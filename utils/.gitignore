@@ -1,0 +1,7 @@
+*.o
+*.d
+*.swp
+src/scoutfs
+.sparse*
+.mock.build*
+cscope.*
