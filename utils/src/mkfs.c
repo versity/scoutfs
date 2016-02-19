@@ -156,7 +156,7 @@ static int write_new_fs(char *path, int fd)
 	bm->bits[0] = cpu_to_le64(~7ULL);
 	bm->bits[1] = cpu_to_le64(~0ULL);
 
-	ret = write_block(fd, 2, &ring->hdr);
+	ret = write_brick(fd, 2 << SCOUTFS_BLOCK_BRICK, &ring->hdr);
 	if (ret)
 		goto out;
 
