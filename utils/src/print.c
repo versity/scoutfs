@@ -22,20 +22,19 @@
 #define SKA(k) le64_to_cpu((k)->inode), (k)->type, \
 		le64_to_cpu((k)->offset)
 
-static void *read_buf(int fd, u64 nr, size_t size)
+static void *read_block(int fd, u64 blkno)
 {
-	off_t off = nr * size;
 	ssize_t ret;
 	void *buf;
 
-	buf = malloc(size);
+	buf = malloc(SCOUTFS_BLOCK_SIZE);
 	if (!buf)
 		return NULL;
 
-	ret = pread(fd, buf, size, off);
-	if (ret != size) {
-		fprintf(stderr, "read at blkno %llu (offset %llu) returned %zd: %s (%d)\n",
-			nr, (long long)off, ret, strerror(errno), errno);
+	ret = pread(fd, buf, SCOUTFS_BLOCK_SIZE, blkno << SCOUTFS_BLOCK_SHIFT);
+	if (ret != SCOUTFS_BLOCK_SIZE) {
+		fprintf(stderr, "read blkno %llu returned %zd: %s (%d)\n",
+			blkno, ret, strerror(errno), errno);
 		free(buf);
 		buf = NULL;
 	}
@@ -43,19 +42,9 @@ static void *read_buf(int fd, u64 nr, size_t size)
 	return buf;
 }
 
-static void *read_brick(int fd, u64 nr)
+static void print_block_header(struct scoutfs_block_header *hdr)
 {
-	return read_buf(fd, nr, SCOUTFS_BRICK_SIZE);
-}
-
-static void *read_block(int fd, u64 nr)
-{
-	return read_buf(fd, nr, SCOUTFS_BLOCK_SIZE);
-}
-
-static void print_header(struct scoutfs_header *hdr, size_t size)
-{
-	u32 crc = crc_header(hdr, size);
+	u32 crc = crc_block(hdr);
 	char valid_str[40];
 
 	if (crc != le32_to_cpu(hdr->crc))
@@ -67,19 +56,9 @@ static void print_header(struct scoutfs_header *hdr, size_t size)
 	       "        crc: %08x %s\n"
 	       "        fsid: %llx\n"
 	       "        seq: %llu\n"
-	       "        nr: %llu\n",
+	       "        blkno: %llu\n",
 		le32_to_cpu(hdr->crc), valid_str, le64_to_cpu(hdr->fsid),
-		le64_to_cpu(hdr->seq), le64_to_cpu(hdr->nr));
-}
-
-static void print_brick_header(struct scoutfs_header *hdr)
-{
-	return print_header(hdr, SCOUTFS_BRICK_SIZE);
-}
-
-static void print_block_header(struct scoutfs_header *hdr)
-{
-	return print_header(hdr, SCOUTFS_BLOCK_SIZE);
+		le64_to_cpu(hdr->seq), le64_to_cpu(hdr->blkno));
 }
 
 static void print_inode(struct scoutfs_inode *inode)
@@ -108,12 +87,12 @@ static void print_inode(struct scoutfs_inode *inode)
 	       le32_to_cpu(inode->mtime.nsec));
 }
 
-static void print_item(struct scoutfs_item_header *ihdr, size_t off)
+static void print_item(struct scoutfs_item_header *ihdr)
 {
-	printf("    item: &%zu\n"
+	printf("    item:\n"
 	       "        key: "SKF"\n"
 	       "        len: %u\n",
-	       off, SKA(&ihdr->key), le16_to_cpu(ihdr->len));
+	       SKA(&ihdr->key), le16_to_cpu(ihdr->len));
 
 	switch(ihdr->key.type) {
 	case SCOUTFS_INODE_KEY:
@@ -122,49 +101,49 @@ static void print_item(struct scoutfs_item_header *ihdr, size_t off)
 	}
 }
 
-static int print_block(int fd, u64 nr)
+static int print_item_block(int fd, u64 nr)
 {
 	struct scoutfs_item_header *ihdr;
-	struct scoutfs_lsm_block *lblk;
+	struct scoutfs_item_block *iblk;
 	size_t off;
 	int i;
 
-	lblk = read_block(fd, nr);
-	if (!lblk)
+	iblk = read_block(fd, nr);
+	if (!iblk)
 		return -ENOMEM;
 
-	printf("block: &%llu\n", le64_to_cpu(lblk->hdr.nr));
-	print_block_header(&lblk->hdr);
+	printf("item block:\n");
+	print_block_header(&iblk->hdr);
 	printf("    first: "SKF"\n"
 	       "    last: "SKF"\n"
 	       "    nr_items: %u\n",
-	       SKA(&lblk->first), SKA(&lblk->last),
-	       le32_to_cpu(lblk->nr_items));
-	off = (char *)(lblk + 1) - (char *)lblk + SCOUTFS_BLOOM_FILTER_BYTES;
+	       SKA(&iblk->first), SKA(&iblk->last),
+	       le32_to_cpu(iblk->nr_items));
 
-	for (i = 0; i < le32_to_cpu(lblk->nr_items); i++) {
-		ihdr = (void *)((char *)lblk + off);
-		print_item(ihdr, off);
+	off = sizeof(struct scoutfs_item_block);
+	for (i = 0; i < le32_to_cpu(iblk->nr_items); i++) {
+		ihdr = (void *)((char *)iblk + off);
+		print_item(ihdr);
 
 		off += sizeof(struct scoutfs_item_header) +
 			le16_to_cpu(ihdr->len);
 	}
 
-	free(lblk);
+	free(iblk);
 
 	return 0;
 }
 
-static int print_blocks(int fd, __le64 *live_blocks, u64 total_blocks)
+static int print_log_blocks(int fd, __le64 *live_logs, u64 total_logs)
 {
 	int ret = 0;
 	int err;
 	s64 nr;
 
-	while ((nr = find_first_le_bit(live_blocks, total_blocks)) >= 0) {
-		clear_le_bit(live_blocks, nr);
+	while ((nr = find_first_le_bit(live_logs, total_logs)) >= 0) {
+		clear_le_bit(live_logs, nr);
 
-		err = print_block(fd, nr);
+		err = print_item_block(fd, nr << SCOUTFS_LOG_BLOCK_SHIFT);
 		if (!ret && err)
 			ret = err;
 	}
@@ -186,32 +165,31 @@ static char *ent_type_str(u8 type)
 	}
 }
 
-static void print_ring_entry(int fd, struct scoutfs_ring_entry *ent,
-			     size_t off)
+static void print_ring_entry(int fd, struct scoutfs_ring_entry *ent)
 {
 	struct scoutfs_ring_remove_manifest *rem;
 	struct scoutfs_ring_add_manifest *add;
 	struct scoutfs_ring_bitmap *bm;
 
-	printf("    entry: &%zu\n"
+	printf("    entry:\n"
 	       "        type: %u # %s\n"
 	       "        len: %u\n",
-	       off, ent->type, ent_type_str(ent->type), le16_to_cpu(ent->len));
+	       ent->type, ent_type_str(ent->type), le16_to_cpu(ent->len));
 
 	switch(ent->type) {
 	case SCOUTFS_RING_REMOVE_MANIFEST:
 		rem = (void *)(ent + 1);
-		printf("            block: %llu\n",
-		       le64_to_cpu(rem->block));
+		printf("            blkno: %llu\n",
+		       le64_to_cpu(rem->blkno));
 		break;
 	case SCOUTFS_RING_ADD_MANIFEST:
 		add = (void *)(ent + 1);
-		printf("            block: %llu\n"
+		printf("            blkno: %llu\n"
 		       "            seq: %llu\n"
 		       "            level: %u\n"
 		       "            first: "SKF"\n"
 		       "            last: "SKF"\n",
-		       le64_to_cpu(add->block), le64_to_cpu(add->seq),
+		       le64_to_cpu(add->blkno), le64_to_cpu(add->seq),
 		       add->level, SKA(&add->first), SKA(&add->last));
 		break;
 	case SCOUTFS_RING_BITMAP:
@@ -224,51 +202,51 @@ static void print_ring_entry(int fd, struct scoutfs_ring_entry *ent,
 	}
 }
 
-static void update_live_blocks(struct scoutfs_ring_entry *ent,
-			       __le64 *live_blocks)
+static void update_live_logs(struct scoutfs_ring_entry *ent,
+			       __le64 *live_logs)
 {
 	struct scoutfs_ring_remove_manifest *rem;
 	struct scoutfs_ring_add_manifest *add;
+	u64 bit;
 
 	switch(ent->type) {
 	case SCOUTFS_RING_REMOVE_MANIFEST:
 		rem = (void *)(ent + 1);
-		clear_le_bit(live_blocks, le64_to_cpu(rem->block));
+		bit = le64_to_cpu(rem->blkno) >> SCOUTFS_LOG_BLOCK_SHIFT;
+		clear_le_bit(live_logs, bit);
 		break;
 	case SCOUTFS_RING_ADD_MANIFEST:
 		add = (void *)(ent + 1);
-		set_le_bit(live_blocks, le64_to_cpu(add->block));
+		bit = le64_to_cpu(add->blkno) >> SCOUTFS_LOG_BLOCK_SHIFT;
+		set_le_bit(live_logs, bit);
 		break;
 	}
 }
 
-static int print_ring_block(int fd, u64 block_nr, __le64 *live_blocks)
+static int print_ring_block(int fd, u64 blkno, __le64 *live_logs)
 {
-	struct scoutfs_ring_brick *ring;
+	struct scoutfs_ring_block *ring;
 	struct scoutfs_ring_entry *ent;
 	size_t off;
 	int ret = 0;
-	u64 nr;
 	int i;
 
-	/* XXX just printing the first brick for now */
+	/* XXX just printing the first block for now */
 
-	nr = block_nr << SCOUTFS_BLOCK_BRICK;
-	ring = read_brick(fd, nr);
+	ring = read_block(fd, blkno);
 	if (!ring)
 		return -ENOMEM;
 
-	printf("ring brick: &%llu\n", nr);
-	print_brick_header(&ring->hdr);
+	printf("ring block:\n");
+	print_block_header(&ring->hdr);
 	printf("    nr_entries: %u\n", le16_to_cpu(ring->nr_entries));
 
-	off = sizeof(struct scoutfs_ring_brick);
+	off = sizeof(struct scoutfs_ring_block);
 	for (i = 0; i < le16_to_cpu(ring->nr_entries); i++) {
 		ent = (void *)((char *)ring + off);
 
-		update_live_blocks(ent, live_blocks);
-
-		print_ring_entry(fd, ent, off);
+		update_live_logs(ent, live_logs);
+		print_ring_entry(fd, ent);
 
 		off += sizeof(struct scoutfs_ring_entry) + 
 		       le16_to_cpu(ent->len);
@@ -278,95 +256,97 @@ static int print_ring_block(int fd, u64 block_nr, __le64 *live_blocks)
 	return ret;
 }
 
-static int print_ring_layout(int fd, u64 blkno, __le64 *live_blocks)
+static int print_layout_block(int fd, u64 blkno, __le64 *live_logs)
 {
-	struct scoutfs_ring_layout *rlo;
+	struct scoutfs_layout_block *lout;
 	int ret = 0;
 	int err;
 	int i;
 
-	rlo = read_block(fd, blkno);
-	if (!rlo)
+	lout = read_block(fd, blkno);
+	if (!lout)
 		return -ENOMEM;
 
-	printf("ring layout: &%llu\n", blkno);
-	print_block_header(&rlo->hdr);
-	printf("    nr_blocks: %u\n", le32_to_cpu(rlo->nr_blocks));
+	printf("layout block:\n");
+	print_block_header(&lout->hdr);
+	printf("    nr_blocks: %u\n", le32_to_cpu(lout->nr_blocks));
 
-	printf("    blocks: ");
-	for (i = 0; i < le32_to_cpu(rlo->nr_blocks); i++)
-		printf("    %llu\n", le64_to_cpu(rlo->blocks[i]));
+	printf("    blknos: ");
+	for (i = 0; i < le32_to_cpu(lout->nr_blocks); i++)
+		printf("    %llu\n", le64_to_cpu(lout->blknos[i]));
 
-	for (i = 0; i < le32_to_cpu(rlo->nr_blocks); i++) {
-		err = print_ring_block(fd, le64_to_cpu(rlo->blocks[i]),
-				       live_blocks);
+	for (i = 0; i < le32_to_cpu(lout->nr_blocks); i++) {
+		err = print_ring_block(fd, le64_to_cpu(lout->blknos[i]),
+				       live_logs);
 		if (err && !ret)
 			ret = err;
 	}
 
-	free(rlo);
+	free(lout);
 	return 0;
 }
 
 static int print_super_brick(int fd)
 {
-	struct scoutfs_super *super;
+	struct scoutfs_super_block *super;
 	char uuid_str[37];
-	__le64 *live_blocks;
-	u64 total_blocks;
+	__le64 *live_logs;
+	u64 total_logs;
 	size_t bytes;
 	int ret = 0;
 	int err;
 
 	/* XXX print both */
-	super = read_brick(fd, SCOUTFS_SUPER_BRICK);
+	super = read_block(fd, SCOUTFS_SUPER_BLKNO);
 	if (!super)
 		return -ENOMEM;
 
 	uuid_unparse(super->uuid, uuid_str);
 
-	total_blocks = le64_to_cpu(super->total_blocks);
+	total_logs = le64_to_cpu(super->total_logs);
 
-	printf("super: &%llu\n", le64_to_cpu(super->hdr.nr));
-	print_brick_header(&super->hdr);
+	printf("super:\n");
+	print_block_header(&super->hdr);
 	printf("    id: %llx\n"
 	       "    uuid: %s\n"
-	       "    total_blocks: %llu\n"
-	       "    ring_layout_block: %llu\n"
+	       "    total_logs: %llu\n"
+	       "    ring_layout_blkno: %llu\n"
+	       "    ring_layout_nr_blocks: %llu\n"
 	       "    ring_layout_seq: %llu\n"
-	       "    last_ring_brick: %llu\n"
-	       "    last_ring_seq: %llu\n"
-	       "    last_block_seq: %llu\n",
+	       "    ring_block: %llu\n"
+	       "    ring_seq: %llu\n"
+	       "    ring_nr_blocks: %llu\n",
 	       le64_to_cpu(super->id),
 	       uuid_str,
-	       total_blocks,
-	       le64_to_cpu(super->ring_layout_block),
+	       total_logs,
+	       le64_to_cpu(super->ring_layout_blkno),
+	       le64_to_cpu(super->ring_layout_nr_blocks),
 	       le64_to_cpu(super->ring_layout_seq),
-	       le64_to_cpu(super->last_ring_brick),
-	       le64_to_cpu(super->last_ring_seq),
-	       le64_to_cpu(super->last_block_seq));
+	       le64_to_cpu(super->ring_block),
+	       le64_to_cpu(super->ring_nr_blocks),
+	       le64_to_cpu(super->ring_seq));
 
 	/* XXX by hand? */
-	bytes = (total_blocks + 63) / 8;
-	live_blocks = malloc(bytes);
-	if (!live_blocks) {
+	bytes = (total_logs + 63) / 8;
+	live_logs = malloc(bytes);
+	if (!live_logs) {
 		ret = -ENOMEM;
 		goto out;
 	}
-	memset(live_blocks, 0, bytes);
+	memset(live_logs, 0, bytes);
 
-	err = print_ring_layout(fd, le64_to_cpu(super->ring_layout_block),
-				live_blocks);
+	err = print_layout_block(fd, le64_to_cpu(super->ring_layout_blkno),
+				 live_logs);
 	if (err && !ret)
 		ret = err;
 
-	err = print_blocks(fd, live_blocks, total_blocks);
+	err = print_log_blocks(fd, live_logs, total_logs);
 	if (err && !ret)
 		ret = err;
 
 out:
 	free(super);
-	free(live_blocks);
+	free(live_logs);
 	return ret;
 }
 

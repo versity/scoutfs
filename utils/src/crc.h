@@ -7,6 +7,6 @@
 
 u32 crc32c(u32 crc, const void *data, unsigned int len);
 u64 crc32c_64(u32 crc, const void *data, unsigned int len);
-u32 crc_header(struct scoutfs_header *hdr, size_t size);
+u32 crc_block(struct scoutfs_block_header *hdr);
 
 #endif

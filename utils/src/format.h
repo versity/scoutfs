@@ -7,53 +7,66 @@
 #define SCOUTFS_SUPER_ID	0x2e736674756f6373ULL	/* "scoutfs." */
 
 /*
- * Some fs structures are stored in smaller fixed size 4k bricks.
+ * Structures are stored and referenced in fixed 4k chunks to
+ * simplify block buffer access at run time.
  */
-#define SCOUTFS_BRICK_SHIFT 12
-#define SCOUTFS_BRICK_SIZE (1 << SCOUTFS_BRICK_SHIFT)
-
-/*
- * A large block size reduces the amount of per-block overhead throughout
- * the system: block IO, manifest communications and storage, etc. 
- */
-#define SCOUTFS_BLOCK_SHIFT 22
+#define SCOUTFS_BLOCK_SHIFT 12
 #define SCOUTFS_BLOCK_SIZE (1 << SCOUTFS_BLOCK_SHIFT)
 
-/* for shifting between brick and block numbers */
-#define SCOUTFS_BLOCK_BRICK (SCOUTFS_BLOCK_SHIFT - SCOUTFS_BRICK_SHIFT)
+/*
+ * Logs are a logical structure that is made up of a fixed number of
+ * contiguously allocated blocks.
+ *
+ * The allocator manages log-sized regions.  Smaller metadata blocks
+ * like the ring and super blocks are stored inside large log
+ * allocations.
+ */
+#define SCOUTFS_LOG_SHIFT 22
+#define SCOUTFS_LOG_SIZE (1 << SCOUTFS_LOG_SHIFT)
+#define SCOUTFS_LOG_BLOCK_SHIFT (SCOUTFS_LOG_SHIFT - SCOUTFS_BLOCK_SHIFT)
+#define SCOUTFS_BLOCKS_PER_LOG (1 << SCOUTFS_LOG_BLOCK_SHIFT)
 
 /*
- * The super bricks leave a bunch of room at the start of the first
- * block for platform structures like boot loaders.
+ * The super blocks leave some room at the start of the first block for
+ * platform structures like boot loaders.
  */
-#define SCOUTFS_SUPER_BRICK 16
+#define SCOUTFS_SUPER_BLKNO ((64 * 1024) >> SCOUTFS_BLOCK_SHIFT)
+#define SCOUTFS_SUPER_NR 2
 
 /*
- * This header is found at the start of every brick and block
- * so that we can verify that it's what we were looking for.
+ * This header is found at the start of every block so that we can
+ * verify that it's what we were looking for.  The crc and padding
+ * starts the block so that its calculation operations on a nice 64bit
+ * aligned region.
  */
-struct scoutfs_header {
+struct scoutfs_block_header {
 	__le32 crc;
+	__le32 _pad;
 	__le64 fsid;
 	__le64 seq;
-	__le64 nr;
+	__le64 blkno;
 } __packed;
 
 #define SCOUTFS_UUID_BYTES 16
 
 /*
- * The super is stored in a pair of bricks in the first block.
+ * The super is stored in a pair of blocks in log 0 on the device.
+ *
+ * The ring layout blocks describe the location of the ring blocks.  The
+ * ring start and length refers to the logical ring blocks within that
+ * storage which contain live data.
  */
-struct scoutfs_super {
-	struct scoutfs_header hdr;
+struct scoutfs_super_block {
+	struct scoutfs_block_header hdr;
 	__le64 id;
 	__u8 uuid[SCOUTFS_UUID_BYTES];
-	__le64 total_blocks;
-	__le64 ring_layout_block;
+	__le64 total_logs;
+	__le64 ring_layout_blkno;
+	__le64 ring_layout_nr_blocks;
 	__le64 ring_layout_seq;
-	__le64 last_ring_brick;
-	__le64 last_ring_seq;
-	__le64 last_block_seq;
+	__le64 ring_block;
+	__le64 ring_nr_blocks;
+	__le64 ring_seq;
 } __packed;
 
 /*
@@ -71,10 +84,10 @@ struct scoutfs_key {
 #define SCOUTFS_INODE_KEY 128
 #define SCOUTFS_DIRENT_KEY 192
 
-struct scoutfs_ring_layout {
-	struct scoutfs_header hdr;
+struct scoutfs_layout_block {
+	struct scoutfs_block_header hdr;
 	__le32 nr_blocks;
-	__le64 blocks[0];
+	__le64 blknos[0];
 } __packed;
 
 struct scoutfs_ring_entry {
@@ -83,16 +96,16 @@ struct scoutfs_ring_entry {
 } __packed;
 
 /*
- * Ring blocks are 4k blocks stored inside the large ring blocks
- * referenced by the ring descriptor block.
+ * Ring blocks are 4k blocks stored inside the regions described by the
+ * ring layout block referenced by the super.
  *
  * The manifest entries describe the position of a given block in the
  * manifest.  They're keyed by the block number so that we can log
  * movement of a block in the manifest with one log entry and we can log
  * deletion with just the block number.
  */ 
-struct scoutfs_ring_brick {
-	struct scoutfs_header hdr;
+struct scoutfs_ring_block {
+	struct scoutfs_block_header hdr;
 	__le16 nr_entries;
 } __packed;
 
@@ -108,7 +121,7 @@ enum {
  * without the key.
  */
 struct scoutfs_ring_remove_manifest {
-	__le64 block;
+	__le64 blkno;
 } __packed;
 
 /*
@@ -119,7 +132,7 @@ struct scoutfs_ring_remove_manifest {
  * blocks when we didn't need to.
  */
 struct scoutfs_ring_add_manifest {
-	__le64 block;
+	__le64 blkno;
 	__le64 seq;
 	__u8 level;
 	struct scoutfs_key first;
@@ -132,23 +145,15 @@ struct scoutfs_ring_bitmap {
 } __packed;
 
 /*
- * This bloom size is chosen to have a roughly 1% false positive rate
- * for ~90k items which is roughly the worst case for a block full of
- * dirents with reasonably small names.  Pathologically smaller items
- * could be even more dense.
+ * To start the logs are a trivial single item block.  We'll flesh this out
+ * into larger blocks once the rest of the architecture is in
+ * place.
  */
-#define SCOUTFS_BLOOM_FILTER_BYTES (128 * 1024)
-#define SCOUTFS_BLOOM_FILTER_BITS (SCOUTFS_BLOOM_FILTER_BYTES * 8)
-#define SCOUTFS_BLOOM_INDEX_BITS (ilog2(SCOUTFS_BLOOM_FILTER_BITS))
-#define SCOUTFS_BLOOM_INDEX_MASK ((1 << SCOUTFS_BLOOM_INDEX_BITS) - 1)
-#define SCOUTFS_BLOOM_INDEX_NR 7
-
-struct scoutfs_lsm_block {
-	struct scoutfs_header hdr;
+struct scoutfs_item_block {
+	struct scoutfs_block_header hdr;
 	struct scoutfs_key first;
 	struct scoutfs_key last;
 	__le32 nr_items;
-	/* u8 bloom[SCOUTFS_BLOOM_BYTES]; */
 	/* struct scoutfs_item_header items[0] .. */
 } __packed;
 

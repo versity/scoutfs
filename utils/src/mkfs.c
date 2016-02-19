@@ -17,77 +17,56 @@
 #include "crc.h"
 #include "rand.h"
 
-
 /*
- * Update the buffer's header and write it out.
+ * Update the block's header and write it out.
  */
-static int write_header(int fd, u64 nr, struct scoutfs_header *hdr, size_t size)
+static int write_block(int fd, u64 blkno, struct scoutfs_block_header *hdr)
 {
-	off_t off = nr * size;
 	ssize_t ret;
 
-	hdr->nr = cpu_to_le64(nr);
-	hdr->crc = cpu_to_le32(crc_header(hdr, size));
+	hdr->blkno = cpu_to_le64(blkno);
+	hdr->crc = cpu_to_le32(crc_block(hdr));
 
-	ret = pwrite(fd, hdr, size, off);
-	if (ret != size) {
-		fprintf(stderr, "write at nr %llu (offset %llu, size %zu) returned %zd: %s (%d)\n",
-			nr, (long long)off, size, ret, strerror(errno), errno);
+	ret = pwrite(fd, hdr, SCOUTFS_BLOCK_SIZE, blkno << SCOUTFS_BLOCK_SHIFT);
+	if (ret != SCOUTFS_BLOCK_SIZE) {
+		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
+			blkno, ret, strerror(errno), errno);
 		return -errno;
 	}
 
 	return 0;
 }
 
-static int write_brick(int fd, u64 nr, struct scoutfs_header *hdr)
-{
-	return write_header(fd, nr, hdr, SCOUTFS_BRICK_SIZE);
-}
-
-static int write_block(int fd, u64 nr, struct scoutfs_header *hdr)
-{
-	return write_header(fd, nr, hdr, SCOUTFS_BLOCK_SIZE);
-}
-
-/*
- * - config blocks that describe ring
- * - ring entries for lots of free blocks
- * - manifest that references single block
- * - block with inode
- */
-/*
- * So what does mkfs really need to do?
- *
- *  - super blocks that describe ring log
- *  - ring log with free bitmap entries
- *  - ring log with manifest entries
- *  - single item block with root dir
- */
 static int write_new_fs(char *path, int fd)
 {
-	struct scoutfs_super *super;
+	struct scoutfs_super_block *super;
+	struct scoutfs_block_header hdr;
 	struct scoutfs_inode *inode;
-	struct scoutfs_ring_layout *rlo;
-	struct scoutfs_ring_brick *ring;
+	struct scoutfs_layout_block *lout;
+	struct scoutfs_ring_block *ring;
 	struct scoutfs_ring_entry *ent;
 	struct scoutfs_ring_add_manifest *mani;
 	struct scoutfs_ring_bitmap *bm;
-	struct scoutfs_lsm_block *lblk;
+	struct scoutfs_item_block *iblk;
 	struct scoutfs_item_header *ihdr;
 	struct scoutfs_key root_key;
 	struct timeval tv;
 	char uuid_str[37];
 	struct stat st;
 	unsigned int i;
-	u64 total_blocks;
+	u64 total_logs;
+	u64 blkno;
 	void *buf;
 	int ret;
 
 	gettimeofday(&tv, NULL);
+	/* crc and blkno written for each write */
+	hdr._pad = 0;
+	pseudo_random_bytes(&hdr.fsid, sizeof(hdr.fsid));
+	hdr.seq = cpu_to_le64(1);
 
-	super = malloc(SCOUTFS_BRICK_SIZE);
 	buf = malloc(SCOUTFS_BLOCK_SIZE);
-	if (!super || !buf) {
+	if (!buf) {
 		ret = -errno;
 		fprintf(stderr, "failed to allocate a block: %s (%d)\n",
 			strerror(errno), errno);
@@ -101,75 +80,23 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	total_blocks = st.st_size >> SCOUTFS_BLOCK_SHIFT;
+	total_logs = st.st_size >> SCOUTFS_LOG_SHIFT;
 
 	root_key.inode = cpu_to_le64(SCOUTFS_ROOT_INO);
 	root_key.type = SCOUTFS_INODE_KEY;
 	root_key.offset = 0;
 
-	/* initialize the super */
-	memset(super, 0, sizeof(struct scoutfs_super));
-	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
-	super->hdr.seq = cpu_to_le64(1);
-	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
-	uuid_generate(super->uuid);
-	super->total_blocks = cpu_to_le64(total_blocks);
-	super->ring_layout_block = cpu_to_le64(1);
-	super->ring_layout_seq = cpu_to_le64(1);
-	super->last_ring_brick = cpu_to_le64(1);
-	super->last_ring_seq = cpu_to_le64(1);
-	super->last_block_seq = cpu_to_le64(1);
+	/* super in log 0, first fs log block in log 1 */
+	blkno = 1 << SCOUTFS_LOG_BLOCK_SHIFT;
 
-	/* the ring has a single block for now */
+	/* write a single log block with the root inode item */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	rlo = buf;
-	rlo->hdr.fsid = super->hdr.fsid;
-	rlo->hdr.seq = super->ring_layout_seq;
-	rlo->nr_blocks = cpu_to_le32(1);
-	rlo->blocks[0] = cpu_to_le64(2);
-
-	ret = write_block(fd, 1, &rlo->hdr);
-	if (ret)
-		goto out;
-
-	/* log the root inode block manifest and free bitmap */
-	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	ring = buf;
-	ring->hdr.fsid = super->hdr.fsid;
-	ring->hdr.seq = super->last_ring_seq;
-	ring->nr_entries = cpu_to_le16(2);
-	ent = (void *)(ring + 1);
-	ent->type = SCOUTFS_RING_ADD_MANIFEST;
-	ent->len = cpu_to_le16(sizeof(*mani));
-	mani = (void *)(ent + 1);
-	mani->block = cpu_to_le64(3);
-	mani->seq = super->last_block_seq;
-	mani->level = 0;
-	mani->first = root_key;
-	mani->last = root_key;
-	ent = (void *)(mani + 1);
-	ent->type = SCOUTFS_RING_BITMAP;
-	ent->len = cpu_to_le16(sizeof(*bm));
-	bm = (void *)(ent + 1);
-	memset(bm->bits, 0xff, sizeof(bm->bits));
-	/* the first three blocks are allocated */
-	bm->bits[0] = cpu_to_le64(~7ULL);
-	bm->bits[1] = cpu_to_le64(~0ULL);
-
-	ret = write_brick(fd, 2 << SCOUTFS_BLOCK_BRICK, &ring->hdr);
-	if (ret)
-		goto out;
-
-	/* write a single lsm block with the root inode item */
-	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	lblk = buf;
-	lblk->hdr.fsid = super->hdr.fsid;
-	lblk->hdr.seq = super->last_block_seq;
-	lblk->first = root_key;
-	lblk->last = root_key;
-	lblk->nr_items = cpu_to_le32(1);
-	/* XXX set bloom */
-	ihdr = (void *)((char *)(lblk + 1) + SCOUTFS_BLOOM_FILTER_BYTES);
+	iblk = buf;
+	iblk->hdr = hdr;
+	iblk->first = root_key;
+	iblk->last = root_key;
+	iblk->nr_items = cpu_to_le32(1);
+	ihdr = (void *)(iblk + 1);
 	ihdr->key = root_key;
 	ihdr->len = cpu_to_le16(sizeof(struct scoutfs_inode));
 	inode = (void *)(ihdr + 1);
@@ -182,14 +109,67 @@ static int write_new_fs(char *path, int fd)
 	inode->mtime.sec = inode->atime.sec;
 	inode->mtime.nsec = inode->atime.nsec;
 
-	ret = write_block(fd, 3, &ring->hdr);
+	ret = write_block(fd, blkno, &iblk->hdr);
 	if (ret)
 		goto out;
 
-	/* write the two super bricks */
-	for (i = 0; i < 2; i++) {
-		super->hdr.seq = cpu_to_le64(i);
-		ret = write_brick(fd, SCOUTFS_SUPER_BRICK + i, &super->hdr);
+	/* write the ring block whose manifest entry references the log block */
+	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
+	ring = buf;
+	ring->hdr = hdr;
+	ring->nr_entries = cpu_to_le16(2);
+	ent = (void *)(ring + 1);
+	ent->type = SCOUTFS_RING_ADD_MANIFEST;
+	ent->len = cpu_to_le16(sizeof(*mani));
+	mani = (void *)(ent + 1);
+	mani->blkno = cpu_to_le64(blkno);
+	mani->seq = hdr.seq;
+	mani->level = 0;
+	mani->first = root_key;
+	mani->last = root_key;
+	ent = (void *)(mani + 1);
+	ent->type = SCOUTFS_RING_BITMAP;
+	ent->len = cpu_to_le16(sizeof(*bm));
+	bm = (void *)(ent + 1);
+	memset(bm->bits, 0xff, sizeof(bm->bits));
+	/* the first three blocks are allocated */
+	bm->bits[0] = cpu_to_le64(~7ULL);
+	bm->bits[1] = cpu_to_le64(~0ULL);
+
+	blkno += SCOUTFS_BLOCKS_PER_LOG;
+	ret = write_block(fd, blkno, &ring->hdr);
+	if (ret)
+		goto out;
+
+	/* the ring has a single block for now */
+	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
+	lout = buf;
+	lout->hdr = hdr;
+	lout->nr_blocks = cpu_to_le32(1);
+	lout->blknos[0] = cpu_to_le64(blkno);
+
+	blkno += SCOUTFS_BLOCKS_PER_LOG;
+	ret = write_block(fd, blkno, &lout->hdr);
+	if (ret)
+		goto out;
+
+	/* write the two super blocks */
+	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
+	super = buf;
+	super->hdr = hdr;
+	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
+	uuid_generate(super->uuid);
+	super->total_logs = cpu_to_le64(total_logs);
+	super->ring_layout_blkno = cpu_to_le64(blkno);
+	super->ring_layout_nr_blocks = cpu_to_le64(1);
+	super->ring_layout_seq = hdr.seq;
+	super->ring_block = cpu_to_le64(0);
+	super->ring_nr_blocks = cpu_to_le64(1);
+	super->ring_seq = hdr.seq;
+
+	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
+		super->hdr.seq = cpu_to_le64(i + 1);
+		ret = write_block(fd, SCOUTFS_SUPER_BLKNO + i, &super->hdr);
 		if (ret)
 			goto out;
 	}
@@ -204,14 +184,13 @@ static int write_new_fs(char *path, int fd)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  total blocks: %llu\n"
+	       "  total logs: %llu\n"
 	       "  fsid: %llx\n"
 	       "  uuid: %s\n",
-		total_blocks, le64_to_cpu(super->hdr.fsid), uuid_str);
+		total_logs, le64_to_cpu(super->hdr.fsid), uuid_str);
 
 	ret = 0;
 out:
-	free(super);
 	free(buf);
 	return ret;
 }
