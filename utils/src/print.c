@@ -134,16 +134,16 @@ static int print_item_block(int fd, u64 nr)
 	return 0;
 }
 
-static int print_log_blocks(int fd, __le64 *live_logs, u64 total_logs)
+static int print_log_segments(int fd, __le64 *log_segs, u64 total_chunks)
 {
 	int ret = 0;
 	int err;
 	s64 nr;
 
-	while ((nr = find_first_le_bit(live_logs, total_logs)) >= 0) {
-		clear_le_bit(live_logs, nr);
+	while ((nr = find_first_le_bit(log_segs, total_chunks)) >= 0) {
+		clear_le_bit(log_segs, nr);
 
-		err = print_item_block(fd, nr << SCOUTFS_LOG_BLOCK_SHIFT);
+		err = print_item_block(fd, nr << SCOUTFS_CHUNK_BLOCK_SHIFT);
 		if (!ret && err)
 			ret = err;
 	}
@@ -202,8 +202,8 @@ static void print_ring_entry(int fd, struct scoutfs_ring_entry *ent)
 	}
 }
 
-static void update_live_logs(struct scoutfs_ring_entry *ent,
-			       __le64 *live_logs)
+static void update_log_segs(struct scoutfs_ring_entry *ent,
+			       __le64 *log_segs)
 {
 	struct scoutfs_ring_remove_manifest *rem;
 	struct scoutfs_ring_add_manifest *add;
@@ -212,18 +212,18 @@ static void update_live_logs(struct scoutfs_ring_entry *ent,
 	switch(ent->type) {
 	case SCOUTFS_RING_REMOVE_MANIFEST:
 		rem = (void *)(ent + 1);
-		bit = le64_to_cpu(rem->blkno) >> SCOUTFS_LOG_BLOCK_SHIFT;
-		clear_le_bit(live_logs, bit);
+		bit = le64_to_cpu(rem->blkno) >> SCOUTFS_CHUNK_BLOCK_SHIFT;
+		clear_le_bit(log_segs, bit);
 		break;
 	case SCOUTFS_RING_ADD_MANIFEST:
 		add = (void *)(ent + 1);
-		bit = le64_to_cpu(add->blkno) >> SCOUTFS_LOG_BLOCK_SHIFT;
-		set_le_bit(live_logs, bit);
+		bit = le64_to_cpu(add->blkno) >> SCOUTFS_CHUNK_BLOCK_SHIFT;
+		set_le_bit(log_segs, bit);
 		break;
 	}
 }
 
-static int print_ring_block(int fd, u64 blkno, __le64 *live_logs)
+static int print_ring_block(int fd, u64 blkno, __le64 *log_segs)
 {
 	struct scoutfs_ring_block *ring;
 	struct scoutfs_ring_entry *ent;
@@ -245,7 +245,7 @@ static int print_ring_block(int fd, u64 blkno, __le64 *live_logs)
 	for (i = 0; i < le16_to_cpu(ring->nr_entries); i++) {
 		ent = (void *)((char *)ring + off);
 
-		update_live_logs(ent, live_logs);
+		update_log_segs(ent, log_segs);
 		print_ring_entry(fd, ent);
 
 		off += sizeof(struct scoutfs_ring_entry) + 
@@ -256,33 +256,33 @@ static int print_ring_block(int fd, u64 blkno, __le64 *live_logs)
 	return ret;
 }
 
-static int print_layout_block(int fd, u64 blkno, __le64 *live_logs)
+static int print_map_block(int fd, u64 blkno, __le64 *log_segs)
 {
-	struct scoutfs_layout_block *lout;
+	struct scoutfs_ring_map_block *map;
 	int ret = 0;
 	int err;
 	int i;
 
-	lout = read_block(fd, blkno);
-	if (!lout)
+	map = read_block(fd, blkno);
+	if (!map)
 		return -ENOMEM;
 
-	printf("layout block:\n");
-	print_block_header(&lout->hdr);
-	printf("    nr_blocks: %u\n", le32_to_cpu(lout->nr_blocks));
+	printf("map block:\n");
+	print_block_header(&map->hdr);
+	printf("    nr_chunks: %u\n", le32_to_cpu(map->nr_chunks));
 
 	printf("    blknos: ");
-	for (i = 0; i < le32_to_cpu(lout->nr_blocks); i++)
-		printf("    %llu\n", le64_to_cpu(lout->blknos[i]));
+	for (i = 0; i < le32_to_cpu(map->nr_chunks); i++)
+		printf("    %llu\n", le64_to_cpu(map->blknos[i]));
 
-	for (i = 0; i < le32_to_cpu(lout->nr_blocks); i++) {
-		err = print_ring_block(fd, le64_to_cpu(lout->blknos[i]),
-				       live_logs);
+	for (i = 0; i < le32_to_cpu(map->nr_chunks); i++) {
+		err = print_ring_block(fd, le64_to_cpu(map->blknos[i]),
+				       log_segs);
 		if (err && !ret)
 			ret = err;
 	}
 
-	free(lout);
+	free(map);
 	return 0;
 }
 
@@ -290,8 +290,8 @@ static int print_super_brick(int fd)
 {
 	struct scoutfs_super_block *super;
 	char uuid_str[37];
-	__le64 *live_logs;
-	u64 total_logs;
+	__le64 *log_segs;
+	u64 total_chunks;
 	size_t bytes;
 	int ret = 0;
 	int err;
@@ -303,50 +303,49 @@ static int print_super_brick(int fd)
 
 	uuid_unparse(super->uuid, uuid_str);
 
-	total_logs = le64_to_cpu(super->total_logs);
+	total_chunks = le64_to_cpu(super->total_chunks);
 
 	printf("super:\n");
 	print_block_header(&super->hdr);
 	printf("    id: %llx\n"
 	       "    uuid: %s\n"
-	       "    total_logs: %llu\n"
-	       "    ring_layout_blkno: %llu\n"
-	       "    ring_layout_nr_blocks: %llu\n"
-	       "    ring_layout_seq: %llu\n"
-	       "    ring_block: %llu\n"
-	       "    ring_seq: %llu\n"
-	       "    ring_nr_blocks: %llu\n",
+	       "    total_chunks: %llu\n"
+	       "    ring_map_blkno: %llu\n"
+	       "    ring_map_seq: %llu\n"
+	       "    ring_first_block: %llu\n"
+	       "    ring_active_blocks: %llu\n"
+	       "    ring_total_blocks: %llu\n"
+	       "    ring_seq: %llu\n",
 	       le64_to_cpu(super->id),
 	       uuid_str,
-	       total_logs,
-	       le64_to_cpu(super->ring_layout_blkno),
-	       le64_to_cpu(super->ring_layout_nr_blocks),
-	       le64_to_cpu(super->ring_layout_seq),
-	       le64_to_cpu(super->ring_block),
-	       le64_to_cpu(super->ring_nr_blocks),
+	       total_chunks,
+	       le64_to_cpu(super->ring_map_blkno),
+	       le64_to_cpu(super->ring_map_seq),
+	       le64_to_cpu(super->ring_first_block),
+	       le64_to_cpu(super->ring_active_blocks),
+	       le64_to_cpu(super->ring_total_blocks),
 	       le64_to_cpu(super->ring_seq));
 
 	/* XXX by hand? */
-	bytes = (total_logs + 63) / 8;
-	live_logs = malloc(bytes);
-	if (!live_logs) {
+	bytes = (total_chunks + 63) / 8;
+	log_segs = malloc(bytes);
+	if (!log_segs) {
 		ret = -ENOMEM;
 		goto out;
 	}
-	memset(live_logs, 0, bytes);
+	memset(log_segs, 0, bytes);
 
-	err = print_layout_block(fd, le64_to_cpu(super->ring_layout_blkno),
-				 live_logs);
+	err = print_map_block(fd, le64_to_cpu(super->ring_map_blkno), log_segs);
 	if (err && !ret)
 		ret = err;
 
-	err = print_log_blocks(fd, live_logs, total_logs);
+	err = print_log_segments(fd, log_segs, total_chunks);
 	if (err && !ret)
 		ret = err;
 
 out:
 	free(super);
-	free(live_logs);
+	free(log_segs);
 	return ret;
 }
 

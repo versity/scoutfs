@@ -42,7 +42,7 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_super_block *super;
 	struct scoutfs_block_header hdr;
 	struct scoutfs_inode *inode;
-	struct scoutfs_layout_block *lout;
+	struct scoutfs_ring_map_block *map;
 	struct scoutfs_ring_block *ring;
 	struct scoutfs_ring_entry *ent;
 	struct scoutfs_ring_add_manifest *mani;
@@ -54,7 +54,7 @@ static int write_new_fs(char *path, int fd)
 	char uuid_str[37];
 	struct stat st;
 	unsigned int i;
-	u64 total_logs;
+	u64 total_chunks;
 	u64 blkno;
 	void *buf;
 	int ret;
@@ -80,14 +80,14 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	total_logs = st.st_size >> SCOUTFS_LOG_SHIFT;
+	total_chunks = st.st_size >> SCOUTFS_CHUNK_SHIFT;
 
 	root_key.inode = cpu_to_le64(SCOUTFS_ROOT_INO);
 	root_key.type = SCOUTFS_INODE_KEY;
 	root_key.offset = 0;
 
 	/* super in log 0, first fs log block in log 1 */
-	blkno = 1 << SCOUTFS_LOG_BLOCK_SHIFT;
+	blkno = 1 << SCOUTFS_CHUNK_BLOCK_SHIFT;
 
 	/* write a single log block with the root inode item */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
@@ -136,20 +136,20 @@ static int write_new_fs(char *path, int fd)
 	bm->bits[0] = cpu_to_le64(~7ULL);
 	bm->bits[1] = cpu_to_le64(~0ULL);
 
-	blkno += SCOUTFS_BLOCKS_PER_LOG;
+	blkno += SCOUTFS_BLOCKS_PER_CHUNK;
 	ret = write_block(fd, blkno, &ring->hdr);
 	if (ret)
 		goto out;
 
-	/* the ring has a single block for now */
+	/* the ring has a single chunk for now */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	lout = buf;
-	lout->hdr = hdr;
-	lout->nr_blocks = cpu_to_le32(1);
-	lout->blknos[0] = cpu_to_le64(blkno);
+	map = buf;
+	map->hdr = hdr;
+	map->nr_chunks = cpu_to_le32(1);
+	map->blknos[0] = cpu_to_le64(blkno);
 
-	blkno += SCOUTFS_BLOCKS_PER_LOG;
-	ret = write_block(fd, blkno, &lout->hdr);
+	blkno += SCOUTFS_BLOCKS_PER_CHUNK;
+	ret = write_block(fd, blkno, &map->hdr);
 	if (ret)
 		goto out;
 
@@ -159,12 +159,12 @@ static int write_new_fs(char *path, int fd)
 	super->hdr = hdr;
 	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
 	uuid_generate(super->uuid);
-	super->total_logs = cpu_to_le64(total_logs);
-	super->ring_layout_blkno = cpu_to_le64(blkno);
-	super->ring_layout_nr_blocks = cpu_to_le64(1);
-	super->ring_layout_seq = hdr.seq;
-	super->ring_block = cpu_to_le64(0);
-	super->ring_nr_blocks = cpu_to_le64(1);
+	super->total_chunks = cpu_to_le64(total_chunks);
+	super->ring_map_blkno = cpu_to_le64(blkno);
+	super->ring_map_seq = hdr.seq;
+	super->ring_first_block = cpu_to_le64(0);
+	super->ring_active_blocks = cpu_to_le64(1);
+	super->ring_total_blocks = cpu_to_le64(SCOUTFS_BLOCKS_PER_CHUNK);
 	super->ring_seq = hdr.seq;
 
 	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
@@ -184,10 +184,12 @@ static int write_new_fs(char *path, int fd)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  total logs: %llu\n"
+	       "  chunk bytes: %u\n"
+	       "  total chunks: %llu\n"
 	       "  fsid: %llx\n"
 	       "  uuid: %s\n",
-		total_logs, le64_to_cpu(super->hdr.fsid), uuid_str);
+		SCOUTFS_CHUNK_SIZE, total_chunks,
+		le64_to_cpu(super->hdr.fsid), uuid_str);
 
 	ret = 0;
 out:

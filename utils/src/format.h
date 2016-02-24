@@ -7,24 +7,24 @@
 #define SCOUTFS_SUPER_ID	0x2e736674756f6373ULL	/* "scoutfs." */
 
 /*
- * Structures are stored and referenced in fixed 4k chunks to
- * simplify block buffer access at run time.
+ * Everything is stored in and addressed as 4k fixed size blocks.  This
+ * avoids having to manage contiguous cpu mappings of larger blocks.
+ * Larger structures are read and written as multiple blocks.
  */
 #define SCOUTFS_BLOCK_SHIFT 12
 #define SCOUTFS_BLOCK_SIZE (1 << SCOUTFS_BLOCK_SHIFT)
 
 /*
- * Logs are a logical structure that is made up of a fixed number of
- * contiguously allocated blocks.
+ * The allocator works on larger chunks.  Smaller metadata structures
+ * like the super blocks and the ring are stored in chunks.
  *
- * The allocator manages log-sized regions.  Smaller metadata blocks
- * like the ring and super blocks are stored inside large log
- * allocations.
+ * A log segment is a collection of smaller blocks (bloom filter, item blocks)
+ * stored in a chunk.
  */
-#define SCOUTFS_LOG_SHIFT 22
-#define SCOUTFS_LOG_SIZE (1 << SCOUTFS_LOG_SHIFT)
-#define SCOUTFS_LOG_BLOCK_SHIFT (SCOUTFS_LOG_SHIFT - SCOUTFS_BLOCK_SHIFT)
-#define SCOUTFS_BLOCKS_PER_LOG (1 << SCOUTFS_LOG_BLOCK_SHIFT)
+#define SCOUTFS_CHUNK_SHIFT 22
+#define SCOUTFS_CHUNK_SIZE (1 << SCOUTFS_CHUNK_SHIFT)
+#define SCOUTFS_CHUNK_BLOCK_SHIFT (SCOUTFS_CHUNK_SHIFT - SCOUTFS_BLOCK_SHIFT)
+#define SCOUTFS_BLOCKS_PER_CHUNK (1 << SCOUTFS_CHUNK_BLOCK_SHIFT)
 
 /*
  * The super blocks leave some room at the start of the first block for
@@ -50,22 +50,25 @@ struct scoutfs_block_header {
 #define SCOUTFS_UUID_BYTES 16
 
 /*
- * The super is stored in a pair of blocks in log 0 on the device.
+ * The super is stored in a pair of blocks in the first chunk on the
+ * device.
  *
- * The ring layout blocks describe the location of the ring blocks.  The
- * ring start and length refers to the logical ring blocks within that
- * storage which contain live data.
+ * The ring map blocks describe the chunks that make up the ring.
+ *
+ * The rest of the ring fields describe the state of the ring blocks
+ * that are stored in their chunks.  The active portion of the ring
+ * describes the current state of the system and is replayed on mount.
  */
 struct scoutfs_super_block {
 	struct scoutfs_block_header hdr;
 	__le64 id;
 	__u8 uuid[SCOUTFS_UUID_BYTES];
-	__le64 total_logs;
-	__le64 ring_layout_blkno;
-	__le64 ring_layout_nr_blocks;
-	__le64 ring_layout_seq;
-	__le64 ring_block;
-	__le64 ring_nr_blocks;
+	__le64 total_chunks;
+	__le64 ring_map_blkno;
+	__le64 ring_map_seq;
+	__le64 ring_first_block;
+	__le64 ring_active_blocks;
+	__le64 ring_total_blocks;
 	__le64 ring_seq;
 } __packed;
 
@@ -84,9 +87,9 @@ struct scoutfs_key {
 #define SCOUTFS_INODE_KEY 128
 #define SCOUTFS_DIRENT_KEY 192
 
-struct scoutfs_layout_block {
+struct scoutfs_ring_map_block {
 	struct scoutfs_block_header hdr;
-	__le32 nr_blocks;
+	__le32 nr_chunks;
 	__le64 blknos[0];
 } __packed;
 
@@ -96,13 +99,12 @@ struct scoutfs_ring_entry {
 } __packed;
 
 /*
- * Ring blocks are 4k blocks stored inside the regions described by the
- * ring layout block referenced by the super.
+ * Ring blocks are stored in chunks described by the ring map blocks.
  *
- * The manifest entries describe the position of a given block in the
- * manifest.  They're keyed by the block number so that we can log
- * movement of a block in the manifest with one log entry and we can log
- * deletion with just the block number.
+ * The manifest entries describe the position of a given log segment in
+ * the manifest.  They're keyed by the block number so that we can
+ * record movement of a log segment in the manifest with one ring entry
+ * and we can record deletion with just the block number.
  */ 
 struct scoutfs_ring_block {
 	struct scoutfs_block_header hdr;
@@ -115,11 +117,6 @@ enum {
 	SCOUTFS_RING_BITMAP,
 };
 
-/*
- * Manifest entries are logged by their block number.  This lets us log
- * a change with one entry and a removal with a tiny block number
- * without the key.
- */
 struct scoutfs_ring_remove_manifest {
 	__le64 blkno;
 } __packed;
@@ -145,9 +142,9 @@ struct scoutfs_ring_bitmap {
 } __packed;
 
 /*
- * To start the logs are a trivial single item block.  We'll flesh this out
- * into larger blocks once the rest of the architecture is in
- * place.
+ * To start the log segments are a trivial single item block.  We'll
+ * flesh this out into larger blocks once the rest of the architecture
+ * is in place.
  */
 struct scoutfs_item_block {
 	struct scoutfs_block_header hdr;
