@@ -16,6 +16,7 @@
 #include "format.h"
 #include "crc.h"
 #include "rand.h"
+#include "dev.h"
 
 /*
  * Update the block's header and write it out.
@@ -52,8 +53,8 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_key root_key;
 	struct timeval tv;
 	char uuid_str[37];
-	struct stat st;
 	unsigned int i;
+	u64 size;
 	u64 total_chunks;
 	u64 blkno;
 	void *buf;
@@ -73,14 +74,14 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	if (fstat(fd, &st)) {
-		ret = -errno;
+	ret = device_size(path, fd, &size);
+	if (ret) {
 		fprintf(stderr, "failed to stat '%s': %s (%d)\n",
 			path, strerror(errno), errno);
 		goto out;
 	}
 
-	total_chunks = st.st_size >> SCOUTFS_CHUNK_SHIFT;
+	total_chunks = size >> SCOUTFS_CHUNK_SHIFT;
 
 	root_key.inode = cpu_to_le64(SCOUTFS_ROOT_INO);
 	root_key.type = SCOUTFS_INODE_KEY;
