@@ -46,7 +46,7 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_ring_map_block *map;
 	struct scoutfs_ring_block *ring;
 	struct scoutfs_ring_entry *ent;
-	struct scoutfs_ring_add_manifest *mani;
+	struct scoutfs_ring_manifest_entry *mani;
 	struct scoutfs_ring_bitmap *bm;
 	struct scoutfs_item_block *iblk;
 	struct scoutfs_item_header *ihdr;
