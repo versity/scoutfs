@@ -256,33 +256,68 @@ static int print_ring_block(int fd, u64 blkno, __le64 *log_segs)
 	return ret;
 }
 
-static int print_map_block(int fd, u64 blkno, __le64 *log_segs)
+/*
+ * Print all the active ring blocks that are referenced by the super
+ * and which were mapped by the map blocks that we printed.
+ */
+static int print_ring_blocks(int fd, struct scoutfs_super_block *super,
+			     u64 *ring_blknos, __le64 *log_segs)
 {
-	struct scoutfs_ring_map_block *map;
+	u64 block;
+	u64 blkno;
+	u64 i;
 	int ret = 0;
 	int err;
-	int i;
 
-	map = read_block(fd, blkno);
-	if (!map)
-		return -ENOMEM;
+	block = le64_to_cpu(super->ring_first_block);
 
-	printf("map block:\n");
-	print_block_header(&map->hdr);
-	printf("    nr_chunks: %u\n", le32_to_cpu(map->nr_chunks));
+	for (i = 0; i < le64_to_cpu(super->ring_active_blocks); i++) {
+		blkno = ring_blknos[block >> SCOUTFS_CHUNK_BLOCK_SHIFT] +
+			(block & SCOUTFS_CHUNK_BLOCK_MASK);
 
-	printf("    blknos: ");
-	for (i = 0; i < le32_to_cpu(map->nr_chunks); i++)
-		printf("    %llu\n", le64_to_cpu(map->blknos[i]));
-
-	for (i = 0; i < le32_to_cpu(map->nr_chunks); i++) {
-		err = print_ring_block(fd, le64_to_cpu(map->blknos[i]),
-				       log_segs);
+		err = print_ring_block(fd, blkno, log_segs);
 		if (err && !ret)
 			ret = err;
+
+		if (++block == le64_to_cpu(super->ring_total_blocks))
+			block = 0;
 	}
 
-	free(map);
+	return ret;
+}
+
+/*
+ * print a chunk's worth of map blocks and stop if we hit a partial
+ * block.
+ */
+static int print_map_blocks(int fd, u64 blkno, u64 *ring_blknos)
+{
+	struct scoutfs_ring_map_block *map;
+	int r = 0;
+	int b;
+	int i;
+
+	for (b = 0; SCOUTFS_BLOCKS_PER_CHUNK; b++) {
+		map = read_block(fd, blkno + b);
+		if (!map)
+			return -ENOMEM;
+
+		printf("map block:\n");
+		print_block_header(&map->hdr);
+		printf("    nr_chunks: %u\n", le32_to_cpu(map->nr_chunks));
+
+		printf("    blknos: ");
+		for (i = 0; i < le32_to_cpu(map->nr_chunks); i++, r++) {
+			printf("    %llu\n", le64_to_cpu(map->blknos[i]));
+			ring_blknos[r] = le64_to_cpu(map->blknos[i]);
+		}
+
+		free(map);
+
+		if (i != SCOUTFS_RING_MAP_BLOCKS)
+			break;
+	}
+
 	return 0;
 }
 
@@ -291,8 +326,8 @@ static int print_super_brick(int fd)
 	struct scoutfs_super_block *super;
 	char uuid_str[37];
 	__le64 *log_segs;
+	u64 *ring_blknos;
 	u64 total_chunks;
-	size_t bytes;
 	int ret = 0;
 	int err;
 
@@ -326,16 +361,23 @@ static int print_super_brick(int fd)
 	       le64_to_cpu(super->ring_total_blocks),
 	       le64_to_cpu(super->ring_seq));
 
-	/* XXX by hand? */
-	bytes = (total_chunks + 63) / 8;
-	log_segs = malloc(bytes);
-	if (!log_segs) {
+	/*
+	 * Allocate a bitmap big enough to describe all the chunks and
+	 * we can have at most a full chunk worth of map blocks.
+	 */
+	log_segs = calloc(1, (total_chunks + 63) / 8);
+	ring_blknos = calloc(1, SCOUTFS_CHUNK_SIZE);
+	if (!log_segs || !ring_blknos) {
 		ret = -ENOMEM;
 		goto out;
 	}
-	memset(log_segs, 0, bytes);
 
-	err = print_map_block(fd, le64_to_cpu(super->ring_map_blkno), log_segs);
+	err = print_map_blocks(fd, le64_to_cpu(super->ring_map_blkno),
+			       ring_blknos);
+	if (err && !ret)
+		ret = err;
+
+	err = print_ring_blocks(fd, super, ring_blknos, log_segs);
 	if (err && !ret)
 		ret = err;
 
@@ -344,8 +386,11 @@ static int print_super_brick(int fd)
 		ret = err;
 
 out:
+	if (log_segs)
+		free(log_segs);
+	if (ring_blknos)
+		free(ring_blknos);
 	free(super);
-	free(log_segs);
 	return ret;
 }
 
