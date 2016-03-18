@@ -133,8 +133,8 @@ static int write_new_fs(char *path, int fd)
 	ent->len = cpu_to_le16(sizeof(*bm));
 	bm = (void *)(ent + 1);
 	memset(bm->bits, 0xff, sizeof(bm->bits));
-	/* the first three blocks are allocated */
-	bm->bits[0] = cpu_to_le64(~7ULL);
+	/* the first four chunks are allocated */
+	bm->bits[0] = cpu_to_le64(~15ULL);
 	bm->bits[1] = cpu_to_le64(~0ULL);
 
 	blkno += SCOUTFS_BLOCKS_PER_CHUNK;
