@@ -42,6 +42,57 @@ static void *read_block(int fd, u64 blkno)
 	return buf;
 }
 
+static void *read_chunk(int fd, u64 blkno)
+{
+	ssize_t ret;
+	void *buf;
+
+	buf = malloc(SCOUTFS_CHUNK_SIZE);
+	if (!buf)
+		return NULL;
+
+	ret = pread(fd, buf, SCOUTFS_CHUNK_SIZE, blkno << SCOUTFS_BLOCK_SHIFT);
+	if (ret != SCOUTFS_CHUNK_SIZE) {
+		fprintf(stderr, "read blkno %llu returned %zd: %s (%d)\n",
+			blkno, ret, strerror(errno), errno);
+		free(buf);
+		buf = NULL;
+	}
+
+	return buf;
+}
+
+static void print_le32_list(int indent, __le32 *data, int nr)
+{
+	char *fmt;
+	int pos;
+	int len;
+	int i;
+	u32 d;
+
+	printf("[");
+
+	pos = indent;
+	for (i = 0; i < nr; i++) {
+		if (i + 1 < nr)
+			fmt = "%u, ";
+		else
+			fmt = "%u";
+
+		d = le32_to_cpu(data[i]);
+		len = snprintf(NULL, 0, fmt, d);
+		if (pos + len > 78) {
+			printf("\n%*c", indent, ' ');
+			pos = indent;
+		}
+
+		printf(fmt, d);
+		pos += len;
+	}
+
+	printf("]\n");
+}
+
 static void print_block_header(struct scoutfs_block_header *hdr)
 {
 	u32 crc = crc_block(hdr);
@@ -87,49 +138,69 @@ static void print_inode(struct scoutfs_inode *inode)
 	       le32_to_cpu(inode->mtime.nsec));
 }
 
-static void print_item(struct scoutfs_item_header *ihdr)
+static void print_item(struct scoutfs_item *item, void *val)
 {
 	printf("    item:\n"
 	       "        key: "SKF"\n"
-	       "        len: %u\n",
-	       SKA(&ihdr->key), le16_to_cpu(ihdr->len));
+	       "        offset: %u\n"
+	       "        len: %u\n"
+	       "        skip_height: %u\n"
+	       "        skip_next[]: ",
+	       SKA(&item->key),
+	       le32_to_cpu(item->offset),
+	       le16_to_cpu(item->len),
+	       item->skip_height);
 
-	switch(ihdr->key.type) {
+	print_le32_list(22, item->skip_next, item->skip_height);
+
+	switch(item->key.type) {
 	case SCOUTFS_INODE_KEY:
-		print_inode((void *)(ihdr + 1));
+		print_inode(val);
 		break;
 	}
 }
 
-static int print_item_block(int fd, u64 nr)
+static int print_log_segment(int fd, u64 nr)
 {
-	struct scoutfs_item_header *ihdr;
 	struct scoutfs_item_block *iblk;
-	size_t off;
+	struct scoutfs_bloom_block *blm;
+	struct scoutfs_item *item;
+	char *buf;
+	char *val;
+	__le32 next;
 	int i;
 
-	iblk = read_block(fd, nr);
-	if (!iblk)
+	buf = read_chunk(fd, nr);
+	if (!buf)
 		return -ENOMEM;
+
+	for (i = 0; i < SCOUTFS_BLOOM_BLOCKS; i++) {
+
+		blm = (void *)(buf + (i << SCOUTFS_BLOCK_SHIFT));
+
+		printf("bloom block:\n");
+		print_block_header(&blm->hdr);
+	}
+
+	iblk = (void *)(buf + (SCOUTFS_BLOOM_BLOCKS << SCOUTFS_BLOCK_SHIFT));
 
 	printf("item block:\n");
 	print_block_header(&iblk->hdr);
 	printf("    first: "SKF"\n"
 	       "    last: "SKF"\n"
-	       "    nr_items: %u\n",
-	       SKA(&iblk->first), SKA(&iblk->last),
-	       le32_to_cpu(iblk->nr_items));
+	       "    skip_root.next[]: ",
+	       SKA(&iblk->first), SKA(&iblk->last));
+	print_le32_list(23, iblk->skip_root.next, SCOUTFS_SKIP_HEIGHT);
 
-	off = sizeof(struct scoutfs_item_block);
-	for (i = 0; i < le32_to_cpu(iblk->nr_items); i++) {
-		ihdr = (void *)((char *)iblk + off);
-		print_item(ihdr);
-
-		off += sizeof(struct scoutfs_item_header) +
-			le16_to_cpu(ihdr->len);
+	next = iblk->skip_root.next[0];
+	while (next) {
+		item = (void *)(buf + le32_to_cpu(next));
+		val = (void *)(buf + le32_to_cpu(item->offset));
+		print_item(item, val);
+		next = item->skip_next[0];
 	}
 
-	free(iblk);
+	free(buf);
 
 	return 0;
 }
@@ -143,7 +214,7 @@ static int print_log_segments(int fd, __le64 *log_segs, u64 total_chunks)
 	while ((nr = find_first_le_bit(log_segs, total_chunks)) >= 0) {
 		clear_le_bit(log_segs, nr);
 
-		err = print_item_block(fd, nr << SCOUTFS_CHUNK_BLOCK_SHIFT);
+		err = print_log_segment(fd, nr << SCOUTFS_CHUNK_BLOCK_SHIFT);
 		if (!ret && err)
 			ret = err;
 	}
@@ -344,15 +415,17 @@ static int print_super_brick(int fd)
 	print_block_header(&super->hdr);
 	printf("    id: %llx\n"
 	       "    uuid: %s\n"
-	       "    total_chunks: %llu\n"
+	       "    bloom_salts: ",
+	       le64_to_cpu(super->id),
+	       uuid_str);
+	print_le32_list(18, super->bloom_salts, SCOUTFS_BLOOM_SALTS);
+	printf("    total_chunks: %llu\n"
 	       "    ring_map_blkno: %llu\n"
 	       "    ring_map_seq: %llu\n"
 	       "    ring_first_block: %llu\n"
 	       "    ring_active_blocks: %llu\n"
 	       "    ring_total_blocks: %llu\n"
 	       "    ring_seq: %llu\n",
-	       le64_to_cpu(super->id),
-	       uuid_str,
 	       total_chunks,
 	       le64_to_cpu(super->ring_map_blkno),
 	       le64_to_cpu(super->ring_map_seq),
