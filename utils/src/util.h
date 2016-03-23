@@ -50,6 +50,8 @@ do {				\
 	((a) + _b - 1) & ~(_b - 1);	\
 })
 
+#define DIV_ROUND_UP(x, y)  (((x) + (y) - 1) / (y))
+
 #ifndef offsetof
 #define offsetof(type, memb) ((unsigned long)&((type *)0)->memb)
 #endif
