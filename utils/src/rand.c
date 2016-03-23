@@ -25,6 +25,6 @@ void pseudo_random_bytes(void *data, unsigned int len)
 
 	if (len) {
 		__builtin_ia32_rdrand64_step(&tmp);
-		memcpy(data, &tmp, len);
+		memcpy(ll, &tmp, len);
 	}
 }
