@@ -10,11 +10,11 @@
 
 static inline void set_bit_le(int nr, void *addr)
 {
-	u64 *dwords = addr;
+	unsigned long *longs = addr;
 
 	nr ^= BITOP_LE_SWIZZLE;
 
-	dwords[nr / 64] |= 1 << (nr & 63);
+	longs[nr / BITS_PER_LONG] |= 1UL << (nr & (BITS_PER_LONG - 1));
 }
 
 #endif
