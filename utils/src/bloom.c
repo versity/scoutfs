@@ -31,6 +31,7 @@ void scoutfs_calc_bloom_bits(struct scoutfs_bloom_bits *bits,
 			     struct scoutfs_key *key, __le32 *salts)
 {
 	unsigned h_bits = 0;
+	unsigned int b;
 	unsigned s = 0;
 	u64 h = 0;
 	int i;
@@ -38,12 +39,16 @@ void scoutfs_calc_bloom_bits(struct scoutfs_bloom_bits *bits,
 	for (i = 0; i < SCOUTFS_BLOOM_BITS; i++) {
 		if (h_bits < SCOUTFS_BLOOM_BIT_WIDTH) {
 			h = (h << 32) | bloom_hash(key, salts[s++]);
-			h += 32;
+			h_bits += 32;
 		}
 
-		bits->nr[i] = h & SCOUTFS_BLOOM_BIT_MASK;
+		b = h & SCOUTFS_BLOOM_BIT_MASK;
 		h >>= SCOUTFS_BLOOM_BIT_WIDTH;
 		h_bits -= SCOUTFS_BLOOM_BIT_WIDTH;
+
+		bits->block[i] = (b / SCOUTFS_BLOOM_BITS_PER_BLOCK) %
+				  SCOUTFS_BLOOM_BLOCKS;
+		bits->bit_off[i] = b % SCOUTFS_BLOOM_BITS_PER_BLOCK;
 	}
 }
 
@@ -51,16 +56,15 @@ void scoutfs_calc_bloom_bits(struct scoutfs_bloom_bits *bits,
  * This interface is different than in the kernel because we don't
  * have a block IO interface here yet.  The caller gives us each
  * bloom block and we set each bit that falls in the block.
- */ 
+ */
 void scoutfs_set_bloom_bits(struct scoutfs_bloom_block *blm, unsigned int nr,
 			    struct scoutfs_bloom_bits *bits)
 {
 	int i;
 
 	for (i = 0; i < SCOUTFS_BLOOM_BITS; i++) {
-		if (nr == (bits->nr[i] / SCOUTFS_BLOOM_BITS_PER_BLOCK)) {
-			set_bit_le(bits->nr[i] % SCOUTFS_BLOOM_BITS_PER_BLOCK,
-				   blm->bits);
+		if (nr == bits->block[i]) {
+			set_bit_le(bits->bit_off[i], blm->bits);
 		}
 	}
 }

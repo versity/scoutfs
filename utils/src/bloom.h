@@ -2,7 +2,8 @@
 #define _BLOOM_H_
 
 struct scoutfs_bloom_bits {
-	u32 nr[SCOUTFS_BLOOM_BITS];
+	u16 bit_off[SCOUTFS_BLOOM_BITS];
+	u8 block[SCOUTFS_BLOOM_BITS];
 };
 
 void scoutfs_calc_bloom_bits(struct scoutfs_bloom_bits *bits,
