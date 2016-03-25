@@ -140,6 +140,23 @@ static void print_inode(struct scoutfs_inode *inode)
 	       le32_to_cpu(inode->mtime.nsec));
 }
 
+static void print_dirent(struct scoutfs_dirent *dent, unsigned int val_len)
+{
+	unsigned int name_len = val_len - sizeof(*dent);
+	char name[SCOUTFS_NAME_LEN + 1];
+	int i;
+
+	for (i = 0; i < min(SCOUTFS_NAME_LEN, name_len); i++)
+		name[i] = isprint(dent->name[i]) ?  dent->name[i] : '.';
+	name[i] = '\0';
+
+	printf("        dirent:\n"
+	       "                ino: %llu\n"
+	       "                type: %u\n"
+	       "                name: \"%.*s\"\n",
+	       le64_to_cpu(dent->ino), dent->type, i, name);
+}
+
 static void print_item(struct scoutfs_item *item, void *val)
 {
 	printf("    item:\n"
@@ -158,6 +175,9 @@ static void print_item(struct scoutfs_item *item, void *val)
 	switch(item->key.type) {
 	case SCOUTFS_INODE_KEY:
 		print_inode(val);
+		break;
+	case SCOUTFS_DIRENT_KEY:
+		print_dirent(val, le16_to_cpu(item->len));
 		break;
 	}
 }
