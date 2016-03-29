@@ -414,47 +414,56 @@ static int print_map_blocks(int fd, u64 blkno, u64 *ring_blknos)
 	return 0;
 }
 
-static int print_super_brick(int fd)
+static int print_super_blocks(int fd)
 {
 	struct scoutfs_super_block *super;
+	struct scoutfs_super_block recent = { .hdr.seq = 0 };
 	char uuid_str[37];
 	__le64 *log_segs;
 	u64 *ring_blknos;
 	u64 total_chunks;
 	int ret = 0;
 	int err;
+	int i;
 
-	/* XXX print both */
-	super = read_block(fd, SCOUTFS_SUPER_BLKNO);
-	if (!super)
-		return -ENOMEM;
+	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
+		super = read_block(fd, SCOUTFS_SUPER_BLKNO + i);
+		if (!super)
+			return -ENOMEM;
 
-	uuid_unparse(super->uuid, uuid_str);
+		uuid_unparse(super->uuid, uuid_str);
 
+		printf("super:\n");
+		print_block_header(&super->hdr);
+		printf("    id: %llx\n"
+		       "    uuid: %s\n"
+		       "    bloom_salts: ",
+		       le64_to_cpu(super->id),
+		       uuid_str);
+		print_le32_list(18, super->bloom_salts, SCOUTFS_BLOOM_SALTS);
+		printf("    total_chunks: %llu\n"
+		       "    ring_map_blkno: %llu\n"
+		       "    ring_map_seq: %llu\n"
+		       "    ring_first_block: %llu\n"
+		       "    ring_active_blocks: %llu\n"
+		       "    ring_total_blocks: %llu\n"
+		       "    ring_seq: %llu\n",
+		       le64_to_cpu(super->total_chunks),
+		       le64_to_cpu(super->ring_map_blkno),
+		       le64_to_cpu(super->ring_map_seq),
+		       le64_to_cpu(super->ring_first_block),
+		       le64_to_cpu(super->ring_active_blocks),
+		       le64_to_cpu(super->ring_total_blocks),
+		       le64_to_cpu(super->ring_seq));
+
+		if (le64_to_cpu(super->hdr.seq) > le64_to_cpu(recent.hdr.seq))
+			memcpy(&recent, super, sizeof(recent));
+
+		free(super);
+	}
+
+	super = &recent;
 	total_chunks = le64_to_cpu(super->total_chunks);
-
-	printf("super:\n");
-	print_block_header(&super->hdr);
-	printf("    id: %llx\n"
-	       "    uuid: %s\n"
-	       "    bloom_salts: ",
-	       le64_to_cpu(super->id),
-	       uuid_str);
-	print_le32_list(18, super->bloom_salts, SCOUTFS_BLOOM_SALTS);
-	printf("    total_chunks: %llu\n"
-	       "    ring_map_blkno: %llu\n"
-	       "    ring_map_seq: %llu\n"
-	       "    ring_first_block: %llu\n"
-	       "    ring_active_blocks: %llu\n"
-	       "    ring_total_blocks: %llu\n"
-	       "    ring_seq: %llu\n",
-	       total_chunks,
-	       le64_to_cpu(super->ring_map_blkno),
-	       le64_to_cpu(super->ring_map_seq),
-	       le64_to_cpu(super->ring_first_block),
-	       le64_to_cpu(super->ring_active_blocks),
-	       le64_to_cpu(super->ring_total_blocks),
-	       le64_to_cpu(super->ring_seq));
 
 	/*
 	 * Allocate a bitmap big enough to describe all the chunks and
@@ -485,7 +494,6 @@ out:
 		free(log_segs);
 	if (ring_blknos)
 		free(ring_blknos);
-	free(super);
 	return ret;
 }
 
@@ -509,7 +517,7 @@ static int print_cmd(int argc, char **argv)
 		return ret;
 	}
 
-	ret = print_super_brick(fd);
+	ret = print_super_blocks(fd);
 	close(fd);
 	return ret;
 };
