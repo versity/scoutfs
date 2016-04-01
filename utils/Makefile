@@ -20,7 +20,7 @@ endif
 
 $(BIN): $(OBJ)
 	$(QU)  [BIN $@]
-	$(VE)gcc -o $@ $^ -luuid
+	$(VE)gcc -o $@ $^ -luuid -lm
 
 %.o %.d: %.c Makefile sparse.sh
 	$(QU)  [CC $<]
