@@ -260,8 +260,7 @@ static char *ent_type_str(u8 type)
 
 static void print_ring_entry(int fd, struct scoutfs_ring_entry *ent)
 {
-	struct scoutfs_ring_manifest_entry *ment;
-	struct scoutfs_ring_del_manifest *del;
+	struct scoutfs_manifest_entry *ment;
 	struct scoutfs_ring_bitmap *bm;
 
 	printf("    entry:\n"
@@ -281,9 +280,14 @@ static void print_ring_entry(int fd, struct scoutfs_ring_entry *ent)
 		       ment->level, SKA(&ment->first), SKA(&ment->last));
 		break;
 	case SCOUTFS_RING_DEL_MANIFEST:
-		del = (void *)(ent + 1);
-		printf("            blkno: %llu\n",
-		       le64_to_cpu(del->blkno));
+		ment = (void *)(ent + 1);
+		printf("            blkno: %llu\n"
+		       "            seq: %llu\n"
+		       "            level: %u\n"
+		       "            first: "SKF"\n"
+		       "            last: "SKF"\n",
+		       le64_to_cpu(ment->blkno), le64_to_cpu(ment->seq),
+		       ment->level, SKA(&ment->first), SKA(&ment->last));
 		break;
 	case SCOUTFS_RING_BITMAP:
 		bm = (void *)(ent + 1);
@@ -298,19 +302,18 @@ static void print_ring_entry(int fd, struct scoutfs_ring_entry *ent)
 static void update_log_segs(struct scoutfs_ring_entry *ent,
 			       __le64 *log_segs)
 {
-	struct scoutfs_ring_manifest_entry *add;
-	struct scoutfs_ring_del_manifest *del;
+	struct scoutfs_manifest_entry *ment;
 	u64 bit;
 
 	switch(ent->type) {
 	case SCOUTFS_RING_ADD_MANIFEST:
-		add = (void *)(ent + 1);
-		bit = le64_to_cpu(add->blkno) >> SCOUTFS_CHUNK_BLOCK_SHIFT;
+		ment = (void *)(ent + 1);
+		bit = le64_to_cpu(ment->blkno) >> SCOUTFS_CHUNK_BLOCK_SHIFT;
 		set_le_bit(log_segs, bit);
 		break;
 	case SCOUTFS_RING_DEL_MANIFEST:
-		del = (void *)(ent + 1);
-		bit = le64_to_cpu(del->blkno) >> SCOUTFS_CHUNK_BLOCK_SHIFT;
+		ment = (void *)(ent + 1);
+		bit = le64_to_cpu(ment->blkno) >> SCOUTFS_CHUNK_BLOCK_SHIFT;
 		clear_le_bit(log_segs, bit);
 		break;
 	}
