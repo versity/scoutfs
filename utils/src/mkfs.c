@@ -17,7 +17,6 @@
 #include "crc.h"
 #include "rand.h"
 #include "dev.h"
-#include "bloom.h"
 #include "bitops.h"
 
 /*
@@ -44,21 +43,13 @@ static int write_new_fs(char *path, int fd)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_inode *inode;
-	struct scoutfs_ring_map_block *map;
-	struct scoutfs_ring_block *ring;
-	struct scoutfs_ring_entry *ent;
-	struct scoutfs_manifest_entry *mani;
-	struct scoutfs_ring_bitmap *bm;
-	struct scoutfs_item_block *iblk;
-	struct scoutfs_bloom_bits bits;
-	struct scoutfs_bloom_block *blm;
-	struct scoutfs_item *item;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_btree_item *item;
 	struct scoutfs_key root_key;
 	struct timeval tv;
 	char uuid_str[37];
 	unsigned int i;
 	u64 size;
-	u64 total_chunks;
 	u64 blkno;
 	void *buf;
 	int ret;
@@ -81,14 +72,12 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	total_chunks = size >> SCOUTFS_CHUNK_SHIFT;
-
 	root_key.inode = cpu_to_le64(SCOUTFS_ROOT_INO);
 	root_key.type = SCOUTFS_INODE_KEY;
 	root_key.offset = 0;
 
-	/* first chunk has super blocks, log segment chunk is next */
-	blkno = 1 << SCOUTFS_CHUNK_BLOCK_SHIFT;
+	/* start with the block after the supers */
+	blkno = SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR;
 
 	/* first initialize the super so we can use it to build structures */
 	memset(super, 0, SCOUTFS_BLOCK_SIZE);
@@ -96,45 +85,21 @@ static int write_new_fs(char *path, int fd)
 	super->hdr.seq = cpu_to_le64(1);
 	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
 	uuid_generate(super->uuid);
-	pseudo_random_bytes(super->bloom_salts, sizeof(super->bloom_salts));
-	super->total_chunks = cpu_to_le64(total_chunks);
-	super->ring_map_seq = super->hdr.seq;
-	super->ring_first_block = cpu_to_le64(0);
-	super->ring_active_blocks = cpu_to_le64(1);
-	super->ring_total_blocks = cpu_to_le64(SCOUTFS_BLOCKS_PER_CHUNK);
-	super->ring_seq = super->hdr.seq;
 
-	/*
-	 * There's only the root item so we check for its bloom bits as
-	 * we write the bloom blocks.
-	 */
-	scoutfs_calc_bloom_bits(&bits, &root_key, super->bloom_salts);
-	for (i = 0; i < SCOUTFS_BLOOM_BLOCKS; i++) {
-		memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-		blm = buf;
-		blm->hdr = super->hdr;
-
-		scoutfs_set_bloom_bits(blm, i, &bits);
-
-		ret = write_block(fd, blkno, &blm->hdr);
-		if (ret)
-			goto out;
-		blkno++;
-	}
-
-	/* write a single log segment with the root inode item */
+	/* write a btree leaf root inode item */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	iblk = buf;
-	iblk->hdr = super->hdr;
-	iblk->skip_root.next[0] = cpu_to_le32((SCOUTFS_BLOOM_BLOCKS <<
-					      SCOUTFS_BLOCK_SHIFT) +
-				            sizeof(struct scoutfs_item_block));
-	item = (void *)(iblk + 1);
+	bt = buf;
+	bt->hdr = super->hdr;
+	bt->nr_items = cpu_to_le16(1);
+
+	item = (void *)(bt + 1);
 	item->key = root_key;
-	item->offset = cpu_to_le32(le32_to_cpu(iblk->skip_root.next[0]) +
-				   sizeof(struct scoutfs_item));
-	item->len = cpu_to_le16(sizeof(struct scoutfs_inode));
-	item->skip_height = 1;
+	item->tnode.parent = 0;
+	item->tnode.left = 0;
+	item->tnode.right = 0;
+	pseudo_random_bytes(&item->tnode.prio, sizeof(item->tnode.prio));
+	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
+
 	inode = (void *)(item + 1);
 	inode->nlink = cpu_to_le32(2);
 	inode->mode = cpu_to_le32(0755 | 0040000);
@@ -145,52 +110,19 @@ static int write_new_fs(char *path, int fd)
 	inode->mtime.sec = inode->atime.sec;
 	inode->mtime.nsec = inode->atime.nsec;
 
-	ret = write_block(fd, blkno, &iblk->hdr);
-	if (ret)
-		goto out;
-	blkno = round_up(blkno, SCOUTFS_BLOCKS_PER_CHUNK);
+	bt->treap.off = cpu_to_le16((char *)&item->tnode - (char *)&bt->treap);
+	bt->total_free = cpu_to_le16(SCOUTFS_BLOCK_SIZE -
+				     ((char *)(inode + 1) - (char *)bt));
+	bt->tail_free = bt->total_free;
 
-	/* write the ring block whose manifest entry references the log block */
-	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	ring = buf;
-	ring->hdr = super->hdr;
-	ring->nr_entries = cpu_to_le16(2);
-	ent = (void *)(ring + 1);
-	ent->type = SCOUTFS_RING_ADD_MANIFEST;
-	ent->len = cpu_to_le16(sizeof(*mani));
-	mani = (void *)(ent + 1);
-	mani->blkno = cpu_to_le64(blkno - SCOUTFS_BLOCKS_PER_CHUNK);
-	mani->seq = super->hdr.seq;
-	mani->level = 0;
-	mani->first = root_key;
-	mani->last = root_key;
-	ent = (void *)(mani + 1);
-	ent->type = SCOUTFS_RING_BITMAP;
-	ent->len = cpu_to_le16(sizeof(*bm));
-	bm = (void *)(ent + 1);
-	memset(bm->bits, 0xff, sizeof(bm->bits));
-	/* the first four chunks are allocated */
-	bm->bits[0] = cpu_to_le64(~15ULL);
-	bm->bits[1] = cpu_to_le64(~0ULL);
-
-	ret = write_block(fd, blkno, &ring->hdr);
-	if (ret)
-		goto out;
-	blkno += SCOUTFS_BLOCKS_PER_CHUNK;
-
-	/* the ring has a single chunk for now */
-	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	map = buf;
-	map->hdr = super->hdr;
-	map->nr_chunks = cpu_to_le32(1);
-	map->blknos[0] = cpu_to_le64(blkno - SCOUTFS_BLOCKS_PER_CHUNK);
-
-	ret = write_block(fd, blkno, &map->hdr);
+	ret = write_block(fd, blkno, &bt->hdr);
 	if (ret)
 		goto out;
 
 	/* make sure the super references everything we just wrote */
-	super->ring_map_blkno = cpu_to_le64(blkno);
+	super->btree_root.height = 1;
+	super->btree_root.ref.blkno = bt->hdr.blkno;
+	super->btree_root.ref.seq = bt->hdr.seq;
 
 	/* write the two super blocks */
 	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
@@ -210,12 +142,10 @@ static int write_new_fs(char *path, int fd)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  chunk bytes: %u\n"
-	       "  total chunks: %llu\n"
+	       "  block size: %u\n"
 	       "  fsid: %llx\n"
 	       "  uuid: %s\n",
-		SCOUTFS_CHUNK_SIZE, total_chunks,
-		le64_to_cpu(super->hdr.fsid), uuid_str);
+		SCOUTFS_BLOCK_SIZE, le64_to_cpu(super->hdr.fsid), uuid_str);
 
 	ret = 0;
 out:
