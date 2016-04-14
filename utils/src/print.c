@@ -91,7 +91,14 @@ static void print_dirent(struct scoutfs_dirent *dent, unsigned int val_len)
 	       le64_to_cpu(dent->ino), dent->type, i, name);
 }
 
-static void print_btree_item(unsigned int off, struct scoutfs_btree_item *item)
+static void print_block_ref(struct scoutfs_block_ref *ref)
+{
+	printf("      ref: blkno %llu seq %llu\n",
+	       le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq));
+}
+
+static void print_btree_item(unsigned int off, struct scoutfs_btree_item *item,
+			     u8 level)
 {
 	printf("    item: key "SKF" val_len %u off %u tnode: parent %u left %u right %u "
 	       "prio %x\n",
@@ -100,6 +107,11 @@ static void print_btree_item(unsigned int off, struct scoutfs_btree_item *item)
 		le16_to_cpu(item->tnode.left),
 		le16_to_cpu(item->tnode.right),
 		le32_to_cpu(item->tnode.prio));
+
+	if (level) {
+		print_block_ref((void *)item->val);
+		return;
+	}
 
 	switch(item->key.type) {
 	case SCOUTFS_INODE_KEY:
@@ -140,7 +152,7 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 			i--;
 		} else  {
 			off = (char *)&item->tnode - (char *)&bt->treap;
-			print_btree_item(off, item);
+			print_btree_item(off, item, level);
 		}
 
 		item = (void *)&item->val[le16_to_cpu(item->val_len)];
