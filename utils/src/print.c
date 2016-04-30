@@ -178,6 +178,49 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 	return ret;
 }
 
+static int print_buddy_blocks(int fd, struct scoutfs_super_block *super)
+{
+	struct scoutfs_buddy_chunk *chunk;
+	struct scoutfs_buddy_block *bb;
+	u64 blkno;
+	u64 blocks;
+	u64 head;
+	u64 tail;
+	int i;
+	int j;
+
+	blocks = le32_to_cpu(super->buddy_blocks);
+	head = le64_to_cpu(super->buddy_head);
+	tail = le64_to_cpu(super->buddy_tail);
+
+	/* XXX make sure values are sane */
+
+	for (; head < tail; head++) {
+
+		blkno = SCOUTFS_BUDDY_BLKNO + (head % blocks);
+		bb = read_block(fd, blkno);
+		if (!bb)
+			return -ENOMEM;
+
+		printf("buddy blkno %llu\n", blkno);
+		print_block_header(&bb->hdr);
+		printf("  nr_chunks %u\n", bb->nr_chunks);
+		for (i = 0; i < bb->nr_chunks; i++) {
+			chunk = &bb->chunks[i];
+
+			printf("   [%u]: pos %u bits ",
+				i, le32_to_cpu(chunk->pos));
+			for (j = 0; j < SCOUTFS_BUDDY_CHUNK_LE64S; j++)
+				printf("%016llx", le64_to_cpu(chunk->bits[j]));
+			printf("\n");
+		}
+
+		free(bb);
+	}
+
+	return 0;
+}
+
 static int print_super_blocks(int fd)
 {
 	struct scoutfs_super_block *super;
@@ -198,6 +241,13 @@ static int print_super_blocks(int fd)
 		print_block_header(&super->hdr);
 		printf("  id %llx uuid %s\n",
 		       le64_to_cpu(super->id), uuid_str);
+		printf("  total_blocks %llu buddy_blocks %u buddy_sweep_bit %u\n"
+		       "  buddy_head %llu buddy_tail %llu\n",
+			le64_to_cpu(super->total_blocks),
+			le32_to_cpu(super->buddy_blocks),
+			le32_to_cpu(super->buddy_sweep_bit),
+			le64_to_cpu(super->buddy_head),
+			le64_to_cpu(super->buddy_tail));
 		printf("  btree_root: height %u seq %llu blkno %llu\n",
 			super->btree_root.height,
 			le64_to_cpu(super->btree_root.ref.seq),
@@ -211,11 +261,15 @@ static int print_super_blocks(int fd)
 
 	super = &recent;
 
-	if (super->btree_root.height)
+	ret = print_buddy_blocks(fd, super);
+
+	if (super->btree_root.height) {
 		err = print_btree_block(fd, super->btree_root.ref.blkno,
 					super->btree_root.height - 1);
-	if (err && !ret)
-		ret = err;
+		if (err && !ret)
+			ret = err;
+	}
+
 	return ret;
 }
 

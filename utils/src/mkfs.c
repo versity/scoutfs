@@ -39,6 +39,24 @@ static int write_block(int fd, u64 blkno, struct scoutfs_block_header *hdr)
 	return 0;
 }
 
+/*
+ * Calculate the number of buddy blocks that are needed to track the
+ * allocation of a device with the given byte size.  We need an even
+ * number of buddy blocks that contain 8 bits for every device block.  This
+ * is a bit overly conservative in that it doesn't subtract the buddy
+ * blocks and super block from the calculation.
+ */
+static u32 calc_buddy_blocks(u64 total_blocks)
+{
+	u64 buddy_bits = total_blocks * 8;
+	u64 chunks = DIV_ROUND_UP(buddy_bits, SCOUTFS_BUDDY_CHUNK_BITS);
+	u64 blocks = DIV_ROUND_UP(chunks, SCOUTFS_BUDDY_CHUNKS_PER_BLOCK);
+
+	/* XXX check u32 overflow? */
+
+	return round_up(blocks, 2);
+}
+
 static int write_new_fs(char *path, int fd)
 {
 	struct scoutfs_super_block *super;
@@ -51,6 +69,8 @@ static int write_new_fs(char *path, int fd)
 	unsigned int i;
 	u64 size;
 	u64 blkno;
+	u64 total_blocks;
+	u64 buddy_blocks;
 	void *buf;
 	int ret;
 
@@ -72,6 +92,15 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
+	/* the block limit is totally arbitrary */
+	total_blocks = size / SCOUTFS_BLOCK_SIZE;
+	if (total_blocks < 32) {
+		fprintf(stderr, "%llu byte device only has room for %llu %u byte blocks, needs at least 32 blocks\n",
+			size, total_blocks, SCOUTFS_BLOCK_SIZE);
+		goto out;
+	}
+	buddy_blocks = calc_buddy_blocks(total_blocks);
+
 	root_key.inode = cpu_to_le64(SCOUTFS_ROOT_INO);
 	root_key.type = SCOUTFS_INODE_KEY;
 	root_key.offset = 0;
@@ -85,6 +114,8 @@ static int write_new_fs(char *path, int fd)
 	super->hdr.seq = cpu_to_le64(1);
 	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
 	uuid_generate(super->uuid);
+	super->total_blocks = cpu_to_le64(total_blocks);
+	super->buddy_blocks = cpu_to_le32(buddy_blocks);
 
 	/* write a btree leaf root inode item */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
@@ -142,10 +173,12 @@ static int write_new_fs(char *path, int fd)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  block size: %u\n"
+	       "  total blocks: %llu\n"
+	       "  buddy blocks: %llu\n"
 	       "  fsid: %llx\n"
 	       "  uuid: %s\n",
-		SCOUTFS_BLOCK_SIZE, le64_to_cpu(super->hdr.fsid), uuid_str);
+		total_blocks, buddy_blocks,
+		le64_to_cpu(super->hdr.fsid), uuid_str);
 
 	ret = 0;
 out:
