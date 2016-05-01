@@ -241,8 +241,10 @@ static int print_super_blocks(int fd)
 		print_block_header(&super->hdr);
 		printf("  id %llx uuid %s\n",
 		       le64_to_cpu(super->id), uuid_str);
-		printf("  total_blocks %llu buddy_blocks %u buddy_sweep_bit %u\n"
+		printf("  next_ino %llu total_blocks %llu buddy_blocks %u "
+		       "buddy_sweep_bit %u\n"
 		       "  buddy_head %llu buddy_tail %llu\n",
+			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
 			le32_to_cpu(super->buddy_blocks),
 			le32_to_cpu(super->buddy_sweep_bit),
