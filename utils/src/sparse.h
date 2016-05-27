@@ -24,12 +24,14 @@ extern unsigned int __builtin_ia32_crc32qi(unsigned int, unsigned char);
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
+typedef int s32;
 typedef unsigned long long u64;
 typedef signed long long s64;
 
 typedef u8 __u8;
 typedef u16 __u16;
 typedef u32 __u32;
+typedef s32 __s32;
 typedef u64 __u64;
 
 typedef u16 __bitwise __le16;
