@@ -13,7 +13,7 @@
 #include "ioctl.h"
 #include "cmd.h"
 
-static int get_ibuf(int fd, int cmd, struct scoutfs_ioctl_buf *ibuf)
+static int ibuf_ioctl(int fd, int cmd, struct scoutfs_ioctl_buf *ibuf)
 {
 	int ret;
 
@@ -45,6 +45,59 @@ static int get_ibuf(int fd, int cmd, struct scoutfs_ioctl_buf *ibuf)
 		ret = 0;
 	}
 
+	return ret;
+}
+
+static int ibuf_read(char *path, struct scoutfs_ioctl_buf *ibuf)
+{
+	struct stat st;
+	ssize_t bytes;
+	int fd;
+	int ret;
+
+	if (stat(path, &st)) {
+		ret = -errno;
+		fprintf(stderr, "stat %s failed: %s (%d)\n",
+			path, strerror(errno), errno);
+		return ret;
+	}
+
+	if (!S_ISREG(st.st_mode)) {
+		fprintf(stderr, "%s must be a regular file\n", path);
+		return -EINVAL;
+	}
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "failed to open '%s': %s (%d)\n",
+			path, strerror(errno), errno);
+		return ret;
+	}
+
+	ibuf->len = st.st_size;
+
+	ibuf->ptr = (intptr_t)malloc(ibuf->len);
+	if (!ibuf->ptr) {
+		ret = -errno;
+		fprintf(stderr, "allocate %d bytes failed: %s (%d)\n",
+			ibuf->len, strerror(errno), errno);
+		return ret;
+	}
+
+	bytes = read(fd, (void *)(intptr_t)ibuf->ptr, ibuf->len);
+	if (bytes != ibuf->len) {
+		if (bytes < 0)
+			ret = -errno;
+		else 
+			ret = -EIO;
+		fprintf(stderr, "read %d bytes from %s returned %zd: %s (%d)\n",
+			ibuf->len, path, bytes, strerror(errno), errno);
+	} else {
+		ret = 0;
+	}
+
+	close(fd);
 	return ret;
 }
 
@@ -130,21 +183,27 @@ static int trace_cmd(int argc, char **argv)
 	int ret;
 	int fd;
 
-	fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			path, strerror(errno), errno);
-		return ret;
-	}
+	if (argc == 0) {
+		fd = open(path, O_RDONLY);
+		if (fd < 0) {
+			ret = -errno;
+			fprintf(stderr, "failed to open '%s': %s (%d)\n",
+				path, strerror(errno), errno);
+			return ret;
+		}
 
-	/*
-	 * Read the formats and records.  Our fd on the debugfs file
-	 * should prevent the module from unloading which is the only
-	 * way the per-module formats could change.
-	 */
-	ret = get_ibuf(fd, SCOUTFS_IOC_GET_TRACE_FORMATS, &fmts) ?:
-	      get_ibuf(fd, SCOUTFS_IOC_GET_TRACE_RECORDS, &recs);
+		/* fd on debugfs file pins formats that live in module */ 
+		ret = ibuf_ioctl(fd, SCOUTFS_IOC_GET_TRACE_FORMATS, &fmts) ?:
+		      ibuf_ioctl(fd, SCOUTFS_IOC_GET_TRACE_RECORDS, &recs);
+		close(fd);
+	} else {
+		if (argc != 2) {
+			fprintf(stderr, "specify trace and record files\n"); 
+			return -EINVAL;
+		}
+		ret = ibuf_read(argv[0], &fmts) ?:
+		      ibuf_read(argv[1], &recs);
+	}
 	if (ret)
 		goto out;
 
@@ -158,12 +217,15 @@ static int trace_cmd(int argc, char **argv)
 	}
 
 out:
-	close(fd);
+	if (fmts.ptr)
+		free((void *)(intptr_t)fmts.ptr);
+	if (recs.ptr)
+		free((void *)(intptr_t)recs.ptr);
 	return ret;
 };
 
 static void __attribute__((constructor)) trace_ctor(void)
 {
-	cmd_register("trace", "<device>", "print scoutfs kernel traces",
-		     trace_cmd);
+	cmd_register("trace", "[fmt file] [record file]",
+		     "print scoutfs kernel traces", trace_cmd);
 }
