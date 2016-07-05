@@ -99,9 +99,10 @@ static void print_block_ref(struct scoutfs_block_ref *ref)
 static void print_btree_item(unsigned int off, struct scoutfs_btree_item *item,
 			     u8 level)
 {
-	printf("    item: key "SKF" val_len %u off %u tnode: parent %u left %u right %u "
+	printf("    item: key "SKF" seq %llu val_len %u off %u tnode: parent %u left %u right %u "
 	       "prio %x\n",
-		SKA(&item->key), le16_to_cpu(item->val_len), off,
+		SKA(&item->key), le64_to_cpu(item->seq),
+		le16_to_cpu(item->val_len), off,
 		le16_to_cpu(item->tnode.parent),
 		le16_to_cpu(item->tnode.left),
 		le16_to_cpu(item->tnode.right),

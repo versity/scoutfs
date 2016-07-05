@@ -125,6 +125,7 @@ static int write_new_fs(char *path, int fd)
 	bt->nr_items = cpu_to_le16(1);
 
 	item = (void *)(bt + 1);
+	item->seq = cpu_to_le64(1);
 	item->key = root_key;
 	item->tnode.parent = 0;
 	item->tnode.left = 0;
