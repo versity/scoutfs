@@ -61,8 +61,8 @@ static int since_cmd(int argc, char **argv)
 	args.first_ino = nrs[0];
 	args.last_ino = nrs[1];
 	args.seq = nrs[2];
-	args.results.ptr = (intptr_t)ptr;
-	args.results.len = len;
+	args.buf_ptr = (intptr_t)ptr;
+	args.buf_len = len;
 
 	ret = ioctl(fd, SCOUTFS_IOC_INODES_SINCE, &args);
 	if (ret < 0) {
