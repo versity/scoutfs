@@ -15,7 +15,6 @@
 #include "format.h"
 #include "cmd.h"
 #include "crc.h"
-#include "lebitmap.h"
 
 /* XXX maybe these go somewhere */
 #define SKF "%llu.%u.%llu"
