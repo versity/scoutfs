@@ -104,4 +104,9 @@ __gen_functions(cast, be)
 #error "machine is neither BIG_ENDIAN nor LITTLE_ENDIAN"
 #endif
 
+static inline void le32_add_cpu(__le32 *val, u32 delta)
+{
+	*val = cpu_to_le32(le32_to_cpu(*val) + delta);
+}
+
 #endif

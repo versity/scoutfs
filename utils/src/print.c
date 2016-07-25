@@ -177,45 +177,89 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 	return ret;
 }
 
+static int print_buddy_block(int fd, struct scoutfs_super_block *super,
+			      u64 blkno)
+{
+	struct scoutfs_buddy_block *bud;
+	int i;
+
+	bud = read_block(fd, blkno);
+	if (!bud)
+		return -ENOMEM;
+
+	printf("buddy blkno %llu\n", blkno);
+	print_block_header(&bud->hdr);
+	printf("  order_counts:");
+	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++)
+		printf(" %u", le32_to_cpu(bud->order_counts[i]));
+	printf("\n");
+
+	free(bud);
+
+	return 0;
+}
+
 static int print_buddy_blocks(int fd, struct scoutfs_super_block *super)
 {
-	struct scoutfs_buddy_chunk *chunk;
-	struct scoutfs_buddy_block *bb;
+	struct scoutfs_buddy_indirect *ind;
+	struct scoutfs_buddy_slot *slot;
 	u64 blkno;
-	u64 blocks;
-	u64 head;
-	u64 tail;
+	int ret = 0;
+	int err;
 	int i;
-	int j;
 
-	blocks = le32_to_cpu(super->buddy_blocks);
-	head = le64_to_cpu(super->buddy_head);
-	tail = le64_to_cpu(super->buddy_tail);
+	blkno = le64_to_cpu(super->buddy_ind_ref.blkno);
+	ind = read_block(fd, blkno);
+	if (!ind)
+		return -ENOMEM;
 
-	/* XXX make sure values are sane */
+	printf("buddy indirect blkno %llu\n", blkno);
+	print_block_header(&ind->hdr);
 
-	for (; head < tail; head++) {
+	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
+		slot = &ind->slots[i];
 
-		blkno = SCOUTFS_BUDDY_BLKNO + (head % blocks);
-		bb = read_block(fd, blkno);
-		if (!bb)
-			return -ENOMEM;
+		/* only print slots with non-zero fields */
+		if (!slot->free_orders && !slot->ref.seq && !slot->ref.blkno)
+			continue;
 
-		printf("buddy blkno %llu\n", blkno);
-		print_block_header(&bb->hdr);
-		printf("  nr_chunks %u\n", bb->nr_chunks);
-		for (i = 0; i < bb->nr_chunks; i++) {
-			chunk = &bb->chunks[i];
-
-			printf("   [%u]: pos %u bits ",
-				i, le32_to_cpu(chunk->pos));
-			for (j = 0; j < SCOUTFS_BUDDY_CHUNK_LE64S; j++)
-				printf("%016llx", le64_to_cpu(chunk->bits[j]));
-			printf("\n");
-		}
-
-		free(bb);
+		printf("  slot[%u]: free_orders: %x ref: seq %llu blkno %llu\n",
+			i, slot->free_orders, le64_to_cpu(slot->ref.seq),
+			le64_to_cpu(slot->ref.blkno));
 	}
+
+	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
+		slot = &ind->slots[i];
+
+		if (!slot->free_orders && !slot->ref.seq && !slot->ref.blkno)
+			continue;
+
+		err = print_buddy_block(fd, super,
+					le64_to_cpu(slot->ref.blkno));
+		if (err && !ret)
+			ret = err;
+	}
+
+	free(ind);
+
+	return ret;
+}
+
+
+static int print_bitmap_block(int fd, struct scoutfs_super_block *super)
+{
+	struct scoutfs_bitmap_block *bm;
+	u64 blkno;
+
+	blkno = le64_to_cpu(super->buddy_bm_ref.blkno);
+	bm = read_block(fd, blkno);
+	if (!bm)
+		return -ENOMEM;
+
+	printf("bitmap blkno %llu\n", blkno);
+	print_block_header(&bm->hdr);
+
+	free(bm);
 
 	return 0;
 }
@@ -240,15 +284,16 @@ static int print_super_blocks(int fd)
 		print_block_header(&super->hdr);
 		printf("  id %llx uuid %s\n",
 		       le64_to_cpu(super->id), uuid_str);
-		printf("  next_ino %llu total_blocks %llu buddy_blocks %u "
-		       "buddy_sweep_bit %u\n"
-		       "  buddy_head %llu buddy_tail %llu\n",
+		printf("  next_ino %llu total_blocks %llu buddy_blocks %u\n",
 			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
-			le32_to_cpu(super->buddy_blocks),
-			le32_to_cpu(super->buddy_sweep_bit),
-			le64_to_cpu(super->buddy_head),
-			le64_to_cpu(super->buddy_tail));
+			le32_to_cpu(super->buddy_blocks));
+		printf("  buddy_bm_ref: seq %llu blkno %llu\n",
+			le64_to_cpu(super->buddy_bm_ref.seq),
+			le64_to_cpu(super->buddy_bm_ref.blkno));
+		printf("  buddy_ind_ref: seq %llu blkno %llu\n",
+			le64_to_cpu(super->buddy_ind_ref.seq),
+			le64_to_cpu(super->buddy_ind_ref.blkno));
 		printf("  btree_root: height %u seq %llu blkno %llu\n",
 			super->btree_root.height,
 			le64_to_cpu(super->btree_root.ref.seq),
@@ -262,7 +307,13 @@ static int print_super_blocks(int fd)
 
 	super = &recent;
 
-	ret = print_buddy_blocks(fd, super);
+	err = print_bitmap_block(fd, super);
+	if (err && !ret)
+		ret = err;
+
+	err = print_buddy_blocks(fd, super);
+	if (err && !ret)
+		ret = err;
 
 	if (super->btree_root.height) {
 		err = print_btree_block(fd, super->btree_root.ref.blkno,

@@ -22,10 +22,13 @@
 /*
  * Update the block's header and write it out.
  */
-static int write_block(int fd, u64 blkno, struct scoutfs_block_header *hdr)
+static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
+		       struct scoutfs_block_header *hdr)
 {
 	ssize_t ret;
 
+	if (super)
+		*hdr = super->hdr;
 	hdr->blkno = cpu_to_le64(blkno);
 	hdr->crc = cpu_to_le32(crc_block(hdr));
 
@@ -40,21 +43,84 @@ static int write_block(int fd, u64 blkno, struct scoutfs_block_header *hdr)
 }
 
 /*
- * Calculate the number of buddy blocks that are needed to track the
- * allocation of a device with the given byte size.  We need an even
- * number of buddy blocks that contain 8 bits for every device block.  This
- * is a bit overly conservative in that it doesn't subtract the buddy
- * blocks and super block from the calculation.
+ * Calculate the number of buddy blocks that are needed to manage
+ * allocation of a device with the given number of total blocks.
+ *
+ * We need a little bit of overhead to write each transaction's dirty
+ * buddy blocks to free space.  We chose 16MB for now which is wild
+ * overkill and should be dependent on the max transaction size.
  */
 static u32 calc_buddy_blocks(u64 total_blocks)
 {
-	u64 buddy_bits = total_blocks * 8;
-	u64 chunks = DIV_ROUND_UP(buddy_bits, SCOUTFS_BUDDY_CHUNK_BITS);
-	u64 blocks = DIV_ROUND_UP(chunks, SCOUTFS_BUDDY_CHUNKS_PER_BLOCK);
+	return DIV_ROUND_UP(total_blocks, SCOUTFS_BUDDY_ORDER0_BITS) +
+		((16 * 1024 * 1024) / SCOUTFS_BLOCK_SIZE);
+}
 
-	/* XXX check u32 overflow? */
+static u32 first_blkno(struct scoutfs_super_block *super)
+{
+	return SCOUTFS_BUDDY_BM_BLKNO + SCOUTFS_BUDDY_BM_NR + 
+	       le32_to_cpu(super->buddy_blocks);
+}
 
-	return round_up(blocks, 2);
+/* the starting bit offset in the block bitmap of an order's bitmap */
+static int order_off(int order)
+{
+	if (order == 0)
+		return 0;
+
+	return (2 * SCOUTFS_BUDDY_ORDER0_BITS) -
+	       (SCOUTFS_BUDDY_ORDER0_BITS / (1 << (order - 1)));
+}
+
+/* the bit offset in the block bitmap of an order's bit */
+static int order_nr(int order, int nr)
+{
+	return order_off(order) + nr;
+}
+
+static int test_buddy_bit(struct scoutfs_buddy_block *bud, int order, int nr)
+{
+	return test_bit_le(order_nr(order, nr), bud->bits);
+}
+
+static void set_buddy_bit(struct scoutfs_buddy_block *bud, int order, int nr)
+{
+	if (!test_and_set_bit_le(order_nr(order, nr), bud->bits))
+		le32_add_cpu(&bud->order_counts[order], 1);
+}
+
+static void clear_buddy_bit(struct scoutfs_buddy_block *bud, int order, int nr)
+{
+	if (test_and_clear_bit_le(order_nr(order, nr), bud->bits))
+		le32_add_cpu(&bud->order_counts[order], -1);
+}
+
+/* merge lower orders buddies as we free up to the highest */
+static void free_order_bit(struct scoutfs_buddy_block *bud, int order, int nr)
+{
+	int i;
+
+	for (i = order; i < SCOUTFS_BUDDY_ORDERS - 1; i++) {
+
+		if (!test_buddy_bit(bud, i, nr ^ 1))
+			break;
+
+		clear_buddy_bit(bud, i, nr ^ 1);
+		nr >>= 1;
+	}
+
+	set_buddy_bit(bud, i, nr);
+}
+
+static u8 calc_free_orders(struct scoutfs_buddy_block *bud)
+{
+	u8 free = 0;
+	int i;
+
+	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++)
+		free |= (!!bud->order_counts[i]) << i;
+
+	return free;
 }
 
 static int write_new_fs(char *path, int fd)
@@ -63,6 +129,9 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_inode *inode;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *item;
+	struct scoutfs_buddy_block *bud;
+	struct scoutfs_buddy_indirect *ind;
+	struct scoutfs_bitmap_block *bm;
 	struct scoutfs_key root_key;
 	struct timeval tv;
 	char uuid_str[37];
@@ -71,6 +140,7 @@ static int write_new_fs(char *path, int fd)
 	u64 blkno;
 	u64 total_blocks;
 	u64 buddy_blocks;
+	u8 free_orders;
 	void *buf;
 	int ret;
 
@@ -105,9 +175,6 @@ static int write_new_fs(char *path, int fd)
 	root_key.type = SCOUTFS_INODE_KEY;
 	root_key.offset = 0;
 
-	/* start with the block after the supers */
-	blkno = SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR;
-
 	/* first initialize the super so we can use it to build structures */
 	memset(super, 0, SCOUTFS_BLOCK_SIZE);
 	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
@@ -118,10 +185,11 @@ static int write_new_fs(char *path, int fd)
 	super->total_blocks = cpu_to_le64(total_blocks);
 	super->buddy_blocks = cpu_to_le32(buddy_blocks);
 
+	blkno = first_blkno(super);
+
 	/* write a btree leaf root inode item */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
 	bt = buf;
-	bt->hdr = super->hdr;
 	bt->nr_items = cpu_to_le16(1);
 
 	item = (void *)(bt + 1);
@@ -148,19 +216,68 @@ static int write_new_fs(char *path, int fd)
 				     ((char *)(inode + 1) - (char *)bt));
 	bt->tail_free = bt->total_free;
 
-	ret = write_block(fd, blkno, &bt->hdr);
+	ret = write_block(fd, blkno, super, &bt->hdr);
 	if (ret)
 		goto out;
 
-	/* make sure the super references everything we just wrote */
+	/* the super references the btree block */
 	super->btree_root.height = 1;
 	super->btree_root.ref.blkno = bt->hdr.blkno;
 	super->btree_root.ref.seq = bt->hdr.seq;
 
+	/* free all the blocks in the first buddy block after btree block */
+	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
+	bud = buf;
+	for (i = 1; i < min(total_blocks - first_blkno(super),
+			    SCOUTFS_BUDDY_ORDER0_BITS); i++)
+		free_order_bit(bud, 0, i);
+	free_orders = calc_free_orders(bud);
+
+	blkno = SCOUTFS_BUDDY_BM_BLKNO + SCOUTFS_BUDDY_BM_NR;
+	ret = write_block(fd, blkno, super, &bud->hdr);
+	if (ret)
+		goto out;
+
+	/* an indirect buddy block references the buddy bitmap block */
+	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
+	ind = buf;
+	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
+		ind->slots[i].free_orders = 0;
+		ind->slots[i].ref = (struct scoutfs_block_ref){0,};
+	}
+	ind->slots[0].free_orders = free_orders;
+	ind->slots[0].ref.seq = super->hdr.seq;
+	ind->slots[0].ref.blkno = cpu_to_le64(blkno);
+
+	blkno++;
+	ret = write_block(fd, blkno, super, &ind->hdr);
+	if (ret)
+		goto out;
+
+	/* the super references the buddy indirect block */
+	super->buddy_ind_ref.blkno = ind->hdr.blkno;
+	super->buddy_ind_ref.seq = ind->hdr.seq;
+
+	/* a bitmap block records the two used buddy blocks */
+	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
+	bm = buf;
+	memset(bm->bits, 0xff, SCOUTFS_BLOCK_SIZE -
+	       offsetof(struct scoutfs_bitmap_block, bits));
+	bm->bits[0] = cpu_to_le64(~0ULL << 2); /* two low order bits clear */
+
+	ret = write_block(fd, SCOUTFS_BUDDY_BM_BLKNO, super, &bm->hdr);
+	if (ret)
+		goto out;
+
+	/* the super references the buddy bitmap block */
+	super->buddy_bm_ref.blkno = bm->hdr.blkno;
+	super->buddy_bm_ref.seq = bm->hdr.seq;
+
 	/* write the two super blocks */
 	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
 		super->hdr.seq = cpu_to_le64(i + 1);
-		ret = write_block(fd, SCOUTFS_SUPER_BLKNO + i, &super->hdr);
+		ret = write_block(fd, SCOUTFS_SUPER_BLKNO + i, NULL,
+				  &super->hdr);
 		if (ret)
 			goto out;
 	}
