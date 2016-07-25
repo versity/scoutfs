@@ -1,4 +1,5 @@
-CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g -mrdrnd -msse4.2
+CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g -mrdrnd -msse4.2 \
+	-fno-strict-aliasing
 
 BIN := src/scoutfs
 OBJ := $(patsubst %.c,%.o,$(wildcard src/*.c))
