@@ -19,6 +19,9 @@ RE="$RE|error: attribute '__leaf__': unknown attribute"
 # yes, sparse, that's the size of memseting a 4 meg buffer all right
 RE="$RE|warning: memset with byte count of 4194304"
 
+# some sparse versions don't know about some builtins
+RE="$RE|error: undefined identifier '__builtin_fpclassify'"
+
 #
 # don't filter out 'too many errors' here, it can signify that
 # sparse doesn't understand something and is throwing a *ton*
