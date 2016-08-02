@@ -190,15 +190,15 @@ static int write_new_fs(char *path, int fd)
 	/* write a btree leaf root inode item */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
 	bt = buf;
-	bt->nr_items = cpu_to_le16(1);
+	bt->nr_items = 1;
+	bt->free_end = cpu_to_le16(SCOUTFS_BLOCK_SIZE - sizeof(*item) -
+				   sizeof(*inode));
+	bt->free_reclaim = 0;
+	bt->item_offs[0] = bt->free_end;
 
-	item = (void *)(bt + 1);
+	item = (void *)bt + le16_to_cpu(bt->free_end);
 	item->seq = cpu_to_le64(1);
 	item->key = root_key;
-	item->tnode.parent = 0;
-	item->tnode.left = 0;
-	item->tnode.right = 0;
-	pseudo_random_bytes(&item->tnode.prio, sizeof(item->tnode.prio));
 	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
 
 	inode = (void *)(item + 1);
@@ -210,11 +210,6 @@ static int write_new_fs(char *path, int fd)
 	inode->ctime.nsec = inode->atime.nsec;
 	inode->mtime.sec = inode->atime.sec;
 	inode->mtime.nsec = inode->atime.nsec;
-
-	bt->treap.off = cpu_to_le16((char *)&item->tnode - (char *)&bt->treap);
-	bt->total_free = cpu_to_le16(SCOUTFS_BLOCK_SIZE -
-				     ((char *)(inode + 1) - (char *)bt));
-	bt->tail_free = bt->total_free;
 
 	ret = write_block(fd, blkno, super, &bt->hdr);
 	if (ret)

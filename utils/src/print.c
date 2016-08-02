@@ -58,11 +58,11 @@ static void print_block_header(struct scoutfs_block_header *hdr)
 
 static void print_inode(struct scoutfs_inode *inode)
 {
-	printf("        inode: size: %llu blocks: %llu nlink: %u\n"
-	       "               uid: %u gid: %u mode: 0%o rdev: 0x%x\n"
-	       "               salt: 0x%x\n"
-	       "               atime: %llu.%08u ctime: %llu.%08u\n"
-	       "               mtime: %llu.%08u\n",
+	printf("      inode: size: %llu blocks: %llu nlink: %u\n"
+	       "             uid: %u gid: %u mode: 0%o rdev: 0x%x\n"
+	       "             salt: 0x%x\n"
+	       "             atime: %llu.%08u ctime: %llu.%08u\n"
+	       "             mtime: %llu.%08u\n",
 	       le64_to_cpu(inode->size), le64_to_cpu(inode->blocks),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
@@ -95,17 +95,8 @@ static void print_block_ref(struct scoutfs_block_ref *ref)
 	       le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq));
 }
 
-static void print_btree_item(unsigned int off, struct scoutfs_btree_item *item,
-			     u8 level)
+static void print_btree_val(struct scoutfs_btree_item *item, u8 level)
 {
-	printf("    item: key "SKF" seq %llu val_len %u off %u tnode: parent %u left %u right %u "
-	       "prio %x\n",
-		SKA(&item->key), le64_to_cpu(item->seq),
-		le16_to_cpu(item->val_len), off,
-		le16_to_cpu(item->tnode.parent),
-		le16_to_cpu(item->tnode.left),
-		le16_to_cpu(item->tnode.right),
-		le32_to_cpu(item->tnode.prio));
 
 	if (level) {
 		print_block_ref((void *)item->val);
@@ -127,7 +118,6 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 	struct scoutfs_btree_item *item;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_block_ref *ref;
-	unsigned int off;
 	int ret = 0;
 	int err;
 	int i;
@@ -138,38 +128,29 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 
 	printf("btree blkno %llu\n", le64_to_cpu(blkno));
 	print_block_header(&bt->hdr);
-	printf("  treap.off %u total_free %u tail_free %u nr_items %u\n",
-	       le16_to_cpu(bt->treap.off),
-	       le16_to_cpu(bt->total_free),
-	       le16_to_cpu(bt->tail_free),
-	       le16_to_cpu(bt->nr_items));
+	printf("  free_end %u free_reclaim %u nr_items %u\n",
+	       le16_to_cpu(bt->free_end),
+	       le16_to_cpu(bt->free_reclaim),
+	       bt->nr_items);
 
-	/* XXX just print in offset order */
-	item = (void *)(bt + 1);
-	for (i = 0; i < le16_to_cpu(bt->nr_items); i++) {
-		if (item->tnode.parent == cpu_to_le16(1)) {
-			i--;
-		} else  {
-			off = (char *)&item->tnode - (char *)&bt->treap;
-			print_btree_item(off, item, level);
-		}
+	for (i = 0; i < bt->nr_items; i++) {
+		item = (void *)bt + le16_to_cpu(bt->item_offs[i]);
 
-		item = (void *)&item->val[le16_to_cpu(item->val_len)];
+		printf("    [%u] off %u: key "SKF" seq %llu val_len %u\n",
+			i, le16_to_cpu(bt->item_offs[i]),
+			SKA(&item->key), le64_to_cpu(item->seq),
+			le16_to_cpu(item->val_len));
+
+		print_btree_val(item, level);
 	}
 
-	item = (void *)(bt + 1);
-	for (i = 0; level && i < le16_to_cpu(bt->nr_items); i++) {
-		if (item->tnode.parent == cpu_to_le16(1)) {
-			i--;
-		} else  {
-			ref = (void *)item->val;
+	for (i = 0; level && i < bt->nr_items; i++) {
+		item = (void *)bt + le16_to_cpu(bt->item_offs[i]);
 
-			err = print_btree_block(fd, ref->blkno, level - 1);
-			if (err && !ret)
-				ret = err;
-		}
-
-		item = (void *)&item->val[le16_to_cpu(item->val_len)];
+		ref = (void *)item->val;
+		err = print_btree_block(fd, ref->blkno, level - 1);
+		if (err && !ret)
+			ret = err;
 	}
 
 	free(bt);
