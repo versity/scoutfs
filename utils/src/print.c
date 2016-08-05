@@ -89,6 +89,17 @@ static void print_dirent(struct scoutfs_dirent *dent, unsigned int val_len)
 	       le64_to_cpu(dent->ino), dent->type, i, name);
 }
 
+static void print_block_map(struct scoutfs_block_map *map)
+{
+	int i;
+
+	printf("      bmap:");
+	for (i = 0; i < SCOUTFS_BLOCK_MAP_COUNT; i++)
+		printf(" [%u] %llu",
+		       i, le64_to_cpu(map->blkno[i]));
+	printf("\n");
+}
+
 static void print_block_ref(struct scoutfs_block_ref *ref)
 {
 	printf("      ref: blkno %llu seq %llu\n",
@@ -109,6 +120,9 @@ static void print_btree_val(struct scoutfs_btree_item *item, u8 level)
 		break;
 	case SCOUTFS_DIRENT_KEY:
 		print_dirent((void *)item->val, le16_to_cpu(item->val_len));
+		break;
+	case SCOUTFS_BMAP_KEY:
+		print_block_map((void *)item->val);
 		break;
 	}
 }
