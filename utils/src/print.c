@@ -58,12 +58,13 @@ static void print_block_header(struct scoutfs_block_header *hdr)
 
 static void print_inode(struct scoutfs_inode *inode)
 {
-	printf("      inode: size: %llu blocks: %llu nlink: %u\n"
+	printf("      inode: size: %llu blocks: %llu lctr: %llu nlink: %u\n"
 	       "             uid: %u gid: %u mode: 0%o rdev: 0x%x\n"
 	       "             salt: 0x%x\n"
 	       "             atime: %llu.%08u ctime: %llu.%08u\n"
 	       "             mtime: %llu.%08u\n",
 	       le64_to_cpu(inode->size), le64_to_cpu(inode->blocks),
+	       le64_to_cpu(inode->link_counter),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev), le32_to_cpu(inode->salt),
@@ -85,8 +86,16 @@ static void print_dirent(struct scoutfs_dirent *dent, unsigned int val_len)
 		name[i] = isprint(dent->name[i]) ?  dent->name[i] : '.';
 	name[i] = '\0';
 
-	printf("      dirent: ino: %llu type: %u name: \"%.*s\"\n",
-	       le64_to_cpu(dent->ino), dent->type, i, name);
+	printf("      dirent: ino: %llu ctr: %llu type: %u name: \"%.*s\"\n",
+	       le64_to_cpu(dent->ino), le64_to_cpu(dent->counter),
+	       dent->type, i, name);
+}
+
+static void print_link_backref(struct scoutfs_link_backref *lref,
+			       unsigned int val_len)
+{
+	printf("      lref: ino: %llu offset: %llu\n",
+	       le64_to_cpu(lref->ino), le64_to_cpu(lref->offset));
 }
 
 static void print_block_map(struct scoutfs_block_map *map)
@@ -120,6 +129,10 @@ static void print_btree_val(struct scoutfs_btree_item *item, u8 level)
 		break;
 	case SCOUTFS_DIRENT_KEY:
 		print_dirent((void *)item->val, le16_to_cpu(item->val_len));
+		break;
+	case SCOUTFS_LINK_BACKREF_KEY:
+		print_link_backref((void *)item->val,
+				   le16_to_cpu(item->val_len));
 		break;
 	case SCOUTFS_BMAP_KEY:
 		print_block_map((void *)item->val);
