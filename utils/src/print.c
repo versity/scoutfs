@@ -76,6 +76,22 @@ static void print_inode(struct scoutfs_inode *inode)
 	       le32_to_cpu(inode->mtime.nsec));
 }
 
+static void print_xattr(struct scoutfs_xattr *xat)
+{
+	/* XXX check lengths */
+
+	printf("      xattr: name %.*s val_len %u\n",
+	       xat->name_len, xat->name, xat->value_len);
+}
+
+static void print_xattr_val_hash(__le64 *refcount)
+{
+	/* XXX check lengths */
+
+	printf("      xattr_val_hash: refcount %llu\n",
+	       le64_to_cpu(*refcount));
+}
+
 static void print_dirent(struct scoutfs_dirent *dent, unsigned int val_len)
 {
 	unsigned int name_len = val_len - sizeof(*dent);
@@ -126,6 +142,12 @@ static void print_btree_val(struct scoutfs_btree_item *item, u8 level)
 	switch(item->key.type) {
 	case SCOUTFS_INODE_KEY:
 		print_inode((void *)item->val);
+		break;
+	case SCOUTFS_XATTR_KEY:
+		print_xattr((void *)item->val);
+		break;
+	case SCOUTFS_XATTR_VAL_HASH_KEY:
+		print_xattr_val_hash((void *)item->val);
 		break;
 	case SCOUTFS_DIRENT_KEY:
 		print_dirent((void *)item->val, le16_to_cpu(item->val_len));

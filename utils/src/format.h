@@ -99,9 +99,11 @@ struct scoutfs_key {
  */
 #define SCOUTFS_INODE_KEY		1
 #define SCOUTFS_XATTR_KEY		2
-#define SCOUTFS_DIRENT_KEY		3
-#define SCOUTFS_LINK_BACKREF_KEY	4
-#define SCOUTFS_BMAP_KEY		5
+#define SCOUTFS_XATTR_NAME_HASH_KEY	3
+#define SCOUTFS_XATTR_VAL_HASH_KEY	4
+#define SCOUTFS_DIRENT_KEY		5
+#define SCOUTFS_LINK_BACKREF_KEY	6
+#define SCOUTFS_BMAP_KEY		7
 
 #define SCOUTFS_MAX_ITEM_LEN 512
 
@@ -216,6 +218,15 @@ struct scoutfs_dirent {
 #define SCOUTFS_NAME_LEN 255
 
 /*
+ * This is arbitrarily limiting the max size of the single buffer
+ * that's needed in the inode_paths ioctl to return all the paths
+ * that link to an inode.  The structures could easily support much
+ * more than this but then we'd need to grow a more thorough interface
+ * for iterating over referring paths.  That sounds horrible.
+ */
+#define SCOUTFS_LINK_MAX 255
+
+/*
  * We only use 31 bits for readdir positions so that we don't confuse
  * old signed 32bit f_pos applications or those on the other side of
  * network protocols that have limited readir positions.
@@ -237,9 +248,8 @@ enum {
 	SCOUTFS_DT_WHT,
 };
 
-#define SCOUTFS_MAX_XATTR_NAME_LEN 255
-#define SCOUTFS_MAX_XATTR_VALUE_LEN 255
-#define SCOUTFS_XATTR_HASH_MASK 7ULL
+#define SCOUTFS_MAX_XATTR_LEN 255
+#define SCOUTFS_XATTR_NAME_HASH_MASK 7ULL
 
 struct scoutfs_xattr {
 	__u8 name_len;
