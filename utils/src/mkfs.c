@@ -140,15 +140,15 @@ static int write_new_fs(char *path, int fd)
 	u64 blkno;
 	u64 total_blocks;
 	u64 buddy_blocks;
-	u8 free_orders;
 	void *buf;
 	int ret;
 
 	gettimeofday(&tv, NULL);
 
 	buf = malloc(SCOUTFS_BLOCK_SIZE);
+	bud = malloc(SCOUTFS_BLOCK_SIZE);
 	super = malloc(SCOUTFS_BLOCK_SIZE);
-	if (!buf || !super) {
+	if (!buf || !bud || !super) {
 		ret = -errno;
 		fprintf(stderr, "failed to allocate a block: %s (%d)\n",
 			strerror(errno), errno);
@@ -221,12 +221,10 @@ static int write_new_fs(char *path, int fd)
 	super->btree_root.ref.seq = bt->hdr.seq;
 
 	/* free all the blocks in the first buddy block after btree block */
-	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
-	bud = buf;
+	memset(bud, 0, SCOUTFS_BLOCK_SIZE);
 	for (i = 1; i < min(total_blocks - first_blkno(super),
 			    SCOUTFS_BUDDY_ORDER0_BITS); i++)
 		free_order_bit(bud, 0, i);
-	free_orders = calc_free_orders(bud);
 
 	blkno = SCOUTFS_BUDDY_BM_BLKNO + SCOUTFS_BUDDY_BM_NR;
 	ret = write_block(fd, blkno, super, &bud->hdr);
@@ -236,11 +234,14 @@ static int write_new_fs(char *path, int fd)
 	/* an indirect buddy block references the buddy bitmap block */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
 	ind = buf;
+	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++)
+		ind->order_totals[i] = cpu_to_le64(le32_to_cpu(
+							bud->order_counts[i]));
 	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
 		ind->slots[i].free_orders = 0;
 		ind->slots[i].ref = (struct scoutfs_block_ref){0,};
 	}
-	ind->slots[0].free_orders = free_orders;
+	ind->slots[0].free_orders = calc_free_orders(bud);
 	ind->slots[0].ref.seq = super->hdr.seq;
 	ind->slots[0].ref.blkno = cpu_to_le64(blkno);
 
@@ -298,6 +299,8 @@ static int write_new_fs(char *path, int fd)
 out:
 	if (super)
 		free(super);
+	if (bud)
+		free(bud);
 	if (buf)
 		free(buf);
 	return ret;

@@ -245,6 +245,10 @@ static int print_buddy_blocks(int fd, struct scoutfs_super_block *super)
 
 	printf("buddy indirect blkno %llu\n", blkno);
 	print_block_header(&ind->hdr);
+	printf("  total_counts:");
+	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++)
+		printf(" %llu", le64_to_cpu(ind->order_totals[i]));
+	printf("\n");
 
 	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
 		slot = &ind->slots[i];
