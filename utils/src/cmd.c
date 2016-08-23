@@ -45,13 +45,18 @@ static struct command *find_command(char *name)
 static void usage(void)
 {
 	struct command *com;
+	int largest = 0;
 
 	fprintf(stderr, "usage: scoutfs <command> [<args>]\n"
 	       "Commands:\n");
 
+	cmd_for_each(com)
+		largest = max(strlen(com->name), largest);
+
 	cmd_for_each(com) {
-		fprintf(stderr, "  %8s %12s - %s\n",
-			com->name, com->opts, com->summary);
+		fprintf(stderr, "  %*s %s\n  %*s %s\n",
+			largest, com->name, com->opts,
+			largest, "", com->summary);
 	}
 }
 
