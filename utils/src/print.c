@@ -114,6 +114,12 @@ static void print_link_backref(struct scoutfs_link_backref *lref,
 	       le64_to_cpu(lref->ino), le64_to_cpu(lref->offset));
 }
 
+/* for now show the raw component items not the whole path */
+static void print_symlink(char *str, unsigned int val_len)
+{
+	printf("      symlink: %.*s\n", val_len, str);
+}
+
 static void print_block_map(struct scoutfs_block_map *map)
 {
 	int i;
@@ -155,6 +161,9 @@ static void print_btree_val(struct scoutfs_btree_item *item, u8 level)
 	case SCOUTFS_LINK_BACKREF_KEY:
 		print_link_backref((void *)item->val,
 				   le16_to_cpu(item->val_len));
+		break;
+	case SCOUTFS_SYMLINK_KEY:
+		print_symlink((void *)item->val, le16_to_cpu(item->val_len));
 		break;
 	case SCOUTFS_BMAP_KEY:
 		print_block_map((void *)item->val);
