@@ -274,7 +274,8 @@ static int print_buddy_blocks(int fd, struct scoutfs_super_block *super)
 	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
 		slot = &ind->slots[i];
 
-		if (!slot->free_orders && !slot->ref.seq && !slot->ref.blkno)
+		/* only print populated buddy blocks */
+		if (slot->ref.blkno == 0)
 			continue;
 
 		err = print_buddy_block(fd, super,

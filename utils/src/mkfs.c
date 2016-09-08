@@ -123,6 +123,31 @@ static u8 calc_free_orders(struct scoutfs_buddy_block *bud)
 	return free;
 }
 
+/*
+ * Figure out the free orders for the slot that starts with the given
+ * blkno.  The bits in the buddy bitmap are relative to the starting
+ * blkno and are aligned so the bits in the count of blocks in the slot
+ * reflect the presence of free orders in that slot.
+ */
+static u8 slot_free_orders(u64 sl_blkno, u64 total_blocks)
+{
+	u64 count;
+	u64 mask;
+	u8 free;
+
+	if (sl_blkno >= total_blocks)
+		return 0;
+
+	count = min(total_blocks - sl_blkno, SCOUTFS_BUDDY_ORDER0_BITS);
+
+	mask = (1 << SCOUTFS_BUDDY_ORDERS) - 1;
+	free = count & mask;
+	if (count > mask)
+		free |= (mask + 1) >> 1;
+
+	return free;
+}
+
 static int write_new_fs(char *path, int fd)
 {
 	struct scoutfs_super_block *super;
@@ -140,6 +165,7 @@ static int write_new_fs(char *path, int fd)
 	u64 blkno;
 	u64 total_blocks;
 	u64 buddy_blocks;
+	u64 sl_blkno;
 	void *buf;
 	int ret;
 
@@ -244,6 +270,14 @@ static int write_new_fs(char *path, int fd)
 	ind->slots[0].free_orders = calc_free_orders(bud);
 	ind->slots[0].ref.seq = super->hdr.seq;
 	ind->slots[0].ref.blkno = cpu_to_le64(blkno);
+
+	/* initialize unpopulated slot bits so the kernel will use them */
+	sl_blkno = first_blkno(super) + SCOUTFS_BUDDY_ORDER0_BITS;
+	for (i = 1; i < SCOUTFS_BUDDY_SLOTS; i++) {
+		ind->slots[i].free_orders = slot_free_orders(sl_blkno,
+							     total_blocks);
+		sl_blkno += SCOUTFS_BUDDY_ORDER0_BITS;
+	}
 
 	blkno++;
 	ret = write_block(fd, blkno, super, &ind->hdr);
