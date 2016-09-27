@@ -1,4 +1,4 @@
-CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g -mrdrnd -msse4.2 \
+CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g -msse4.2 \
 	-fno-strict-aliasing
 
 BIN := src/scoutfs
@@ -21,7 +21,7 @@ endif
 
 $(BIN): $(OBJ)
 	$(QU)  [BIN $@]
-	$(VE)gcc -o $@ $^ -luuid -lm
+	$(VE)gcc -o $@ $^ -luuid -lm -lcrypto
 
 %.o %.d: %.c Makefile sparse.sh
 	$(QU)  [CC $<]
