@@ -126,8 +126,9 @@ static void print_block_map(struct scoutfs_block_map *map)
 
 	printf("      bmap:");
 	for (i = 0; i < SCOUTFS_BLOCK_MAP_COUNT; i++)
-		printf(" [%u] %llu",
-		       i, le64_to_cpu(map->blkno[i]));
+		printf(" [%u] %llu:%llu",
+		       i, le64_to_cpu(map->blkno[i]),
+		       le64_to_cpu(map->seq[i]));
 	printf("\n");
 }
 
