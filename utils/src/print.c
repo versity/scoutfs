@@ -15,6 +15,7 @@
 #include "format.h"
 #include "cmd.h"
 #include "crc.h"
+#include "buddy.h"
 
 /* XXX maybe these go somewhere */
 #define SKF "%llu.%u.%llu"
@@ -217,96 +218,63 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 	return ret;
 }
 
-static int print_buddy_block(int fd, struct scoutfs_super_block *super,
-			      u64 blkno)
+/* print populated buddy blocks */
+static int print_buddy_block(int fd, struct buddy_info *binf,
+			     int level, u64 base, u8 off)
 {
 	struct scoutfs_buddy_block *bud;
+	struct scoutfs_buddy_slot *slot;
+	int ret = 0;
+	u64 blkno;
+	u16 first;
+	int err;
 	int i;
 
+	blkno = binf->blknos[level] + base + off;
 	bud = read_block(fd, blkno);
 	if (!bud)
 		return -ENOMEM;
 
 	printf("buddy blkno %llu\n", blkno);
 	print_block_header(&bud->hdr);
-	printf("  order_counts:");
-	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++)
-		printf(" %u", le32_to_cpu(bud->order_counts[i]));
+	printf("  first_set:");
+	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++) {
+		first = le16_to_cpu(bud->first_set[i]);
+		if (first == U16_MAX)
+			printf(" -");
+		else
+			printf(" %u", first);
+	}
 	printf("\n");
+	printf("  level: %u\n", bud->level);
 
-	free(bud);
+	for (i = 0; level && i < SCOUTFS_BUDDY_SLOTS; i++) {
+		slot = &bud->slots[i];
 
-	return 0;
-}
-
-static int print_buddy_blocks(int fd, struct scoutfs_super_block *super)
-{
-	struct scoutfs_buddy_indirect *ind;
-	struct scoutfs_buddy_slot *slot;
-	u64 blkno;
-	int ret = 0;
-	int err;
-	int i;
-
-	blkno = le64_to_cpu(super->buddy_ind_ref.blkno);
-	ind = read_block(fd, blkno);
-	if (!ind)
-		return -ENOMEM;
-
-	printf("buddy indirect blkno %llu\n", blkno);
-	print_block_header(&ind->hdr);
-	printf("  total_counts:");
-	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++)
-		printf(" %llu", le64_to_cpu(ind->order_totals[i]));
-	printf("\n");
-
-	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
-		slot = &ind->slots[i];
-
-		/* only print slots with non-zero fields */
-		if (!slot->free_orders && !slot->ref.seq && !slot->ref.blkno)
+		if (slot->seq == 0)
 			continue;
 
-		printf("  slot[%u]: free_orders: %x ref: seq %llu blkno %llu\n",
-			i, slot->free_orders, le64_to_cpu(slot->ref.seq),
-			le64_to_cpu(slot->ref.blkno));
+		printf("  slots[%u]: seq %llu free_orders: %x blkno_off %u\n",
+			i, le64_to_cpu(slot->seq),
+			le16_to_cpu(slot->free_orders), slot->blkno_off);
 	}
 
-	for (i = 0; i < SCOUTFS_BUDDY_SLOTS; i++) {
-		slot = &ind->slots[i];
+	for (i = 0; level && i < SCOUTFS_BUDDY_SLOTS; i++) {
+		slot = &bud->slots[i];
 
-		/* only print populated buddy blocks */
-		if (slot->ref.blkno == 0)
+		if (slot->seq == 0)
 			continue;
 
-		err = print_buddy_block(fd, super,
-					le64_to_cpu(slot->ref.blkno));
+		err = print_buddy_block(fd, binf, level - 1,
+					(base * SCOUTFS_BUDDY_SLOTS) + (i * 2),
+					slot->blkno_off);
 		if (err && !ret)
 			ret = err;
 	}
 
-	free(ind);
+	free(bud);
 
 	return ret;
-}
-
-
-static int print_bitmap_block(int fd, struct scoutfs_super_block *super)
-{
-	struct scoutfs_bitmap_block *bm;
-	u64 blkno;
-
-	blkno = le64_to_cpu(super->buddy_bm_ref.blkno);
-	bm = read_block(fd, blkno);
-	if (!bm)
-		return -ENOMEM;
-
-	printf("bitmap blkno %llu\n", blkno);
-	print_block_header(&bm->hdr);
-
-	free(bm);
-
-	return 0;
 }
 
 static int print_super_blocks(int fd)
@@ -329,16 +297,17 @@ static int print_super_blocks(int fd)
 		print_block_header(&super->hdr);
 		printf("  id %llx uuid %s\n",
 		       le64_to_cpu(super->id), uuid_str);
-		printf("  next_ino %llu total_blocks %llu buddy_blocks %u\n",
+		printf("  next_ino %llu total_blocks %llu buddy_blocks %llu\n"
+		       "  free_blocks %llu\n",
 			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
-			le32_to_cpu(super->buddy_blocks));
-		printf("  buddy_bm_ref: seq %llu blkno %llu\n",
-			le64_to_cpu(super->buddy_bm_ref.seq),
-			le64_to_cpu(super->buddy_bm_ref.blkno));
-		printf("  buddy_ind_ref: seq %llu blkno %llu\n",
-			le64_to_cpu(super->buddy_ind_ref.seq),
-			le64_to_cpu(super->buddy_ind_ref.blkno));
+			le64_to_cpu(super->buddy_blocks),
+			le64_to_cpu(super->free_blocks));
+		printf("  buddy_root: height %u seq %llu free_orders %x blkno_off %u\n",
+			super->buddy_root.height,
+			le64_to_cpu(super->buddy_root.slot.seq),
+			le16_to_cpu(super->buddy_root.slot.free_orders),
+			super->buddy_root.slot.blkno_off);
 		printf("  btree_root: height %u seq %llu blkno %llu\n",
 			super->btree_root.height,
 			le64_to_cpu(super->btree_root.ref.seq),
@@ -352,13 +321,17 @@ static int print_super_blocks(int fd)
 
 	super = &recent;
 
-	err = print_bitmap_block(fd, super);
-	if (err && !ret)
-		ret = err;
 
-	err = print_buddy_blocks(fd, super);
-	if (err && !ret)
-		ret = err;
+	if (super->buddy_root.height) {
+		struct buddy_info binf;
+
+		buddy_init(&binf, le64_to_cpu(super->total_blocks));
+		err = print_buddy_block(fd, &binf,
+					super->buddy_root.height - 1, 0,
+					super->buddy_root.slot.blkno_off);
+		if (err && !ret)
+			ret = err;
+	}
 
 	if (super->btree_root.height) {
 		err = print_btree_block(fd, super->btree_root.ref.blkno,
