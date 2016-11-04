@@ -75,4 +75,6 @@ static inline int test_and_clear_bit_le(int nr, void *addr)
 	return ret;
 }
 
+int find_next_bit_le(void *addr, long size, int start);
+
 #endif
