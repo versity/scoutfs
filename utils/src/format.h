@@ -22,6 +22,8 @@
 #define SCOUTFS_BUDDY_BM_BLKNO (SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR)
 #define SCOUTFS_BUDDY_BM_NR 2
 
+#define SCOUTFS_MAX_TRANS_BLOCKS  (128 * 1024 * 1024 / SCOUTFS_BLOCK_SIZE)
+
 /*
  * This header is found at the start of every block so that we can
  * verify that it's what we were looking for.  The crc and padding
@@ -145,6 +147,29 @@ struct scoutfs_btree_item {
 /* Blocks are no more than half free. */
 #define SCOUTFS_BTREE_FREE_LIMIT \
 	((SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_btree_block)) / 2)
+
+/* XXX does this exist upstream somewhere? */
+#define member_sizeof(TYPE, MEMBER) (sizeof(((TYPE *)0)->MEMBER))
+
+#define SCOUTFS_BTREE_MAX_ITEMS \
+	((SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_btree_block)) /	\
+	 (member_sizeof(struct scoutfs_btree_block, item_offs[0]) +	\
+          sizeof(struct scoutfs_btree_item)))
+
+/*
+ * We can calculate the max tree depth by calculating how many leaf
+ * blocks the tree could reference.  The block device can only reference
+ * 2^64 bytes.  The tallest parent tree has half full parent blocks.
+ *
+ * So we have the relation:
+ *
+ * ceil(max_items / 2) ^ (max_depth - 1) >= 2^64 / block_size
+ *
+ * and solve for depth:
+ *
+ * max_depth = log(ceil(max_items / 2), 2^64 / block_size) + 1
+ */
+#define SCOUTFS_BTREE_MAX_DEPTH 10
 
 #define SCOUTFS_UUID_BYTES 16
 
