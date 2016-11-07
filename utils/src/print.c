@@ -178,6 +178,7 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 	struct scoutfs_btree_item *item;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_block_ref *ref;
+	unsigned int nr;
 	int ret = 0;
 	int err;
 	int i;
@@ -186,14 +187,14 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 	if (!bt)
 		return -ENOMEM;
 
+	nr = le16_to_cpu(bt->nr_items);
+
 	printf("btree blkno %llu\n", le64_to_cpu(blkno));
 	print_block_header(&bt->hdr);
 	printf("  free_end %u free_reclaim %u nr_items %u\n",
-	       le16_to_cpu(bt->free_end),
-	       le16_to_cpu(bt->free_reclaim),
-	       bt->nr_items);
+	       le16_to_cpu(bt->free_end), le16_to_cpu(bt->free_reclaim), nr);
 
-	for (i = 0; i < bt->nr_items; i++) {
+	for (i = 0; i < nr; i++) {
 		item = (void *)bt + le16_to_cpu(bt->item_offs[i]);
 
 		printf("    [%u] off %u: key "SKF" seq %llu val_len %u\n",
@@ -204,7 +205,7 @@ static int print_btree_block(int fd, __le64 blkno, u8 level)
 		print_btree_val(item, level);
 	}
 
-	for (i = 0; level && i < bt->nr_items; i++) {
+	for (i = 0; level && i < nr; i++) {
 		item = (void *)bt + le16_to_cpu(bt->item_offs[i]);
 
 		ref = (void *)item->val;

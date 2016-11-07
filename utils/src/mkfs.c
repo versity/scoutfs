@@ -360,7 +360,7 @@ static int write_new_fs(char *path, int fd)
 	/* write a btree leaf root inode item */
 	memset(buf, 0, SCOUTFS_BLOCK_SIZE);
 	bt = buf;
-	bt->nr_items = 1;
+	bt->nr_items = cpu_to_le16(1);
 	bt->free_end = cpu_to_le16(SCOUTFS_BLOCK_SIZE - sizeof(*item) -
 				   sizeof(*inode));
 	bt->free_reclaim = 0;
