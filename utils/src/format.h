@@ -255,13 +255,10 @@ struct scoutfs_dirent {
 #define SCOUTFS_NAME_LEN 255
 
 /*
- * This is arbitrarily limiting the max size of the single buffer
- * that's needed in the inode_paths ioctl to return all the paths
- * that link to an inode.  The structures could easily support much
- * more than this but then we'd need to grow a more thorough interface
- * for iterating over referring paths.  That sounds horrible.
+ * Just to keep sloppy (int) apps from being confused.  2^31 is good
+ * enough for everybody.
  */
-#define SCOUTFS_LINK_MAX 255
+#define SCOUTFS_LINK_MAX (1 << 31)
 
 /*
  * We only use 31 bits for readdir positions so that we don't confuse
