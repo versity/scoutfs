@@ -61,7 +61,7 @@ static void print_inode(struct scoutfs_inode *inode)
 {
 	printf("      inode: size: %llu blocks: %llu lctr: %llu nlink: %u\n"
 	       "             uid: %u gid: %u mode: 0%o rdev: 0x%x\n"
-	       "             salt: 0x%x\n"
+	       "             salt: 0x%x data_version %llu\n"
 	       "             atime: %llu.%08u ctime: %llu.%08u\n"
 	       "             mtime: %llu.%08u\n",
 	       le64_to_cpu(inode->size), le64_to_cpu(inode->blocks),
@@ -69,6 +69,7 @@ static void print_inode(struct scoutfs_inode *inode)
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev), le32_to_cpu(inode->salt),
+	       le64_to_cpu(inode->data_version),
 	       le64_to_cpu(inode->atime.sec),
 	       le32_to_cpu(inode->atime.nsec),
 	       le64_to_cpu(inode->ctime.sec),
