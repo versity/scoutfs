@@ -122,16 +122,16 @@ static void print_symlink(char *str, unsigned int val_len)
 	printf("      symlink: %.*s\n", val_len, str);
 }
 
-static void print_block_map(struct scoutfs_block_map *map)
-{
-	int i;
+#define EXT_FLAG(f, flags, str) \
+	(flags & f) ? str : "", (flags & (f - 1)) ? "|" : ""
 
-	printf("      bmap:");
-	for (i = 0; i < SCOUTFS_BLOCK_MAP_COUNT; i++)
-		printf(" [%u] %llu:%llu",
-		       i, le64_to_cpu(map->blkno[i]),
-		       le64_to_cpu(map->seq[i]));
-	printf("\n");
+static void print_extent(struct scoutfs_key *key,
+			 struct scoutfs_file_extent *ext)
+{
+	printf("      extent: (offest %llu) blkno %llu, len %llu flags %s%s\n",
+	       le64_to_cpu(key->offset), le64_to_cpu(ext->blkno),
+	       le64_to_cpu(ext->len),
+	       EXT_FLAG(SCOUTFS_EXTENT_FLAG_OFFLINE, ext->flags, "OFF"));
 }
 
 static void print_block_ref(struct scoutfs_block_ref *ref)
@@ -168,8 +168,8 @@ static void print_btree_val(struct scoutfs_btree_item *item, u8 level)
 	case SCOUTFS_SYMLINK_KEY:
 		print_symlink((void *)item->val, le16_to_cpu(item->val_len));
 		break;
-	case SCOUTFS_BMAP_KEY:
-		print_block_map((void *)item->val);
+	case SCOUTFS_EXTENT_KEY:
+		print_extent(&item->key, (void *)item->val);
 		break;
 	}
 }
