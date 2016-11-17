@@ -54,13 +54,7 @@ struct scoutfs_ioctl_find_xattr {
 #define SCOUTFS_IOC_INODE_DATA_SINCE _IOW(SCOUTFS_IOCTL_MAGIC, 5, \
 					  struct scoutfs_ioctl_inodes_since)
 
-struct scoutfs_ioctl_data_version {
-	__u64 ino;
-	__u64 data_version;
-} __packed;
-
-#define SCOUTFS_IOC_DATA_VERSION _IOW(SCOUTFS_IOCTL_MAGIC, 6, \
-				      struct scoutfs_ioctl_data_version)
+#define SCOUTFS_IOC_DATA_VERSION _IOW(SCOUTFS_IOCTL_MAGIC, 6, u64)
 
 struct scoutfs_ioctl_release {
 	__u64 offset;
