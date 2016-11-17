@@ -232,8 +232,7 @@ static int write_buddy_blocks(int fd, struct scoutfs_super_block *super,
 		last = SCOUTFS_BUDDY_ORDER0_BITS - 1;
 	} else {
 		first = 0;
-		last = min(blk % SCOUTFS_BUDDY_ORDER0_BITS,
-			   SCOUTFS_BUDDY_ORDER0_BITS);
+		last = blk % SCOUTFS_BUDDY_ORDER0_BITS;
 	}
 
 	/* write the leaf block */
@@ -396,7 +395,9 @@ static int write_new_fs(char *path, int fd)
 	super->free_blocks = cpu_to_le64(total_blocks - blkno);
 
 	/* write left-most buddy block and all full parents, not root */
-	ret = write_buddy_blocks(fd, super, &binf, buf, 0, 1, &free_orders);
+	ret = write_buddy_blocks(fd, super, &binf, buf,
+				 blkno - first_blkno(super),
+				 1, &free_orders);
 	if (ret)
 		goto out;
 
