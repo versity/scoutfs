@@ -14,7 +14,7 @@
 #include "ioctl.h"
 #include "cmd.h"
 
-static int since_cmd(int argc, char **argv)
+static int since_cmd(int argc, char **argv, unsigned long ioc)
 {
 	struct scoutfs_ioctl_inodes_since args;
 	struct scoutfs_ioctl_ino_seq *iseq;
@@ -64,7 +64,7 @@ static int since_cmd(int argc, char **argv)
 	args.buf_ptr = (intptr_t)ptr;
 	args.buf_len = len;
 
-	ret = ioctl(fd, SCOUTFS_IOC_INODES_SINCE, &args);
+	ret = ioctl(fd, ioc, &args);
 	if (ret < 0) {
 		ret = -errno;
 		fprintf(stderr, "inodes_since ioctl failed: %s (%d)\n",
@@ -82,8 +82,20 @@ out:
 	return ret;
 };
 
+static int inodes_since_cmd(int argc, char **argv)
+{
+	return since_cmd(argc, argv, SCOUTFS_IOC_INODES_SINCE);
+}
+
+static int data_since_cmd(int argc, char **argv)
+{
+	return since_cmd(argc, argv, SCOUTFS_IOC_INODE_DATA_SINCE);
+}
+
 static void __attribute__((constructor)) since_ctor(void)
 {
 	cmd_register("inodes-since", "<first> <last> <seq> <path>",
-		     "print inodes modified since seq #", since_cmd);
+		     "print inodes modified since seq #", inodes_since_cmd);
+	cmd_register("data-since", "<first> <last> <seq> <path>",
+		     "print inodes with data blocks modified since seq #", data_since_cmd);
 }
