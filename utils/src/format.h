@@ -97,7 +97,7 @@ struct scoutfs_buddy_root {
  */
 struct scoutfs_key {
 	__le64 inode;
-	u8 type;
+	__u8 type;
 	__le64 offset;
 } __packed;
 
@@ -119,7 +119,7 @@ struct scoutfs_key {
 #define SCOUTFS_MAX_ITEM_LEN 512
 
 struct scoutfs_btree_root {
-	u8 height;
+	__u8 height;
 	struct scoutfs_block_ref ref;
 } __packed;
 
