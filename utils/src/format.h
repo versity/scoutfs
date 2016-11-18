@@ -293,7 +293,7 @@ struct scoutfs_xattr {
 	__u8 name[0];
 } __packed;
 
-struct scoutfs_file_extent {
+struct scoutfs_extent {
 	__le64	blkno;
 	__le64	len;
 	__u8	flags;

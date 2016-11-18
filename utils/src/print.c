@@ -126,7 +126,7 @@ static void print_symlink(char *str, unsigned int val_len)
 	(flags & f) ? str : "", (flags & (f - 1)) ? "|" : ""
 
 static void print_extent(struct scoutfs_key *key,
-			 struct scoutfs_file_extent *ext)
+			 struct scoutfs_extent *ext)
 {
 	printf("      extent: (offest %llu) blkno %llu, len %llu flags %s%s\n",
 	       le64_to_cpu(key->offset), le64_to_cpu(ext->blkno),
