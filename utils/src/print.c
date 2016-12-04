@@ -16,6 +16,7 @@
 #include "cmd.h"
 #include "crc.h"
 #include "buddy.h"
+#include "bitops.h"
 
 /* XXX maybe these go somewhere */
 #define SKF "%llu.%u.%llu"
@@ -42,6 +43,27 @@ static void *read_block(int fd, u64 blkno)
 	return buf;
 }
 
+static void *read_segment(int fd, u64 segno)
+{
+	ssize_t ret;
+	void *buf;
+
+	buf = malloc(SCOUTFS_SEGMENT_SIZE);
+	if (!buf)
+		return NULL;
+
+	ret = pread(fd, buf, SCOUTFS_SEGMENT_SIZE,
+		    segno << SCOUTFS_SEGMENT_SHIFT);
+	if (ret != SCOUTFS_SEGMENT_SIZE) {
+		fprintf(stderr, "read segno %llu returned %zd: %s (%d)\n",
+			segno, ret, strerror(errno), errno);
+		free(buf);
+		buf = NULL;
+	}
+
+	return buf;
+}
+
 static void print_block_header(struct scoutfs_block_header *hdr)
 {
 	u32 crc = crc_block(hdr);
@@ -57,13 +79,17 @@ static void print_block_header(struct scoutfs_block_header *hdr)
 		le64_to_cpu(hdr->seq), le64_to_cpu(hdr->blkno));
 }
 
-static void print_inode(struct scoutfs_inode *inode)
+static void print_inode(void *key, void *val)
 {
-	printf("      inode: size: %llu blocks: %llu lctr: %llu nlink: %u\n"
-	       "             uid: %u gid: %u mode: 0%o rdev: 0x%x\n"
-	       "             salt: 0x%x data_version %llu\n"
-	       "             atime: %llu.%08u ctime: %llu.%08u\n"
-	       "             mtime: %llu.%08u\n",
+	struct scoutfs_inode_key *ikey = key;
+	struct scoutfs_inode *inode = val;
+
+	printf("    inode: ino %llu size %llu blocks %llu lctr %llu nlink %u\n"
+	       "      uid %u gid %u mode 0%o rdev 0x%x\n"
+	       "      salt 0x%x data_version %llu\n"
+	       "      atime %llu.%08u ctime %llu.%08u\n"
+	       "      mtime %llu.%08u\n",
+	       be64_to_cpu(ikey->ino),
 	       le64_to_cpu(inode->size), le64_to_cpu(inode->blocks),
 	       le64_to_cpu(inode->link_counter),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
@@ -77,6 +103,8 @@ static void print_inode(struct scoutfs_inode *inode)
 	       le64_to_cpu(inode->mtime.sec),
 	       le32_to_cpu(inode->mtime.nsec));
 }
+
+#if 0
 
 static void print_xattr(struct scoutfs_xattr *xat)
 {
@@ -133,148 +161,149 @@ static void print_extent(struct scoutfs_key *key,
 	       le64_to_cpu(ext->len),
 	       EXT_FLAG(SCOUTFS_EXTENT_FLAG_OFFLINE, ext->flags, "OFF"));
 }
+#endif
 
-static void print_block_ref(struct scoutfs_block_ref *ref)
+typedef void (*print_func_t)(void *key, void *val);
+
+static print_func_t printers[] = {
+	[SCOUTFS_INODE_KEY] = print_inode,
+};
+
+static void print_item(struct scoutfs_segment_block *sblk,
+		       struct scoutfs_segment_item *item)
 {
-	printf("      ref: blkno %llu seq %llu\n",
-	       le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq));
+	void *key = (char *)sblk + le32_to_cpu(item->key_off);
+	void *val = (char *)sblk + le32_to_cpu(item->val_off);
+	__u8 type = *(__u8 *)key;
+
+	if (type < array_size(printers) && printers[type])
+		printers[type](key, val);
+	else
+		printf(" unknown!\n");
 }
 
-static void print_btree_val(struct scoutfs_btree_item *item, u8 level)
+static int print_segment(int fd, u64 segno)
 {
-
-	if (level) {
-		print_block_ref((void *)item->val);
-		return;
-	}
-
-	switch(item->key.type) {
-	case SCOUTFS_INODE_KEY:
-		print_inode((void *)item->val);
-		break;
-	case SCOUTFS_XATTR_KEY:
-		print_xattr((void *)item->val);
-		break;
-	case SCOUTFS_XATTR_VAL_HASH_KEY:
-		print_xattr_val_hash((void *)item->val);
-		break;
-	case SCOUTFS_DIRENT_KEY:
-		print_dirent((void *)item->val, le16_to_cpu(item->val_len));
-		break;
-	case SCOUTFS_LINK_BACKREF_KEY:
-		print_link_backref((void *)item->val,
-				   le16_to_cpu(item->val_len));
-		break;
-	case SCOUTFS_SYMLINK_KEY:
-		print_symlink((void *)item->val, le16_to_cpu(item->val_len));
-		break;
-	case SCOUTFS_EXTENT_KEY:
-		print_extent(&item->key, (void *)item->val);
-		break;
-	}
-}
-
-static int print_btree_block(int fd, __le64 blkno, u8 level)
-{
-	struct scoutfs_btree_item *item;
-	struct scoutfs_btree_block *bt;
-	struct scoutfs_block_ref *ref;
-	unsigned int nr;
-	int ret = 0;
-	int err;
+	struct scoutfs_segment_block *sblk;
+	struct scoutfs_segment_item *item;
 	int i;
 
-	bt = read_block(fd, le64_to_cpu(blkno));
-	if (!bt)
+	sblk = read_segment(fd, segno);
+	if (!sblk)
 		return -ENOMEM;
 
-	nr = le16_to_cpu(bt->nr_items);
+	printf("segment segno %llu\n", segno);
+//	print_block_header(&sblk->hdr);
 
-	printf("btree blkno %llu\n", le64_to_cpu(blkno));
-	print_block_header(&bt->hdr);
-	printf("  free_end %u free_reclaim %u nr_items %u\n",
-	       le16_to_cpu(bt->free_end), le16_to_cpu(bt->free_reclaim), nr);
-
-	for (i = 0; i < nr; i++) {
-		item = (void *)bt + le16_to_cpu(bt->item_offs[i]);
-
-		printf("    [%u] off %u: key "SKF" seq %llu val_len %u\n",
-			i, le16_to_cpu(bt->item_offs[i]),
-			SKA(&item->key), le64_to_cpu(item->seq),
+	item = (void *)(sblk + 1);
+	for (i = 0; i < le32_to_cpu(sblk->nr_items); i++) {
+		printf("  [%u]: seq %llu key_off %u val_off %u key_len %u "
+		       "val_len %u\n",
+			i,
+			le64_to_cpu(item->seq),
+			le32_to_cpu(item->key_off),
+			le32_to_cpu(item->val_off),
+			le16_to_cpu(item->key_len),
 			le16_to_cpu(item->val_len));
 
-		print_btree_val(item, level);
+		print_item(sblk, item);
+
+		/* XXX item has to skip holes at the end of blocks */
+		item = (void *)(item + 1);
 	}
 
-	for (i = 0; level && i < nr; i++) {
-		item = (void *)bt + le16_to_cpu(bt->item_offs[i]);
+	free(sblk);
 
-		ref = (void *)item->val;
-		err = print_btree_block(fd, ref->blkno, level - 1);
+	return 0;
+}
+
+static int print_segments(int fd, unsigned long *seg_map, u64 total_segs)
+{
+	int ret = 0;
+	int i = 0;
+	int err;
+
+	for (i = 0; 
+	     (i = find_next_bit_le(seg_map, total_segs, i)) < total_segs;
+	     i++) {
+
+		err = print_segment(fd, i);
 		if (err && !ret)
 			ret = err;
+		i++;
 	}
-
-	free(bt);
 
 	return ret;
 }
 
-/* print populated buddy blocks */
-static int print_buddy_block(int fd, struct buddy_info *binf,
-			     int level, u64 base, u8 off)
+static int print_ring_block(int fd, unsigned long *seg_map, u64 blkno)
 {
-	struct scoutfs_buddy_block *bud;
-	struct scoutfs_buddy_slot *slot;
-	int ret = 0;
-	u64 blkno;
-	u16 first;
-	int err;
+	struct scoutfs_ring_entry_header *eh;
+	struct scoutfs_ring_add_manifest *am;
+	struct scoutfs_ring_block *ring;
+	u32 off;
 	int i;
 
-	blkno = binf->blknos[level] + base + off;
-	bud = read_block(fd, blkno);
-	if (!bud)
+	ring = read_block(fd, blkno);
+	if (!ring)
 		return -ENOMEM;
 
-	printf("buddy blkno %llu\n", blkno);
-	print_block_header(&bud->hdr);
-	printf("  first_set:");
-	for (i = 0; i < SCOUTFS_BUDDY_ORDERS; i++) {
-		first = le16_to_cpu(bud->first_set[i]);
-		if (first == U16_MAX)
-			printf(" -");
-		else
-			printf(" %u", first);
+	printf("ring blkno %llu\n", blkno);
+	print_block_header(&ring->hdr);
+
+	eh = ring->entries;
+	for (i = 0; i < le32_to_cpu(ring->nr_entries); i++) {
+		off = (char *)eh - (char *)ring;
+		printf("  [%u]: type %u len %u\n",
+			off, eh->type, le16_to_cpu(eh->len));
+
+		switch(eh->type) {
+		case SCOUTFS_RING_ADD_MANIFEST:
+			am = (void *)eh;
+			printf("    add ment: segno %llu seq %llu "
+			       "first_len %u last_len %u level %u\n",
+			       le64_to_cpu(am->segno),
+			       le64_to_cpu(am->seq),
+			       le16_to_cpu(am->first_key_len),
+			       le16_to_cpu(am->last_key_len),
+			       am->level);
+
+			/* XXX verify, 'int nr' limits segno precision */
+			set_bit_le(le64_to_cpu(am->segno), seg_map);
+			break;
+		}
 	}
-	printf("\n");
-	printf("  level: %u\n", bud->level);
 
-	for (i = 0; level && i < SCOUTFS_BUDDY_SLOTS; i++) {
-		slot = &bud->slots[i];
+	free(ring);
 
-		if (slot->seq == 0)
-			continue;
+	return 0;
+}
 
-		printf("  slots[%u]: seq %llu free_orders: %x blkno_off %u\n",
-			i, le64_to_cpu(slot->seq),
-			le16_to_cpu(slot->free_orders), slot->blkno_off);
-	}
+static int print_ring_blocks(int fd, struct scoutfs_super_block *super,
+			     unsigned long *seg_map)
+{
+	int ret = 0;
+	u64 blkno;
+	u16 index;
+	u16 tail;
+	int err;
 
-	for (i = 0; level && i < SCOUTFS_BUDDY_SLOTS; i++) {
-		slot = &bud->slots[i];
+	index = le64_to_cpu(super->ring_head_index);
+	tail = le64_to_cpu(super->ring_tail_index);
 
-		if (slot->seq == 0)
-			continue;
+	for(;;) {
+		blkno = le64_to_cpu(super->ring_blkno) + index;
 
-		err = print_buddy_block(fd, binf, level - 1,
-					(base * SCOUTFS_BUDDY_SLOTS) + (i * 2),
-					slot->blkno_off);
+		err = print_ring_block(fd, seg_map, blkno);
 		if (err && !ret)
 			ret = err;
-	}
 
-	free(bud);
+		if (index == tail)
+			break;
+
+		if (++index == le64_to_cpu(super->ring_blocks))
+			index = 0;
+	};
 
 	return ret;
 }
@@ -283,9 +312,11 @@ static int print_super_blocks(int fd)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_super_block recent = { .hdr.seq = 0 };
+	unsigned long *seg_map;
 	char uuid_str[37];
+	u64 total_segs;
+	u64 longs;
 	int ret = 0;
-	int err;
 	int i;
 
 	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
@@ -299,21 +330,16 @@ static int print_super_blocks(int fd)
 		print_block_header(&super->hdr);
 		printf("  id %llx uuid %s\n",
 		       le64_to_cpu(super->id), uuid_str);
-		printf("  next_ino %llu total_blocks %llu buddy_blocks %llu\n"
-		       "  free_blocks %llu\n",
+		printf("  next_ino %llu total_blocks %llu free_blocks %llu\n"
+		       "  ring_blkno %llu ring_blocks %llu ring_head %llu\n"
+		       "  ring_tail %llu\n",
 			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
-			le64_to_cpu(super->buddy_blocks),
-			le64_to_cpu(super->free_blocks));
-		printf("  buddy_root: height %u seq %llu free_orders %x blkno_off %u\n",
-			super->buddy_root.height,
-			le64_to_cpu(super->buddy_root.slot.seq),
-			le16_to_cpu(super->buddy_root.slot.free_orders),
-			super->buddy_root.slot.blkno_off);
-		printf("  btree_root: height %u seq %llu blkno %llu\n",
-			super->btree_root.height,
-			le64_to_cpu(super->btree_root.ref.seq),
-			le64_to_cpu(super->btree_root.ref.blkno));
+			le64_to_cpu(super->free_blocks),
+			le64_to_cpu(super->ring_blkno),
+			le64_to_cpu(super->ring_blocks),
+			le64_to_cpu(super->ring_head_index),
+			le64_to_cpu(super->ring_tail_index));
 
 		if (le64_to_cpu(super->hdr.seq) > le64_to_cpu(recent.hdr.seq))
 			memcpy(&recent, super, sizeof(recent));
@@ -323,24 +349,17 @@ static int print_super_blocks(int fd)
 
 	super = &recent;
 
+	/* XXX :P */
+	total_segs = le64_to_cpu(super->total_blocks) / SCOUTFS_SEGMENT_BLOCKS;
+	longs = DIV_ROUND_UP(total_segs, BITS_PER_LONG);
+	seg_map = calloc(longs, sizeof(unsigned long));
+	if (!seg_map)
+		return -ENOMEM;
 
-	if (super->buddy_root.height) {
-		struct buddy_info binf;
+	ret = print_ring_blocks(fd, super, seg_map) ?:
+	      print_segments(fd, seg_map, total_segs);
 
-		buddy_init(&binf, le64_to_cpu(super->total_blocks));
-		err = print_buddy_block(fd, &binf,
-					super->buddy_root.height - 1, 0,
-					super->buddy_root.slot.blkno_off);
-		if (err && !ret)
-			ret = err;
-	}
-
-	if (super->btree_root.height) {
-		err = print_btree_block(fd, super->btree_root.ref.blkno,
-					super->btree_root.height - 1);
-		if (err && !ret)
-			ret = err;
-	}
+	free(seg_map);
 
 	return ret;
 }
