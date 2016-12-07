@@ -17,6 +17,7 @@
 #include "crc.h"
 #include "buddy.h"
 #include "bitops.h"
+#include "item.h"
 
 /* XXX maybe these go somewhere */
 #define SKF "%llu.%u.%llu"
@@ -169,12 +170,23 @@ static print_func_t printers[] = {
 	[SCOUTFS_INODE_KEY] = print_inode,
 };
 
-static void print_item(struct scoutfs_segment_block *sblk,
-		       struct scoutfs_segment_item *item)
+static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
 {
-	void *key = (char *)sblk + le32_to_cpu(item->key_off);
-	void *val = (char *)sblk + le32_to_cpu(item->val_off);
-	__u8 type = *(__u8 *)key;
+	struct native_item item;
+	void *key;
+	void *val;
+	__u8 type;
+
+	load_item(sblk, pos, &item);
+
+	key = (char *)sblk + item.key_off;
+	val = (char *)sblk + item.val_off;
+	type = *(__u8 *)key;
+
+	printf("  [%u]: seq %llu key_off %u val_off %u key_len %u "
+	       "val_len %u\n",
+		pos, item.seq, item.key_off, item.val_off, item.key_len,
+		item.val_len);
 
 	if (type < array_size(printers) && printers[type])
 		printers[type](key, val);
@@ -185,7 +197,6 @@ static void print_item(struct scoutfs_segment_block *sblk,
 static int print_segment(int fd, u64 segno)
 {
 	struct scoutfs_segment_block *sblk;
-	struct scoutfs_segment_item *item;
 	int i;
 
 	sblk = read_segment(fd, segno);
@@ -195,22 +206,8 @@ static int print_segment(int fd, u64 segno)
 	printf("segment segno %llu\n", segno);
 //	print_block_header(&sblk->hdr);
 
-	item = (void *)(sblk + 1);
-	for (i = 0; i < le32_to_cpu(sblk->nr_items); i++) {
-		printf("  [%u]: seq %llu key_off %u val_off %u key_len %u "
-		       "val_len %u\n",
-			i,
-			le64_to_cpu(item->seq),
-			le32_to_cpu(item->key_off),
-			le32_to_cpu(item->val_off),
-			le16_to_cpu(item->key_len),
-			le16_to_cpu(item->val_len));
-
-		print_item(sblk, item);
-
-		/* XXX item has to skip holes at the end of blocks */
-		item = (void *)(item + 1);
-	}
+	for (i = 0; i < le32_to_cpu(sblk->nr_items); i++)
+		print_item(sblk, i);
 
 	free(sblk);
 
@@ -238,6 +235,7 @@ static int print_segments(int fd, unsigned long *seg_map, u64 total_segs)
 
 static int print_ring_block(int fd, unsigned long *seg_map, u64 blkno)
 {
+	struct scoutfs_ring_alloc_region *reg;
 	struct scoutfs_ring_entry_header *eh;
 	struct scoutfs_ring_add_manifest *am;
 	struct scoutfs_ring_block *ring;
@@ -252,12 +250,13 @@ static int print_ring_block(int fd, unsigned long *seg_map, u64 blkno)
 	print_block_header(&ring->hdr);
 
 	eh = ring->entries;
-	for (i = 0; i < le32_to_cpu(ring->nr_entries); i++) {
+	while (eh->len) {
 		off = (char *)eh - (char *)ring;
 		printf("  [%u]: type %u len %u\n",
 			off, eh->type, le16_to_cpu(eh->len));
 
 		switch(eh->type) {
+
 		case SCOUTFS_RING_ADD_MANIFEST:
 			am = (void *)eh;
 			printf("    add ment: segno %llu seq %llu "
@@ -271,7 +270,18 @@ static int print_ring_block(int fd, unsigned long *seg_map, u64 blkno)
 			/* XXX verify, 'int nr' limits segno precision */
 			set_bit_le(le64_to_cpu(am->segno), seg_map);
 			break;
+
+		case SCOUTFS_RING_ADD_ALLOC:
+			reg = (void *)eh;
+			printf("    add alloc: index %llu bits",
+			       le64_to_cpu(reg->index));
+			for (i = 0; i < array_size(reg->bits); i++)
+				printf(" %016llx", le64_to_cpu(reg->bits[i]));
+			printf("\n");
+			break;
 		}
+
+		eh = (void *)eh + le16_to_cpu(eh->len);
 	}
 
 	free(ring);
@@ -330,16 +340,19 @@ static int print_super_blocks(int fd)
 		print_block_header(&super->hdr);
 		printf("  id %llx uuid %s\n",
 		       le64_to_cpu(super->id), uuid_str);
+		/* XXX these are all in a crazy order */
 		printf("  next_ino %llu total_blocks %llu free_blocks %llu\n"
 		       "  ring_blkno %llu ring_blocks %llu ring_head %llu\n"
-		       "  ring_tail %llu\n",
+		       "  ring_tail %llu alloc_uninit %llu total_segs %llu\n",
 			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
 			le64_to_cpu(super->free_blocks),
 			le64_to_cpu(super->ring_blkno),
 			le64_to_cpu(super->ring_blocks),
 			le64_to_cpu(super->ring_head_index),
-			le64_to_cpu(super->ring_tail_index));
+			le64_to_cpu(super->ring_tail_index),
+			le64_to_cpu(super->alloc_uninit),
+			le64_to_cpu(super->total_segs));
 
 		if (le64_to_cpu(super->hdr.seq) > le64_to_cpu(recent.hdr.seq))
 			memcpy(&recent, super, sizeof(recent));

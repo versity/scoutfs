@@ -19,6 +19,7 @@
 #include "dev.h"
 #include "bitops.h"
 #include "buddy.h"
+#include "item.h"
 
 /*
  * Update the block's header and write it out.
@@ -88,8 +89,9 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_inode *inode;
 	struct scoutfs_segment_block *sblk;
 	struct scoutfs_ring_block *ring;
-	struct scoutfs_segment_item *item;
 	struct scoutfs_ring_add_manifest *am;
+	struct scoutfs_ring_alloc_region *reg;
+	struct native_item item;
 	struct timeval tv;
 	char uuid_str[37];
 	unsigned int i;
@@ -97,6 +99,8 @@ static int write_new_fs(char *path, int fd)
 	u64 size;
 	u64 total_blocks;
 	u64 ring_blocks;
+	u64 total_segs;
+	u64 first_segno;
 	int ret;
 
 	gettimeofday(&tv, NULL);
@@ -127,6 +131,7 @@ static int write_new_fs(char *path, int fd)
 	}
 
 	total_blocks = size / SCOUTFS_BLOCK_SIZE;
+	total_segs = size / SCOUTFS_SEGMENT_SIZE;
 	ring_blocks = calc_ring_blocks(size);
 
 	/* first initialize the super so we can use it to build structures */
@@ -137,24 +142,30 @@ static int write_new_fs(char *path, int fd)
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->total_blocks = cpu_to_le64(total_blocks);
+	super->total_segs = cpu_to_le64(total_segs);
+	super->alloc_uninit = cpu_to_le64(SCOUTFS_ALLOC_REGION_BITS);
 	super->ring_blkno = cpu_to_le64(SCOUTFS_SUPER_BLKNO + 2);
 	super->ring_blocks = cpu_to_le64(ring_blocks);
 	super->ring_head_seq = cpu_to_le64(1);
 
+	first_segno = DIV_ROUND_UP(le64_to_cpu(super->ring_blkno) +
+		                   le64_to_cpu(super->ring_blocks),
+				   SCOUTFS_SEGMENT_BLOCKS);
+
 	/* write seg with root inode */
-	sblk->segno = cpu_to_le64(1);
+	sblk->segno = cpu_to_le64(first_segno);
 	sblk->max_seq = cpu_to_le64(1);
 	sblk->nr_items = cpu_to_le32(1);
 
-	item = (void *)(sblk + 1);
-	ikey = (void *)(item + 1);
+	ikey = (void *)&sblk->items[1];
 	inode = (void *)(ikey + 1);
 
-	item->seq = cpu_to_le64(1);
-	item->key_off = cpu_to_le32((long)ikey - (long)sblk);
-	item->val_off = cpu_to_le32((long)inode - (long)sblk);
-	item->key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
-	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
+	item.seq = 1;
+	item.key_off = (long)ikey - (long)sblk;
+	item.val_off = (long)inode - (long)sblk;
+	item.key_len = sizeof(struct scoutfs_inode_key);
+	item.val_len = sizeof(struct scoutfs_inode);
+	store_item(sblk, 0, &item);
 
 	ikey->type = SCOUTFS_INODE_KEY;
 	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
@@ -169,19 +180,18 @@ static int write_new_fs(char *path, int fd)
 	inode->mtime.nsec = inode->atime.nsec;
 
 	ret = pwrite(fd, sblk, SCOUTFS_SEGMENT_SIZE,
-		     1 << SCOUTFS_SEGMENT_SHIFT);
+		     first_segno << SCOUTFS_SEGMENT_SHIFT);
 	if (ret != SCOUTFS_SEGMENT_SIZE) {
 		ret = -EIO;
 		goto out;
 	}
 
-	/* write the ring block with the manifest entry pointing to seg */
-	ring->nr_entries = cpu_to_le32(1);
-
+	/* a single manifest entry points to the single segment */
 	am = (void *)ring->entries;
 	am->eh.type = SCOUTFS_RING_ADD_MANIFEST;
-	am->eh.len = cpu_to_le16(sizeof(struct scoutfs_ring_add_manifest));
-	am->segno = cpu_to_le64(1);
+	am->eh.len = cpu_to_le16(sizeof(struct scoutfs_ring_add_manifest) +
+				 (2 * sizeof(struct scoutfs_inode_key)));
+	am->segno = sblk->segno;
 	am->seq = cpu_to_le64(1);
 	am->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
 	am->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
@@ -192,6 +202,17 @@ static int write_new_fs(char *path, int fd)
 	ikey = (void *)(ikey + 1);
 	ikey->type = SCOUTFS_INODE_KEY;
 	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+
+	/* a single alloc region records the first two segs as allocated */
+	reg = (void *)am + le16_to_cpu(am->eh.len);
+	reg->eh.type = SCOUTFS_RING_ADD_ALLOC;
+	reg->eh.len = cpu_to_le16(sizeof(struct scoutfs_ring_alloc_region));
+	/* initial super, ring, and first seg are all allocated */
+	memset(reg->bits, 0xff, sizeof(reg->bits));
+	for (i = 0; i <= first_segno; i++)
+		clear_bit_le(i, reg->bits);
+
+	/* block is already zeroed and so contains a 0 len terminating header */
 
 	ret = write_block(fd, le64_to_cpu(super->ring_blkno), super,
 			  &ring->hdr);
