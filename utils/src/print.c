@@ -80,7 +80,7 @@ static void print_block_header(struct scoutfs_block_header *hdr)
 		le64_to_cpu(hdr->seq), le64_to_cpu(hdr->blkno));
 }
 
-static void print_inode(void *key, void *val)
+static void print_inode(void *key, int key_len, void *val, int val_len)
 {
 	struct scoutfs_inode_key *ikey = key;
 	struct scoutfs_inode *inode = val;
@@ -122,22 +122,49 @@ static void print_xattr_val_hash(__le64 *refcount)
 	printf("      xattr_val_hash: refcount %llu\n",
 	       le64_to_cpu(*refcount));
 }
+#endif
 
-static void print_dirent(struct scoutfs_dirent *dent, unsigned int val_len)
+static u8 *global_printable_name(u8 *name, int name_len)
 {
-	unsigned int name_len = val_len - sizeof(*dent);
-	char name[SCOUTFS_NAME_LEN + 1];
+	static u8 name_buf[SCOUTFS_NAME_LEN + 1];
 	int i;
 
-	for (i = 0; i < min(SCOUTFS_NAME_LEN, name_len); i++)
-		name[i] = isprint(dent->name[i]) ?  dent->name[i] : '.';
-	name[i] = '\0';
+	name_len = min(SCOUTFS_NAME_LEN, name_len);
+	for (i = 0; i < name_len; i++)
+		name_buf[i] = isprint(name[i]) ? name[i] : '.';
+	name_buf[i] = '\0';
 
-	printf("      dirent: ino: %llu ctr: %llu type: %u name: \"%.*s\"\n",
-	       le64_to_cpu(dent->ino), le64_to_cpu(dent->counter),
-	       dent->type, i, name);
+	return name_buf;
 }
 
+static void print_dirent(void *key, int key_len, void *val, int val_len)
+{
+	struct scoutfs_dirent_key *dkey = key;
+	struct scoutfs_dirent *dent = val;
+	unsigned int name_len = key_len - sizeof(*dkey);
+	u8 *name = global_printable_name(dkey->name, name_len);
+
+	printf("    dirent: dir ino %llu type %u targ ino %llu\n"
+	       "      name %s\n",
+	       be64_to_cpu(dkey->ino), dent->type, le64_to_cpu(dent->ino),
+	       name);
+}
+
+static void print_readdir(void *key, int key_len, void *val, int val_len)
+{
+	struct scoutfs_readdir_key *rkey = key;
+	struct scoutfs_dirent *dent = val;
+	unsigned int name_len = val_len - sizeof(*dent);
+	u8 *name = global_printable_name(dent->name, name_len);
+
+	printf("    readdir: dir ino %llu pos %llu type %u targ ino %llu\n"
+	       "      name %s\n",
+	       be64_to_cpu(rkey->ino), be64_to_cpu(rkey->pos), 
+	       dent->type, le64_to_cpu(dent->ino),
+	       name);
+}
+
+#if 0
 static void print_link_backref(struct scoutfs_link_backref *lref,
 			       unsigned int val_len)
 {
@@ -164,14 +191,17 @@ static void print_extent(struct scoutfs_key *key,
 }
 #endif
 
-typedef void (*print_func_t)(void *key, void *val);
+typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
 
 static print_func_t printers[] = {
 	[SCOUTFS_INODE_KEY] = print_inode,
+	[SCOUTFS_DIRENT_KEY] = print_dirent,
+	[SCOUTFS_READDIR_KEY] = print_readdir,
 };
 
 static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
 {
+	print_func_t printer;
 	struct native_item item;
 	void *key;
 	void *val;
@@ -183,15 +213,15 @@ static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
 	val = (char *)sblk + item.val_off;
 	type = *(__u8 *)key;
 
-	printf("  [%u]: seq %llu key_off %u val_off %u key_len %u "
-	       "val_len %u\n",
-		pos, item.seq, item.key_off, item.val_off, item.key_len,
-		item.val_len);
+	printer = type < array_size(printers) ? printers[type] : NULL;
 
-	if (type < array_size(printers) && printers[type])
-		printers[type](key, val);
-	else
-		printf(" unknown!\n");
+	printf("  [%u]: type %u seq %llu key_off %u val_off %u key_len %u "
+	       "val_len %u%s\n",
+		pos, type, item.seq, item.key_off, item.val_off, item.key_len,
+		item.val_len, printer ? "" : " (unrecognized type)");
+
+	if (printer)
+		printer(key, item.key_len, val, item.val_len);
 }
 
 static int print_segment(int fd, u64 segno)
