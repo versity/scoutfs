@@ -227,7 +227,6 @@ static int print_segments(int fd, unsigned long *seg_map, u64 total_segs)
 		err = print_segment(fd, i);
 		if (err && !ret)
 			ret = err;
-		i++;
 	}
 
 	return ret;
