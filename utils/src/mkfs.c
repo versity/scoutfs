@@ -146,7 +146,8 @@ static int write_new_fs(char *path, int fd)
 	super->alloc_uninit = cpu_to_le64(SCOUTFS_ALLOC_REGION_BITS);
 	super->ring_blkno = cpu_to_le64(SCOUTFS_SUPER_BLKNO + 2);
 	super->ring_blocks = cpu_to_le64(ring_blocks);
-	super->ring_head_seq = cpu_to_le64(1);
+	super->ring_nr = cpu_to_le64(1);
+	super->ring_seq = cpu_to_le64(1);
 
 	first_segno = DIV_ROUND_UP(le64_to_cpu(super->ring_blkno) +
 		                   le64_to_cpu(super->ring_blocks),

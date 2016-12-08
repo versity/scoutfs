@@ -323,25 +323,23 @@ static int print_ring_blocks(int fd, struct scoutfs_super_block *super,
 {
 	int ret = 0;
 	u64 blkno;
-	u16 index;
-	u16 tail;
+	u64 index;
+	u64 nr;
 	int err;
 
-	index = le64_to_cpu(super->ring_head_index);
-	tail = le64_to_cpu(super->ring_tail_index);
+	index = le64_to_cpu(super->ring_index);
+	nr = le64_to_cpu(super->ring_nr);
 
-	for(;;) {
+	while (nr) {
 		blkno = le64_to_cpu(super->ring_blkno) + index;
 
 		err = print_ring_block(fd, seg_map, blkno);
 		if (err && !ret)
 			ret = err;
 
-		if (index == tail)
-			break;
-
 		if (++index == le64_to_cpu(super->ring_blocks))
 			index = 0;
+		nr--;
 	};
 
 	return ret;
@@ -371,15 +369,17 @@ static int print_super_blocks(int fd)
 		       le64_to_cpu(super->id), uuid_str);
 		/* XXX these are all in a crazy order */
 		printf("  next_ino %llu total_blocks %llu free_blocks %llu\n"
-		       "  ring_blkno %llu ring_blocks %llu ring_head %llu\n"
-		       "  ring_tail %llu alloc_uninit %llu total_segs %llu\n",
+		       "  ring_blkno %llu ring_blocks %llu ring_index %llu\n"
+		       "  ring_nr %llu ring_seq %llu alloc_uninit %llu\n"
+		       "  total_segs %llu\n",
 			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
 			le64_to_cpu(super->free_blocks),
 			le64_to_cpu(super->ring_blkno),
 			le64_to_cpu(super->ring_blocks),
-			le64_to_cpu(super->ring_head_index),
-			le64_to_cpu(super->ring_tail_index),
+			le64_to_cpu(super->ring_index),
+			le64_to_cpu(super->ring_nr),
+			le64_to_cpu(super->ring_seq),
 			le64_to_cpu(super->alloc_uninit),
 			le64_to_cpu(super->total_segs));
 
