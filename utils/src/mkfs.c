@@ -66,7 +66,7 @@ static u64 calc_ring_blocks(u64 size)
 
 	segs = size >> SCOUTFS_SEGMENT_SHIFT;
 	max_entry_bytes = sizeof(struct scoutfs_ring_add_manifest) +
-		          (2 * SCOUTFS_MAX_KEY_BYTES);
+		          (2 * SCOUTFS_MAX_KEY_SIZE);
 	total_bytes = (segs * max_entry_bytes) * 4;
 	blocks = DIV_ROUND_UP(total_bytes, SCOUTFS_BLOCK_SIZE);
 
@@ -101,6 +101,7 @@ static int write_new_fs(char *path, int fd)
 	u64 ring_blocks;
 	u64 total_segs;
 	u64 first_segno;
+	__u8 *type;
 	int ret;
 
 	gettimeofday(&tv, NULL);
@@ -190,19 +191,14 @@ static int write_new_fs(char *path, int fd)
 	/* a single manifest entry points to the single segment */
 	am = (void *)ring->entries;
 	am->eh.type = SCOUTFS_RING_ADD_MANIFEST;
-	am->eh.len = cpu_to_le16(sizeof(struct scoutfs_ring_add_manifest) +
-				 (2 * sizeof(struct scoutfs_inode_key)));
+	am->eh.len = cpu_to_le16(sizeof(struct scoutfs_ring_add_manifest) + 1);
 	am->segno = sblk->segno;
 	am->seq = cpu_to_le64(1);
-	am->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
-	am->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
+	am->first_key_len = 0;
+	am->last_key_len = cpu_to_le16(1);
 	am->level = 1;
-	ikey = (void *)(am + 1);
-	ikey->type = SCOUTFS_INODE_KEY;
-	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-	ikey = (void *)(ikey + 1);
-	ikey->type = SCOUTFS_INODE_KEY;
-	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	type = (void *)(am + 1);
+	*type = SCOUTFS_MAX_UNUSED_KEY;
 
 	/* a single alloc region records the first two segs as allocated */
 	reg = (void *)am + le16_to_cpu(am->eh.len);
