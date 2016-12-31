@@ -51,6 +51,7 @@ do {				\
 })
 
 #define DIV_ROUND_UP(x, y)  (((x) + (y) - 1) / (y))
+#define ALIGN(x, y)  (((x) + (y) - 1) & ~((y) - 1))
 
 #ifndef offsetof
 #define offsetof(type, memb) ((unsigned long)&((type *)0)->memb)

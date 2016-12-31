@@ -21,20 +21,11 @@
 #include "buddy.h"
 #include "item.h"
 
-/*
- * Update the block's header and write it out.
- */
-static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
-		       struct scoutfs_block_header *hdr)
+static int write_raw_block(int fd, u64 blkno, void *blk)
 {
 	ssize_t ret;
 
-	if (super)
-		*hdr = super->hdr;
-	hdr->blkno = cpu_to_le64(blkno);
-	hdr->crc = cpu_to_le32(crc_block(hdr));
-
-	ret = pwrite(fd, hdr, SCOUTFS_BLOCK_SIZE, blkno << SCOUTFS_BLOCK_SHIFT);
+	ret = pwrite(fd, blk, SCOUTFS_BLOCK_SIZE, blkno << SCOUTFS_BLOCK_SHIFT);
 	if (ret != SCOUTFS_BLOCK_SIZE) {
 		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
 			blkno, ret, strerror(errno), errno);
@@ -45,41 +36,55 @@ static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
 }
 
 /*
- * Figure out how many blocks the ring will need.  This goes crazy
- * with the variables to make the calculation clear.
- *
- * XXX just a place holder.  The real calculation is more like:
- *
- *  - max size add manifest entries for all segments
- *  - (some day) allocator entries for all segments
- *  - ring block header overhead
- *  - ring block unused tail space overhead
- *
+ * Update the block's header and write it out.
  */
-static u64 calc_ring_blocks(u64 size)
+static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
+		       struct scoutfs_block_header *hdr)
 {
-	u64 first_seg_blocks;
-	u64 max_entry_bytes;
-	u64 total_bytes;
-	u64 blocks;
-	u64 segs;
+	if (super)
+		*hdr = super->hdr;
+	hdr->blkno = cpu_to_le64(blkno);
+	hdr->crc = cpu_to_le32(crc_block(hdr));
 
-	segs = size >> SCOUTFS_SEGMENT_SHIFT;
-	max_entry_bytes = sizeof(struct scoutfs_ring_add_manifest) +
-		          (2 * SCOUTFS_MAX_KEY_SIZE);
-	total_bytes = (segs * max_entry_bytes) * 4;
-	blocks = DIV_ROUND_UP(total_bytes, SCOUTFS_BLOCK_SIZE);
+	return write_raw_block(fd, blkno, hdr);
+}
 
-	first_seg_blocks = SCOUTFS_SEGMENT_BLOCKS -
-			   (SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR);
+/*
+ * Figure out how many blocks the ring will need.  The ring has to hold:
+ *
+ *  - manifest entries for every segment with largest keys
+ *  - allocator regions for bits to reference every segment
+ *  - empty space at the end of blocks so nodes don't cross blocks
+ *  - double that to account for repeatedly duplicating entries
+ *  - double that so we can migrate everything before wrapping
+ */
+static u64 calc_ring_blocks(u64 segs)
+{
+	u64 alloc_blocks;
+	u64 ment_blocks;
+	u64 block_bytes;
+	u64 node_bytes;
+	u64 regions;
 
-	return max(first_seg_blocks, blocks);
+	node_bytes = sizeof(struct scoutfs_treap_node) +
+		     sizeof(struct scoutfs_manifest_entry) +
+		     (2 * SCOUTFS_MAX_KEY_SIZE);
+	block_bytes = SCOUTFS_BLOCK_SIZE - (node_bytes - 1);
+	ment_blocks = DIV_ROUND_UP(segs * node_bytes, block_bytes);
+
+	node_bytes = sizeof(struct scoutfs_treap_node) +
+		     sizeof(struct scoutfs_alloc_region);
+	regions = DIV_ROUND_UP(segs, SCOUTFS_ALLOC_REGION_BITS);
+	block_bytes = SCOUTFS_BLOCK_SIZE - (node_bytes - 1);
+	alloc_blocks = DIV_ROUND_UP(regions * node_bytes, block_bytes);
+
+	return ALIGN((ment_blocks + alloc_blocks) * 4, SCOUTFS_SEGMENT_BLOCKS);
 }
 
 /*
  * Make a new file system by writing:
  *  - super blocks
- *  - ring block with manifest entry
+ *  - ring block with manifest node
  *  - segment with root inode
  */
 static int write_new_fs(char *path, int fd)
@@ -88,13 +93,12 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_inode_key *ikey;
 	struct scoutfs_inode *inode;
 	struct scoutfs_segment_block *sblk;
-	struct scoutfs_ring_block *ring;
-	struct scoutfs_ring_add_manifest *am;
-	struct scoutfs_ring_alloc_region *reg;
+	struct scoutfs_manifest_entry *ment;
+	struct scoutfs_treap_node *node;
 	struct native_item item;
 	struct timeval tv;
 	char uuid_str[37];
-	unsigned int i;
+	void *ring;
 	u64 limit;
 	u64 size;
 	u64 total_blocks;
@@ -103,6 +107,7 @@ static int write_new_fs(char *path, int fd)
 	u64 first_segno;
 	__u8 *type;
 	int ret;
+	u64 i;
 
 	gettimeofday(&tv, NULL);
 
@@ -133,7 +138,7 @@ static int write_new_fs(char *path, int fd)
 
 	total_blocks = size / SCOUTFS_BLOCK_SIZE;
 	total_segs = size / SCOUTFS_SEGMENT_SIZE;
-	ring_blocks = calc_ring_blocks(size);
+	ring_blocks = calc_ring_blocks(total_segs);
 
 	/* first initialize the super so we can use it to build structures */
 	memset(super, 0, SCOUTFS_BLOCK_SIZE);
@@ -144,15 +149,17 @@ static int write_new_fs(char *path, int fd)
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->total_blocks = cpu_to_le64(total_blocks);
 	super->total_segs = cpu_to_le64(total_segs);
-	super->alloc_uninit = cpu_to_le64(SCOUTFS_ALLOC_REGION_BITS);
 	super->ring_blkno = cpu_to_le64(SCOUTFS_SUPER_BLKNO + 2);
 	super->ring_blocks = cpu_to_le64(ring_blocks);
-	super->ring_nr = cpu_to_le64(1);
-	super->ring_seq = cpu_to_le64(1);
+	super->ring_tail_block = cpu_to_le64(1);
+	super->ring_gen = cpu_to_le64(1);
 
 	first_segno = DIV_ROUND_UP(le64_to_cpu(super->ring_blkno) +
 		                   le64_to_cpu(super->ring_blocks),
 				   SCOUTFS_SEGMENT_BLOCKS);
+
+	/* alloc from uninit, don't need regions yet */
+	super->alloc_uninit = cpu_to_le64(first_segno + 1);
 
 	/* write seg with root inode */
 	sblk->segno = cpu_to_le64(first_segno);
@@ -189,30 +196,29 @@ static int write_new_fs(char *path, int fd)
 	}
 
 	/* a single manifest entry points to the single segment */
-	am = (void *)ring->entries;
-	am->eh.type = SCOUTFS_RING_ADD_MANIFEST;
-	am->eh.len = cpu_to_le16(sizeof(struct scoutfs_ring_add_manifest) + 1);
-	am->segno = sblk->segno;
-	am->seq = cpu_to_le64(1);
-	am->first_key_len = 0;
-	am->last_key_len = cpu_to_le16(1);
-	am->level = 1;
-	type = (void *)(am + 1);
+	node = ring;
+	node->off = cpu_to_le64((char *)node - (char *)ring);
+	node->gen = cpu_to_le64(1);
+	node->bytes = cpu_to_le16(sizeof(struct scoutfs_manifest_entry) + 1);
+	pseudo_random_bytes(&node->prio, sizeof(node->prio));
+
+	ment = (void *)node->data;
+	ment->segno = sblk->segno;
+	ment->seq = cpu_to_le64(1);
+	ment->first_key_len = 0;
+	ment->last_key_len = cpu_to_le16(1);
+	ment->level = 1;
+	type = (void *)ment->keys;
 	*type = SCOUTFS_MAX_UNUSED_KEY;
 
-	/* a single alloc region records the first two segs as allocated */
-	reg = (void *)am + le16_to_cpu(am->eh.len);
-	reg->eh.type = SCOUTFS_RING_ADD_ALLOC;
-	reg->eh.len = cpu_to_le16(sizeof(struct scoutfs_ring_alloc_region));
-	/* initial super, ring, and first seg are all allocated */
-	memset(reg->bits, 0xff, sizeof(reg->bits));
-	for (i = 0; i <= first_segno; i++)
-		clear_bit_le(i, reg->bits);
+	node->crc = crc_node(node);
 
-	/* block is already zeroed and so contains a 0 len terminating header */
+	super->manifest.root.ref.off = node->off;
+	super->manifest.root.ref.gen = node->gen;
+	super->manifest.root.ref.aug_bits = SCOUTFS_TREAP_AUG_LESSER;
+	super->manifest.level_counts[1] = cpu_to_le64(1);
 
-	ret = write_block(fd, le64_to_cpu(super->ring_blkno), super,
-			  &ring->hdr);
+	ret = write_raw_block(fd, le64_to_cpu(super->ring_blkno), ring);
 	if (ret)
 		goto out;
 
