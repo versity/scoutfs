@@ -224,6 +224,13 @@ static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
 		printer(key, item.key_len, val, item.val_len);
 }
 
+static void print_segment_block(struct scoutfs_segment_block *sblk)
+{
+	printf("  sblk: segno %llu seq %llu nr_items %u\n",
+		le64_to_cpu(sblk->segno), le64_to_cpu(sblk->seq),
+		le32_to_cpu(sblk->nr_items));
+}
+
 static int print_segment(int fd, u64 segno)
 {
 	struct scoutfs_segment_block *sblk;
@@ -234,7 +241,7 @@ static int print_segment(int fd, u64 segno)
 		return -ENOMEM;
 
 	printf("segment segno %llu\n", segno);
-//	print_block_header(&sblk->hdr);
+	print_segment_block(sblk);
 
 	for (i = 0; i < le32_to_cpu(sblk->nr_items); i++)
 		print_item(sblk, i);
@@ -376,7 +383,8 @@ static int print_super_blocks(int fd)
 		/* XXX these are all in a crazy order */
 		printf("  next_ino %llu total_blocks %llu free_blocks %llu\n"
 		       "  ring_blkno %llu ring_blocks %llu ring_tail_block %llu\n"
-		       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n",
+		       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n"
+		       "  next_seg_seq %llu\n",
 			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
 			le64_to_cpu(super->free_blocks),
@@ -385,7 +393,8 @@ static int print_super_blocks(int fd)
 			le64_to_cpu(super->ring_tail_block),
 			le64_to_cpu(super->ring_gen),
 			le64_to_cpu(super->alloc_uninit),
-			le64_to_cpu(super->total_segs));
+			le64_to_cpu(super->total_segs),
+			le64_to_cpu(super->next_seg_seq));
 		printf("  alloc root:");
 		print_treap_ref(&super->alloc_treap_root.ref);
 		printf("\n");

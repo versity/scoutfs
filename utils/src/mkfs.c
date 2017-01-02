@@ -153,6 +153,7 @@ static int write_new_fs(char *path, int fd)
 	super->ring_blocks = cpu_to_le64(ring_blocks);
 	super->ring_tail_block = cpu_to_le64(1);
 	super->ring_gen = cpu_to_le64(1);
+	super->next_seg_seq = cpu_to_le64(2);
 
 	first_segno = DIV_ROUND_UP(le64_to_cpu(super->ring_blkno) +
 		                   le64_to_cpu(super->ring_blocks),
@@ -163,7 +164,7 @@ static int write_new_fs(char *path, int fd)
 
 	/* write seg with root inode */
 	sblk->segno = cpu_to_le64(first_segno);
-	sblk->max_seq = cpu_to_le64(1);
+	sblk->seq = cpu_to_le64(1);
 	sblk->nr_items = cpu_to_le32(1);
 
 	ikey = (void *)&sblk->items[1];
