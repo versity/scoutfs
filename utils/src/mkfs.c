@@ -90,6 +90,7 @@ static u64 calc_ring_blocks(u64 segs)
 static int write_new_fs(char *path, int fd)
 {
 	struct scoutfs_super_block *super;
+	struct scoutfs_inode_key root_ikey;
 	struct scoutfs_inode_key *ikey;
 	struct scoutfs_inode *inode;
 	struct scoutfs_segment_block *sblk;
@@ -105,7 +106,6 @@ static int write_new_fs(char *path, int fd)
 	u64 ring_blocks;
 	u64 total_segs;
 	u64 first_segno;
-	__u8 *type;
 	int ret;
 	u64 i;
 
@@ -167,6 +167,9 @@ static int write_new_fs(char *path, int fd)
 	sblk->seq = cpu_to_le64(1);
 	sblk->nr_items = cpu_to_le32(1);
 
+	root_ikey.type = SCOUTFS_INODE_KEY;
+	root_ikey.ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+
 	ikey = (void *)&sblk->items[1];
 	inode = (void *)(ikey + 1);
 
@@ -177,8 +180,7 @@ static int write_new_fs(char *path, int fd)
 	item.val_len = sizeof(struct scoutfs_inode);
 	store_item(sblk, 0, &item);
 
-	ikey->type = SCOUTFS_INODE_KEY;
-	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	*ikey = root_ikey;
 
 	inode->nlink = cpu_to_le32(2);
 	inode->mode = cpu_to_le32(0755 | 0040000);
@@ -200,17 +202,19 @@ static int write_new_fs(char *path, int fd)
 	node = ring;
 	node->off = cpu_to_le64((char *)node - (char *)ring);
 	node->gen = cpu_to_le64(1);
-	node->bytes = cpu_to_le16(sizeof(struct scoutfs_manifest_entry) + 1);
+	node->bytes = cpu_to_le16(sizeof(struct scoutfs_manifest_entry) +
+				  (2 * sizeof(struct scoutfs_inode_key)));
 	pseudo_random_bytes(&node->prio, sizeof(node->prio));
 
 	ment = (void *)node->data;
 	ment->segno = sblk->segno;
 	ment->seq = cpu_to_le64(1);
-	ment->first_key_len = 0;
-	ment->last_key_len = cpu_to_le16(1);
+	ment->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
+	ment->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
 	ment->level = 1;
-	type = (void *)ment->keys;
-	*type = SCOUTFS_MAX_UNUSED_KEY;
+	ikey = (void *)ment->keys;
+	ikey[0] = root_ikey;
+	ikey[1] = root_ikey;
 
 	node->crc = crc_node(node);
 
