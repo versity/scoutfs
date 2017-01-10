@@ -17,7 +17,6 @@
 #include "crc.h"
 #include "rand.h"
 #include "dev.h"
-#include "bitops.h"
 #include "buddy.h"
 #include "item.h"
 
