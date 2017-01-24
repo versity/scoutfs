@@ -18,7 +18,6 @@
 #include "rand.h"
 #include "dev.h"
 #include "buddy.h"
-#include "item.h"
 
 static int write_raw_block(int fd, u64 blkno, void *blk)
 {
@@ -95,7 +94,7 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_segment_block *sblk;
 	struct scoutfs_manifest_entry *ment;
 	struct scoutfs_treap_node *node;
-	struct native_item item;
+	struct scoutfs_segment_item *item;
 	struct timeval tv;
 	char uuid_str[37];
 	void *ring;
@@ -169,15 +168,15 @@ static int write_new_fs(char *path, int fd)
 	root_ikey.type = SCOUTFS_INODE_KEY;
 	root_ikey.ino = cpu_to_be64(SCOUTFS_ROOT_INO);
 
+	item = &sblk->items[0];
 	ikey = (void *)&sblk->items[1];
 	inode = (void *)(ikey + 1);
 
-	item.seq = 1;
-	item.key_off = (long)ikey - (long)sblk;
-	item.val_off = (long)inode - (long)sblk;
-	item.key_len = sizeof(struct scoutfs_inode_key);
-	item.val_len = sizeof(struct scoutfs_inode);
-	store_item(sblk, 0, &item);
+	item->seq = cpu_to_le64(1);
+	item->key_off = cpu_to_le32((long)ikey - (long)sblk);
+	item->val_off = cpu_to_le32((long)inode - (long)sblk);
+	item->key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
+	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
 
 	*ikey = root_ikey;
 

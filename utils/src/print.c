@@ -16,7 +16,6 @@
 #include "cmd.h"
 #include "crc.h"
 #include "buddy.h"
-#include "item.h"
 
 /* XXX maybe these go somewhere */
 #define SKF "%llu.%u.%llu"
@@ -198,29 +197,48 @@ static print_func_t printers[] = {
 	[SCOUTFS_READDIR_KEY] = print_readdir,
 };
 
+/* utils uses big contiguous allocations */
+static void *off_ptr(struct scoutfs_segment_block *sblk, u32 off)
+{
+	return (char *)sblk + off;
+}
+
+static u32 pos_off(struct scoutfs_segment_block *sblk, u32 pos)
+{
+	return offsetof(struct scoutfs_segment_block, items[pos]);
+}
+
+static void *pos_ptr(struct scoutfs_segment_block *sblk, u32 pos)
+{
+	return off_ptr(sblk, pos_off(sblk, pos));
+}
+
 static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
 {
 	print_func_t printer;
-	struct native_item item;
+	struct scoutfs_segment_item *item;
 	void *key;
 	void *val;
 	__u8 type;
 
-	load_item(sblk, pos, &item);
+	item = pos_ptr(sblk, pos);
 
-	key = (char *)sblk + item.key_off;
-	val = (char *)sblk + item.val_off;
+	key = (char *)sblk + le32_to_cpu(item->key_off);
+	val = (char *)sblk + le32_to_cpu(item->val_off);
 	type = *(__u8 *)key;
 
 	printer = type < array_size(printers) ? printers[type] : NULL;
 
 	printf("  [%u]: type %u seq %llu key_off %u val_off %u key_len %u "
-	       "val_len %u%s\n",
-		pos, type, item.seq, item.key_off, item.val_off, item.key_len,
-		item.val_len, printer ? "" : " (unrecognized type)");
+	       "val_len %u flags %x%s\n",
+		pos, type, le64_to_cpu(item->seq), le32_to_cpu(item->key_off),
+		le32_to_cpu(item->val_off), le16_to_cpu(item->key_len),
+		le16_to_cpu(item->val_len), item->flags,
+		printer ? "" : " (unrecognized type)");
 
 	if (printer)
-		printer(key, item.key_len, val, item.val_len);
+		printer(key, le16_to_cpu(item->key_len),
+			val, le16_to_cpu(item->val_len));
 }
 
 static void print_segment_block(struct scoutfs_segment_block *sblk)
