@@ -103,6 +103,13 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 	       le32_to_cpu(inode->mtime.nsec));
 }
 
+static void print_orphan(void *key, int key_len, void *val, int val_len)
+{
+	struct scoutfs_orphan_key *okey = key;
+
+	printf("    orphan: ino %llu\n", be64_to_cpu(okey->ino));
+}
+
 #if 0
 
 static void print_xattr(struct scoutfs_xattr *xat)
@@ -193,6 +200,7 @@ typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
 
 static print_func_t printers[] = {
 	[SCOUTFS_INODE_KEY] = print_inode,
+	[SCOUTFS_ORPHAN_KEY] = print_orphan,
 	[SCOUTFS_DIRENT_KEY] = print_dirent,
 	[SCOUTFS_READDIR_KEY] = print_readdir,
 };
