@@ -180,7 +180,8 @@ static int write_new_fs(char *path, int fd)
 
 	*ikey = root_ikey;
 
-	inode->nlink = cpu_to_le32(2);
+	inode->next_readdir_pos = cpu_to_le64(2);
+	inode->nlink = cpu_to_le32(SCOUTFS_DIRENT_FIRST_POS);
 	inode->mode = cpu_to_le32(0755 | 0040000);
 	inode->atime.sec = cpu_to_le64(tv.tv_sec);
 	inode->atime.nsec = cpu_to_le32(tv.tv_usec * 1000);

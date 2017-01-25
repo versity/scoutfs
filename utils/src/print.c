@@ -85,7 +85,7 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 
 	printf("    inode: ino %llu size %llu blocks %llu lctr %llu nlink %u\n"
 	       "      uid %u gid %u mode 0%o rdev 0x%x\n"
-	       "      salt 0x%x data_version %llu\n"
+	       "      salt 0x%x next_readdir_pos %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
 	       "      mtime %llu.%08u\n",
 	       be64_to_cpu(ikey->ino),
@@ -94,6 +94,7 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev), le32_to_cpu(inode->salt),
+	       le64_to_cpu(inode->next_readdir_pos),
 	       le64_to_cpu(inode->data_version),
 	       le64_to_cpu(inode->atime.sec),
 	       le32_to_cpu(inode->atime.nsec),
@@ -149,9 +150,10 @@ static void print_dirent(void *key, int key_len, void *val, int val_len)
 	unsigned int name_len = key_len - sizeof(*dkey);
 	u8 *name = global_printable_name(dkey->name, name_len);
 
-	printf("    dirent: dir ino %llu type %u targ ino %llu\n"
+	printf("    dirent: dir ino %llu type %u rdpos %llu targ ino %llu\n"
 	       "      name %s\n",
-	       be64_to_cpu(dkey->ino), dent->type, le64_to_cpu(dent->ino),
+	       be64_to_cpu(dkey->ino), dent->type,
+	       le64_to_cpu(dent->readdir_pos), le64_to_cpu(dent->ino),
 	       name);
 }
 
