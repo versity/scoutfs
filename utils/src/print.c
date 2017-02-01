@@ -171,6 +171,14 @@ static void print_readdir(void *key, int key_len, void *val, int val_len)
 	       name);
 }
 
+static void print_data(void *key, int key_len, void *val, int val_len)
+{
+	struct scoutfs_data_key *dat = key;
+
+	printf("      data: ino %llu block %llu\n",
+	       be64_to_cpu(dat->ino), be64_to_cpu(dat->block));
+}
+
 #if 0
 static void print_link_backref(struct scoutfs_link_backref *lref,
 			       unsigned int val_len)
@@ -205,6 +213,7 @@ static print_func_t printers[] = {
 	[SCOUTFS_ORPHAN_KEY] = print_orphan,
 	[SCOUTFS_DIRENT_KEY] = print_dirent,
 	[SCOUTFS_READDIR_KEY] = print_readdir,
+	[SCOUTFS_DATA_KEY] = print_data,
 };
 
 /* utils uses big contiguous allocations */
