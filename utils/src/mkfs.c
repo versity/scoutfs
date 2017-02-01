@@ -159,6 +159,7 @@ static int write_new_fs(char *path, int fd)
 
 	/* alloc from uninit, don't need regions yet */
 	super->alloc_uninit = cpu_to_le64(first_segno + 1);
+	super->free_segs = cpu_to_le64(total_segs - (first_segno + 1));
 
 	/* write seg with root inode */
 	sblk->segno = cpu_to_le64(first_segno);

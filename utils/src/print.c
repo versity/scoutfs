@@ -408,7 +408,7 @@ static int print_super_blocks(int fd)
 		printf("  next_ino %llu total_blocks %llu free_blocks %llu\n"
 		       "  ring_blkno %llu ring_blocks %llu ring_tail_block %llu\n"
 		       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n"
-		       "  next_seg_seq %llu\n",
+		       "  next_seg_seq %llu free_segs %llu\n",
 			le64_to_cpu(super->next_ino),
 			le64_to_cpu(super->total_blocks),
 			le64_to_cpu(super->free_blocks),
@@ -418,7 +418,8 @@ static int print_super_blocks(int fd)
 			le64_to_cpu(super->ring_gen),
 			le64_to_cpu(super->alloc_uninit),
 			le64_to_cpu(super->total_segs),
-			le64_to_cpu(super->next_seg_seq));
+			le64_to_cpu(super->next_seg_seq),
+			le64_to_cpu(super->free_segs));
 		printf("  alloc root:");
 		print_treap_ref(&super->alloc_treap_root.ref);
 		printf("\n");
