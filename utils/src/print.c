@@ -179,14 +179,17 @@ static void print_data(void *key, int key_len, void *val, int val_len)
 	       be64_to_cpu(dat->ino), be64_to_cpu(dat->block));
 }
 
-#if 0
-static void print_link_backref(struct scoutfs_link_backref *lref,
-			       unsigned int val_len)
+static void print_link_backref(void *key, int key_len, void *val, int val_len)
 {
-	printf("      lref: ino: %llu offset: %llu\n",
-	       le64_to_cpu(lref->ino), le64_to_cpu(lref->offset));
+	struct scoutfs_link_backref_key *lbkey = key;
+	unsigned int name_len = key_len - sizeof(*lbkey);
+	u8 *name = global_printable_name(lbkey->name, name_len);
+
+	printf("      lbref: ino: %llu dir_ino %llu name %s\n",
+	       be64_to_cpu(lbkey->ino), be64_to_cpu(lbkey->dir_ino), name);
 }
 
+#if 0
 /* for now show the raw component items not the whole path */
 static void print_symlink(char *str, unsigned int val_len)
 {
@@ -213,6 +216,7 @@ static print_func_t printers[] = {
 	[SCOUTFS_ORPHAN_KEY] = print_orphan,
 	[SCOUTFS_DIRENT_KEY] = print_dirent,
 	[SCOUTFS_READDIR_KEY] = print_readdir,
+	[SCOUTFS_LINK_BACKREF_KEY] = print_link_backref,
 	[SCOUTFS_DATA_KEY] = print_data,
 };
 
