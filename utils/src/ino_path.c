@@ -18,7 +18,8 @@ static int ino_path_cmd(int argc, char **argv)
 {
 	struct scoutfs_ioctl_ino_path args;
 	char *endptr = NULL;
-	char *path;
+	char *path = NULL;
+	char *curs = NULL;
 	u64 ino;
 	int ret;
 	int fd;
@@ -51,9 +52,18 @@ static int ino_path_cmd(int argc, char **argv)
 		goto out;
 	}
 
+	curs = calloc(1, SCOUTFS_IOC_INO_PATH_CURSOR_BYTES);
+	if (!curs) {
+		fprintf(stderr, "couldn't allocate %ld byte cursor\n",
+			SCOUTFS_IOC_INO_PATH_CURSOR_BYTES);
+		ret = -ENOMEM;
+		goto out;
+	}
+
 	args.ino = ino;
-	args.ctr = 0;
+	args.cursor_ptr = (intptr_t)curs;
 	args.path_ptr = (intptr_t)path;
+	args.cursor_bytes = SCOUTFS_IOC_INO_PATH_CURSOR_BYTES;
 	args.path_bytes = PATH_MAX;
 	do {
 		ret = ioctl(fd, SCOUTFS_IOC_INO_PATH, &args);
@@ -68,6 +78,7 @@ static int ino_path_cmd(int argc, char **argv)
 	}
 out:
 	free(path);
+	free(curs);
 	close(fd);
 	return ret;
 };
