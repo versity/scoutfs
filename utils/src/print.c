@@ -111,25 +111,6 @@ static void print_orphan(void *key, int key_len, void *val, int val_len)
 	printf("    orphan: ino %llu\n", be64_to_cpu(okey->ino));
 }
 
-#if 0
-
-static void print_xattr(struct scoutfs_xattr *xat)
-{
-	/* XXX check lengths */
-
-	printf("      xattr: name %.*s val_len %u\n",
-	       xat->name_len, xat->name, xat->value_len);
-}
-
-static void print_xattr_val_hash(__le64 *refcount)
-{
-	/* XXX check lengths */
-
-	printf("      xattr_val_hash: refcount %llu\n",
-	       le64_to_cpu(*refcount));
-}
-#endif
-
 static u8 *global_printable_name(u8 *name, int name_len)
 {
 	static u8 name_buf[SCOUTFS_NAME_LEN + 1];
@@ -141,6 +122,20 @@ static u8 *global_printable_name(u8 *name, int name_len)
 	name_buf[i] = '\0';
 
 	return name_buf;
+}
+
+static void print_xattr(void *key, int key_len, void *val, int val_len)
+{
+	struct scoutfs_xattr_key *xkey = key;
+	struct scoutfs_xattr_key_footer *foot = key + key_len - sizeof(*foot);
+	struct scoutfs_xattr_val_header *vh = val;
+	unsigned int name_len = key_len - sizeof(*xkey) - sizeof(*foot);
+	u8 *name = global_printable_name(xkey->name, name_len);
+
+	printf("    xattr: ino %llu part %u part_len %u last_part %u\n"
+	       "      name %s\n",
+	       be64_to_cpu(xkey->ino), foot->part, le16_to_cpu(vh->part_len),
+	       vh->last_part, name);
 }
 
 static void print_dirent(void *key, int key_len, void *val, int val_len)
@@ -213,6 +208,7 @@ typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
 
 static print_func_t printers[] = {
 	[SCOUTFS_INODE_KEY] = print_inode,
+	[SCOUTFS_XATTR_KEY] = print_xattr,
 	[SCOUTFS_ORPHAN_KEY] = print_orphan,
 	[SCOUTFS_DIRENT_KEY] = print_dirent,
 	[SCOUTFS_READDIR_KEY] = print_readdir,
