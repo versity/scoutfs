@@ -15,12 +15,6 @@
 #include "format.h"
 #include "cmd.h"
 #include "crc.h"
-#include "buddy.h"
-
-/* XXX maybe these go somewhere */
-#define SKF "%llu.%u.%llu"
-#define SKA(k) le64_to_cpu((k)->inode), (k)->type, \
-		le64_to_cpu((k)->offset)
 
 static void *read_block(int fd, u64 blkno)
 {
@@ -83,17 +77,16 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 	struct scoutfs_inode_key *ikey = key;
 	struct scoutfs_inode *inode = val;
 
-	printf("    inode: ino %llu size %llu blocks %llu lctr %llu nlink %u\n"
+	printf("    inode: ino %llu size %llu blocks %llu nlink %u\n"
 	       "      uid %u gid %u mode 0%o rdev 0x%x\n"
-	       "      salt 0x%x next_readdir_pos %llu data_version %llu\n"
+	       "      next_readdir_pos %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
 	       "      mtime %llu.%08u\n",
 	       be64_to_cpu(ikey->ino),
 	       le64_to_cpu(inode->size), le64_to_cpu(inode->blocks),
-	       le64_to_cpu(inode->link_counter),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
-	       le32_to_cpu(inode->rdev), le32_to_cpu(inode->salt),
+	       le32_to_cpu(inode->rdev),
 	       le64_to_cpu(inode->next_readdir_pos),
 	       le64_to_cpu(inode->data_version),
 	       le64_to_cpu(inode->atime.sec),
@@ -193,20 +186,6 @@ static void print_symlink(void *key, int key_len, void *val, int val_len)
 	       "      target %s\n",
 	       be64_to_cpu(skey->ino), name);
 }
-
-#if 0
-#define EXT_FLAG(f, flags, str) \
-	(flags & f) ? str : "", (flags & (f - 1)) ? "|" : ""
-
-static void print_extent(struct scoutfs_key *key,
-			 struct scoutfs_extent *ext)
-{
-	printf("      extent: (offest %llu) blkno %llu, len %llu flags %s%s\n",
-	       le64_to_cpu(key->offset), le64_to_cpu(ext->blkno),
-	       le64_to_cpu(ext->len),
-	       EXT_FLAG(SCOUTFS_EXTENT_FLAG_OFFLINE, ext->flags, "OFF"));
-}
-#endif
 
 typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
 
@@ -410,13 +389,11 @@ static int print_super_blocks(int fd)
 		printf("  id %llx uuid %s\n",
 		       le64_to_cpu(super->id), uuid_str);
 		/* XXX these are all in a crazy order */
-		printf("  next_ino %llu total_blocks %llu free_blocks %llu\n"
+		printf("  next_ino %llu\n"
 		       "  ring_blkno %llu ring_blocks %llu ring_tail_block %llu\n"
 		       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n"
 		       "  next_seg_seq %llu free_segs %llu\n",
 			le64_to_cpu(super->next_ino),
-			le64_to_cpu(super->total_blocks),
-			le64_to_cpu(super->free_blocks),
 			le64_to_cpu(super->ring_blkno),
 			le64_to_cpu(super->ring_blocks),
 			le64_to_cpu(super->ring_tail_block),

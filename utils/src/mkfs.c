@@ -17,7 +17,6 @@
 #include "crc.h"
 #include "rand.h"
 #include "dev.h"
-#include "buddy.h"
 
 static int write_raw_block(int fd, u64 blkno, void *blk)
 {
@@ -100,7 +99,6 @@ static int write_new_fs(char *path, int fd)
 	void *ring;
 	u64 limit;
 	u64 size;
-	u64 total_blocks;
 	u64 ring_blocks;
 	u64 total_segs;
 	u64 first_segno;
@@ -134,7 +132,6 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	total_blocks = size / SCOUTFS_BLOCK_SIZE;
 	total_segs = size / SCOUTFS_SEGMENT_SIZE;
 	ring_blocks = calc_ring_blocks(total_segs);
 
@@ -145,7 +142,6 @@ static int write_new_fs(char *path, int fd)
 	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
-	super->total_blocks = cpu_to_le64(total_blocks);
 	super->total_segs = cpu_to_le64(total_segs);
 	super->ring_blkno = cpu_to_le64(SCOUTFS_SUPER_BLKNO + 2);
 	super->ring_blocks = cpu_to_le64(ring_blocks);
@@ -246,11 +242,11 @@ static int write_new_fs(char *path, int fd)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  total blocks: %llu\n"
+	       "  total segments: %llu\n"
 	       "  ring blocks: %llu\n"
 	       "  fsid: %llx\n"
 	       "  uuid: %s\n",
-		total_blocks, ring_blocks, le64_to_cpu(super->hdr.fsid),
+		total_segs, ring_blocks, le64_to_cpu(super->hdr.fsid),
 		uuid_str);
 
 	ret = 0;
