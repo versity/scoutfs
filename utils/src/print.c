@@ -184,13 +184,17 @@ static void print_link_backref(void *key, int key_len, void *val, int val_len)
 	       be64_to_cpu(lbkey->ino), be64_to_cpu(lbkey->dir_ino), name);
 }
 
-#if 0
-/* for now show the raw component items not the whole path */
-static void print_symlink(char *str, unsigned int val_len)
+static void print_symlink(void *key, int key_len, void *val, int val_len)
 {
-	printf("      symlink: %.*s\n", val_len, str);
+	struct scoutfs_symlink_key *skey = key;
+	u8 *name = global_printable_name(val, val_len - 1);
+
+	printf("    symlink: ino %llu\n"
+	       "      target %s\n",
+	       be64_to_cpu(skey->ino), name);
 }
 
+#if 0
 #define EXT_FLAG(f, flags, str) \
 	(flags & f) ? str : "", (flags & (f - 1)) ? "|" : ""
 
@@ -212,6 +216,7 @@ static print_func_t printers[] = {
 	[SCOUTFS_ORPHAN_KEY] = print_orphan,
 	[SCOUTFS_DIRENT_KEY] = print_dirent,
 	[SCOUTFS_READDIR_KEY] = print_readdir,
+	[SCOUTFS_SYMLINK_KEY] = print_symlink,
 	[SCOUTFS_LINK_BACKREF_KEY] = print_link_backref,
 	[SCOUTFS_DATA_KEY] = print_data,
 };
