@@ -60,6 +60,8 @@ do {				\
 #define container_of(ptr, type, memb) \
 	((type *)((void *)(ptr) - offsetof(type, memb)))
 
+#define BITS_PER_LONG (sizeof(long) * 8)
+
 /*
  * return -1,0,+1 based on the memcmp comparison of the minimum of their
  * two lengths.  If their min shared bytes are equal but the lengths
