@@ -38,11 +38,9 @@ u32 crc_block(struct scoutfs_block_header *hdr)
 		      SCOUTFS_BLOCK_SIZE - sizeof(hdr->crc));
 }
 
-__le32 crc_node(struct scoutfs_treap_node *node)
+u32 crc_ring_block(struct scoutfs_ring_block *rblk)
 {
-	unsigned int skip = sizeof(node->crc);
-	unsigned int bytes = offsetof(struct scoutfs_treap_node,
-				      data[le16_to_cpu(node->bytes)]);
+	unsigned long skip = (char *)(&rblk->crc + 1) - (char *)rblk;
 
-	return cpu_to_le32(crc32c(~0, (char *)node + skip, bytes - skip));
+	return crc32c(~0, (char *)rblk + skip, SCOUTFS_BLOCK_SIZE - skip);
 }

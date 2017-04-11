@@ -47,35 +47,23 @@ static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
 }
 
 /*
- * Figure out how many blocks the ring will need.  The ring has to hold:
- *
- *  - manifest entries for every segment with largest keys
- *  - allocator regions for bits to reference every segment
- *  - empty space at the end of blocks so nodes don't cross blocks
- *  - double that to account for repeatedly duplicating entries
- *  - double that so we can migrate everything before wrapping
+ * Figure out how many blocks a given ring will need given a max number
+ * of entries up to a given max size.  We figure out how many blocks it
+ * could take to store these maximal entries given unused tail space and
+ * block header overheads.  Then we (wastefully) multiply by three to
+ * ensure that the ring won't consume itself as it wraps.  The caller
+ * aligns the ring size to a segment size depending on where it starts.
  */
-static u64 calc_ring_blocks(u64 segs)
+static u64 calc_ring_blocks(u64 max_nr, u64 max_size)
 {
-	u64 alloc_blocks;
-	u64 ment_blocks;
 	u64 block_bytes;
-	u64 node_bytes;
-	u64 regions;
 
-	node_bytes = sizeof(struct scoutfs_treap_node) +
-		     sizeof(struct scoutfs_manifest_entry) +
-		     (2 * SCOUTFS_MAX_KEY_SIZE);
-	block_bytes = SCOUTFS_BLOCK_SIZE - (node_bytes - 1);
-	ment_blocks = DIV_ROUND_UP(segs * node_bytes, block_bytes);
+	max_size += sizeof(struct scoutfs_ring_entry);
 
-	node_bytes = sizeof(struct scoutfs_treap_node) +
-		     sizeof(struct scoutfs_alloc_region);
-	regions = DIV_ROUND_UP(segs, SCOUTFS_ALLOC_REGION_BITS);
-	block_bytes = SCOUTFS_BLOCK_SIZE - (node_bytes - 1);
-	alloc_blocks = DIV_ROUND_UP(regions * node_bytes, block_bytes);
+	block_bytes = SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_ring_block) -
+			(max_size - 1);
 
-	return ALIGN((ment_blocks + alloc_blocks) * 4, SCOUTFS_SEGMENT_BLOCKS);
+	return DIV_ROUND_UP(max_nr * max_size, block_bytes) * 3;
 }
 
 /*
@@ -92,11 +80,13 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_inode *inode;
 	struct scoutfs_segment_block *sblk;
 	struct scoutfs_manifest_entry *ment;
-	struct scoutfs_treap_node *node;
+	struct scoutfs_ring_descriptor *rdesc;
+	struct scoutfs_ring_block *rblk;
+	struct scoutfs_ring_entry *rent;
 	struct scoutfs_segment_item *item;
 	struct timeval tv;
 	char uuid_str[37];
-	void *ring;
+	u64 blkno;
 	u64 limit;
 	u64 size;
 	u64 ring_blocks;
@@ -108,9 +98,9 @@ static int write_new_fs(char *path, int fd)
 	gettimeofday(&tv, NULL);
 
 	super = calloc(1, SCOUTFS_BLOCK_SIZE);
-	ring = calloc(1, SCOUTFS_BLOCK_SIZE);
+	rblk = calloc(1, SCOUTFS_BLOCK_SIZE);
 	sblk = calloc(1, SCOUTFS_SEGMENT_SIZE);
-	if (!super || !ring || !sblk) {
+	if (!super || !rblk || !sblk) {
 		ret = -errno;
 		fprintf(stderr, "failed to allocate block mem: %s (%d)\n",
 			strerror(errno), errno);
@@ -133,9 +123,12 @@ static int write_new_fs(char *path, int fd)
 	}
 
 	total_segs = size / SCOUTFS_SEGMENT_SIZE;
-	ring_blocks = calc_ring_blocks(total_segs);
 
-	/* first initialize the super so we can use it to build structures */
+	/* segments and manifest entries all use single key */
+	root_ikey.type = SCOUTFS_INODE_KEY;
+	root_ikey.ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+
+	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SIZE);
 	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
 	super->hdr.seq = cpu_to_le64(1);
@@ -143,15 +136,72 @@ static int write_new_fs(char *path, int fd)
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->total_segs = cpu_to_le64(total_segs);
-	super->ring_blkno = cpu_to_le64(SCOUTFS_SUPER_BLKNO + 2);
-	super->ring_blocks = cpu_to_le64(ring_blocks);
-	super->ring_tail_block = cpu_to_le64(1);
-	super->ring_gen = cpu_to_le64(1);
 	super->next_seg_seq = cpu_to_le64(2);
 
-	first_segno = DIV_ROUND_UP(le64_to_cpu(super->ring_blkno) +
-		                   le64_to_cpu(super->ring_blocks),
-				   SCOUTFS_SEGMENT_BLOCKS);
+	/* start writing rings after the super */
+	blkno = SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR;
+
+	/* allocator ring is empty, allocations start from super fields */
+	ring_blocks = calc_ring_blocks(DIV_ROUND_UP(total_segs,
+						SCOUTFS_ALLOC_REGION_BITS),
+				       sizeof(struct scoutfs_alloc_region));
+	ring_blocks = round_up(blkno + ring_blocks, SCOUTFS_SEGMENT_BLOCKS) -
+			blkno;
+
+	rdesc = &super->alloc_ring;
+	rdesc->blkno = cpu_to_le64(blkno);
+	rdesc->total_blocks = cpu_to_le64(ring_blocks);
+	rdesc->first_block = cpu_to_le64(0);
+	rdesc->first_seq = cpu_to_le64(0);
+	rdesc->nr_blocks = cpu_to_le64(0);
+
+	blkno += ring_blocks;
+
+	/* manifest ring has a block with an entry for the segment */
+	ring_blocks = calc_ring_blocks(total_segs,
+				   sizeof(struct scoutfs_manifest_entry) +
+				   (2 * SCOUTFS_MAX_KEY_SIZE));
+	ring_blocks = round_up(ring_blocks, SCOUTFS_SEGMENT_BLOCKS);
+
+	/* first usable segno follows manifest ring */
+	first_segno = (blkno + ring_blocks) / SCOUTFS_SEGMENT_BLOCKS;
+
+	super->manifest.level_counts[1] = cpu_to_le64(1);
+
+	rdesc = &super->manifest.ring;
+	rdesc->blkno = cpu_to_le64(blkno);
+	rdesc->total_blocks = cpu_to_le64(ring_blocks);
+	rdesc->first_seq = cpu_to_le64(1);
+	rdesc->nr_blocks = cpu_to_le64(1);
+
+	memset(rblk, 0, SCOUTFS_BLOCK_SIZE);
+	rblk->pad = 0;
+	rblk->fsid = super->hdr.fsid;
+	rblk->seq = cpu_to_le64(1);
+	rblk->block = 0;
+	rblk->nr_entries = cpu_to_le32(1);
+
+	rent = rblk->entries;
+	rent->flags = 0;
+	rent->data_len = cpu_to_le16(sizeof(struct scoutfs_manifest_entry) +
+				     (2 * sizeof(struct scoutfs_inode_key)));
+
+	ment = (void *)rent->data;
+	ment->segno = cpu_to_le64(first_segno);
+	ment->seq = cpu_to_le64(1);
+	ment->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
+	ment->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
+	ment->level = 1;
+	ikey = (void *)ment->keys;
+	ikey[0] = root_ikey;
+	ikey[1] = root_ikey;
+
+	rblk->crc = cpu_to_le32(crc_ring_block(rblk));
+
+	ret = write_raw_block(fd, blkno, rblk);
+	if (ret)
+		goto out;
+	blkno += ring_blocks;
 
 	/* alloc from uninit, don't need regions yet */
 	super->alloc_uninit = cpu_to_le64(first_segno + 1);
@@ -161,9 +211,6 @@ static int write_new_fs(char *path, int fd)
 	sblk->segno = cpu_to_le64(first_segno);
 	sblk->seq = cpu_to_le64(1);
 	sblk->nr_items = cpu_to_le32(1);
-
-	root_ikey.type = SCOUTFS_INODE_KEY;
-	root_ikey.ino = cpu_to_be64(SCOUTFS_ROOT_INO);
 
 	item = &sblk->items[0];
 	ikey = (void *)&sblk->items[1];
@@ -194,35 +241,6 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	/* a single manifest entry points to the single segment */
-	node = ring;
-	node->off = cpu_to_le64((char *)node - (char *)ring);
-	node->gen = cpu_to_le64(1);
-	node->bytes = cpu_to_le16(sizeof(struct scoutfs_manifest_entry) +
-				  (2 * sizeof(struct scoutfs_inode_key)));
-	pseudo_random_bytes(&node->prio, sizeof(node->prio));
-
-	ment = (void *)node->data;
-	ment->segno = sblk->segno;
-	ment->seq = cpu_to_le64(1);
-	ment->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
-	ment->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
-	ment->level = 1;
-	ikey = (void *)ment->keys;
-	ikey[0] = root_ikey;
-	ikey[1] = root_ikey;
-
-	node->crc = crc_node(node);
-
-	super->manifest.root.ref.off = node->off;
-	super->manifest.root.ref.gen = node->gen;
-	super->manifest.root.ref.aug_bits = SCOUTFS_TREAP_AUG_LESSER;
-	super->manifest.level_counts[1] = cpu_to_le64(1);
-
-	ret = write_raw_block(fd, le64_to_cpu(super->ring_blkno), ring);
-	if (ret)
-		goto out;
-
 	/* write the two super blocks */
 	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
 		super->hdr.seq = cpu_to_le64(i + 1);
@@ -242,19 +260,17 @@ static int write_new_fs(char *path, int fd)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  total segments: %llu\n"
-	       "  ring blocks: %llu\n"
 	       "  fsid: %llx\n"
 	       "  uuid: %s\n",
-		total_segs, ring_blocks, le64_to_cpu(super->hdr.fsid),
+		le64_to_cpu(super->hdr.fsid),
 		uuid_str);
 
 	ret = 0;
 out:
 	if (super)
 		free(super);
-	if (ring)
-		free(ring);
+	if (rblk)
+		free(rblk);
 	if (sblk)
 		free(sblk);
 	return ret;

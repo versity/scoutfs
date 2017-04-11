@@ -50,43 +50,30 @@ struct scoutfs_block_header {
 	__le64 blkno;
 } __packed;
 
-struct scoutfs_treap_ref {
-	__le64 off;
-	__le64 gen;
-	__u8 aug_bits;
+struct scoutfs_ring_entry {
+	__le16 data_len;
+	__u8 flags;
+	__u8 data[0];
 } __packed;
 
-/*
- * The lesser and greater bits are persistent on disk so that we can migrate
- * nodes from the older half of the ring.
- *
- * The dirty bit is only used for in-memory nodes.
- */
-#define SCOUTFS_TREAP_AUG_LESSER	(1 << 0)
-#define SCOUTFS_TREAP_AUG_GREATER	(1 << 1)
-#define SCOUTFS_TREAP_AUG_HALVES	(SCOUTFS_TREAP_AUG_LESSER | \
-					 SCOUTFS_TREAP_AUG_GREATER)
-#define SCOUTFS_TREAP_AUG_DIRTY		(1 << 2)
+#define SCOUTFS_RING_ENTRY_FLAG_DELETION (1 << 0)
 
-/*
- * Treap nodes are stored at byte offset in the ring of blocks described
- * by the super block.  Each reference contains the off and gen that it
- * will find in the node for verification.  Each node has the header
- * and data payload covered by a crc.
- */
-struct scoutfs_treap_node {
+struct scoutfs_ring_block {
 	__le32 crc;
-	__le64 off;
-	__le64 gen;
-	__le64 prio;
-	struct scoutfs_treap_ref left;
-	struct scoutfs_treap_ref right;
-	__le16 bytes;
-	u8 data[0];
+	__le32 pad;
+	__le64 fsid;
+	__le64 seq;
+	__le64 block;
+	__le32 nr_entries;
+	struct scoutfs_ring_entry entries[0];
 } __packed;
 
-struct scoutfs_treap_root {
-	struct scoutfs_treap_ref ref;
+struct scoutfs_ring_descriptor {
+	__le64 blkno;
+	__le64 total_blocks;
+	__le64 first_block;
+	__le64 first_seq;
+	__le64 nr_blocks;
 } __packed;
 
 /*
@@ -98,7 +85,7 @@ struct scoutfs_treap_root {
 #define SCOUTFS_MANIFEST_FANOUT 10
 
 struct scoutfs_manifest {
-	struct scoutfs_treap_root root;
+	struct scoutfs_ring_descriptor ring;
 	__le64 level_counts[SCOUTFS_MANIFEST_MAX_LEVEL];
 } __packed;
 
@@ -172,7 +159,10 @@ struct scoutfs_segment_block {
 #define SCOUTFS_EXTENT_KEY		9
 #define SCOUTFS_ORPHAN_KEY		10
 #define SCOUTFS_DATA_KEY		11
-#define SCOUTFS_MAX_UNUSED_KEY		255
+/* not found in the fs */
+#define SCOUTFS_MAX_UNUSED_KEY		253
+#define SCOUTFS_NET_ADDR_KEY		254
+#define SCOUTFS_NET_LISTEN_KEY		255
 
 /* value is struct scoutfs_inode */
 struct scoutfs_inode_key {
@@ -243,6 +233,7 @@ struct scoutfs_symlink_key {
 
 #define SCOUTFS_UUID_BYTES 16
 
+
 /*
  * The ring fields describe the statically allocated ring log.  The
  * head and tail indexes are logical 4k blocks offsets inside the ring.
@@ -261,7 +252,7 @@ struct scoutfs_super_block {
 	__le64 ring_tail_block;
 	__le64 ring_gen;
 	__le64 next_seg_seq;
-	struct scoutfs_treap_root alloc_treap_root;
+	struct scoutfs_ring_descriptor alloc_ring;
 	struct scoutfs_manifest manifest;
 } __packed;
 
@@ -347,5 +338,43 @@ enum {
 /* ino_path can search for backref items with a null term */
 #define SCOUTFS_MAX_KEY_SIZE \
 	offsetof(struct scoutfs_link_backref_key, name[SCOUTFS_NAME_LEN + 1])
+
+/*
+ * messages over the wire.
+ */
+
+/* XXX ipv6 */
+struct scoutfs_inet_addr {
+	__le32 addr;
+	__le16 port;
+} __packed;
+
+/*
+ * This header precedes and describes all network messages sent over
+ * sockets.  The id is set by the request and sent in the reply.  The
+ * type is strictly redundant in the reply because the id will find the
+ * send but we include it in both packets to make it easier to observe
+ * replies without having the id from their previous request.
+ */
+struct scoutfs_net_header {
+	__le64 id;
+	__le16 data_len;
+	__u8 type;
+	__u8 status;
+	__u8 data[0];
+};
+
+enum {
+	/* sends and receives a struct scoutfs_timeval */
+	SCOUTFS_NET_TRADE_TIME = 0,
+	SCOUTFS_NET_UNKNOWN,
+};
+
+enum {
+	SCOUTFS_NET_STATUS_REQUEST = 0,
+	SCOUTFS_NET_STATUS_SUCCESS,
+	SCOUTFS_NET_STATUS_ERROR,
+	SCOUTFS_NET_STATUS_UNKNOWN,
+};
 
 #endif

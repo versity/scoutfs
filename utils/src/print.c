@@ -13,6 +13,7 @@
 #include "sparse.h"
 #include "util.h"
 #include "format.h"
+#include "bitmap.h"
 #include "cmd.h"
 #include "crc.h"
 
@@ -251,81 +252,69 @@ static void print_segment_block(struct scoutfs_segment_block *sblk)
 		le32_to_cpu(sblk->nr_items));
 }
 
-static int print_segment(int fd, struct scoutfs_treap_node *tnode)
+static int print_segments(int fd, unsigned long *seg_map, u64 total)
 {
-	struct scoutfs_manifest_entry *ment = (void *)tnode->data;
-	u64 segno = le64_to_cpu(ment->segno);
 	struct scoutfs_segment_block *sblk;
-	int i;
+	u64 s;
+	u64 i;
 
-	sblk = read_segment(fd, segno);
-	if (!sblk)
-		return -ENOMEM;
+	for (s = 0; (s = find_next_set_bit(seg_map, s, total)) < total; s++) {
+		sblk = read_segment(fd, s);
+		if (!sblk)
+			return -ENOMEM;
 
-	printf("segment segno %llu\n", segno);
-	print_segment_block(sblk);
+		printf("segment segno %llu\n", s);
+		print_segment_block(sblk);
 
-	for (i = 0; i < le32_to_cpu(sblk->nr_items); i++)
-		print_item(sblk, i);
+		for (i = 0; i < le32_to_cpu(sblk->nr_items); i++)
+			print_item(sblk, i);
 
-	free(sblk);
+		free(sblk);
+	}
 
 	return 0;
 }
 
-static void print_treap_ref(struct scoutfs_treap_ref *ref)
+static void print_ring_descriptor(struct scoutfs_ring_descriptor *rdesc,
+				  char *which)
 {
-	printf(" off %llu gen %llu aug_bits %x",
-	       le64_to_cpu(ref->off), le64_to_cpu(ref->gen),
-	       ref->aug_bits);
+	printf("  %s ring:\n    blkno %llu total_blocks %llu first_block %llu "
+	       "first_seq %llu nr_blocks %llu\n",
+	       which, le64_to_cpu(rdesc->blkno),
+	       le64_to_cpu(rdesc->total_blocks),
+	       le64_to_cpu(rdesc->first_block),
+	       le64_to_cpu(rdesc->first_seq),
+	       le64_to_cpu(rdesc->nr_blocks));
 }
 
-static void print_treap_node(struct scoutfs_treap_node *tnode)
+static int print_manifest_entry(int fd, struct scoutfs_ring_entry *rent,
+				void *arg)
 {
-	char valid_str[40];
-	__le32 crc;
+	struct scoutfs_manifest_entry *ment = (void *)rent->data;
+	unsigned long *seg_map = arg;
 
-	crc = crc_node(tnode);
-	if (crc != tnode->crc)
-		sprintf(valid_str, "(!= %08x) ", le32_to_cpu(crc));
-	else
-		valid_str[0] = '\0';
-
-	printf("  node: crc %08x %soff %llu gen %llu bytes %u prio %016llx\n"
-	       "        l:",
-	       le32_to_cpu(tnode->crc), valid_str, le64_to_cpu(tnode->off),
-	       le64_to_cpu(tnode->gen), le16_to_cpu(tnode->bytes),
-	       le64_to_cpu(tnode->prio));
-	print_treap_ref(&tnode->left);
-	printf(" r:");
-	print_treap_ref(&tnode->right);
-	printf("\n");
-}
-
-static int print_manifest_entry(int fd, struct scoutfs_treap_node *tnode)
-{
-	struct scoutfs_manifest_entry *ment = (void *)tnode->data;
-
-	print_treap_node(tnode);
-
-	printf("    ment: segno %llu seq %llu first_len %u last_len %u level %u\n",
+	printf("      segno %llu seq %llu first_len %u last_len %u level %u\n",
 	       le64_to_cpu(ment->segno),
 	       le64_to_cpu(ment->seq),
 	       le16_to_cpu(ment->first_key_len),
 	       le16_to_cpu(ment->last_key_len),
 	       ment->level);
 
+	if (rent->flags & SCOUTFS_RING_ENTRY_FLAG_DELETION)
+	       clear_bit(seg_map, le64_to_cpu(ment->segno));
+	else
+	       set_bit(seg_map, le64_to_cpu(ment->segno));
+
 	return 0;
 }
 
-static int print_alloc_region(int fd, struct scoutfs_treap_node *tnode)
+static int print_alloc_region(int fd, struct scoutfs_ring_entry *rent,
+			      void *arg)
 {
-	struct scoutfs_alloc_region *reg = (void *)tnode->data;
+	struct scoutfs_alloc_region *reg = (void *)rent->data;
 	int i;
 
-	print_treap_node(tnode);
-
-	printf("    reg: index %llu bits", le64_to_cpu(reg->index));
+	printf("      index %llu bits", le64_to_cpu(reg->index));
 	for (i = 0; i < array_size(reg->bits); i++)
 		printf(" %016llx", le64_to_cpu(reg->bits[i]));
 	printf("\n");
@@ -333,43 +322,68 @@ static int print_alloc_region(int fd, struct scoutfs_treap_node *tnode)
 	return 0;
 }
 
-typedef int (*tnode_func)(int fd, struct scoutfs_treap_node *tnode);
+typedef int (*rent_func)(int fd, struct scoutfs_ring_entry *rent, void *arg);
 
-static int walk_treap(int fd, struct scoutfs_super_block *super,
-		      struct scoutfs_treap_ref *ref, tnode_func func)
+static int print_ring(int fd, struct scoutfs_super_block *super,
+		      char *which, struct scoutfs_ring_descriptor *rdesc,
+		      rent_func func, void *arg)
 {
-	struct scoutfs_treap_node *tnode;
+	struct scoutfs_ring_block *rblk;
+	struct scoutfs_ring_entry *rent;
+	u64 block;
 	u64 blkno;
-	void *blk;
-	u64 off;
 	int ret;
+	u64 i;
+	u32 e;
 
-	if (!ref->gen)
-		return 0;
+	block = le64_to_cpu(rdesc->first_block);
+	for (i = 0; i < le64_to_cpu(rdesc->nr_blocks); i++) {
+		blkno = le64_to_cpu(rdesc->blkno) + block;
 
-	off = le64_to_cpu(ref->off);
-	blkno = le64_to_cpu(super->ring_blkno) + (off >> SCOUTFS_BLOCK_SHIFT);
+		rblk = read_block(fd, blkno);
+		if (!rblk)
+			return -ENOMEM;
 
-	blk = read_block(fd, blkno);
-	if (!blk)
-		return -ENOMEM;
+		printf("%s ring blkno %llu\n"
+		       "  crc %08x fsid %llx seq %llu block %llu "
+		       "nr_entries %u\n",
+		       which, blkno, le32_to_cpu(rblk->crc),
+		       le64_to_cpu(rblk->fsid),
+		       le64_to_cpu(rblk->seq),
+		       le64_to_cpu(rblk->block),
+		       le32_to_cpu(rblk->nr_entries));
 
-	tnode = blk + (off & SCOUTFS_BLOCK_MASK);
+		rent = rblk->entries;
+		for (e = 0; e < le32_to_cpu(rblk->nr_entries); e++) {
 
-	ret = func(fd, tnode);
-	if (ret == 0)
-		ret = walk_treap(fd, super, &tnode->left, func) ?:
-		      walk_treap(fd, super, &tnode->right, func);
+			printf("    entry [%u] off %lu data_len %u flags %x\n",
+			       e, (char *)rent - (char *)rblk->entries,
+			       le16_to_cpu(rent->data_len), rent->flags);
 
-	free(blk);
+			ret = func(fd, rent, arg);
+			if (ret) {
+				free(rblk);
+				return ret;
+			}
 
-	return ret;
+			rent = (void *)&rent->data[le16_to_cpu(rent->data_len)];
+		}
+
+		block++;
+		if (block == le64_to_cpu(rdesc->total_blocks))
+			block = 0;
+
+		free(rblk);
+	}
+
+	return 0;
 }
 
 static int print_super_blocks(int fd)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_super_block recent = { .hdr.seq = 0 };
+	unsigned long *seg_map;
 	char uuid_str[37];
 	__le64 *counts;
 	int ret = 0;
@@ -402,14 +416,11 @@ static int print_super_blocks(int fd)
 			le64_to_cpu(super->total_segs),
 			le64_to_cpu(super->next_seg_seq),
 			le64_to_cpu(super->free_segs));
-		printf("  alloc root:");
-		print_treap_ref(&super->alloc_treap_root.ref);
-		printf("\n");
-		printf("  manifest root:");
-		print_treap_ref(&super->manifest.root.ref);
-		printf("\n");
 
-		printf("    level_counts:");
+		print_ring_descriptor(&super->alloc_ring, "alloc");
+		print_ring_descriptor(&super->manifest.ring, "manifest");
+
+		printf("  level_counts:");
 		counts = super->manifest.level_counts;
 		for (j = 0; j < SCOUTFS_MANIFEST_MAX_LEVEL; j++) {
 			if (le64_to_cpu(counts[j]))
@@ -425,20 +436,28 @@ static int print_super_blocks(int fd)
 
 	super = &recent;
 
-	printf("manifest treap:\n");
-	ret = walk_treap(fd, super, &super->manifest.root.ref,
-			 print_manifest_entry);
+	seg_map = alloc_bits(le64_to_cpu(super->total_segs));
+	if (!seg_map) {
+		ret = -ENOMEM;
+		fprintf(stderr, "failed to alloc %llu seg map: %s (%d)\n",
+			le64_to_cpu(super->total_segs),
+			strerror(errno), errno);
+		return ret;
+	}
 
-	printf("alloc treap:\n");
-	err = walk_treap(fd, super, &super->alloc_treap_root.ref,
-			 print_alloc_region);
+	ret = print_ring(fd, super, "alloc", &super->alloc_ring,
+			 print_alloc_region, NULL);
+
+	err = print_ring(fd, super, "manifest", &super->manifest.ring,
+			 print_manifest_entry, seg_map);
 	if (err && !ret)
 		ret = err;
 
-	err = walk_treap(fd, super, &super->manifest.root.ref,
-			 print_segment);
+	err = print_segments(fd, seg_map, le64_to_cpu(super->total_segs));
 	if (err && !ret)
 		ret = err;
+
+	free(seg_map);
 
 	return ret;
 }
