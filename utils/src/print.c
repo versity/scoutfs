@@ -416,62 +416,71 @@ static int print_ring(int fd, struct scoutfs_super_block *super,
 	return 0;
 }
 
+static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
+{
+	char uuid_str[37];
+	__le64 *counts;
+	int i;
+
+	uuid_unparse(super->uuid, uuid_str);
+
+	printf("super blkno %llu\n", blkno);
+	print_block_header(&super->hdr);
+	printf("  id %llx uuid %s\n",
+	       le64_to_cpu(super->id), uuid_str);
+	/* XXX these are all in a crazy order */
+	printf("  next_ino %llu\n"
+	       "  ring_blkno %llu ring_blocks %llu ring_tail_block %llu\n"
+	       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n"
+	       "  next_seg_seq %llu free_segs %llu\n",
+		le64_to_cpu(super->next_ino),
+		le64_to_cpu(super->ring_blkno),
+		le64_to_cpu(super->ring_blocks),
+		le64_to_cpu(super->ring_tail_block),
+		le64_to_cpu(super->ring_gen),
+		le64_to_cpu(super->alloc_uninit),
+		le64_to_cpu(super->total_segs),
+		le64_to_cpu(super->next_seg_seq),
+		le64_to_cpu(super->free_segs));
+
+	print_ring_descriptor(&super->alloc_ring, "alloc");
+	print_ring_descriptor(&super->manifest.ring, "manifest");
+
+	printf("  level_counts:");
+	counts = super->manifest.level_counts;
+	for (i = 0; i < SCOUTFS_MANIFEST_MAX_LEVEL; i++) {
+		if (le64_to_cpu(counts[i]))
+			printf(" %u: %llu", i, le64_to_cpu(counts[i]));
+	}
+	printf("\n");
+}
+
 static int print_super_blocks(int fd)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_super_block recent = { .hdr.seq = 0 };
 	unsigned long *seg_map;
-	char uuid_str[37];
-	__le64 *counts;
 	int ret = 0;
 	int err;
 	int i;
-	int j;
+	int r = 0;
 
 	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
 		super = read_block(fd, SCOUTFS_SUPER_BLKNO + i);
 		if (!super)
 			return -ENOMEM;
 
-		uuid_unparse(super->uuid, uuid_str);
-
-		printf("super blkno %llu\n", (u64)SCOUTFS_SUPER_BLKNO + i);
-		print_block_header(&super->hdr);
-		printf("  id %llx uuid %s\n",
-		       le64_to_cpu(super->id), uuid_str);
-		/* XXX these are all in a crazy order */
-		printf("  next_ino %llu\n"
-		       "  ring_blkno %llu ring_blocks %llu ring_tail_block %llu\n"
-		       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n"
-		       "  next_seg_seq %llu free_segs %llu\n",
-			le64_to_cpu(super->next_ino),
-			le64_to_cpu(super->ring_blkno),
-			le64_to_cpu(super->ring_blocks),
-			le64_to_cpu(super->ring_tail_block),
-			le64_to_cpu(super->ring_gen),
-			le64_to_cpu(super->alloc_uninit),
-			le64_to_cpu(super->total_segs),
-			le64_to_cpu(super->next_seg_seq),
-			le64_to_cpu(super->free_segs));
-
-		print_ring_descriptor(&super->alloc_ring, "alloc");
-		print_ring_descriptor(&super->manifest.ring, "manifest");
-
-		printf("  level_counts:");
-		counts = super->manifest.level_counts;
-		for (j = 0; j < SCOUTFS_MANIFEST_MAX_LEVEL; j++) {
-			if (le64_to_cpu(counts[j]))
-				printf(" %u: %llu", j, le64_to_cpu(counts[j]));
-		}
-		printf("\n");
-
-		if (le64_to_cpu(super->hdr.seq) > le64_to_cpu(recent.hdr.seq))
+		if (le64_to_cpu(super->hdr.seq) > le64_to_cpu(recent.hdr.seq)) {
 			memcpy(&recent, super, sizeof(recent));
+			r = i;
+		}
 
 		free(super);
 	}
 
 	super = &recent;
+
+	print_super_block(super, SCOUTFS_SUPER_BLKNO + r);
 
 	seg_map = alloc_bits(le64_to_cpu(super->total_segs));
 	if (!seg_map) {
