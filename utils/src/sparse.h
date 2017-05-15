@@ -7,8 +7,8 @@
 #ifdef __CHECKER__
 # undef __force
 # define __force		__attribute__((force))
-# undef __bitwise
-# define __bitwise		__attribute__((bitwise))
+# undef __sp_biwise
+# define __sp_biwise		__attribute__((bitwise))
 /* sparse seems to get confused by some builtins */
 extern __builtin_ia32_rdrand64_step(unsigned long long *);
 extern unsigned int __builtin_ia32_crc32di(unsigned int, unsigned long long);
@@ -18,7 +18,7 @@ extern unsigned int __builtin_ia32_crc32qi(unsigned int, unsigned char);
 
 #else
 # define __force
-# define __bitwise
+# define __sp_biwise
 #endif
 
 typedef unsigned char u8;
@@ -36,12 +36,12 @@ typedef u64 __u64;
 
 #define U16_MAX ((u16)~0)
 
-typedef u16 __bitwise __le16;
-typedef u16 __bitwise __be16;
-typedef u32 __bitwise __le32;
-typedef u32 __bitwise __be32;
-typedef u64 __bitwise __le64;
-typedef u64 __bitwise __be64;
+typedef u16 __sp_biwise __le16;
+typedef u16 __sp_biwise __be16;
+typedef u32 __sp_biwise __le32;
+typedef u32 __sp_biwise __be32;
+typedef u64 __sp_biwise __le64;
+typedef u64 __sp_biwise __be64;
 
 static inline u16 ___swab16(u16 x)
 {
