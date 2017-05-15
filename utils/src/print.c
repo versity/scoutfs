@@ -191,8 +191,10 @@ static void print_file_extent(void *key, int key_len, void *val, int val_len)
 	u64 blk_off = be64_to_cpu(fext->last_blk_off) - blocks + 1;
 	u64 blkno = be64_to_cpu(fext->last_blkno) - blocks + 1;
 
-	printf("      extent: ino %llu blk_off %llu blkno %llu blocks %llu\n",
-	       be64_to_cpu(fext->ino), blk_off, blkno, blocks);
+	printf("      extent: ino %llu blk_off %llu blkno %llu blocks %llu "
+	       "flags %x (%c)\n",
+	       be64_to_cpu(fext->ino), blk_off, blkno, blocks, fext->flags,
+	       (fext->flags & SCOUTFS_FILE_EXTENT_OFFLINE) ? 'O' : '-');
 }
 
 static void print_free_extent(void *key, int key_len, void *val, int val_len)
