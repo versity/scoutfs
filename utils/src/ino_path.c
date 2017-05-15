@@ -11,6 +11,7 @@
 
 #include "sparse.h"
 #include "util.h"
+#include "format.h"
 #include "ioctl.h"
 #include "cmd.h"
 

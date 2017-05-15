@@ -1,30 +1,36 @@
 #ifndef _SCOUTFS_IOCTL_H_
 #define _SCOUTFS_IOCTL_H_
 
-#include "format.h"
-
 /* XXX I have no idea how these are chosen. */
 #define SCOUTFS_IOCTL_MAGIC 's'
 
-struct scoutfs_ioctl_ino_seq {
+struct scoutfs_ioctl_walk_inodes_entry {
+	__u64 major;
+	__u32 minor;
 	__u64 ino;
-	__u64 seq;
 } __packed;
 
-struct scoutfs_ioctl_inodes_since {
-	__u64 first_ino;
-	__u64 last_ino;
-	__u64 seq;
-	__u64 buf_ptr;
-	__u32 buf_len;
+struct scoutfs_ioctl_walk_inodes {
+	struct scoutfs_ioctl_walk_inodes_entry first;
+	struct scoutfs_ioctl_walk_inodes_entry last;
+	__u64 entries_ptr;
+	__u32 nr_entries;
+	__u8 index;
 } __packed;
+
+enum {
+	SCOUTFS_IOC_WALK_INODES_CTIME = 0,
+	SCOUTFS_IOC_WALK_INODES_MTIME,
+	SCOUTFS_IOC_WALK_INODES_SIZE,
+	SCOUTFS_IOC_WALK_INODES_UNKNOWN,
+};
 
 /*
- * Adds entries to the user's buffer for each inode whose sequence
- * number is greater than or equal to the given seq.
+ * Adds entries to the user's buffer for each inode that is found in the
+ * given index between the first and last positions.
  */
-#define SCOUTFS_IOC_INODES_SINCE _IOW(SCOUTFS_IOCTL_MAGIC, 1, \
-				      struct scoutfs_ioctl_inodes_since)
+#define SCOUTFS_IOC_WALK_INODES _IOW(SCOUTFS_IOCTL_MAGIC, 1, \
+				     struct scoutfs_ioctl_walk_inodes)
 
 /*
  * Fill the path buffer with the next path to the target inode.  An
@@ -80,10 +86,7 @@ struct scoutfs_ioctl_ino_path {
 #define SCOUTFS_IOC_INO_PATH _IOW(SCOUTFS_IOCTL_MAGIC, 2, \
 				      struct scoutfs_ioctl_ino_path)
 
-#define SCOUTFS_IOC_INODE_DATA_SINCE _IOW(SCOUTFS_IOCTL_MAGIC, 3, \
-					  struct scoutfs_ioctl_inodes_since)
-
-#define SCOUTFS_IOC_DATA_VERSION _IOW(SCOUTFS_IOCTL_MAGIC, 4, u64)
+#define SCOUTFS_IOC_DATA_VERSION _IOW(SCOUTFS_IOCTL_MAGIC, 4, __u64)
 
 struct scoutfs_ioctl_release {
 	__u64 offset;

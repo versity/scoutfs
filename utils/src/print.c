@@ -225,6 +225,15 @@ static void print_free_extent(void *key, int key_len, void *val, int val_len)
 	       str, node_id, blkno, blocks);
 }
 
+static void print_inode_index(void *key, int key_len, void *val, int val_len)
+{
+	struct scoutfs_inode_index_key *ikey = key;
+
+	printf("      index: major %llu minor %u ino %llu\n",
+	       be64_to_cpu(ikey->major), be32_to_cpu(ikey->minor),
+	       be64_to_cpu(ikey->ino));
+}
+
 typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
 
 static print_func_t printers[] = {
@@ -238,6 +247,9 @@ static print_func_t printers[] = {
 	[SCOUTFS_FILE_EXTENT_KEY] = print_file_extent,
 	[SCOUTFS_FREE_EXTENT_BLKNO_KEY] = print_free_extent,
 	[SCOUTFS_FREE_EXTENT_BLOCKS_KEY] = print_free_extent,
+	[SCOUTFS_INODE_INDEX_CTIME_KEY] = print_inode_index,
+	[SCOUTFS_INODE_INDEX_MTIME_KEY] = print_inode_index,
+	[SCOUTFS_INODE_INDEX_SIZE_KEY] = print_inode_index,
 };
 
 /* utils uses big contiguous allocations */
