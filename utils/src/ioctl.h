@@ -10,6 +10,27 @@ struct scoutfs_ioctl_walk_inodes_entry {
 	__u64 ino;
 } __packed;
 
+/*
+ * Walk inodes in an index that is sorted by one of their fields.
+ *
+ * Each index is built from generic index items that have major and
+ * minor values that are set to the field being indexed.  In time
+ * indices, for example, major is seconds and minor is nanoseconds.
+ *
+ * @first       The first index entry that can be returned.
+ * @last        The last index entry that can be returned.
+ * @entries_ptr Pointer to emory containing buffer for entry results.
+ * @nr_entries  The number of entries that can fit in the buffer.
+ * @index       Which index to walk, enumerated in _WALK_INODES_ constants.
+ *
+ * To start iterating first can be memset to 0 and last to 0xff.  Then
+ * after each set of results first can be set to the last entry returned
+ * and then the fields can be incremented in reverse sort order (ino <
+ * minor < major) as each increasingly significant value wraps around to
+ * 0.
+ *
+ * If first is greater than last then the walk will return 0 entries.
+ */
 struct scoutfs_ioctl_walk_inodes {
 	struct scoutfs_ioctl_walk_inodes_entry first;
 	struct scoutfs_ioctl_walk_inodes_entry last;
@@ -106,5 +127,26 @@ struct scoutfs_ioctl_stage {
 
 #define SCOUTFS_IOC_STAGE _IOW(SCOUTFS_IOCTL_MAGIC, 6, \
 			       struct scoutfs_ioctl_stage)
+
+/*
+ * Give the user inode fields that are not otherwise visible.  statx()
+ * isn't always available and xattrs are relatively expensive.
+ *
+ * @valid_bytes stores the number of bytes that are valid in the
+ * structure.  The caller sets this to the size of the struct that they
+ * understand.  The kernel then fills and copies back the min of the
+ * size they and the user caller understand.  The user can tell if a
+ * field is set if all of its bytes are within the valid_bytes that the
+ * kernel set on return.
+ *
+ * New fields are only added to the end of the struct.
+ */
+struct scoutfs_ioctl_stat_more {
+	__u64 valid_bytes;
+	__u64 data_version;
+} __packed;
+
+#define SCOUTFS_IOC_STAT_MORE _IOW(SCOUTFS_IOCTL_MAGIC, 7, \
+				   struct scoutfs_ioctl_stat_more)
 
 #endif
