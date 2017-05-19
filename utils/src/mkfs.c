@@ -131,6 +131,7 @@ static int write_new_fs(char *path, int fd)
 	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
+	super->next_seq = cpu_to_le64(1);
 	super->total_segs = cpu_to_le64(total_segs);
 	super->next_seg_seq = cpu_to_le64(2);
 
@@ -193,7 +194,7 @@ static int write_new_fs(char *path, int fd)
 	ikey->type = SCOUTFS_INODE_KEY;
 	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
 	idx_key = (void *)(ikey + 1);
-	idx_key->type = SCOUTFS_INODE_INDEX_SIZE_KEY;
+	idx_key->type = SCOUTFS_INODE_INDEX_META_SEQ_KEY;
 	idx_key->major = cpu_to_be64(0);
 	idx_key->minor = 0;
 	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
@@ -212,12 +213,12 @@ static int write_new_fs(char *path, int fd)
 	/* write seg with root inode */
 	sblk->segno = cpu_to_le64(first_segno);
 	sblk->seq = cpu_to_le64(1);
-	sblk->nr_items = cpu_to_le32(4);
+	sblk->nr_items = cpu_to_le32(5);
 
 	item = &sblk->items[0];
-	ikey = (void *)&sblk->items[4];
+	ikey = (void *)&sblk->items[5];
 	inode = (void *)(ikey + 1) +
-			(3 * sizeof(struct scoutfs_inode_index_key));
+			(4 * sizeof(struct scoutfs_inode_index_key));
 
 	item->seq = cpu_to_le64(1);
 	item->key_off = cpu_to_le32((long)ikey - (long)sblk);
@@ -243,7 +244,7 @@ static int write_new_fs(char *path, int fd)
 
 	/* write the root inode index keys */
 	for (i = SCOUTFS_INODE_INDEX_CTIME_KEY;
-	     i <= SCOUTFS_INODE_INDEX_SIZE_KEY; i++) {
+	     i <= SCOUTFS_INODE_INDEX_META_SEQ_KEY; i++) {
 
 		item->seq = cpu_to_le64(1);
 		item->key_off = cpu_to_le32((long)idx_key - (long)sblk);
@@ -260,7 +261,7 @@ static int write_new_fs(char *path, int fd)
 			idx_key->major = cpu_to_be64(tv.tv_sec);
 			idx_key->minor = cpu_to_be32(tv.tv_usec * 1000);
 			break;
-		case SCOUTFS_INODE_INDEX_SIZE_KEY:
+		default:
 			idx_key->major = cpu_to_be64(0);
 			idx_key->minor = 0;
 			break;

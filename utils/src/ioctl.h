@@ -43,6 +43,8 @@ enum {
 	SCOUTFS_IOC_WALK_INODES_CTIME = 0,
 	SCOUTFS_IOC_WALK_INODES_MTIME,
 	SCOUTFS_IOC_WALK_INODES_SIZE,
+	SCOUTFS_IOC_WALK_INODES_META_SEQ,
+	SCOUTFS_IOC_WALK_INODES_DATA_SEQ,
 	SCOUTFS_IOC_WALK_INODES_UNKNOWN,
 };
 
@@ -143,6 +145,8 @@ struct scoutfs_ioctl_stage {
  */
 struct scoutfs_ioctl_stat_more {
 	__u64 valid_bytes;
+	__u64 meta_seq;
+	__u64 data_seq;
 	__u64 data_version;
 } __packed;
 

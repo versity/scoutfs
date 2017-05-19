@@ -48,8 +48,10 @@ static int stat_more_cmd(int argc, char **argv)
 				"%s (%d)\n", path, strerror(errno), errno);
 		} else {
 			printf("          File: '%s'\n"
+			       "  meta_seq: %-20llu data_seq %-20llu"
 			       "  data_version: %-20llu\n",
-				path, stm.data_version);
+				path, stm.meta_seq, stm.data_seq,
+				stm.data_version);
 		}
 
 		close(fd);

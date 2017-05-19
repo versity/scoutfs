@@ -80,7 +80,7 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 
 	printf("    inode: ino %llu size %llu blocks %llu nlink %u\n"
 	       "      uid %u gid %u mode 0%o rdev 0x%x\n"
-	       "      next_readdir_pos %llu data_version %llu\n"
+	       "      next_readdir_pos %llu meta_seq %llu data_seq %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
 	       "      mtime %llu.%08u\n",
 	       be64_to_cpu(ikey->ino),
@@ -89,6 +89,8 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev),
 	       le64_to_cpu(inode->next_readdir_pos),
+	       le64_to_cpu(inode->meta_seq),
+	       le64_to_cpu(inode->data_seq),
 	       le64_to_cpu(inode->data_version),
 	       le64_to_cpu(inode->atime.sec),
 	       le32_to_cpu(inode->atime.nsec),
@@ -250,6 +252,8 @@ static print_func_t printers[] = {
 	[SCOUTFS_INODE_INDEX_CTIME_KEY] = print_inode_index,
 	[SCOUTFS_INODE_INDEX_MTIME_KEY] = print_inode_index,
 	[SCOUTFS_INODE_INDEX_SIZE_KEY] = print_inode_index,
+	[SCOUTFS_INODE_INDEX_META_SEQ_KEY] = print_inode_index,
+	[SCOUTFS_INODE_INDEX_DATA_SEQ_KEY] = print_inode_index,
 };
 
 /* utils uses big contiguous allocations */
@@ -443,11 +447,12 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("  id %llx uuid %s\n",
 	       le64_to_cpu(super->id), uuid_str);
 	/* XXX these are all in a crazy order */
-	printf("  next_ino %llu\n"
+	printf("  next_ino %llu next_seq %llu\n"
 	       "  ring_blkno %llu ring_blocks %llu ring_tail_block %llu\n"
 	       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n"
 	       "  next_seg_seq %llu free_segs %llu\n",
 		le64_to_cpu(super->next_ino),
+		le64_to_cpu(super->next_seq),
 		le64_to_cpu(super->ring_blkno),
 		le64_to_cpu(super->ring_blocks),
 		le64_to_cpu(super->ring_tail_block),
