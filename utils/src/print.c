@@ -16,6 +16,7 @@
 #include "bitmap.h"
 #include "cmd.h"
 #include "crc.h"
+#include "key.h"
 
 static void *read_block(int fd, u64 blkno)
 {
@@ -294,6 +295,9 @@ static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
 		le32_to_cpu(item->val_off), le16_to_cpu(item->key_len),
 		le16_to_cpu(item->val_len), item->flags,
 		printer ? "" : " (unrecognized type)");
+	printf("    key: ");
+	print_key(key, le16_to_cpu(item->key_len));
+	printf("\n");
 
 	if (printer)
 		printer(key, le16_to_cpu(item->key_len),
@@ -354,6 +358,12 @@ static int print_manifest_entry(int fd, struct scoutfs_ring_entry *rent,
 	       le16_to_cpu(ment->first_key_len),
 	       le16_to_cpu(ment->last_key_len),
 	       ment->level);
+	printf("      first: ");
+	print_key(ment->keys, le16_to_cpu(ment->first_key_len));
+	printf("\n      last: ");
+	print_key(ment->keys + le16_to_cpu(ment->first_key_len),
+		  le16_to_cpu(ment->last_key_len));
+	printf("\n");
 
 	if (rent->flags & SCOUTFS_RING_ENTRY_FLAG_DELETION)
 	       clear_bit(seg_map, le64_to_cpu(ment->segno));
