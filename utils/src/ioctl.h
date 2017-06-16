@@ -29,7 +29,18 @@ struct scoutfs_ioctl_walk_inodes_entry {
  * minor < major) as each increasingly significant value wraps around to
  * 0.
  *
+ * These indexes are not strictly consistent.  The items that back these
+ * index entries aren't updated with cluster locks so they're not
+ * guaranteed to be visible the moment you read after writing.  They're
+ * only visible when the transaction that updated them is synced.
+ *
+ * In addition, the seq indexes will only allow walking through sequence
+ * space that has been consistent.  This prevents old dirty entries from
+ * becoming visible after newer stable entries are displayed.
+ *
  * If first is greater than last then the walk will return 0 entries.
+ *
+ * XXX invalidate before reading.
  */
 struct scoutfs_ioctl_walk_inodes {
 	struct scoutfs_ioctl_walk_inodes_entry first;
@@ -152,5 +163,21 @@ struct scoutfs_ioctl_stat_more {
 
 #define SCOUTFS_IOC_STAT_MORE _IOW(SCOUTFS_IOCTL_MAGIC, 7, \
 				   struct scoutfs_ioctl_stat_more)
+
+struct scoutfs_ioctl_item_cache_keys {
+	__u64 key_ptr;
+	__u64 key_len;
+	__u64 buf_ptr;
+	__u64 buf_len;
+	__u8 which;
+} __packed;
+
+enum {
+	SCOUTFS_IOC_ITEM_CACHE_KEYS_ITEMS = 0,
+	SCOUTFS_IOC_ITEM_CACHE_KEYS_RANGES,
+};
+
+#define SCOUTFS_IOC_ITEM_CACHE_KEYS _IOW(SCOUTFS_IOCTL_MAGIC, 8, \
+					 struct scoutfs_ioctl_item_cache_keys)
 
 #endif
