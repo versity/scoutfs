@@ -84,6 +84,7 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_ring_block *rblk;
 	struct scoutfs_ring_entry *rent;
 	struct scoutfs_segment_item *item;
+	__le32 *prev_link;
 	struct timeval tv;
 	char uuid_str[37];
 	u64 blkno;
@@ -214,17 +215,15 @@ static int write_new_fs(char *path, int fd)
 	sblk->segno = cpu_to_le64(first_segno);
 	sblk->seq = cpu_to_le64(1);
 	sblk->nr_items = cpu_to_le32(5);
+	prev_link = &sblk->skip_links[0];
 
-	item = &sblk->items[0];
-	ikey = (void *)&sblk->items[5];
-	inode = (void *)(ikey + 1) +
-			(4 * sizeof(struct scoutfs_inode_index_key));
+	item = (void *)(sblk + 1);
+	ikey = (void *)&item->skip_links[1];
+	inode = (void *)ikey + sizeof(struct scoutfs_inode_key);
 
-	item->seq = cpu_to_le64(1);
-	item->key_off = cpu_to_le32((long)ikey - (long)sblk);
-	item->val_off = cpu_to_le32((long)inode - (long)sblk);
 	item->key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
 	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
+	item->nr_links = 1;
 
 	ikey->type = SCOUTFS_INODE_KEY;
 	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
@@ -239,18 +238,19 @@ static int write_new_fs(char *path, int fd)
 	inode->mtime.sec = inode->atime.sec;
 	inode->mtime.nsec = inode->atime.nsec;
 
-	item = (void *)(item + 1);
-	idx_key = (void *)(ikey + 1);
+	*prev_link = cpu_to_le32((long)item -(long)sblk);
+	prev_link = &item->skip_links[0];
+
+	item = (void *)inode + sizeof(struct scoutfs_inode);
+	idx_key = (void *)&item->skip_links[1];
 
 	/* write the root inode index keys */
 	for (i = SCOUTFS_INODE_INDEX_CTIME_KEY;
 	     i <= SCOUTFS_INODE_INDEX_META_SEQ_KEY; i++) {
 
-		item->seq = cpu_to_le64(1);
-		item->key_off = cpu_to_le32((long)idx_key - (long)sblk);
-		item->val_off = 0;
 		item->key_len = cpu_to_le16(sizeof(*idx_key));
 		item->val_len = 0;
+		item->nr_links = 1;
 
 		idx_key->type = i;
 		idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
@@ -267,9 +267,16 @@ static int write_new_fs(char *path, int fd)
 			break;
 		}
 
-		item = (void *)(item + 1);
-		idx_key = (void *)(idx_key + 1);
+		*prev_link = cpu_to_le32((long)item -(long)sblk);
+		prev_link = &item->skip_links[0];
+
+		sblk->last_item_off = cpu_to_le32((long)item - (long)sblk);
+
+		item = (void *)(idx_key + 1);
+		idx_key = (void *)&item->skip_links[1];
 	}
+
+	sblk->total_bytes = cpu_to_le32((long)item - (long)sblk);
 
 	ret = pwrite(fd, sblk, SCOUTFS_SEGMENT_SIZE,
 		     first_segno << SCOUTFS_SEGMENT_SHIFT);

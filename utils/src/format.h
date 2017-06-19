@@ -112,19 +112,29 @@ struct scoutfs_alloc_region {
 } __packed;
 
 /*
- * We really want these to be a power of two size so that they're naturally
- * aligned.  This ensures that they won't cross page boundaries and we
- * can use pointers to them in the page vecs that make up segments without
- * funny business.
+ * The max number of links defines the max number of entries that we can
+ * index in o(log n) and the static list head storage size in the
+ * segment block.  We always pay the static storage cost, which is tiny,
+ * and we can look at the number of items to know the greatest number of
+ * links and skip most of the initial 0 links.
+ */
+#define SCOUTFS_MAX_SKIP_LINKS 32
+
+/*
+ * Items are packed into segments and linked together in a skip list.
+ * Each item's header, links, key, and value are stored contiguously.
+ * They're not allowed to cross a block boundary.
  */
 struct scoutfs_segment_item {
-	__le64 seq;
-	__le32 key_off;
-	__le32 val_off;
 	__le16 key_len;
 	__le16 val_len;
-	__u8 padding[11];
 	__u8 flags;
+	__u8 nr_links;
+	__le32 skip_links[0];
+	/*
+	 * u8 key_bytes[key_len]
+	 * u8 val_bytes[val_len]
+	 */
 } __packed;
 
 #define SCOUTFS_ITEM_FLAG_DELETION (1 << 0)
@@ -138,11 +148,11 @@ struct scoutfs_segment_block {
 	__le32 _padding;
 	__le64 segno;
 	__le64 seq;
+	__le32 last_item_off;
+	__le32 total_bytes;
 	__le32 nr_items;
-	__le32 _moar_pads;
-	struct scoutfs_segment_item items[0];
-	/* packed keys */
-	/* packed vals */
+	__le32 skip_links[SCOUTFS_MAX_SKIP_LINKS];
+	/* packed items */
 } __packed;
 
 /*
@@ -160,7 +170,7 @@ struct scoutfs_segment_block {
 #define SCOUTFS_ORPHAN_KEY		10
 #define SCOUTFS_FREE_EXTENT_BLKNO_KEY	11
 #define SCOUTFS_FREE_EXTENT_BLOCKS_KEY	12
-#define SCOUTFS_INODE_INDEX_CTIME_KEY	13
+#define SCOUTFS_INODE_INDEX_CTIME_KEY	13  /* don't forget first and last */
 #define SCOUTFS_INODE_INDEX_MTIME_KEY	14
 #define SCOUTFS_INODE_INDEX_SIZE_KEY	15
 #define SCOUTFS_INODE_INDEX_META_SEQ_KEY	16
@@ -169,6 +179,11 @@ struct scoutfs_segment_block {
 #define SCOUTFS_MAX_UNUSED_KEY		253
 #define SCOUTFS_NET_ADDR_KEY		254
 #define SCOUTFS_NET_LISTEN_KEY		255
+
+#define SCOUTFS_INODE_INDEX_FIRST SCOUTFS_INODE_INDEX_CTIME_KEY
+#define SCOUTFS_INODE_INDEX_LAST SCOUTFS_INODE_INDEX_DATA_SEQ_KEY
+#define SCOUTFS_INODE_INDEX_NR \
+	(SCOUTFS_INODE_INDEX_LAST - SCOUTFS_INODE_INDEX_FIRST + 1)
 
 /* value is struct scoutfs_inode */
 struct scoutfs_inode_key {
@@ -388,6 +403,10 @@ enum {
 #define SCOUTFS_MAX_KEY_SIZE \
 	offsetof(struct scoutfs_link_backref_key, name[SCOUTFS_NAME_LEN + 1])
 
+/* largest single val are dirents, larger broken up into units of this */
+#define SCOUTFS_MAX_VAL_SIZE \
+	offsetof(struct scoutfs_dirent, name[SCOUTFS_NAME_LEN])
+
 /*
  * messages over the wire.
  */
@@ -433,10 +452,23 @@ struct scoutfs_net_manifest_entries {
 	struct scoutfs_manifest_entry ments[0];
 } __packed;
 
+/* XXX I dunno, totally made up */
+#define SCOUTFS_BULK_ALLOC_COUNT 32
+
 struct scoutfs_net_segnos {
 	__le16 nr;
 	__le64 segnos[0];
 } __packed;
+
+/* XXX eventually we'll have net compaction and will need agents to agree */
+
+/* one upper segment and fanout lower segments */
+#define SCOUTFS_COMPACTION_MAX_INPUT	(1 + SCOUTFS_MANIFEST_FANOUT)
+/* sticky can add one, and so can item page alignment */
+#define SCOUTFS_COMPACTION_SLOP		2
+/* delete all inputs and insert all outputs (same goes for alloc|free segnos) */
+#define SCOUTFS_COMPACTION_MAX_UPDATE \
+	(2 * (SCOUTFS_COMPACTION_MAX_INPUT + SCOUTFS_COMPACTION_SLOP))
 
 enum {
 	SCOUTFS_NET_ALLOC_INODES = 0,

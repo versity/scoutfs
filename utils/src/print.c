@@ -257,45 +257,29 @@ static print_func_t printers[] = {
 	[SCOUTFS_INODE_INDEX_DATA_SEQ_KEY] = print_inode_index,
 };
 
-/* utils uses big contiguous allocations */
-static void *off_ptr(struct scoutfs_segment_block *sblk, u32 off)
-{
-	return (char *)sblk + off;
-}
-
-static u32 pos_off(struct scoutfs_segment_block *sblk, u32 pos)
-{
-	return offsetof(struct scoutfs_segment_block, items[pos]);
-}
-
-static void *pos_ptr(struct scoutfs_segment_block *sblk, u32 pos)
-{
-	return off_ptr(sblk, pos_off(sblk, pos));
-}
-
-static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
+static void print_item(struct scoutfs_segment_block *sblk,
+		       struct scoutfs_segment_item *item, u32 which, u32 off)
 {
 	print_func_t printer;
-	struct scoutfs_segment_item *item;
 	void *key;
 	void *val;
 	__u8 type;
+	int i;
 
-	item = pos_ptr(sblk, pos);
-
-	key = (char *)sblk + le32_to_cpu(item->key_off);
-	val = (char *)sblk + le32_to_cpu(item->val_off);
+	key = (char *)&item->skip_links[item->nr_links];
+	val = (char *)key + le16_to_cpu(item->key_len);
 	type = *(__u8 *)key;
 
 	printer = type < array_size(printers) ? printers[type] : NULL;
 
-	printf("  [%u]: type %u seq %llu key_off %u val_off %u key_len %u "
-	       "val_len %u flags %x%s\n",
-		pos, type, le64_to_cpu(item->seq), le32_to_cpu(item->key_off),
-		le32_to_cpu(item->val_off), le16_to_cpu(item->key_len),
-		le16_to_cpu(item->val_len), item->flags,
-		printer ? "" : " (unrecognized type)");
-	printf("    key: ");
+	printf("  [%u]: type %u off %u key_len %u val_len %u nr_links %u flags %x%s\n",
+		which, type, off, le16_to_cpu(item->key_len),
+		le16_to_cpu(item->val_len), item->nr_links,
+		item->flags, printer ? "" : " (unrecognized type)");
+	printf("    links:");
+	for (i = 0; i < item->nr_links; i++)
+		printf(" %u", le32_to_cpu(item->skip_links[i]));
+	printf("\n    key: ");
 	print_key(key, le16_to_cpu(item->key_len));
 	printf("\n");
 
@@ -306,14 +290,24 @@ static void print_item(struct scoutfs_segment_block *sblk, u32 pos)
 
 static void print_segment_block(struct scoutfs_segment_block *sblk)
 {
-	printf("  sblk: segno %llu seq %llu nr_items %u\n",
+	int i;
+
+	printf("  sblk: segno %llu seq %llu last_item_off %u total_bytes %u "
+	       "nr_items %u\n",
 		le64_to_cpu(sblk->segno), le64_to_cpu(sblk->seq),
+		le32_to_cpu(sblk->last_item_off), le32_to_cpu(sblk->total_bytes),
 		le32_to_cpu(sblk->nr_items));
+	printf("    links:");
+	for (i = 0; sblk->skip_links[i]; i++)
+		printf(" %u", le32_to_cpu(sblk->skip_links[i]));
+	printf("\n");
 }
 
 static int print_segments(int fd, unsigned long *seg_map, u64 total)
 {
 	struct scoutfs_segment_block *sblk;
+	struct scoutfs_segment_item *item;
+	u32 off;
 	u64 s;
 	u64 i;
 
@@ -325,8 +319,12 @@ static int print_segments(int fd, unsigned long *seg_map, u64 total)
 		printf("segment segno %llu\n", s);
 		print_segment_block(sblk);
 
-		for (i = 0; i < le32_to_cpu(sblk->nr_items); i++)
-			print_item(sblk, i);
+		off = le32_to_cpu(sblk->skip_links[0]);
+		for (i = 0; i < le32_to_cpu(sblk->nr_items); i++) {
+			item = (void *)sblk + off;
+			print_item(sblk, item, i, off);
+			off = le32_to_cpu(item->skip_links[0]);
+		}
 
 		free(sblk);
 	}
