@@ -176,11 +176,17 @@ static void print_link_backref(void *key, int key_len, void *val, int val_len)
 static void print_symlink(void *key, int key_len, void *val, int val_len)
 {
 	struct scoutfs_symlink_key *skey = key;
-	u8 *name = global_printable_name(val, val_len - 1);
+	u8 *frag = val;
+	u8 *name;
 
-	printf("    symlink: ino %llu\n"
+	/* don't try to print null term */
+	if (frag[val_len - 1] == '\0')
+		val_len--;
+	name = global_printable_name(frag, val_len);
+
+	printf("    symlink: ino %llu nr %u\n"
 	       "      target %s\n",
-	       be64_to_cpu(skey->ino), name);
+	       be64_to_cpu(skey->ino), skey->nr, name);
 }
 
 /*
