@@ -338,114 +338,187 @@ static int print_segments(int fd, unsigned long *seg_map, u64 total)
 	return 0;
 }
 
-static void print_ring_descriptor(struct scoutfs_ring_descriptor *rdesc,
-				  char *which)
+static int print_manifest_entry(void *key, unsigned key_len, void *val,
+			        unsigned val_len, void *arg)
 {
-	printf("  %s ring:\n    blkno %llu total_blocks %llu first_block %llu "
-	       "first_seq %llu nr_blocks %llu\n",
-	       which, le64_to_cpu(rdesc->blkno),
-	       le64_to_cpu(rdesc->total_blocks),
-	       le64_to_cpu(rdesc->first_block),
-	       le64_to_cpu(rdesc->first_seq),
-	       le64_to_cpu(rdesc->nr_blocks));
-}
-
-static int print_manifest_entry(int fd, struct scoutfs_ring_entry *rent,
-				void *arg)
-{
-	struct scoutfs_manifest_entry *ment = (void *)rent->data;
+	struct scoutfs_manifest_btree_key *mkey = key;
+	struct scoutfs_manifest_btree_val *mval = val;
 	unsigned long *seg_map = arg;
+	unsigned first_len;
+	unsigned last_len;
+	void *first;
+	void *last;
+	__be64 seq;
 
-	printf("      segno %llu seq %llu first_len %u last_len %u level %u\n",
-	       le64_to_cpu(ment->segno),
-	       le64_to_cpu(ment->seq),
-	       le16_to_cpu(ment->first_key_len),
-	       le16_to_cpu(ment->last_key_len),
-	       ment->level);
-	printf("      first: ");
-	print_key(ment->keys, le16_to_cpu(ment->first_key_len));
-	printf("\n      last: ");
-	print_key(ment->keys + le16_to_cpu(ment->first_key_len),
-		  le16_to_cpu(ment->last_key_len));
-	printf("\n");
-
-	if (rent->flags & SCOUTFS_RING_ENTRY_FLAG_DELETION)
-	       clear_bit(seg_map, le64_to_cpu(ment->segno));
-	else
-	       set_bit(seg_map, le64_to_cpu(ment->segno));
-
-	return 0;
-}
-
-static int print_alloc_region(int fd, struct scoutfs_ring_entry *rent,
-			      void *arg)
-{
-	struct scoutfs_alloc_region *reg = (void *)rent->data;
-	int i;
-
-	printf("      index %llu bits", le64_to_cpu(reg->index));
-	for (i = 0; i < array_size(reg->bits); i++)
-		printf(" %016llx", le64_to_cpu(reg->bits[i]));
-	printf("\n");
-
-	return 0;
-}
-
-typedef int (*rent_func)(int fd, struct scoutfs_ring_entry *rent, void *arg);
-
-static int print_ring(int fd, struct scoutfs_super_block *super,
-		      char *which, struct scoutfs_ring_descriptor *rdesc,
-		      rent_func func, void *arg)
-{
-	struct scoutfs_ring_block *rblk;
-	struct scoutfs_ring_entry *rent;
-	u64 block;
-	u64 blkno;
-	int ret;
-	u64 i;
-	u32 e;
-
-	block = le64_to_cpu(rdesc->first_block);
-	for (i = 0; i < le64_to_cpu(rdesc->nr_blocks); i++) {
-		blkno = le64_to_cpu(rdesc->blkno) + block;
-
-		rblk = read_block(fd, blkno);
-		if (!rblk)
-			return -ENOMEM;
-
-		printf("%s ring blkno %llu\n"
-		       "  crc %08x fsid %llx seq %llu block %llu "
-		       "nr_entries %u\n",
-		       which, blkno, le32_to_cpu(rblk->crc),
-		       le64_to_cpu(rblk->fsid),
-		       le64_to_cpu(rblk->seq),
-		       le64_to_cpu(rblk->block),
-		       le32_to_cpu(rblk->nr_entries));
-
-		rent = rblk->entries;
-		for (e = 0; e < le32_to_cpu(rblk->nr_entries); e++) {
-
-			printf("    entry [%u] off %lu data_len %u flags %x\n",
-			       e, (char *)rent - (char *)rblk->entries,
-			       le16_to_cpu(rent->data_len), rent->flags);
-
-			ret = func(fd, rent, arg);
-			if (ret) {
-				free(rblk);
-				return ret;
-			}
-
-			rent = (void *)&rent->data[le16_to_cpu(rent->data_len)];
+	/* parent items only have the key */
+	if (val == NULL) {
+		if (mkey->level == 0) {
+			memcpy(&seq, mkey->bkey, sizeof(seq));
+			printf("    level %u seq %llu\n",
+			       mkey->level, be64_to_cpu(seq));
+		} else {
+			printf("    level %u first ", mkey->level);
+			print_key(mkey->bkey, key_len - sizeof(mkey->level));
+			printf("\n");
 		}
-
-		block++;
-		if (block == le64_to_cpu(rdesc->total_blocks))
-			block = 0;
-
-		free(rblk);
+		return 0;
 	}
 
+	/* leaf items print the whole entry */
+	first_len = le16_to_cpu(mval->first_key_len);
+	last_len = le16_to_cpu(mval->last_key_len);
+
+	if (mkey->level == 0) {
+		first = mval->keys;
+		last = mval->keys + first_len;
+	} else {
+		first = mkey->bkey;
+		last = mval->keys;
+	}
+
+	printf("    level %u segno %llu seq %llu first_len %u last_len %u\n",
+	       mkey->level, le64_to_cpu(mval->segno), le64_to_cpu(mval->seq),
+	       first_len, last_len);
+
+	printf("    first ");
+	print_key(first, first_len);
+	printf("\n    last ");
+	print_key(last, last_len);
+	printf("\n");
+
+	set_bit(seg_map, le64_to_cpu(mval->segno));
+
 	return 0;
+}
+
+static int print_alloc_region(void *key, unsigned key_len, void *val,
+			      unsigned val_len, void *arg)
+{
+	struct scoutfs_alloc_region_btree_key *reg_key = key;
+	struct scoutfs_alloc_region_btree_val *reg_val = val;
+	int i;
+
+	/* XXX check sizes */
+
+	printf("    index %llu bits", be64_to_cpu(reg_key->index));
+
+	if (val == NULL)
+		return 0;
+
+	for (i = 0; i < array_size(reg_val->bits); i++)
+		printf(" %016llx", le64_to_cpu(reg_val->bits[i]));
+	printf("\n");
+
+	return 0;
+}
+
+typedef int (*print_item_func)(void *key, unsigned key_len, void *val,
+			       unsigned val_len, void *arg);
+
+static int print_btree_ref(void *key, unsigned key_len, void *val,
+			   unsigned val_len, print_item_func func, void *arg)
+{
+	struct scoutfs_btree_ref *ref = val;
+
+	func(key, key_len, NULL, 0, arg);
+	printf("    ref blkno %llu seq %llu\n",
+		le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq));
+
+	return 0;
+}
+
+static int print_btree_block(int fd, struct scoutfs_super_block *super,
+			     char *which, struct scoutfs_btree_ref *ref,
+			     print_item_func func, void *arg, u8 level)
+{
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_block *bt;
+	unsigned key_len;
+	unsigned val_len;
+	void *key;
+	void *val;
+	int ret;
+	int i;
+
+	bt = read_block(fd, le64_to_cpu(ref->blkno));
+	if (!bt)
+		return -ENOMEM;
+
+	if (bt->level == level) {
+		printf("%s btree blkno %llu\n"
+		       "  fsid %llx blkno %llu seq %llu crc %08x \n"
+		       "  level %u free_end %u free_reclaim %u nr_items %u\n"
+		       "  bit_counts:",
+		       which, le64_to_cpu(ref->blkno),
+		       le64_to_cpu(bt->fsid),
+		       le64_to_cpu(bt->blkno),
+		       le64_to_cpu(bt->seq),
+		       le32_to_cpu(bt->crc),
+		       bt->level,
+		       le16_to_cpu(bt->free_end),
+		       le16_to_cpu(bt->free_reclaim),
+		       le16_to_cpu(bt->nr_items));
+		for (i = 0; i < array_size(bt->bit_counts); i++) {
+			if (bt->bit_counts[i])
+				printf(" %u:%u",
+				       i, le16_to_cpu(bt->bit_counts[i]));
+		}
+		printf("\n");
+	}
+
+	for (i = 0; i < le16_to_cpu(bt->nr_items); i++) {
+		item = (void *)bt + le16_to_cpu(bt->item_hdrs[i].off);
+		key_len = le16_to_cpu(item->key_len);
+		val_len = le16_to_cpu(item->val_len);
+		key = (void *)(item + 1);
+		val = (void *)key + key_len;
+
+		if (level < bt->level) {
+			ref = val;
+			/* XXX check len */
+			if (ref->blkno) {
+				ret = print_btree_block(fd, super, which, ref,
+							func, arg, level);
+				if (ret)
+					break;
+			}
+			continue;
+		}
+
+		printf("  item [%u] off %u bits %02x key_len %u val_len %u\n",
+			i, le16_to_cpu(bt->item_hdrs[i].off),
+			bt->item_hdrs[i].bits, key_len, val_len);
+
+		if (level)
+			print_btree_ref(key, key_len, val, val_len, func, arg);
+		else
+			func(key, key_len, val, val_len, arg);
+	}
+
+	free(bt);
+	return 0;
+}
+
+/*
+ * We print btrees by a breadth-first search.  This way all the parent
+ * blocks are printed before the factor of fanout more numerous leaf
+ * blocks and their included items.
+ */
+static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
+		       struct scoutfs_btree_root *root,
+		       print_item_func func, void *arg)
+{
+	int ret = 0;
+	int i;
+
+	for (i = root->height - 1; i >= 0; i--) {
+		ret = print_btree_block(fd, super, which, &root->ref,
+					func, arg, i);
+		if (ret)
+			break;
+	}
+
+	return ret;
 }
 
 static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
@@ -460,24 +533,30 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	print_block_header(&super->hdr);
 	printf("  id %llx uuid %s\n",
 	       le64_to_cpu(super->id), uuid_str);
+
 	/* XXX these are all in a crazy order */
-	printf("  next_ino %llu next_seq %llu\n"
-	       "  ring_blkno %llu ring_blocks %llu ring_tail_block %llu\n"
-	       "  ring_gen %llu alloc_uninit %llu total_segs %llu\n"
-	       "  next_seg_seq %llu free_segs %llu\n",
+	printf("  next_ino %llu next_seq %llu next_seg_seq %llu\n"
+	       "  alloc_uninit %llu total_segs %llu free_segs %llu\n"
+	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
+	       "next_seq %llu\n"
+	       "  alloc btree root: height %u blkno %llu seq %llu\n"
+	       "  manifest btree root: height %u blkno %llu seq %llu\n",
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->next_seq),
-		le64_to_cpu(super->ring_blkno),
-		le64_to_cpu(super->ring_blocks),
-		le64_to_cpu(super->ring_tail_block),
-		le64_to_cpu(super->ring_gen),
+		le64_to_cpu(super->next_seg_seq),
 		le64_to_cpu(super->alloc_uninit),
 		le64_to_cpu(super->total_segs),
-		le64_to_cpu(super->next_seg_seq),
-		le64_to_cpu(super->free_segs));
-
-	print_ring_descriptor(&super->alloc_ring, "alloc");
-	print_ring_descriptor(&super->manifest.ring, "manifest");
+		le64_to_cpu(super->free_segs),
+		le64_to_cpu(super->bring.first_blkno),
+		le64_to_cpu(super->bring.nr_blocks),
+		le64_to_cpu(super->bring.next_block),
+		le64_to_cpu(super->bring.next_seq),
+		super->alloc_root.height,
+		le64_to_cpu(super->alloc_root.ref.blkno),
+		le64_to_cpu(super->alloc_root.ref.seq),
+		super->manifest.root.height,
+		le64_to_cpu(super->manifest.root.ref.blkno),
+		le64_to_cpu(super->manifest.root.ref.seq));
 
 	printf("  level_counts:");
 	counts = super->manifest.level_counts;
@@ -524,11 +603,11 @@ static int print_super_blocks(int fd)
 		return ret;
 	}
 
-	ret = print_ring(fd, super, "alloc", &super->alloc_ring,
-			 print_alloc_region, NULL);
+	ret = print_btree(fd, super, "alloc", &super->alloc_root,
+			  print_alloc_region, NULL);
 
-	err = print_ring(fd, super, "manifest", &super->manifest.ring,
-			 print_manifest_entry, seg_map);
+	err = print_btree(fd, super, "manifest", &super->manifest.root,
+			  print_manifest_entry, seg_map);
 	if (err && !ret)
 		ret = err;
 

@@ -47,30 +47,106 @@ static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
 }
 
 /*
- * Figure out how many blocks a given ring will need given a max number
- * of entries up to a given max size.  We figure out how many blocks it
- * could take to store these maximal entries given unused tail space and
- * block header overheads.  Then we (wastefully) multiply by three to
- * ensure that the ring won't consume itself as it wraps.  The caller
- * aligns the ring size to a segment size depending on where it starts.
+ * Calculate the greatest number of btree blocks that might be needed to
+ * store the given item population.  At most all blocks will be half
+ * full.  All keys will be the max size including parent items which
+ * determines the fanout.
+ *
+ * We will never hit this in practice.  But some joker *could* fill a
+ * filesystem with empty files with enormous file names.
  */
-static u64 calc_ring_blocks(u64 max_nr, u64 max_size)
+static u64 calc_btree_blocks(u64 nr, u64 max_key, u64 max_val)
 {
-	u64 block_bytes;
+	u64 item_bytes;
+	u64 fanout;
+	u64 block_items;
+	u64 leaf_blocks;
+	u64 level_blocks;
+	u64 total_blocks;
 
-	max_size += sizeof(struct scoutfs_ring_entry);
+	/* figure out the parent fanout for these silly huge possible items */
+	item_bytes = sizeof(struct scoutfs_btree_item_header) +
+			    sizeof(struct scoutfs_btree_item) +
+			    max_key + sizeof(struct scoutfs_btree_ref);
+	fanout = (SCOUTFS_BLOCK_SIZE - SCOUTFS_BTREE_FREE_LIMIT) / item_bytes;
 
-	block_bytes = SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_ring_block) -
-			(max_size - 1);
+	/* figure out how many items we have to store */
+	item_bytes = sizeof(struct scoutfs_btree_item_header) +
+			    sizeof(struct scoutfs_btree_item) +
+			    max_key + max_val;
+	block_items = (SCOUTFS_BLOCK_SIZE - SCOUTFS_BTREE_FREE_LIMIT) / item_bytes;
+	leaf_blocks = DIV_ROUND_UP(nr, block_items);
 
-	return DIV_ROUND_UP(max_nr * max_size, block_bytes) * 3;
+	/* then calc total blocks as we grow to have enough blocks for items */
+	level_blocks = 1;
+	total_blocks = level_blocks;
+	while (level_blocks < leaf_blocks) {
+		level_blocks *= fanout;
+		level_blocks = min(leaf_blocks, level_blocks);
+		total_blocks += level_blocks;
+	}
+
+	return total_blocks;
 }
+
+/*
+ * Figure out how many btree ring blocks we'll need for all the btree
+ * items that could be needed to describe this many segments.  The
+ * allocator regions are nice and dense but the manifest entries can be
+ * absolutely enormous.
+ */
+static u64 calc_btree_ring_blocks(u64 total_segs)
+{
+	u64 blocks;
+
+	blocks = calc_btree_blocks(DIV_ROUND_UP(total_segs,
+						SCOUTFS_ALLOC_REGION_BITS),
+				   sizeof(struct scoutfs_alloc_region_btree_key),
+				   sizeof(struct scoutfs_alloc_region_btree_val));
+
+	blocks += calc_btree_blocks(total_segs,
+				sizeof(struct scoutfs_manifest_btree_key) +
+				SCOUTFS_MAX_KEY_SIZE,
+				sizeof(struct scoutfs_manifest_btree_val) +
+				SCOUTFS_MAX_KEY_SIZE);
+
+	return round_up(blocks * 4, SCOUTFS_SEGMENT_BLOCKS);
+}
+
+static float size_flt(u64 nr, unsigned size)
+{
+	float x = (float)nr * (float)size;
+
+	while (x >= 1024)
+		x /= 1024;
+
+	return x;
+}
+
+static char *size_str(u64 nr, unsigned size)
+{
+	float x = (float)nr * (float)size;
+	static char *suffixes[] = {
+		"B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB",
+	};
+	int i = 0;
+
+	while (x >= 1024) {
+		x /= 1024;
+		i++;
+	}
+
+	return suffixes[i];
+}
+
+#define SIZE_FMT "%llu (%.2f %s)"
+#define SIZE_ARGS(nr, sz) (nr), size_flt(nr, sz), size_str(nr, sz)
 
 /*
  * Make a new file system by writing:
  *  - super blocks
- *  - ring block with manifest node
- *  - segment with root inode
+ *  - btree ring blocks with manifest and allocator btree blocks
+ *  - segment with root inode items
  */
 static int write_new_fs(char *path, int fd)
 {
@@ -79,10 +155,10 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_inode_index_key *idx_key;
 	struct scoutfs_inode *inode;
 	struct scoutfs_segment_block *sblk;
-	struct scoutfs_manifest_entry *ment;
-	struct scoutfs_ring_descriptor *rdesc;
-	struct scoutfs_ring_block *rblk;
-	struct scoutfs_ring_entry *rent;
+	struct scoutfs_manifest_btree_key *mkey;
+	struct scoutfs_manifest_btree_val *mval;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_btree_item *btitem;
 	struct scoutfs_segment_item *item;
 	__le32 *prev_link;
 	struct timeval tv;
@@ -99,9 +175,9 @@ static int write_new_fs(char *path, int fd)
 	gettimeofday(&tv, NULL);
 
 	super = calloc(1, SCOUTFS_BLOCK_SIZE);
-	rblk = calloc(1, SCOUTFS_BLOCK_SIZE);
+	bt = calloc(1, SCOUTFS_BLOCK_SIZE);
 	sblk = calloc(1, SCOUTFS_SEGMENT_SIZE);
-	if (!super || !rblk || !sblk) {
+	if (!super || !bt || !sblk) {
 		ret = -errno;
 		fprintf(stderr, "failed to allocate block mem: %s (%d)\n",
 			strerror(errno), errno);
@@ -136,73 +212,66 @@ static int write_new_fs(char *path, int fd)
 	super->total_segs = cpu_to_le64(total_segs);
 	super->next_seg_seq = cpu_to_le64(2);
 
-	/* start writing rings after the super */
-	blkno = SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR;
-
-	/* allocator ring is empty, allocations start from super fields */
-	ring_blocks = calc_ring_blocks(DIV_ROUND_UP(total_segs,
-						SCOUTFS_ALLOC_REGION_BITS),
-				       sizeof(struct scoutfs_alloc_region));
-	ring_blocks = round_up(blkno + ring_blocks, SCOUTFS_SEGMENT_BLOCKS) -
-			blkno;
-
-	rdesc = &super->alloc_ring;
-	rdesc->blkno = cpu_to_le64(blkno);
-	rdesc->total_blocks = cpu_to_le64(ring_blocks);
-	rdesc->first_block = cpu_to_le64(0);
-	rdesc->first_seq = cpu_to_le64(0);
-	rdesc->nr_blocks = cpu_to_le64(0);
-
-	blkno += ring_blocks;
-
-	/* manifest ring has a block with an entry for the segment */
-	ring_blocks = calc_ring_blocks(total_segs,
-				   sizeof(struct scoutfs_manifest_entry) +
-				   (2 * SCOUTFS_MAX_KEY_SIZE));
-	ring_blocks = round_up(ring_blocks, SCOUTFS_SEGMENT_BLOCKS);
-
+	/* align the btree ring to the segment after the supers */
+	blkno = round_up(SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR,
+			 SCOUTFS_SEGMENT_BLOCKS);
 	/* first usable segno follows manifest ring */
+	ring_blocks = calc_btree_ring_blocks(total_segs);
 	first_segno = (blkno + ring_blocks) / SCOUTFS_SEGMENT_BLOCKS;
 
+	super->bring.first_blkno = cpu_to_le64(blkno);
+	super->bring.nr_blocks = cpu_to_le64(ring_blocks);
+	super->bring.next_block = cpu_to_le64(1);
+	super->bring.next_seq = cpu_to_le64(2);
+
+	/* allocator btree is empty, allocations start from super fields */
+	super->alloc_root.ref.blkno = cpu_to_le64(0);
+	super->alloc_root.ref.seq = cpu_to_le64(0);
+	super->alloc_root.height = 0;
+
+	/* manifest btree has a block with an item for the segment */
+	super->manifest.root.ref.blkno = cpu_to_le64(blkno);
+	super->manifest.root.ref.seq = cpu_to_le64(1);
+	super->manifest.root.height = 1;
 	super->manifest.level_counts[1] = cpu_to_le64(1);
 
-	rdesc = &super->manifest.ring;
-	rdesc->blkno = cpu_to_le64(blkno);
-	rdesc->total_blocks = cpu_to_le64(ring_blocks);
-	rdesc->first_seq = cpu_to_le64(1);
-	rdesc->nr_blocks = cpu_to_le64(1);
+	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
+	bt->fsid = super->hdr.fsid;
+	bt->blkno = cpu_to_le64(blkno);
+	bt->seq = cpu_to_le64(1);
+	bt->nr_items = cpu_to_le16(1);
 
-	memset(rblk, 0, SCOUTFS_BLOCK_SIZE);
-	rblk->pad = 0;
-	rblk->fsid = super->hdr.fsid;
-	rblk->seq = cpu_to_le64(1);
-	rblk->block = 0;
-	rblk->nr_entries = cpu_to_le32(1);
+	/* btree item allocated from the back of the block */
+	idx_key = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*idx_key);
+	mval = (void *)idx_key - sizeof(*mval);
+	ikey = (void *)mval - sizeof(*ikey);
+	mkey = (void *)ikey - sizeof(*mkey);
+	btitem = (void *)mkey - sizeof(*btitem);
 
-	rent = rblk->entries;
-	rent->flags = 0;
-	rent->data_len = cpu_to_le16(sizeof(struct scoutfs_manifest_entry) +
-				     sizeof(struct scoutfs_inode_key) +
-				     sizeof(struct scoutfs_inode_index_key));
+	bt->item_hdrs[0].off = cpu_to_le16((long)btitem - (long)bt);
+	bt->free_end = bt->item_hdrs[0].off;
 
-	ment = (void *)rent->data;
-	ment->segno = cpu_to_le64(first_segno);
-	ment->seq = cpu_to_le64(1);
-	ment->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
-	ment->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_index_key));
-	ment->level = 1;
-	ikey = (void *)ment->keys;
+	btitem->key_len = cpu_to_le16(sizeof(struct scoutfs_manifest_btree_key) +
+				      sizeof(struct scoutfs_inode_key));
+	btitem->val_len = cpu_to_le16(sizeof(struct scoutfs_manifest_btree_val) +
+				      sizeof(struct scoutfs_inode_index_key));
+
+	mkey->level = 1;
 	ikey->type = SCOUTFS_INODE_KEY;
 	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-	idx_key = (void *)(ikey + 1);
+
+	mval->segno = cpu_to_le64(first_segno);
+	mval->seq = cpu_to_le64(1);
+	mval->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
+	mval->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_index_key));
 	idx_key->type = SCOUTFS_INODE_INDEX_META_SEQ_KEY;
 	idx_key->major = cpu_to_be64(0);
 	idx_key->minor = 0;
 	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
 
-	rblk->crc = cpu_to_le32(crc_ring_block(rblk));
+	bt->crc = cpu_to_le32(crc_btree_block(bt));
 
-	ret = write_raw_block(fd, blkno, rblk);
+	ret = write_raw_block(fd, blkno, bt);
 	if (ret)
 		goto out;
 	blkno += ring_blocks;
@@ -304,17 +373,27 @@ static int write_new_fs(char *path, int fd)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  fsid: %llx\n"
-	       "  uuid: %s\n",
+	       "  device path:        %s\n"
+	       "  fsid:               %llx\n"
+	       "  uuid:               %s\n"
+	       "  device bytes:	      "SIZE_FMT"\n"
+	       "  btree ring blocks:  "SIZE_FMT"\n"
+	       "  usable segments:    "SIZE_FMT"\n",
+		path,
 		le64_to_cpu(super->hdr.fsid),
-		uuid_str);
+		uuid_str,
+		SIZE_ARGS(size, 1),
+		SIZE_ARGS(le64_to_cpu(super->bring.nr_blocks),
+			  SCOUTFS_BLOCK_SIZE),
+		SIZE_ARGS(le64_to_cpu(super->free_segs) + 1,
+			  SCOUTFS_SEGMENT_SIZE));
 
 	ret = 0;
 out:
 	if (super)
 		free(super);
-	if (rblk)
-		free(rblk);
+	if (bt)
+		free(bt);
 	if (sblk)
 		free(sblk);
 	return ret;

@@ -7,7 +7,7 @@
 #define SCOUTFS_SUPER_ID	0x2e736674756f6373ULL	/* "scoutfs." */
 
 /*
- * The super block and ring blocks are fixed 4k.
+ * The super block and btree blocks are fixed 4k.
  */
 #define SCOUTFS_BLOCK_SHIFT 12
 #define SCOUTFS_BLOCK_SIZE (1 << SCOUTFS_BLOCK_SHIFT)
@@ -50,30 +50,97 @@ struct scoutfs_block_header {
 	__le64 blkno;
 } __packed;
 
-struct scoutfs_ring_entry {
-	__le16 data_len;
-	__u8 flags;
+/*
+ * The largest possible btree has 2^64 bytes worth of segments with
+ * the largest possible keys in a pathologically sparse btree where
+ * all the nodes are half full.
+ */
+
+/*
+ * Assert that we'll be able to represent all possible keys with 8 64bit
+ * primary sort values.
+ */
+#define SCOUTFS_BTREE_GREATEST_KEY_LEN 32
+/* level >0 segments can have a full key and some metadata */
+#define SCOUTFS_BTREE_MAX_KEY_LEN 320
+/* level 0 segments can have two full keys in the value :/ */
+#define SCOUTFS_BTREE_MAX_VAL_LEN 768
+
+/*
+ * A 4EB test image measured a worst case height of 17.  This is plenty
+ * generous.
+ */
+#define SCOUTFS_BTREE_MAX_HEIGHT 20
+
+/* btree blocks (beyond the first) need to be at least half full */
+#define SCOUTFS_BTREE_FREE_LIMIT \
+	((SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_btree_block)) / 2)
+
+#define SCOUTFS_BTREE_BITS 8
+
+/*
+ * Btree items can have bits associated with them.  Their parent items
+ * reflect all the bits that their child block contain.  Thus searches
+ * can find items with bits set.
+ *
+ * @SCOUTFS_BTREE_BIT_HALF1: Tracks blocks found in the first half of
+ * the ring.  It's used to migrate blocks from the old half of the ring
+ * into the current half as blocks are dirtied.  It's not found in leaf
+ * items but is calculated based on the block number of referenced
+ * blocks.  _HALF2 is identical but for the second half of the ring.
+ */
+enum {
+	SCOUTFS_BTREE_BIT_HALF1		= (1 << 0),
+	SCOUTFS_BTREE_BIT_HALF2		= (1 << 1),
+};
+
+#define SCOUTFS_BTREE_HALF_BITS \
+	(SCOUTFS_BTREE_BIT_HALF1 | SCOUTFS_BTREE_BIT_HALF2)
+
+struct scoutfs_btree_ref {
+	__le64 blkno;
+	__le64 seq;
+} __packed;
+
+/*
+ * A height of X means that the first block read will have level X-1 and
+ * the leaves will have level 0.
+ */
+struct scoutfs_btree_root {
+	struct scoutfs_btree_ref ref;
+	__u8 height;
+} __packed;
+
+struct scoutfs_btree_item_header {
+	__le16 off;
+	__u8 bits;
+} __packed;
+
+struct scoutfs_btree_item {
+	__le16 key_len;
+	__le16 val_len;
 	__u8 data[0];
 } __packed;
 
-#define SCOUTFS_RING_ENTRY_FLAG_DELETION (1 << 0)
-
-struct scoutfs_ring_block {
-	__le32 crc;
-	__le32 pad;
+struct scoutfs_btree_block {
 	__le64 fsid;
+	__le64 blkno;
 	__le64 seq;
-	__le64 block;
-	__le32 nr_entries;
-	struct scoutfs_ring_entry entries[0];
+	__le32 crc;
+	__le32 _pad;
+	__le16 free_end;
+	__le16 free_reclaim;
+	__le16 nr_items;
+	__le16 bit_counts[SCOUTFS_BTREE_BITS];
+	__u8 level;
+	struct scoutfs_btree_item_header item_hdrs[0];
 } __packed;
 
-struct scoutfs_ring_descriptor {
-	__le64 blkno;
-	__le64 total_blocks;
-	__le64 first_block;
-	__le64 first_seq;
+struct scoutfs_btree_ring {
+	__le64 first_blkno;
 	__le64 nr_blocks;
+	__le64 next_block;
+	__le64 next_seq;
 } __packed;
 
 /*
@@ -85,16 +152,39 @@ struct scoutfs_ring_descriptor {
 #define SCOUTFS_MANIFEST_FANOUT 10
 
 struct scoutfs_manifest {
-	struct scoutfs_ring_descriptor ring;
+	struct scoutfs_btree_root root;
 	__le64 level_counts[SCOUTFS_MANIFEST_MAX_LEVEL];
 } __packed;
 
-struct scoutfs_manifest_entry {
+/*
+ * Manifest entries are packed into btree keys and values in a very
+ * fiddly way so that we can sort them with memcmp first by level then
+ * by their position in the level.  First comes the level.
+ *
+ * Level 0 segments are sorted by their seq so they don't have the first
+ * segment key in the manifest btree key.  Both of their keys are in the
+ * value.
+ *
+ * Level 1 segments are sorted by their key before their seq so the
+ * btree header has the key and the seq is in the footer.  Only their
+ * last key is in the value.
+ *
+ * We go to all this trouble so that we can communicate a version of the
+ * manifest with one btree root, have dense btree keys which are used as
+ * seperators in parent blocks, and don't duplicate the large keys in
+ * the manifest btree key and value.
+ */
+
+struct scoutfs_manifest_btree_key {
+	__u8 level;
+	__u8 bkey[0];
+} __packed;
+
+struct scoutfs_manifest_btree_val {
 	__le64 segno;
 	__le64 seq;
 	__le16 first_key_len;
 	__le16 last_key_len;
-	__u8 level;
 	__u8 keys[0];
 } __packed;
 
@@ -102,12 +192,12 @@ struct scoutfs_manifest_entry {
 #define SCOUTFS_ALLOC_REGION_BITS (1 << SCOUTFS_ALLOC_REGION_SHIFT)
 #define SCOUTFS_ALLOC_REGION_MASK (SCOUTFS_ALLOC_REGION_BITS - 1)
 
-/*
- * The bits need to be aligned so that the host can use native long
- * bitops on the bits in memory.
- */
-struct scoutfs_alloc_region {
-	__le64 index;
+struct scoutfs_alloc_region_btree_key {
+	__be64 index;
+} __packed;
+
+/* The bits need to be aligned so that the hosts can use native long bit ops */
+struct scoutfs_alloc_region_btree_val {
 	__le64 bits[SCOUTFS_ALLOC_REGION_BITS / 64];
 } __packed;
 
@@ -270,8 +360,6 @@ struct scoutfs_symlink_key {
 	__u8 nr;
 } __packed;
 
-#define SCOUTFS_SYMLINK_MAX_VAL_SIZE 200
-
 struct scoutfs_betimespec {
 	__be64 sec;
 	__be32 nsec;
@@ -289,12 +377,14 @@ struct scoutfs_inode_index_key {
 
 #define SCOUTFS_UUID_BYTES 16
 
+/* XXX ipv6 */
+struct scoutfs_inet_addr {
+	__le32 addr;
+	__le16 port;
+} __packed;
 
-/*
- * The ring fields describe the statically allocated ring log.  The
- * head and tail indexes are logical 4k blocks offsets inside the ring.
- * The head block should contain the seq.
- */
+#define SCOUTFS_DEFAULT_PORT 12345
+
 struct scoutfs_super_block {
 	struct scoutfs_block_header hdr;
 	__le64 id;
@@ -304,13 +394,11 @@ struct scoutfs_super_block {
 	__le64 alloc_uninit;
 	__le64 total_segs;
 	__le64 free_segs;
-	__le64 ring_blkno;
-	__le64 ring_blocks;
-	__le64 ring_tail_block;
-	__le64 ring_gen;
+	struct scoutfs_btree_ring bring;
 	__le64 next_seg_seq;
-	struct scoutfs_ring_descriptor alloc_ring;
+	struct scoutfs_btree_root alloc_root;
 	struct scoutfs_manifest manifest;
+	struct scoutfs_inet_addr server_addr;
 } __packed;
 
 #define SCOUTFS_ROOT_INO 1
@@ -379,13 +467,6 @@ struct scoutfs_dirent {
 /* S32_MAX avoids the (int) sign bit and might avoid sloppy bugs */
 #define SCOUTFS_LINK_MAX S32_MAX
 
-#define SCOUTFS_XATTR_MAX_NAME_LEN 255
-#define SCOUTFS_XATTR_MAX_SIZE 65536
-#define SCOUTFS_XATTR_PART_SIZE \
-	(SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_xattr_val_header))
-#define SCOUTFS_XATTR_MAX_PARTS \
-	DIV_ROUND_UP(SCOUTFS_XATTR_MAX_SIZE, SCOUTFS_XATTR_PART_SIZE)
-
 /* entries begin after . and .. */
 #define SCOUTFS_DIRENT_FIRST_POS 2
 /* getdents returns next pos with an entry, no entry at (f_pos)~0 */
@@ -410,15 +491,17 @@ enum {
 #define SCOUTFS_MAX_VAL_SIZE \
 	offsetof(struct scoutfs_dirent, name[SCOUTFS_NAME_LEN])
 
+#define SCOUTFS_XATTR_MAX_NAME_LEN 255
+#define SCOUTFS_XATTR_MAX_SIZE 65536
+#define SCOUTFS_XATTR_PART_SIZE \
+	(SCOUTFS_MAX_VAL_SIZE - sizeof(struct scoutfs_xattr_val_header))
+#define SCOUTFS_XATTR_MAX_PARTS \
+	DIV_ROUND_UP(SCOUTFS_XATTR_MAX_SIZE, SCOUTFS_XATTR_PART_SIZE)
+
+
 /*
  * messages over the wire.
  */
-
-/* XXX ipv6 */
-struct scoutfs_inet_addr {
-	__le32 addr;
-	__le16 port;
-} __packed;
 
 /*
  * This header precedes and describes all network messages sent over
@@ -450,9 +533,13 @@ struct scoutfs_net_key_range {
 	__u8 key_bytes[0];
 } __packed;
 
-struct scoutfs_net_manifest_entries {
-	__le16 nr;
-	struct scoutfs_manifest_entry ments[0];
+struct scoutfs_net_manifest_entry {
+	__le64 segno;
+	__le64 seq;
+	__le16 first_key_len;
+	__le16 last_key_len;
+	__u8 level;
+	__u8 keys[0];
 } __packed;
 
 /* XXX I dunno, totally made up */
@@ -475,12 +562,12 @@ struct scoutfs_net_segnos {
 
 enum {
 	SCOUTFS_NET_ALLOC_INODES = 0,
-	SCOUTFS_NET_MANIFEST_RANGE_ENTRIES,
 	SCOUTFS_NET_ALLOC_SEGNO,
 	SCOUTFS_NET_RECORD_SEGMENT,
 	SCOUTFS_NET_BULK_ALLOC,
 	SCOUTFS_NET_ADVANCE_SEQ,
 	SCOUTFS_NET_GET_LAST_SEQ,
+	SCOUTFS_NET_GET_MANIFEST_ROOT,
 	SCOUTFS_NET_UNKNOWN,
 };
 

@@ -38,9 +38,15 @@ u32 crc_block(struct scoutfs_block_header *hdr)
 		      SCOUTFS_BLOCK_SIZE - sizeof(hdr->crc));
 }
 
-u32 crc_ring_block(struct scoutfs_ring_block *rblk)
+u32 crc_btree_block(struct scoutfs_btree_block *bt)
 {
-	unsigned long skip = (char *)(&rblk->crc + 1) - (char *)rblk;
+	__le32 old;
+	u32 crc;
 
-	return crc32c(~0, (char *)rblk + skip, SCOUTFS_BLOCK_SIZE - skip);
+	old = bt->crc;
+	bt->crc = 0;
+	crc = crc32c(~0, bt, SCOUTFS_BLOCK_SIZE);
+	bt->crc = old;
+
+	return crc;
 }
