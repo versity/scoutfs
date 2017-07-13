@@ -216,7 +216,7 @@ static void print_free_extent(void *key, int key_len, void *val, int val_len)
 	u64 blkno;
 	char *str;
 
-	if (blk->type == SCOUTFS_FREE_EXTENT_BLKNO_KEY) {
+	if (blk->type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE) {
 		str = "free (blkno)";
 		node_id = be64_to_cpu(blk->node_id);
 		last_blkno = be64_to_cpu(blk->last_blkno);
@@ -245,23 +245,58 @@ static void print_inode_index(void *key, int key_len, void *val, int val_len)
 
 typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
 
-static print_func_t printers[] = {
-	[SCOUTFS_INODE_KEY] = print_inode,
-	[SCOUTFS_XATTR_KEY] = print_xattr,
-	[SCOUTFS_ORPHAN_KEY] = print_orphan,
-	[SCOUTFS_DIRENT_KEY] = print_dirent,
-	[SCOUTFS_READDIR_KEY] = print_readdir,
-	[SCOUTFS_SYMLINK_KEY] = print_symlink,
-	[SCOUTFS_LINK_BACKREF_KEY] = print_link_backref,
-	[SCOUTFS_FILE_EXTENT_KEY] = print_file_extent,
-	[SCOUTFS_FREE_EXTENT_BLKNO_KEY] = print_free_extent,
-	[SCOUTFS_FREE_EXTENT_BLOCKS_KEY] = print_free_extent,
-	[SCOUTFS_INODE_INDEX_CTIME_KEY] = print_inode_index,
-	[SCOUTFS_INODE_INDEX_MTIME_KEY] = print_inode_index,
-	[SCOUTFS_INODE_INDEX_SIZE_KEY] = print_inode_index,
-	[SCOUTFS_INODE_INDEX_META_SEQ_KEY] = print_inode_index,
-	[SCOUTFS_INODE_INDEX_DATA_SEQ_KEY] = print_inode_index,
-};
+static print_func_t find_printer(u8 zone, u8 type)
+{
+	if (zone == SCOUTFS_INODE_INDEX_ZONE &&
+	    type >= SCOUTFS_INODE_INDEX_CTIME_TYPE  &&
+	    type <= SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE)
+		return print_inode_index;
+
+	if (zone == SCOUTFS_NODE_ZONE) {
+		if (type >= SCOUTFS_FREE_EXTENT_BLKNO_TYPE &&
+		    type <= SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
+			return print_free_extent;
+		if (type == SCOUTFS_ORPHAN_TYPE)
+			return print_orphan;
+	}
+
+	if (zone == SCOUTFS_FS_ZONE) {
+		switch(type) {
+			case SCOUTFS_INODE_TYPE: return print_inode;
+			case SCOUTFS_XATTR_TYPE: return print_xattr;
+			case SCOUTFS_DIRENT_TYPE: return print_dirent;
+			case SCOUTFS_READDIR_TYPE: return print_readdir;
+			case SCOUTFS_SYMLINK_TYPE: return print_symlink;
+			case SCOUTFS_LINK_BACKREF_TYPE: return print_link_backref;
+			case SCOUTFS_FILE_EXTENT_TYPE: return print_file_extent;
+		}
+	}
+
+	return NULL;
+}
+
+static void find_zone_type(void *key, u8 *zone, u8 *type)
+{
+	struct scoutfs_inode_index_key *idx_key = key;
+	struct scoutfs_inode_key *ikey = key;
+	struct scoutfs_orphan_key *okey = key;
+
+	*zone = *(u8 *)key;
+
+	switch (*zone) {
+	case SCOUTFS_INODE_INDEX_ZONE:
+		*type = idx_key->type;
+		break;
+	case SCOUTFS_NODE_ZONE:
+		*type = okey->type;
+		break;
+	case SCOUTFS_FS_ZONE:
+		*type = ikey->type;
+		break;
+	default:
+		*type = 0;
+	}
+}
 
 static void print_item(struct scoutfs_segment_block *sblk,
 		       struct scoutfs_segment_item *item, u32 which, u32 off)
@@ -269,19 +304,20 @@ static void print_item(struct scoutfs_segment_block *sblk,
 	print_func_t printer;
 	void *key;
 	void *val;
-	__u8 type;
+	u8 type;
+	u8 zone;
 	int i;
 
 	key = (char *)&item->skip_links[item->nr_links];
 	val = (char *)key + le16_to_cpu(item->key_len);
-	type = *(__u8 *)key;
 
-	printer = type < array_size(printers) ? printers[type] : NULL;
+	find_zone_type(key, &zone, &type);
+	printer = find_printer(zone, type);
 
-	printf("  [%u]: type %u off %u key_len %u val_len %u nr_links %u flags %x%s\n",
-		which, type, off, le16_to_cpu(item->key_len),
+	printf("  [%u]: off %u key_len %u val_len %u nr_links %u flags %x%s\n",
+		which, off, le16_to_cpu(item->key_len),
 		le16_to_cpu(item->val_len), item->nr_links,
-		item->flags, printer ? "" : " (unrecognized type)");
+		item->flags, printer ? "" : " (unrecognized zone+type)");
 	printf("    links:");
 	for (i = 0; i < item->nr_links; i++)
 		printf(" %u", le32_to_cpu(item->skip_links[i]));

@@ -242,32 +242,34 @@ static int write_new_fs(char *path, int fd)
 	bt->nr_items = cpu_to_le16(1);
 
 	/* btree item allocated from the back of the block */
-	idx_key = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*idx_key);
-	mval = (void *)idx_key - sizeof(*mval);
-	ikey = (void *)mval - sizeof(*ikey);
-	mkey = (void *)ikey - sizeof(*mkey);
+	ikey = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*ikey);
+	mval = (void *)ikey - sizeof(*mval);
+	idx_key = (void *)mval - sizeof(*idx_key);
+	mkey = (void *)idx_key - sizeof(*mkey);
 	btitem = (void *)mkey - sizeof(*btitem);
 
 	bt->item_hdrs[0].off = cpu_to_le16((long)btitem - (long)bt);
 	bt->free_end = bt->item_hdrs[0].off;
 
 	btitem->key_len = cpu_to_le16(sizeof(struct scoutfs_manifest_btree_key) +
-				      sizeof(struct scoutfs_inode_key));
-	btitem->val_len = cpu_to_le16(sizeof(struct scoutfs_manifest_btree_val) +
 				      sizeof(struct scoutfs_inode_index_key));
+	btitem->val_len = cpu_to_le16(sizeof(struct scoutfs_manifest_btree_val) +
+				      sizeof(struct scoutfs_inode_key));
 
 	mkey->level = 1;
-	ikey->type = SCOUTFS_INODE_KEY;
-	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
+	idx_key->type = SCOUTFS_INODE_INDEX_CTIME_TYPE;
+	idx_key->major = cpu_to_be64(tv.tv_sec);
+	idx_key->minor = cpu_to_be32(tv.tv_usec * 1000);
+	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
 
 	mval->segno = cpu_to_le64(first_segno);
 	mval->seq = cpu_to_le64(1);
-	mval->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
-	mval->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_index_key));
-	idx_key->type = SCOUTFS_INODE_INDEX_META_SEQ_KEY;
-	idx_key->major = cpu_to_be64(0);
-	idx_key->minor = 0;
-	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	mval->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_index_key));
+	mval->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
+	ikey->zone = SCOUTFS_FS_ZONE;
+	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	ikey->type = SCOUTFS_INODE_TYPE;
 
 	bt->crc = cpu_to_le32(crc_btree_block(bt));
 
@@ -287,6 +289,42 @@ static int write_new_fs(char *path, int fd)
 	prev_link = &sblk->skip_links[0];
 
 	item = (void *)(sblk + 1);
+	*prev_link = cpu_to_le32((long)item -(long)sblk);
+	prev_link = &item->skip_links[0];
+
+	/* write the root inode index keys */
+	for (i = SCOUTFS_INODE_INDEX_CTIME_TYPE;
+	     i <= SCOUTFS_INODE_INDEX_META_SEQ_TYPE; i++) {
+
+		item->key_len = cpu_to_le16(sizeof(*idx_key));
+		item->val_len = 0;
+		item->nr_links = 1;
+
+		idx_key = (void *)&item->skip_links[1];
+		idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
+		idx_key->type = i;
+		idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+
+		switch(i) {
+		case SCOUTFS_INODE_INDEX_CTIME_TYPE:
+		case SCOUTFS_INODE_INDEX_MTIME_TYPE:
+			idx_key->major = cpu_to_be64(tv.tv_sec);
+			idx_key->minor = cpu_to_be32(tv.tv_usec * 1000);
+			break;
+		default:
+			idx_key->major = cpu_to_be64(0);
+			idx_key->minor = 0;
+			break;
+		}
+
+
+		item = (void *)(idx_key + 1);
+		*prev_link = cpu_to_le32((long)item -(long)sblk);
+		prev_link = &item->skip_links[0];
+	}
+
+	sblk->last_item_off = cpu_to_le32((long)item - (long)sblk);
+
 	ikey = (void *)&item->skip_links[1];
 	inode = (void *)ikey + sizeof(struct scoutfs_inode_key);
 
@@ -294,8 +332,9 @@ static int write_new_fs(char *path, int fd)
 	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
 	item->nr_links = 1;
 
-	ikey->type = SCOUTFS_INODE_KEY;
+	ikey->zone = SCOUTFS_FS_ZONE;
 	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	ikey->type = SCOUTFS_INODE_TYPE;
 
 	inode->next_readdir_pos = cpu_to_le64(2);
 	inode->nlink = cpu_to_le32(SCOUTFS_DIRENT_FIRST_POS);
@@ -307,44 +346,7 @@ static int write_new_fs(char *path, int fd)
 	inode->mtime.sec = inode->atime.sec;
 	inode->mtime.nsec = inode->atime.nsec;
 
-	*prev_link = cpu_to_le32((long)item -(long)sblk);
-	prev_link = &item->skip_links[0];
-
-	item = (void *)inode + sizeof(struct scoutfs_inode);
-	idx_key = (void *)&item->skip_links[1];
-
-	/* write the root inode index keys */
-	for (i = SCOUTFS_INODE_INDEX_CTIME_KEY;
-	     i <= SCOUTFS_INODE_INDEX_META_SEQ_KEY; i++) {
-
-		item->key_len = cpu_to_le16(sizeof(*idx_key));
-		item->val_len = 0;
-		item->nr_links = 1;
-
-		idx_key->type = i;
-		idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-
-		switch(i) {
-		case SCOUTFS_INODE_INDEX_CTIME_KEY:
-		case SCOUTFS_INODE_INDEX_MTIME_KEY:
-			idx_key->major = cpu_to_be64(tv.tv_sec);
-			idx_key->minor = cpu_to_be32(tv.tv_usec * 1000);
-			break;
-		default:
-			idx_key->major = cpu_to_be64(0);
-			idx_key->minor = 0;
-			break;
-		}
-
-		*prev_link = cpu_to_le32((long)item -(long)sblk);
-		prev_link = &item->skip_links[0];
-
-		sblk->last_item_off = cpu_to_le32((long)item - (long)sblk);
-
-		item = (void *)(idx_key + 1);
-		idx_key = (void *)&item->skip_links[1];
-	}
-
+	item = (void *)(inode + 1);
 	sblk->total_bytes = cpu_to_le32((long)item - (long)sblk);
 
 	ret = pwrite(fd, sblk, SCOUTFS_SEGMENT_SIZE,
