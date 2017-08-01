@@ -127,7 +127,7 @@ static int release_cmd(int argc, char **argv)
 {
 	struct scoutfs_ioctl_release args;
 	char *endptr = NULL;
-	u64 offset;
+	u64 block;
 	u64 count;
 	u64 vers;
 	int ret;
@@ -155,10 +155,10 @@ static int release_cmd(int argc, char **argv)
 		goto out;
 	}
 
-	offset = strtoull(argv[2], &endptr, 0);
+	block = strtoull(argv[2], &endptr, 0);
 	if (*endptr != '\0' ||
-	    ((offset == LLONG_MIN || offset == LLONG_MAX) && errno == ERANGE)) {
-		fprintf(stderr, "error parsing starting offset '%s'\n",
+	    ((block == LLONG_MIN || block == LLONG_MAX) && errno == ERANGE)) {
+		fprintf(stderr, "error parsing starting 4K block offset '%s'\n",
 			argv[2]);
 		ret = -EINVAL;
 		goto out;
@@ -173,7 +173,7 @@ static int release_cmd(int argc, char **argv)
 		goto out;
 	}
 
-	args.offset = offset;
+	args.block = block;
 	args.count = count;
 	args.data_version = vers;
 
@@ -190,6 +190,6 @@ out:
 
 static void __attribute__((constructor)) release_ctor(void)
 {
-	cmd_register("release", "<path> <vers> <offset> <count>",
+	cmd_register("release", "<path> <vers> <4K block offset> <block count>",
 		     "mark file region offline and free extents", release_cmd);
 }
