@@ -248,7 +248,7 @@ typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
 static print_func_t find_printer(u8 zone, u8 type)
 {
 	if (zone == SCOUTFS_INODE_INDEX_ZONE &&
-	    type >= SCOUTFS_INODE_INDEX_CTIME_TYPE  &&
+	    type >= SCOUTFS_INODE_INDEX_SIZE_TYPE  &&
 	    type <= SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE)
 		return print_inode_index;
 

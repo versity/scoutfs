@@ -34,8 +34,6 @@ int print_key(void *key_data, unsigned key_len)
 	case SCOUTFS_INODE_INDEX_ZONE: {
 		struct scoutfs_inode_index_key *ikey = key_data;
 		static char *type_strings[] = {
-			[SCOUTFS_INODE_INDEX_CTIME_TYPE]	= "ctm",
-			[SCOUTFS_INODE_INDEX_MTIME_TYPE]	= "mtm",
 			[SCOUTFS_INODE_INDEX_SIZE_TYPE]		= "siz",
 			[SCOUTFS_INODE_INDEX_META_SEQ_TYPE]	= "msq",
 			[SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE]	= "dsq",

@@ -258,9 +258,9 @@ static int write_new_fs(char *path, int fd)
 
 	mkey->level = 1;
 	idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
-	idx_key->type = SCOUTFS_INODE_INDEX_CTIME_TYPE;
-	idx_key->major = cpu_to_be64(tv.tv_sec);
-	idx_key->minor = cpu_to_be32(tv.tv_usec * 1000);
+	idx_key->type = SCOUTFS_INODE_INDEX_SIZE_TYPE;
+	idx_key->major = 0;
+	idx_key->minor = 0;
 	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
 
 	mval->segno = cpu_to_le64(first_segno);
@@ -285,7 +285,6 @@ static int write_new_fs(char *path, int fd)
 	/* write seg with root inode */
 	sblk->segno = cpu_to_le64(first_segno);
 	sblk->seq = cpu_to_le64(1);
-	sblk->nr_items = cpu_to_le32(5);
 	prev_link = &sblk->skip_links[0];
 
 	item = (void *)(sblk + 1);
@@ -293,30 +292,20 @@ static int write_new_fs(char *path, int fd)
 	prev_link = &item->skip_links[0];
 
 	/* write the root inode index keys */
-	for (i = SCOUTFS_INODE_INDEX_CTIME_TYPE;
+	for (i = SCOUTFS_INODE_INDEX_SIZE_TYPE;
 	     i <= SCOUTFS_INODE_INDEX_META_SEQ_TYPE; i++) {
 
 		item->key_len = cpu_to_le16(sizeof(*idx_key));
 		item->val_len = 0;
 		item->nr_links = 1;
+		le32_add_cpu(&sblk->nr_items, 1);
 
 		idx_key = (void *)&item->skip_links[1];
 		idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
 		idx_key->type = i;
 		idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-
-		switch(i) {
-		case SCOUTFS_INODE_INDEX_CTIME_TYPE:
-		case SCOUTFS_INODE_INDEX_MTIME_TYPE:
-			idx_key->major = cpu_to_be64(tv.tv_sec);
-			idx_key->minor = cpu_to_be32(tv.tv_usec * 1000);
-			break;
-		default:
-			idx_key->major = cpu_to_be64(0);
-			idx_key->minor = 0;
-			break;
-		}
-
+		idx_key->major = 0;
+		idx_key->minor = 0;
 
 		item = (void *)(idx_key + 1);
 		*prev_link = cpu_to_le32((long)item -(long)sblk);
@@ -331,6 +320,7 @@ static int write_new_fs(char *path, int fd)
 	item->key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
 	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
 	item->nr_links = 1;
+	le32_add_cpu(&sblk->nr_items, 1);
 
 	ikey->zone = SCOUTFS_FS_ZONE;
 	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);

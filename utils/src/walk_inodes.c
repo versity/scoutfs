@@ -82,10 +82,6 @@ static int walk_inodes_cmd(int argc, char **argv)
 
 	if (!strcasecmp(argv[0], "size"))
 		walk.index = SCOUTFS_IOC_WALK_INODES_SIZE;
-	else if (!strcasecmp(argv[0], "ctime"))
-		walk.index = SCOUTFS_IOC_WALK_INODES_CTIME;
-	else if (!strcasecmp(argv[0], "mtime"))
-		walk.index = SCOUTFS_IOC_WALK_INODES_MTIME;
 	else if (!strcasecmp(argv[0], "meta_seq"))
 		walk.index = SCOUTFS_IOC_WALK_INODES_META_SEQ;
 	else if (!strcasecmp(argv[0], "data_seq"))
