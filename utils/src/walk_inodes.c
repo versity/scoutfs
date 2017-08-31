@@ -26,7 +26,7 @@ static int parse_walk_entry(struct scoutfs_ioctl_walk_inodes_entry *ent,
 	char *endptr;
 	char *c;
 	u64 ull;
-	u64 minor;
+	u64 minor = 0;
 	u64 *val;
 
 	memset(ent, 0, sizeof(*ent));
