@@ -190,48 +190,31 @@ static void print_symlink(void *key, int key_len, void *val, int val_len)
 }
 
 /*
- * Just print the calculated starting blk_off/blkno, we can add a flag
- * to print the raw values before the math if needed.
+ * XXX not decoding the bytes yet
  */
-static void print_file_extent(void *key, int key_len, void *val, int val_len)
+static void print_block_mapping(void *key, int key_len, void *val, int val_len)
 {
-	struct scoutfs_file_extent_key *fext = key;
-	u64 blocks = be64_to_cpu(fext->blocks);
-	u64 blk_off = be64_to_cpu(fext->last_blk_off) - blocks + 1;
-	u64 blkno = be64_to_cpu(fext->last_blkno) - blocks + 1;
+	struct scoutfs_block_mapping_key *bmk = key;
+	u64 blk_off = be64_to_cpu(bmk->base) << SCOUTFS_BLOCK_MAPPING_SHIFT;
+	u8 nr = *((u8 *)val) & 63;
 
-	printf("      extent: ino %llu blk_off %llu blkno %llu blocks %llu "
-	       "flags %x (%c)\n",
-	       be64_to_cpu(fext->ino), blk_off, blkno, blocks, fext->flags,
-	       (fext->flags & SCOUTFS_FILE_EXTENT_OFFLINE) ? 'O' : '-');
+	printf("      block mapping: ino %llu blk_off %llu blocks %u\n",
+	       be64_to_cpu(bmk->ino), blk_off, nr);
 }
 
-static void print_free_extent(void *key, int key_len, void *val, int val_len)
+static void print_free_bits(void *key, int key_len, void *val, int val_len)
 {
-	struct scoutfs_free_extent_blkno_key *blk = key;
-	struct scoutfs_free_extent_blocks_key *bks = key;
-	u64 last_blkno;
-	u64 node_id;
-	u64 blocks;
-	u64 blkno;
-	char *str;
+	struct scoutfs_free_bits_key *fbk = key;
+	struct scoutfs_free_bits *frb = val;
+	int i;
 
-	if (blk->type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE) {
-		str = "free (blkno)";
-		node_id = be64_to_cpu(blk->node_id);
-		last_blkno = be64_to_cpu(blk->last_blkno);
-		blocks = be64_to_cpu(blk->blocks);
-	} else {
-		str = "free (blocks)";
-		node_id = be64_to_cpu(bks->node_id);
-		last_blkno = be64_to_cpu(bks->last_blkno);
-		blocks = be64_to_cpu(bks->blocks);
-	}
+	printf("      node_id %llx base %llu\n",
+	       be64_to_cpu(fbk->node_id), be64_to_cpu(fbk->base));
 
-	blkno = last_blkno - blocks + 1;
-
-	printf("      %s: node_id %llx blkno %llu blocks %llu\n",
-	       str, node_id, blkno, blocks);
+	printf("      bits:");
+	for (i = 0; i < array_size(frb->bits); i++)
+		printf(" %016llx", le64_to_cpu(frb->bits[i]));
+	printf("\n");
 }
 
 static void print_inode_index(void *key, int key_len, void *val, int val_len)
@@ -253,9 +236,9 @@ static print_func_t find_printer(u8 zone, u8 type)
 		return print_inode_index;
 
 	if (zone == SCOUTFS_NODE_ZONE) {
-		if (type >= SCOUTFS_FREE_EXTENT_BLKNO_TYPE &&
-		    type <= SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
-			return print_free_extent;
+		if (type == SCOUTFS_FREE_BITS_SEGNO_TYPE ||
+		    type == SCOUTFS_FREE_BITS_BLKNO_TYPE)
+			return print_free_bits;
 		if (type == SCOUTFS_ORPHAN_TYPE)
 			return print_orphan;
 	}
@@ -268,7 +251,8 @@ static print_func_t find_printer(u8 zone, u8 type)
 			case SCOUTFS_READDIR_TYPE: return print_readdir;
 			case SCOUTFS_SYMLINK_TYPE: return print_symlink;
 			case SCOUTFS_LINK_BACKREF_TYPE: return print_link_backref;
-			case SCOUTFS_FILE_EXTENT_TYPE: return print_file_extent;
+			case SCOUTFS_BLOCK_MAPPING_TYPE:
+				return print_block_mapping;
 		}
 	}
 
