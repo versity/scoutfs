@@ -538,6 +538,7 @@ enum {
 #define SCOUTFS_LOCK_SCOPE_FS_ITEMS 2
 
 #define SCOUTFS_LOCK_TYPE_GLOBAL_RENAME 1
+#define SCOUTFS_LOCK_TYPE_GLOBAL_SERVER 2
 
 struct scoutfs_lock_name {
 	__u8 scope;
@@ -550,6 +551,8 @@ struct scoutfs_lock_name {
 #define SCOUTFS_LOCK_INODE_GROUP_NR	1024
 #define SCOUTFS_LOCK_INODE_GROUP_MASK	(SCOUTFS_LOCK_INODE_GROUP_NR - 1)
 #define SCOUTFS_LOCK_INODE_GROUP_OFFSET	(~0ULL)
+
+#define SCOUTFS_LOCK_SEQ_GROUP_MASK	((1ULL << 10) - 1)
 
 /*
  * messages over the wire.
