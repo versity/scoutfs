@@ -551,8 +551,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	printf("super blkno %llu\n", blkno);
 	print_block_header(&super->hdr);
-	printf("  id %llx uuid %s\n",
-	       le64_to_cpu(super->id), uuid_str);
+	printf("  id %llx format_hash %llx\n"
+	       "  uuid %s\n",
+	       le64_to_cpu(super->id), le64_to_cpu(super->format_hash),
+	       uuid_str);
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_seq %llu next_seg_seq %llu\n"

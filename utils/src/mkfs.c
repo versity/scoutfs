@@ -208,6 +208,7 @@ static int write_new_fs(char *path, int fd)
 	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
 	super->hdr.seq = cpu_to_le64(1);
 	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
+	super->format_hash = cpu_to_le64(SCOUTFS_FORMAT_HASH);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->next_seq = cpu_to_le64(1);
@@ -369,12 +370,14 @@ static int write_new_fs(char *path, int fd)
 	printf("Created scoutfs filesystem:\n"
 	       "  device path:        %s\n"
 	       "  fsid:               %llx\n"
+	       "  format hash:        %llx\n"
 	       "  uuid:               %s\n"
 	       "  device bytes:	      "SIZE_FMT"\n"
 	       "  btree ring blocks:  "SIZE_FMT"\n"
 	       "  usable segments:    "SIZE_FMT"\n",
 		path,
 		le64_to_cpu(super->hdr.fsid),
+		le64_to_cpu(super->format_hash),
 		uuid_str,
 		SIZE_ARGS(size, 1),
 		SIZE_ARGS(le64_to_cpu(super->bring.nr_blocks),
