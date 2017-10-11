@@ -68,13 +68,15 @@ static u64 calc_btree_blocks(u64 nr, u64 max_key, u64 max_val)
 	item_bytes = sizeof(struct scoutfs_btree_item_header) +
 			    sizeof(struct scoutfs_btree_item) +
 			    max_key + sizeof(struct scoutfs_btree_ref);
-	fanout = (SCOUTFS_BLOCK_SIZE - SCOUTFS_BTREE_FREE_LIMIT) / item_bytes;
+	fanout = ((SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_btree_block) -
+		   SCOUTFS_BTREE_PARENT_MIN_FREE_BYTES) / 2) / item_bytes;
 
 	/* figure out how many items we have to store */
 	item_bytes = sizeof(struct scoutfs_btree_item_header) +
 			    sizeof(struct scoutfs_btree_item) +
 			    max_key + max_val;
-	block_items = (SCOUTFS_BLOCK_SIZE - SCOUTFS_BTREE_FREE_LIMIT) / item_bytes;
+	block_items = ((SCOUTFS_BLOCK_SIZE -
+		       sizeof(struct scoutfs_btree_block)) / 2) / item_bytes;
 	leaf_blocks = DIV_ROUND_UP(nr, block_items);
 
 	/* then calc total blocks as we grow to have enough blocks for items */
