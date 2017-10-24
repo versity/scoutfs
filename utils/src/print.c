@@ -562,8 +562,8 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  alloc_uninit %llu total_segs %llu free_segs %llu\n"
 	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
 	       "next_seq %llu\n"
-	       "  alloc btree root: height %u blkno %llu seq %llu\n"
-	       "  manifest btree root: height %u blkno %llu seq %llu\n",
+	       "  alloc btree root: height %u blkno %llu seq %llu mig_len %u\n"
+	       "  manifest btree root: height %u blkno %llu seq %llu mig_len %u\n",
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->next_seq),
 		le64_to_cpu(super->next_seg_seq),
@@ -577,9 +577,11 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		super->alloc_root.height,
 		le64_to_cpu(super->alloc_root.ref.blkno),
 		le64_to_cpu(super->alloc_root.ref.seq),
+		le16_to_cpu(super->alloc_root.migration_key_len),
 		super->manifest.root.height,
 		le64_to_cpu(super->manifest.root.ref.blkno),
-		le64_to_cpu(super->manifest.root.ref.seq));
+		le64_to_cpu(super->manifest.root.ref.seq),
+		le16_to_cpu(super->manifest.root.migration_key_len));
 
 	printf("  level_counts:");
 	counts = super->manifest.level_counts;
