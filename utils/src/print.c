@@ -468,8 +468,7 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 	if (bt->level == level) {
 		printf("%s btree blkno %llu\n"
 		       "  fsid %llx blkno %llu seq %llu crc %08x \n"
-		       "  level %u free_end %u free_reclaim %u nr_items %u\n"
-		       "  bit_counts:",
+		       "  level %u free_end %u free_reclaim %u nr_items %u\n",
 		       which, le64_to_cpu(ref->blkno),
 		       le64_to_cpu(bt->fsid),
 		       le64_to_cpu(bt->blkno),
@@ -479,12 +478,6 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 		       le16_to_cpu(bt->free_end),
 		       le16_to_cpu(bt->free_reclaim),
 		       le16_to_cpu(bt->nr_items));
-		for (i = 0; i < array_size(bt->bit_counts); i++) {
-			if (bt->bit_counts[i])
-				printf(" %u:%u",
-				       i, le16_to_cpu(bt->bit_counts[i]));
-		}
-		printf("\n");
 	}
 
 	for (i = 0; i < le16_to_cpu(bt->nr_items); i++) {
@@ -506,9 +499,8 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 			continue;
 		}
 
-		printf("  item [%u] off %u bits %02x key_len %u val_len %u\n",
-			i, le16_to_cpu(bt->item_hdrs[i].off),
-			bt->item_hdrs[i].bits, key_len, val_len);
+		printf("  item [%u] off %u key_len %u val_len %u\n",
+			i, le16_to_cpu(bt->item_hdrs[i].off), key_len, val_len);
 
 		if (level)
 			print_btree_ref(key, key_len, val, val_len, func, arg);
