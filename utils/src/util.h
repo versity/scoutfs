@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sparse.h"
+
+
 /*
  * Generate build warnings if the condition is false but generate no
  * code at run time if it's true.
@@ -74,5 +77,8 @@ static inline int memcmp_lens(const void *a, int a_len,
 
 	return memcmp(a, b, len) ?: a_len - b_len;
 }
+
+/* exported from print.c, we should probably just move it into a util.c */
+void *read_block(int fd, u64 blkno);
 
 #endif

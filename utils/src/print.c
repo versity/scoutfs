@@ -18,7 +18,7 @@
 #include "crc.h"
 #include "key.h"
 
-static void *read_block(int fd, u64 blkno)
+void *read_block(int fd, u64 blkno)
 {
 	ssize_t ret;
 	void *buf;
