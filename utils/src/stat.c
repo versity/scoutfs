@@ -22,12 +22,12 @@ static int stat_more_cmd(int argc, char **argv)
 	int fd;
 	int i;
 
-	if (argc == 0) {
+	if (argc == 1) {
 		fprintf(stderr, "must specify at least one path argument\n");
 		return -EINVAL;
 	}
 
-	for (i = 0; i < argc; i++) {
+	for (i = 1; i < argc; i++) {
 		path = argv[i];
 
 		fd = open(path, O_RDONLY);

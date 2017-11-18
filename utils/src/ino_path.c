@@ -25,24 +25,24 @@ static int ino_path_cmd(int argc, char **argv)
 	int ret;
 	int fd;
 
-	if (argc != 2) {
+	if (argc != 3) {
 		fprintf(stderr, "must specify ino and path\n");
 		return -EINVAL;
 	}
 
-	ino = strtoull(argv[0], &endptr, 0);
+	ino = strtoull(argv[1], &endptr, 0);
 	if (*endptr != '\0' ||
 	    ((ino == LLONG_MIN || ino == LLONG_MAX) && errno == ERANGE)) {
 		fprintf(stderr, "error parsing inode number '%s'\n",
-			argv[0]);
+			argv[1]);
 		return -EINVAL;
 	}
 
-	fd = open(argv[1], O_RDONLY);
+	fd = open(argv[2], O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[1], strerror(errno), errno);
+			argv[2], strerror(errno), errno);
 		return ret;
 	}
 

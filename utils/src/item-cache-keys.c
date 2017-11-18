@@ -28,7 +28,7 @@ static int item_cache_keys(int argc, char **argv, int which)
 	int ret;
 	int fd;
 
-	if (argc != 1) {
+	if (argc != 2) {
 		fprintf(stderr, "too many arguments, only scoutfs path needed");
 		return -EINVAL;
 	}
@@ -41,11 +41,11 @@ static int item_cache_keys(int argc, char **argv, int which)
 		return ret;
 	}
 
-	fd = open(argv[0], O_RDONLY);
+	fd = open(argv[1], O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[0], strerror(errno), errno);
+			argv[1], strerror(errno), errno);
 		free(buf);
 		return ret;
 	}

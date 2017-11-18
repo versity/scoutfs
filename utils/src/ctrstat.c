@@ -129,16 +129,16 @@ static int ctrstat_cmd(int argc, char **argv)
 	int iter;
 	int ret;
 
-	if (argc > 1) {
+	if (argc > 2) {
 		printf("scoutfs ctrstat: too many arguments\n");
 		return -EINVAL;
 	}
 
 	/* set the sleep duration */
-	if (argc == 1) {
-		seconds = strtof(argv[0], NULL);
+	if (argc == 2) {
+		seconds = strtof(argv[1], NULL);
 		if (fpclassify(seconds) != FP_NORMAL || seconds <= 0) {
-			printf("invalid sleep duration float: %s\n", argv[0]);
+			printf("invalid sleep duration float: %s\n", argv[1]);
 			return -EINVAL;
 		}
 	}

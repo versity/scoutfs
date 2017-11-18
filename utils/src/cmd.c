@@ -76,7 +76,7 @@ int cmd_execute(int argc, char **argv)
 		return 1;
 	}
 
-	ret = com->func(argc - 2, argv + 2);
+	ret = com->func(argc - 1, argv + 1);
 	if (ret < 0) {
 		fprintf(stderr, "scoutfs: %s failed: %s (%d)\n",
 			com->name, strerror(-ret), -ret);

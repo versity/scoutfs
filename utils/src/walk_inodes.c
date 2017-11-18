@@ -75,44 +75,44 @@ static int walk_inodes_cmd(int argc, char **argv)
 	int fd;
 	int i;
 
-	if (argc != 4) {
+	if (argc != 5) {
 		fprintf(stderr, "must specify seq and path\n");
 		return -EINVAL;
 	}
 
-	if (!strcasecmp(argv[0], "size"))
+	if (!strcasecmp(argv[1], "size"))
 		walk.index = SCOUTFS_IOC_WALK_INODES_SIZE;
-	else if (!strcasecmp(argv[0], "meta_seq"))
+	else if (!strcasecmp(argv[1], "meta_seq"))
 		walk.index = SCOUTFS_IOC_WALK_INODES_META_SEQ;
-	else if (!strcasecmp(argv[0], "data_seq"))
+	else if (!strcasecmp(argv[1], "data_seq"))
 		walk.index = SCOUTFS_IOC_WALK_INODES_DATA_SEQ;
 	else {
 		fprintf(stderr, "unknown index '%s', try 'size', 'ctime, or "
-			"mtime'\n", argv[0]);
+			"mtime'\n", argv[1]);
 		return -EINVAL;
 	}
 
-	ret = parse_walk_entry(&walk.first, argv[1]);
+	ret = parse_walk_entry(&walk.first, argv[2]);
 	if (ret) {
 		fprintf(stderr, "invalid first position '%s', try '1.2.3' or "
-			"'-1'\n", argv[1]);
-		return -EINVAL;
-
-	}
-
-	ret = parse_walk_entry(&walk.last, argv[2]);
-	if (ret) {
-		fprintf(stderr, "invalid last position '%s', try '1.2.3' or "
 			"'-1'\n", argv[2]);
 		return -EINVAL;
 
 	}
 
-	fd = open(argv[3], O_RDONLY);
+	ret = parse_walk_entry(&walk.last, argv[3]);
+	if (ret) {
+		fprintf(stderr, "invalid last position '%s', try '1.2.3' or "
+			"'-1'\n", argv[3]);
+		return -EINVAL;
+
+	}
+
+	fd = open(argv[4], O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[3], strerror(errno), errno);
+			argv[4], strerror(errno), errno);
 		return ret;
 	}
 

@@ -398,11 +398,11 @@ out:
 
 static int mkfs_func(int argc, char *argv[])
 {
-	char *path = argv[0];
+	char *path = argv[1];
 	int ret;
 	int fd;
 
-	if (argc != 1) {
+	if (argc != 2) {
 		printf("scoutfs: mkfs: a single path argument is required\n");
 		return -EINVAL;
 	}

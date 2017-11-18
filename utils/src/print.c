@@ -643,11 +643,11 @@ static int print_cmd(int argc, char **argv)
 	int ret;
 	int fd;
 
-	if (argc != 1) {
+	if (argc != 2) {
 		printf("scoutfs print: a single path argument is required\n");
 		return -EINVAL;
 	}
-	path = argv[0];
+	path = argv[1];
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {

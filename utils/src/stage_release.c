@@ -26,42 +26,42 @@ static int stage_cmd(int argc, char **argv)
 	u64 vers;
 	int ret;
 
-	if (argc != 5) {
+	if (argc != 6) {
 		fprintf(stderr, "must specify moar args\n");
 		return -EINVAL;
 	}
 
-	fd = open(argv[0], O_RDWR);
+	fd = open(argv[1], O_RDWR);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[0], strerror(errno), errno);
+			argv[1], strerror(errno), errno);
 		return ret;
 	}
 
-	vers = strtoull(argv[1], &endptr, 0);
+	vers = strtoull(argv[2], &endptr, 0);
 	if (*endptr != '\0' ||
 	    ((vers == LLONG_MIN || vers == LLONG_MAX) && errno == ERANGE)) {
 		fprintf(stderr, "error parsing data version '%s'\n",
-			argv[1]);
-		ret = -EINVAL;
-		goto out;
-	}
-
-	offset = strtoull(argv[2], &endptr, 0);
-	if (*endptr != '\0' ||
-	    ((offset == LLONG_MIN || offset == LLONG_MAX) && errno == ERANGE)) {
-		fprintf(stderr, "error parsing offset '%s'\n",
 			argv[2]);
 		ret = -EINVAL;
 		goto out;
 	}
 
-	count = strtoull(argv[3], &endptr, 0);
+	offset = strtoull(argv[3], &endptr, 0);
+	if (*endptr != '\0' ||
+	    ((offset == LLONG_MIN || offset == LLONG_MAX) && errno == ERANGE)) {
+		fprintf(stderr, "error parsing offset '%s'\n",
+			argv[3]);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	count = strtoull(argv[4], &endptr, 0);
 	if (*endptr != '\0' ||
 	    ((count == LLONG_MIN || count == LLONG_MAX) && errno == ERANGE)) {
 		fprintf(stderr, "error parsing count '%s'\n",
-			argv[3]);
+			argv[4]);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -73,11 +73,11 @@ static int stage_cmd(int argc, char **argv)
 		goto out;
 	}
 
-	afd = open(argv[4], O_RDONLY);
+	afd = open(argv[5], O_RDONLY);
 	if (afd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[4], strerror(errno), errno);
+			argv[5], strerror(errno), errno);
 		goto out;
 	}
 
@@ -133,42 +133,42 @@ static int release_cmd(int argc, char **argv)
 	int ret;
 	int fd;
 
-	if (argc != 4) {
+	if (argc != 5) {
 		fprintf(stderr, "must specify path, data version, offset, and count\n");
 		return -EINVAL;
 	}
 
-	fd = open(argv[0], O_RDWR);
+	fd = open(argv[1], O_RDWR);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[0], strerror(errno), errno);
+			argv[1], strerror(errno), errno);
 		return ret;
 	}
 
-	vers = strtoull(argv[1], &endptr, 0);
+	vers = strtoull(argv[2], &endptr, 0);
 	if (*endptr != '\0' ||
 	    ((vers == LLONG_MIN || vers == LLONG_MAX) && errno == ERANGE)) {
 		fprintf(stderr, "error parsing data version '%s'\n",
-			argv[1]);
-		ret = -EINVAL;
-		goto out;
-	}
-
-	block = strtoull(argv[2], &endptr, 0);
-	if (*endptr != '\0' ||
-	    ((block == LLONG_MIN || block == LLONG_MAX) && errno == ERANGE)) {
-		fprintf(stderr, "error parsing starting 4K block offset '%s'\n",
 			argv[2]);
 		ret = -EINVAL;
 		goto out;
 	}
 
-	count = strtoull(argv[3], &endptr, 0);
+	block = strtoull(argv[3], &endptr, 0);
+	if (*endptr != '\0' ||
+	    ((block == LLONG_MIN || block == LLONG_MAX) && errno == ERANGE)) {
+		fprintf(stderr, "error parsing starting 4K block offset '%s'\n",
+			argv[3]);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	count = strtoull(argv[4], &endptr, 0);
 	if (*endptr != '\0' ||
 	    ((count == LLONG_MIN || count == LLONG_MAX) && errno == ERANGE)) {
 		fprintf(stderr, "error parsing length '%s'\n",
-			argv[3]);
+			argv[4]);
 		ret = -EINVAL;
 		goto out;
 	}
