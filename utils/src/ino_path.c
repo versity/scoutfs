@@ -18,9 +18,9 @@
 static int ino_path_cmd(int argc, char **argv)
 {
 	struct scoutfs_ioctl_ino_path args;
+	struct scoutfs_ioctl_ino_path_result *res;
+	unsigned int result_bytes;
 	char *endptr = NULL;
-	char *path = NULL;
-	char *curs = NULL;
 	u64 ino;
 	int ret;
 	int fd;
@@ -38,6 +38,7 @@ static int ino_path_cmd(int argc, char **argv)
 		return -EINVAL;
 	}
 
+
 	fd = open(argv[2], O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
@@ -46,31 +47,39 @@ static int ino_path_cmd(int argc, char **argv)
 		return ret;
 	}
 
-	path = malloc(PATH_MAX);
-	if (!path) {
-		fprintf(stderr, "couldn't allocate %d byte buffer\n", PATH_MAX);
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	curs = calloc(1, SCOUTFS_IOC_INO_PATH_CURSOR_BYTES);
-	if (!curs) {
-		fprintf(stderr, "couldn't allocate %ld byte cursor\n",
-			SCOUTFS_IOC_INO_PATH_CURSOR_BYTES);
+	result_bytes = offsetof(struct scoutfs_ioctl_ino_path_result,
+				path[PATH_MAX]);
+	res = malloc(result_bytes);
+	if (!res) {
+		fprintf(stderr, "couldn't allocate %u byte buffer\n",
+			result_bytes);
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	args.ino = ino;
-	args.cursor_ptr = (intptr_t)curs;
-	args.path_ptr = (intptr_t)path;
-	args.cursor_bytes = SCOUTFS_IOC_INO_PATH_CURSOR_BYTES;
-	args.path_bytes = PATH_MAX;
-	do {
+	args.dir_ino = 0;
+	args.dir_pos = 0;
+	args.result_ptr = (intptr_t)res;
+	args.result_bytes = result_bytes;
+	for (;;) {
 		ret = ioctl(fd, SCOUTFS_IOC_INO_PATH, &args);
-		if (ret > 0)
-			printf("%s\n", path);
-	} while (ret > 0);
+		if (ret < 0) {
+			ret = -errno;
+			if (ret == -ENOENT)
+				ret = 0;
+			break;
+		}
+
+		printf("%.*s\n", res->path_bytes, res->path);
+
+		args.dir_ino = res->dir_ino;
+		args.dir_pos = res->dir_pos;
+		if (++args.dir_pos == 0) {
+			if (++args.dir_ino == 0)
+				break;
+		}
+	}
 
 	if (ret < 0) {
 		ret = -errno;
@@ -78,8 +87,7 @@ static int ino_path_cmd(int argc, char **argv)
 			strerror(errno), errno);
 	}
 out:
-	free(path);
-	free(curs);
+	free(res);
 	close(fd);
 	return ret;
 };

@@ -141,38 +141,14 @@ static void print_dirent(void *key, int key_len, void *val, int val_len)
 {
 	struct scoutfs_dirent_key *dkey = key;
 	struct scoutfs_dirent *dent = val;
-	unsigned int name_len = key_len - sizeof(*dkey);
-	u8 *name = global_printable_name(dkey->name, name_len);
-
-	printf("    dirent: dir ino %llu type %u rdpos %llu targ ino %llu\n"
-	       "      name %s\n",
-	       be64_to_cpu(dkey->ino), dent->type,
-	       le64_to_cpu(dent->readdir_pos), le64_to_cpu(dent->ino),
-	       name);
-}
-
-static void print_readdir(void *key, int key_len, void *val, int val_len)
-{
-	struct scoutfs_readdir_key *rkey = key;
-	struct scoutfs_dirent *dent = val;
 	unsigned int name_len = val_len - sizeof(*dent);
 	u8 *name = global_printable_name(dent->name, name_len);
 
-	printf("    readdir: dir ino %llu pos %llu type %u targ ino %llu\n"
+	printf("    dirent: dir %llu hash %016llx pos %llu type %u ino %llu\n"
 	       "      name %s\n",
-	       be64_to_cpu(rkey->ino), be64_to_cpu(rkey->pos), 
-	       dent->type, le64_to_cpu(dent->ino),
+	       be64_to_cpu(dkey->ino), le64_to_cpu(dent->hash),
+	       le64_to_cpu(dent->pos), dent->type, le64_to_cpu(dent->ino),
 	       name);
-}
-
-static void print_link_backref(void *key, int key_len, void *val, int val_len)
-{
-	struct scoutfs_link_backref_key *lbkey = key;
-	unsigned int name_len = key_len - sizeof(*lbkey);
-	u8 *name = global_printable_name(lbkey->name, name_len);
-
-	printf("      lbref: ino: %llu dir_ino %llu name %s\n",
-	       be64_to_cpu(lbkey->ino), be64_to_cpu(lbkey->dir_ino), name);
 }
 
 static void print_symlink(void *key, int key_len, void *val, int val_len)
@@ -250,9 +226,9 @@ static print_func_t find_printer(u8 zone, u8 type)
 			case SCOUTFS_INODE_TYPE: return print_inode;
 			case SCOUTFS_XATTR_TYPE: return print_xattr;
 			case SCOUTFS_DIRENT_TYPE: return print_dirent;
-			case SCOUTFS_READDIR_TYPE: return print_readdir;
+			case SCOUTFS_READDIR_TYPE: return print_dirent;
 			case SCOUTFS_SYMLINK_TYPE: return print_symlink;
-			case SCOUTFS_LINK_BACKREF_TYPE: return print_link_backref;
+			case SCOUTFS_LINK_BACKREF_TYPE: return print_dirent;
 			case SCOUTFS_BLOCK_MAPPING_TYPE:
 				return print_block_mapping;
 		}
