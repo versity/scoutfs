@@ -17,6 +17,7 @@
 #include "crc.h"
 #include "rand.h"
 #include "dev.h"
+#include "key.h"
 
 static int write_raw_block(int fd, u64 blkno, void *blk)
 {
@@ -107,10 +108,8 @@ static u64 calc_btree_ring_blocks(u64 total_segs)
 				   sizeof(struct scoutfs_alloc_region_btree_val));
 
 	blocks += calc_btree_blocks(total_segs,
-				sizeof(struct scoutfs_manifest_btree_key) +
-				SCOUTFS_MAX_KEY_SIZE,
-				sizeof(struct scoutfs_manifest_btree_val) +
-				SCOUTFS_MAX_KEY_SIZE);
+				sizeof(struct scoutfs_manifest_btree_key),
+				sizeof(struct scoutfs_manifest_btree_val));
 
 	return round_up(blocks * 4, SCOUTFS_SEGMENT_BLOCKS);
 }
@@ -153,8 +152,8 @@ static char *size_str(u64 nr, unsigned size)
 static int write_new_fs(char *path, int fd)
 {
 	struct scoutfs_super_block *super;
-	struct scoutfs_inode_key *ikey;
-	struct scoutfs_inode_index_key *idx_key;
+	struct scoutfs_key *ino_key;
+	struct scoutfs_key *idx_key;
 	struct scoutfs_inode *inode;
 	struct scoutfs_segment_block *sblk;
 	struct scoutfs_manifest_btree_key *mkey;
@@ -162,6 +161,7 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *btitem;
 	struct scoutfs_segment_item *item;
+	struct scoutfs_key key;
 	__le32 *prev_link;
 	struct timeval tv;
 	char uuid_str[37];
@@ -245,34 +245,29 @@ static int write_new_fs(char *path, int fd)
 	bt->nr_items = cpu_to_le16(1);
 
 	/* btree item allocated from the back of the block */
-	ikey = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*ikey);
-	mval = (void *)ikey - sizeof(*mval);
-	idx_key = (void *)mval - sizeof(*idx_key);
-	mkey = (void *)idx_key - sizeof(*mkey);
+	mval = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*mval);
+	ino_key = &mval->last_key;
+	mkey = (void *)mval - sizeof(*mkey);
 	btitem = (void *)mkey - sizeof(*btitem);
 
 	bt->item_hdrs[0].off = cpu_to_le16((long)btitem - (long)bt);
 	bt->free_end = bt->item_hdrs[0].off;
 
-	btitem->key_len = cpu_to_le16(sizeof(struct scoutfs_manifest_btree_key) +
-				      sizeof(struct scoutfs_inode_index_key));
-	btitem->val_len = cpu_to_le16(sizeof(struct scoutfs_manifest_btree_val) +
-				      sizeof(struct scoutfs_inode_key));
+	btitem->key_len = cpu_to_le16(sizeof(*mkey));
+	btitem->val_len = cpu_to_le16(sizeof(*mval));
 
 	mkey->level = 1;
-	idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
-	idx_key->type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
-	idx_key->major = 0;
-	idx_key->minor = 0;
-	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	mkey->seq = cpu_to_be64(1);
+	memset(&key, 0, sizeof(key));
+	key.sk_zone = SCOUTFS_INODE_INDEX_ZONE;
+	key.sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
+	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	scoutfs_key_to_be(&mkey->first_key, &key);
 
 	mval->segno = cpu_to_le64(first_segno);
-	mval->seq = cpu_to_le64(1);
-	mval->first_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_index_key));
-	mval->last_key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
-	ikey->zone = SCOUTFS_FS_ZONE;
-	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-	ikey->type = SCOUTFS_INODE_TYPE;
+	ino_key->sk_zone = SCOUTFS_FS_ZONE;
+	ino_key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	ino_key->sk_type = SCOUTFS_INODE_TYPE;
 
 	bt->crc = cpu_to_le32(crc_btree_block(bt));
 
@@ -294,35 +289,31 @@ static int write_new_fs(char *path, int fd)
 	*prev_link = cpu_to_le32((long)item -(long)sblk);
 	prev_link = &item->skip_links[0];
 
-	item->key_len = cpu_to_le16(sizeof(*idx_key));
 	item->val_len = 0;
 	item->nr_links = 1;
 	le32_add_cpu(&sblk->nr_items, 1);
 
-	idx_key = (void *)&item->skip_links[1];
-	idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
-	idx_key->type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
-	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-	idx_key->major = 0;
-	idx_key->minor = 0;
+	idx_key = &item->key;
+	idx_key->sk_zone = SCOUTFS_INODE_INDEX_ZONE;
+	idx_key->sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
+	idx_key->skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
 
-	item = (void *)(idx_key + 1);
+	item = (void *)&item->skip_links[1];
 	*prev_link = cpu_to_le32((long)item -(long)sblk);
 	prev_link = &item->skip_links[0];
 
 	sblk->last_item_off = cpu_to_le32((long)item - (long)sblk);
 
-	ikey = (void *)&item->skip_links[1];
-	inode = (void *)ikey + sizeof(struct scoutfs_inode_key);
+	ino_key = (void *)&item->key;
+	inode = (void *)&item->skip_links[1];
 
-	item->key_len = cpu_to_le16(sizeof(struct scoutfs_inode_key));
 	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
 	item->nr_links = 1;
 	le32_add_cpu(&sblk->nr_items, 1);
 
-	ikey->zone = SCOUTFS_FS_ZONE;
-	ikey->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-	ikey->type = SCOUTFS_INODE_TYPE;
+	ino_key->sk_zone = SCOUTFS_FS_ZONE;
+	ino_key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	ino_key->sk_type = SCOUTFS_INODE_TYPE;
 
 	inode->next_readdir_pos = cpu_to_le64(2);
 	inode->nlink = cpu_to_le32(SCOUTFS_DIRENT_FIRST_POS);

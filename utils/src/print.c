@@ -74,9 +74,8 @@ static void print_block_header(struct scoutfs_block_header *hdr)
 		le64_to_cpu(hdr->seq), le64_to_cpu(hdr->blkno));
 }
 
-static void print_inode(void *key, int key_len, void *val, int val_len)
+static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_inode_key *ikey = key;
 	struct scoutfs_inode *inode = val;
 
 	printf("    inode: ino %llu size %llu nlink %u\n"
@@ -84,7 +83,7 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 	       "      next_readdir_pos %llu meta_seq %llu data_seq %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
 	       "      mtime %llu.%08u\n",
-	       be64_to_cpu(ikey->ino),
+	       le64_to_cpu(key->ski_ino),
 	       le64_to_cpu(inode->size),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
@@ -102,11 +101,9 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 	       le32_to_cpu(inode->mtime.nsec));
 }
 
-static void print_orphan(void *key, int key_len, void *val, int val_len)
+static void print_orphan(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_orphan_key *okey = key;
-
-	printf("    orphan: ino %llu\n", be64_to_cpu(okey->ino));
+	printf("    orphan: ino %llu\n", le64_to_cpu(key->sko_ino));
 }
 
 static u8 *global_printable_name(u8 *name, int name_len)
@@ -122,38 +119,35 @@ static u8 *global_printable_name(u8 *name, int name_len)
 	return name_buf;
 }
 
-static void print_xattr(void *key, int key_len, void *val, int val_len)
+static void print_xattr(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_xattr_key *xkey = key;
 	struct scoutfs_xattr *xat = val;
 
 	printf("    xattr: ino %llu name_hash %08x id %llu part %u\n",
-	       be64_to_cpu(xkey->ino), be32_to_cpu(xkey->name_hash),
-	       be64_to_cpu(xkey->id), xkey->part);
+	       le64_to_cpu(key->skx_ino), (u32)le64_to_cpu(key->skx_name_hash),
+	       le64_to_cpu(key->skx_id), key->skx_part);
 
-       if (xkey->part == 0)
+	if (key->skx_part == 0)
 		printf("      name_len %u val_len %u name %s\n",
 		       xat->name_len, le16_to_cpu(xat->val_len),
 		       global_printable_name(xat->name, xat->name_len));
 }
 
-static void print_dirent(void *key, int key_len, void *val, int val_len)
+static void print_dirent(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_dirent_key *dkey = key;
 	struct scoutfs_dirent *dent = val;
 	unsigned int name_len = val_len - sizeof(*dent);
 	u8 *name = global_printable_name(dent->name, name_len);
 
 	printf("    dirent: dir %llu hash %016llx pos %llu type %u ino %llu\n"
 	       "      name %s\n",
-	       be64_to_cpu(dkey->ino), le64_to_cpu(dent->hash),
+	       le64_to_cpu(key->skd_ino), le64_to_cpu(dent->hash),
 	       le64_to_cpu(dent->pos), dent->type, le64_to_cpu(dent->ino),
 	       name);
 }
 
-static void print_symlink(void *key, int key_len, void *val, int val_len)
+static void print_symlink(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_symlink_key *skey = key;
 	u8 *frag = val;
 	u8 *name;
 
@@ -162,32 +156,30 @@ static void print_symlink(void *key, int key_len, void *val, int val_len)
 		val_len--;
 	name = global_printable_name(frag, val_len);
 
-	printf("    symlink: ino %llu nr %u\n"
+	printf("    symlink: ino %llu nr %llu\n"
 	       "      target %s\n",
-	       be64_to_cpu(skey->ino), skey->nr, name);
+	       le64_to_cpu(key->sks_ino), le64_to_cpu(key->sks_nr), name);
 }
 
 /*
  * XXX not decoding the bytes yet
  */
-static void print_block_mapping(void *key, int key_len, void *val, int val_len)
+static void print_block_mapping(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_block_mapping_key *bmk = key;
-	u64 blk_off = be64_to_cpu(bmk->base) << SCOUTFS_BLOCK_MAPPING_SHIFT;
+	u64 blk_off = le64_to_cpu(key->skm_base) << SCOUTFS_BLOCK_MAPPING_SHIFT;
 	u8 nr = *((u8 *)val) & 63;
 
 	printf("      block mapping: ino %llu blk_off %llu blocks %u\n",
-	       be64_to_cpu(bmk->ino), blk_off, nr);
+	       le64_to_cpu(key->skm_ino), blk_off, nr);
 }
 
-static void print_free_bits(void *key, int key_len, void *val, int val_len)
+static void print_free_bits(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_free_bits_key *fbk = key;
 	struct scoutfs_free_bits *frb = val;
 	int i;
 
 	printf("      node_id %llx base %llu\n",
-	       be64_to_cpu(fbk->node_id), be64_to_cpu(fbk->base));
+	       le64_to_cpu(key->skf_node_id), le64_to_cpu(key->skf_base));
 
 	printf("      bits:");
 	for (i = 0; i < array_size(frb->bits); i++)
@@ -195,16 +187,13 @@ static void print_free_bits(void *key, int key_len, void *val, int val_len)
 	printf("\n");
 }
 
-static void print_inode_index(void *key, int key_len, void *val, int val_len)
+static void print_inode_index(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_inode_index_key *ikey = key;
-
-	printf("      index: major %llu minor %u ino %llu\n",
-	       be64_to_cpu(ikey->major), be32_to_cpu(ikey->minor),
-	       be64_to_cpu(ikey->ino));
+	printf("      index: major %llu ino %llu\n",
+	       le64_to_cpu(key->skii_major), le64_to_cpu(key->skii_ino));
 }
 
-typedef void (*print_func_t)(void *key, int key_len, void *val, int val_len);
+typedef void (*print_func_t)(struct scoutfs_key *key, void *val, int val_len);
 
 static print_func_t find_printer(u8 zone, u8 type)
 {
@@ -237,59 +226,28 @@ static print_func_t find_printer(u8 zone, u8 type)
 	return NULL;
 }
 
-static void find_zone_type(void *key, u8 *zone, u8 *type)
-{
-	struct scoutfs_inode_index_key *idx_key = key;
-	struct scoutfs_inode_key *ikey = key;
-	struct scoutfs_orphan_key *okey = key;
-
-	*zone = *(u8 *)key;
-
-	switch (*zone) {
-	case SCOUTFS_INODE_INDEX_ZONE:
-		*type = idx_key->type;
-		break;
-	case SCOUTFS_NODE_ZONE:
-		*type = okey->type;
-		break;
-	case SCOUTFS_FS_ZONE:
-		*type = ikey->type;
-		break;
-	default:
-		*type = 0;
-	}
-}
-
 static void print_item(struct scoutfs_segment_block *sblk,
 		       struct scoutfs_segment_item *item, u32 which, u32 off)
 {
 	print_func_t printer;
-	void *key;
 	void *val;
-	u8 type;
-	u8 zone;
 	int i;
 
-	key = (char *)&item->skip_links[item->nr_links];
-	val = (char *)key + le16_to_cpu(item->key_len);
+	val = (char *)&item->skip_links[item->nr_links];
 
-	find_zone_type(key, &zone, &type);
-	printer = find_printer(zone, type);
+	printer = find_printer(item->key.sk_zone, item->key.sk_type);
 
-	printf("  [%u]: off %u key_len %u val_len %u nr_links %u flags %x%s\n",
-		which, off, le16_to_cpu(item->key_len),
-		le16_to_cpu(item->val_len), item->nr_links,
+	printf("  [%u]: key "SK_FMT" off %u val_len %u nr_links %u flags %x%s\n",
+		which, SK_ARG(&item->key), off, le16_to_cpu(item->val_len),
+		item->nr_links,
 		item->flags, printer ? "" : " (unrecognized zone+type)");
 	printf("    links:");
 	for (i = 0; i < item->nr_links; i++)
 		printf(" %u", le32_to_cpu(item->skip_links[i]));
-	printf("\n    key: ");
-	print_key(key, le16_to_cpu(item->key_len));
 	printf("\n");
 
 	if (printer)
-		printer(key, le16_to_cpu(item->key_len),
-			val, le16_to_cpu(item->val_len));
+		printer(&item->key, val, le16_to_cpu(item->val_len));
 }
 
 static void print_segment_block(struct scoutfs_segment_block *sblk)
@@ -341,50 +299,21 @@ static int print_manifest_entry(void *key, unsigned key_len, void *val,
 {
 	struct scoutfs_manifest_btree_key *mkey = key;
 	struct scoutfs_manifest_btree_val *mval = val;
+	struct scoutfs_key first;
 	unsigned long *seg_map = arg;
-	unsigned first_len;
-	unsigned last_len;
-	void *first;
-	void *last;
-	__be64 seq;
 
-	/* parent items only have the key */
-	if (val == NULL) {
-		if (mkey->level == 0) {
-			memcpy(&seq, mkey->bkey, sizeof(seq));
-			printf("    level %u seq %llu\n",
-			       mkey->level, be64_to_cpu(seq));
-		} else {
-			printf("    level %u first ", mkey->level);
-			print_key(mkey->bkey, key_len - sizeof(mkey->level));
-			printf("\n");
-		}
-		return 0;
+	scoutfs_key_from_be(&first, &mkey->first_key);
+
+	printf("    level %u first "SK_FMT" seq %llu\n",
+	       mkey->level, SK_ARG(&first), be64_to_cpu(mkey->seq));
+
+	/* only items in leaf blocks have values */
+	if (val) {
+		printf("    segno %llu last "SK_FMT"\n",
+		       le64_to_cpu(mval->segno), SK_ARG(&mval->last_key));
+
+		set_bit(seg_map, le64_to_cpu(mval->segno));
 	}
-
-	/* leaf items print the whole entry */
-	first_len = le16_to_cpu(mval->first_key_len);
-	last_len = le16_to_cpu(mval->last_key_len);
-
-	if (mkey->level == 0) {
-		first = mval->keys;
-		last = mval->keys + first_len;
-	} else {
-		first = mkey->bkey;
-		last = mval->keys;
-	}
-
-	printf("    level %u segno %llu seq %llu first_len %u last_len %u\n",
-	       mkey->level, le64_to_cpu(mval->segno), le64_to_cpu(mval->seq),
-	       first_len, last_len);
-
-	printf("    first ");
-	print_key(first, first_len);
-	printf("\n    last ");
-	print_key(last, last_len);
-	printf("\n");
-
-	set_bit(seg_map, le64_to_cpu(mval->segno));
 
 	return 0;
 }
@@ -514,7 +443,7 @@ static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
 static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 {
 	char uuid_str[37];
-	__le64 *counts;
+	u64 count;
 	int i;
 
 	uuid_unparse(super->uuid, uuid_str);
@@ -553,10 +482,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le16_to_cpu(super->manifest.root.migration_key_len));
 
 	printf("  level_counts:");
-	counts = super->manifest.level_counts;
 	for (i = 0; i < SCOUTFS_MANIFEST_MAX_LEVEL; i++) {
-		if (le64_to_cpu(counts[i]))
-			printf(" %u: %llu", i, le64_to_cpu(counts[i]));
+		count = le64_to_cpu(super->manifest.level_counts[i]);
+		if (count)
+			printf(" %u: %llu", i, count);
 	}
 	printf("\n");
 }
