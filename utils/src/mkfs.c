@@ -261,7 +261,7 @@ static int write_new_fs(char *path, int fd)
 
 	mkey->level = 1;
 	idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
-	idx_key->type = SCOUTFS_INODE_INDEX_SIZE_TYPE;
+	idx_key->type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
 	idx_key->major = 0;
 	idx_key->minor = 0;
 	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
@@ -294,26 +294,21 @@ static int write_new_fs(char *path, int fd)
 	*prev_link = cpu_to_le32((long)item -(long)sblk);
 	prev_link = &item->skip_links[0];
 
-	/* write the root inode index keys */
-	for (i = SCOUTFS_INODE_INDEX_SIZE_TYPE;
-	     i <= SCOUTFS_INODE_INDEX_META_SEQ_TYPE; i++) {
+	item->key_len = cpu_to_le16(sizeof(*idx_key));
+	item->val_len = 0;
+	item->nr_links = 1;
+	le32_add_cpu(&sblk->nr_items, 1);
 
-		item->key_len = cpu_to_le16(sizeof(*idx_key));
-		item->val_len = 0;
-		item->nr_links = 1;
-		le32_add_cpu(&sblk->nr_items, 1);
+	idx_key = (void *)&item->skip_links[1];
+	idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
+	idx_key->type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
+	idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
+	idx_key->major = 0;
+	idx_key->minor = 0;
 
-		idx_key = (void *)&item->skip_links[1];
-		idx_key->zone = SCOUTFS_INODE_INDEX_ZONE;
-		idx_key->type = i;
-		idx_key->ino = cpu_to_be64(SCOUTFS_ROOT_INO);
-		idx_key->major = 0;
-		idx_key->minor = 0;
-
-		item = (void *)(idx_key + 1);
-		*prev_link = cpu_to_le32((long)item -(long)sblk);
-		prev_link = &item->skip_links[0];
-	}
+	item = (void *)(idx_key + 1);
+	*prev_link = cpu_to_le32((long)item -(long)sblk);
+	prev_link = &item->skip_links[0];
 
 	sblk->last_item_off = cpu_to_le32((long)item - (long)sblk);
 
