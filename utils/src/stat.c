@@ -49,9 +49,12 @@ static int stat_more_cmd(int argc, char **argv)
 		} else {
 			printf("          File: '%s'\n"
 			       "  meta_seq: %-20llu data_seq %-20llu"
-			       "  data_version: %-20llu\n",
+			       "  data_version: %-20llu\n"
+			       "  online_blocks: %-20llu "
+			       " offline_blocks: %-20llu\n",
 				path, stm.meta_seq, stm.data_seq,
-				stm.data_version);
+				stm.data_version, stm.online_blocks,
+				stm.offline_blocks);
 		}
 
 		close(fd);
