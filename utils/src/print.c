@@ -79,13 +79,13 @@ static void print_inode(void *key, int key_len, void *val, int val_len)
 	struct scoutfs_inode_key *ikey = key;
 	struct scoutfs_inode *inode = val;
 
-	printf("    inode: ino %llu size %llu blocks %llu nlink %u\n"
+	printf("    inode: ino %llu size %llu nlink %u\n"
 	       "      uid %u gid %u mode 0%o rdev 0x%x flags 0x%x\n"
 	       "      next_readdir_pos %llu meta_seq %llu data_seq %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
 	       "      mtime %llu.%08u\n",
 	       be64_to_cpu(ikey->ino),
-	       le64_to_cpu(inode->size), le64_to_cpu(inode->blocks),
+	       le64_to_cpu(inode->size),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev),
