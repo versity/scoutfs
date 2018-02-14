@@ -47,13 +47,17 @@ static int stat_more_cmd(int argc, char **argv)
 			fprintf(stderr, "stat_more ioctl failed on '%s': "
 				"%s (%d)\n", path, strerror(errno), errno);
 		} else {
-			printf("          File: '%s'\n"
-			       "  meta_seq: %-20llu data_seq %-20llu"
-			       "  data_version: %-20llu\n"
-			       "  online_blocks: %-20llu "
-			       " offline_blocks: %-20llu\n",
-				path, stm.meta_seq, stm.data_seq,
-				stm.data_version, stm.online_blocks,
+			printf("path            %s\n"
+			       "meta_seq        %llu\n"
+			       "data_seq        %llu\n"
+			       "data_version    %llu\n"
+			       "online_blocks   %llu\n"
+			       "offline_blocks  %llu\n",
+				path,
+				stm.meta_seq,
+				stm.data_seq,
+				stm.data_version,
+				stm.online_blocks,
 				stm.offline_blocks);
 		}
 
