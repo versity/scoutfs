@@ -125,15 +125,16 @@ static u8 *global_printable_name(u8 *name, int name_len)
 static void print_xattr(void *key, int key_len, void *val, int val_len)
 {
 	struct scoutfs_xattr_key *xkey = key;
-	struct scoutfs_xattr_key_footer *foot = key + key_len - sizeof(*foot);
-	struct scoutfs_xattr_val_header *vh = val;
-	unsigned int name_len = key_len - sizeof(*xkey) - sizeof(*foot);
-	u8 *name = global_printable_name(xkey->name, name_len);
+	struct scoutfs_xattr *xat = val;
 
-	printf("    xattr: ino %llu part %u part_len %u last_part %u\n"
-	       "      name %s\n",
-	       be64_to_cpu(xkey->ino), foot->part, le16_to_cpu(vh->part_len),
-	       vh->last_part, name);
+	printf("    xattr: ino %llu name_hash %08x id %llu part %u\n",
+	       be64_to_cpu(xkey->ino), be32_to_cpu(xkey->name_hash),
+	       be64_to_cpu(xkey->id), xkey->part);
+
+       if (xkey->part == 0)
+		printf("      name_len %u val_len %u name %s\n",
+		       xat->name_len, le16_to_cpu(xat->val_len),
+		       global_printable_name(xat->name, xat->name_len));
 }
 
 static void print_dirent(void *key, int key_len, void *val, int val_len)
