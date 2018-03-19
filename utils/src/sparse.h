@@ -109,4 +109,14 @@ static inline void le32_add_cpu(__le32 *val, u32 delta)
 	*val = cpu_to_le32(le32_to_cpu(*val) + delta);
 }
 
+static inline void le64_add_cpu(__le64 *val, u64 delta)
+{
+	*val = cpu_to_le64(le64_to_cpu(*val) + delta);
+}
+
+static inline void be64_add_cpu(__be64 *val, u64 delta)
+{
+	*val = cpu_to_be64(be64_to_cpu(*val) + delta);
+}
+
 #endif
