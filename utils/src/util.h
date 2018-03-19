@@ -61,6 +61,10 @@ do {				\
 	((type *)((void *)(ptr) - offsetof(type, memb)))
 
 #define BITS_PER_LONG (sizeof(long) * 8)
+#define U8_MAX ((u8)~0ULL)
+#define U16_MAX ((u16)~0ULL)
+#define U32_MAX ((u32)~0ULL)
+#define U64_MAX ((u64)~0ULL)
 
 /*
  * return -1,0,+1 based on the memcmp comparison of the minimum of their

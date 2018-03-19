@@ -34,8 +34,6 @@ typedef u32 __u32;
 typedef s32 __s32;
 typedef u64 __u64;
 
-#define U16_MAX ((u16)~0)
-
 typedef u16 __sp_biwise __le16;
 typedef u16 __sp_biwise __be16;
 typedef u32 __sp_biwise __le32;
