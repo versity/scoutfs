@@ -10,7 +10,7 @@
 # undef __sp_biwise
 # define __sp_biwise		__attribute__((bitwise))
 /* sparse seems to get confused by some builtins */
-extern __builtin_ia32_rdrand64_step(unsigned long long *);
+extern int __builtin_ia32_rdrand64_step(unsigned long long *);
 extern unsigned int __builtin_ia32_crc32di(unsigned int, unsigned long long);
 extern unsigned int __builtin_ia32_crc32si(unsigned int, unsigned int);
 extern unsigned int __builtin_ia32_crc32hi(unsigned int, unsigned short);
