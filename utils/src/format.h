@@ -15,6 +15,7 @@
 #define SCOUTFS_BLOCKS_PER_PAGE (PAGE_SIZE / SCOUTFS_BLOCK_SIZE)
 #define SCOUTFS_BLOCK_SECTOR_SHIFT (SCOUTFS_BLOCK_SHIFT - 9)
 #define SCOUTFS_BLOCK_SECTORS (1 << SCOUTFS_BLOCK_SECTOR_SHIFT)
+#define SCOUTFS_BLOCK_MAX (U64_MAX >> SCOUTFS_BLOCK_SHIFT)
 
 /*
  * FS data is stored in segments, for now they're fixed size. They'll
@@ -78,9 +79,10 @@ struct scoutfs_key {
 #define skii_major	_sk_second
 #define skii_ino	_sk_third
 
-/* node free bit map  */
-#define skf_node_id	_sk_first
-#define skf_base	_sk_second
+/* node free extent */
+#define sknf_node_id	_sk_first
+#define sknf_major	_sk_second
+#define sknf_minor	_sk_third
 
 /* node orphan inode */
 #define sko_node_id	_sk_first
@@ -104,9 +106,9 @@ struct scoutfs_key {
 #define sks_ino		_sk_first
 #define sks_nr		_sk_second
 
-/* file data mapping */
-#define skm_ino		_sk_first
-#define skm_base	_sk_second
+/* file extent */
+#define skfe_ino	_sk_first
+#define skfe_last	_sk_second
 
 /*
  * The btree still uses memcmp() to compare keys.  We should fix that
@@ -302,8 +304,8 @@ struct scoutfs_segment_block {
 #define SCOUTFS_INODE_INDEX_NR			3 /* don't forget to update */
 
 /* node zone */
-#define SCOUTFS_FREE_BITS_SEGNO_TYPE		1
-#define SCOUTFS_FREE_BITS_BLKNO_TYPE		2
+#define SCOUTFS_FREE_EXTENT_BLKNO_TYPE		1
+#define SCOUTFS_FREE_EXTENT_BLOCKS_TYPE		2
 
 /* fs zone */
 #define SCOUTFS_INODE_TYPE			1
@@ -312,59 +314,22 @@ struct scoutfs_segment_block {
 #define SCOUTFS_READDIR_TYPE			4
 #define SCOUTFS_LINK_BACKREF_TYPE		5
 #define SCOUTFS_SYMLINK_TYPE			6
-#define SCOUTFS_BLOCK_MAPPING_TYPE		7
+#define SCOUTFS_FILE_EXTENT_TYPE		7
 #define SCOUTFS_ORPHAN_TYPE			8
 
 #define SCOUTFS_MAX_TYPE			16 /* power of 2 is efficient */
 
-/* each mapping item describes a fixed number of blocks */
-#define SCOUTFS_BLOCK_MAPPING_SHIFT	6
-#define SCOUTFS_BLOCK_MAPPING_BLOCKS	(1 << SCOUTFS_BLOCK_MAPPING_SHIFT)
-#define SCOUTFS_BLOCK_MAPPING_MASK	(SCOUTFS_BLOCK_MAPPING_BLOCKS - 1)
-
 /*
- * The mapping item value is a byte stream that encodes the value of the
- * mapped blocks.  The first byte contains the last index that contains
- * a mapped block in its low bits.  The high bits contain the control
- * bits for the first (and possibly only) mapped block.
- *
- * From then on we consume the control bits in the current control byte
- * for each mapped block.  Each block has two bits that describe the
- * block: zero, incremental from previous block, delta encoded, and
- * offline.  If we run out of control bits then we consume the next byte
- * in the stream for additional control bits.  If we have a delta
- * encoded block then we consume its encoded bytes from the byte stream.
+ * File extents have more data than easily fits in the key so we move
+ * the non-indexed fields into the value.
  */
-
-#define SCOUTFS_BLOCK_ENC_ZERO		0
-#define SCOUTFS_BLOCK_ENC_INC		1
-#define SCOUTFS_BLOCK_ENC_DELTA		2
-#define SCOUTFS_BLOCK_ENC_OFFLINE	3
-#define SCOUTFS_BLOCK_ENC_MASK		3
-
-#define SCOUTFS_ZIGZAG_MAX_BYTES	(DIV_ROUND_UP(64, 7))
-
-/*
- * the largest block mapping has: nr byte, ctl bytes for all blocks, and
- * worst case zigzag encodings for all blocks.
- */
-#define SCOUTFS_BLOCK_MAPPING_MAX_BYTES			\
-	(1 + (SCOUTFS_BLOCK_MAPPING_BLOCKS / 4) +		\
-	 (SCOUTFS_BLOCK_MAPPING_BLOCKS * SCOUTFS_ZIGZAG_MAX_BYTES))
-
-/* free bit bitmaps contain a segment's worth of blocks */
-#define SCOUTFS_FREE_BITS_SHIFT	\
-	SCOUTFS_SEGMENT_BLOCK_SHIFT
-#define SCOUTFS_FREE_BITS_BITS	\
-	(1 << SCOUTFS_FREE_BITS_SHIFT)
-#define SCOUTFS_FREE_BITS_MASK	\
-	(SCOUTFS_FREE_BITS_BITS - 1)
-#define SCOUTFS_FREE_BITS_U64S \
-	DIV_ROUND_UP(SCOUTFS_FREE_BITS_BITS, 64)
-
-struct scoutfs_free_bits {
-	__le64 bits[SCOUTFS_FREE_BITS_U64S];
+struct scoutfs_file_extent {
+	__le64 blkno;
+	__le64 len;
+	__u8 flags;
 } __packed;
+
+#define SEF_OFFLINE	0x1
 
 /*
  * The first xattr part item has a header that describes the xattr.  The
@@ -509,7 +474,6 @@ enum {
 	SCOUTFS_DT_WHT,
 };
 
-#define SCOUTFS_MAX_VAL_SIZE SCOUTFS_BLOCK_MAPPING_MAX_BYTES
 
 #define SCOUTFS_XATTR_MAX_NAME_LEN	255
 #define SCOUTFS_XATTR_MAX_VAL_LEN	65535
@@ -518,6 +482,8 @@ enum {
 #define SCOUTFS_XATTR_NR_PARTS(name_len, val_len)			\
 	DIV_ROUND_UP(sizeof(struct scoutfs_xattr) + name_len + val_len, \
 		     SCOUTFS_XATTR_MAX_PART_SIZE);
+
+#define SCOUTFS_MAX_VAL_SIZE	SCOUTFS_XATTR_MAX_PART_SIZE
 
 /*
  * structures used by dlm

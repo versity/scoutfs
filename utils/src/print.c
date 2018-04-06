@@ -161,30 +161,30 @@ static void print_symlink(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->sks_ino), le64_to_cpu(key->sks_nr), name);
 }
 
-/*
- * XXX not decoding the bytes yet
- */
-static void print_block_mapping(struct scoutfs_key *key, void *val, int val_len)
+static void print_file_extent(struct scoutfs_key *key, void *val, int val_len)
 {
-	u64 blk_off = le64_to_cpu(key->skm_base) << SCOUTFS_BLOCK_MAPPING_SHIFT;
-	u8 nr = *((u8 *)val) & 63;
+	struct scoutfs_file_extent *fex = val;
+	u64 iblock = le64_to_cpu(key->skfe_last) - le64_to_cpu(fex->len) + 1;
 
-	printf("      block mapping: ino %llu blk_off %llu blocks %u\n",
-	       le64_to_cpu(key->skm_ino), blk_off, nr);
+	printf("      extent: ino %llu (last %llu) iblock %llu len %llu "
+	       "blkno %llu flags 0x%x\n",
+	       le64_to_cpu(key->skfe_ino), le64_to_cpu(key->skfe_last),
+	       iblock, le64_to_cpu(fex->len), le64_to_cpu(fex->blkno),
+	       fex->flags);
 }
 
-static void print_free_bits(struct scoutfs_key *key, void *val, int val_len)
+static void print_free_extent(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_free_bits *frb = val;
-	int i;
+	u64 start = le64_to_cpu(key->sknf_major);
+	u64 len = le64_to_cpu(key->sknf_minor);
+	if (key->sk_type == SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
+		swap(start, len);
+	start -= (len - 1);
 
-	printf("      node_id %llx base %llu\n",
-	       le64_to_cpu(key->skf_node_id), le64_to_cpu(key->skf_base));
-
-	printf("      bits:");
-	for (i = 0; i < array_size(frb->bits); i++)
-		printf(" %016llx", le64_to_cpu(frb->bits[i]));
-	printf("\n");
+	printf("      free extent: major %llu minor %llu (start %llu "
+	       "len %llu)\n",
+	       le64_to_cpu(key->sknf_major), le64_to_cpu(key->sknf_minor),
+	       start, len);
 }
 
 static void print_inode_index(struct scoutfs_key *key, void *val, int val_len)
@@ -203,9 +203,9 @@ static print_func_t find_printer(u8 zone, u8 type)
 		return print_inode_index;
 
 	if (zone == SCOUTFS_NODE_ZONE) {
-		if (type == SCOUTFS_FREE_BITS_SEGNO_TYPE ||
-		    type == SCOUTFS_FREE_BITS_BLKNO_TYPE)
-			return print_free_bits;
+		if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE ||
+		    type == SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
+			return print_free_extent;
 		if (type == SCOUTFS_ORPHAN_TYPE)
 			return print_orphan;
 	}
@@ -218,8 +218,7 @@ static print_func_t find_printer(u8 zone, u8 type)
 			case SCOUTFS_READDIR_TYPE: return print_dirent;
 			case SCOUTFS_SYMLINK_TYPE: return print_symlink;
 			case SCOUTFS_LINK_BACKREF_TYPE: return print_dirent;
-			case SCOUTFS_BLOCK_MAPPING_TYPE:
-				return print_block_mapping;
+			case SCOUTFS_FILE_EXTENT_TYPE: return print_file_extent;
 		}
 	}
 
