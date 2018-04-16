@@ -193,8 +193,8 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	/* require space for one segment */
-	limit = SCOUTFS_SEGMENT_SIZE * 2;
+	/* arbitrarily require space for a handful of segments */
+	limit = SCOUTFS_SEGMENT_SIZE * 16;
 	if (size < limit) {
 		fprintf(stderr, "%llu byte device too small for min %llu byte fs\n",
 			size, limit);
