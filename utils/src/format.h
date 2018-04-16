@@ -236,17 +236,17 @@ struct scoutfs_manifest_btree_val {
 	struct scoutfs_key last_key;
 } __packed;
 
-#define SCOUTFS_ALLOC_REGION_SHIFT 8
-#define SCOUTFS_ALLOC_REGION_BITS (1 << SCOUTFS_ALLOC_REGION_SHIFT)
-#define SCOUTFS_ALLOC_REGION_MASK (SCOUTFS_ALLOC_REGION_BITS - 1)
-
-struct scoutfs_alloc_region_btree_key {
-	__be64 index;
-} __packed;
-
-/* The bits need to be aligned so that the hosts can use native long bit ops */
-struct scoutfs_alloc_region_btree_val {
-	__le64 bits[SCOUTFS_ALLOC_REGION_BITS / 64];
+/*
+ * Free extents are stored in the server in an allocation btree.  The
+ * type differentiates whether start or length is in stored in the major
+ * value and is the primary sort key.  'start' is set to the final block
+ * in the extent so that overlaping queries can be done with next
+ * instead prev.
+ */
+struct scoutfs_extent_btree_key {
+	__u8 type;
+	__be64 major;
+	__be64 minor;
 } __packed;
 
 /*
@@ -303,7 +303,7 @@ struct scoutfs_segment_block {
 #define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	2
 #define SCOUTFS_INODE_INDEX_NR			3 /* don't forget to update */
 
-/* node zone */
+/* node zone (also used in server alloc btree) */
 #define SCOUTFS_FREE_EXTENT_BLKNO_TYPE		1
 #define SCOUTFS_FREE_EXTENT_BLOCKS_TYPE		2
 
@@ -367,9 +367,9 @@ struct scoutfs_super_block {
 	__u8 uuid[SCOUTFS_UUID_BYTES];
 	__le64 next_ino;
 	__le64 next_seq;
-	__le64 alloc_uninit;
-	__le64 total_segs;
-	__le64 free_segs;
+	__le64 total_blocks;
+	__le64 free_blocks;
+	__le64 alloc_cursor;
 	struct scoutfs_btree_ring bring;
 	__le64 next_seg_seq;
 	struct scoutfs_btree_root alloc_root;
@@ -555,18 +555,10 @@ struct scoutfs_net_manifest_entry {
 	__u8 keys[0];
 } __packed;
 
-/* XXX I dunno, totally made up */
-#define SCOUTFS_BULK_ALLOC_COUNT 32
-
-struct scoutfs_net_segnos {
-	__le16 nr;
-	__le64 segnos[0];
-} __packed;
-
 struct scoutfs_net_statfs {
-	__le64 total_segs;		/* total segments in device */
+	__le64 total_blocks;		/* total blocks in device */
 	__le64 next_ino;		/* next unused inode number */
-	__le64 bfree;			/* total free small blocks */
+	__le64 bfree;			/* free blocks */
 	__u8 uuid[SCOUTFS_UUID_BYTES];	/* logical volume uuid */
 } __packed;
 
@@ -582,9 +574,9 @@ struct scoutfs_net_statfs {
 
 enum {
 	SCOUTFS_NET_ALLOC_INODES = 0,
+	SCOUTFS_NET_ALLOC_EXTENT,
 	SCOUTFS_NET_ALLOC_SEGNO,
 	SCOUTFS_NET_RECORD_SEGMENT,
-	SCOUTFS_NET_BULK_ALLOC,
 	SCOUTFS_NET_ADVANCE_SEQ,
 	SCOUTFS_NET_GET_LAST_SEQ,
 	SCOUTFS_NET_GET_MANIFEST_ROOT,

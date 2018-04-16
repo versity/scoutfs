@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <assert.h>
 
 #include "sparse.h"
 #include "cmd.h"
@@ -94,20 +95,27 @@ static u64 calc_btree_blocks(u64 nr, u64 max_key, u64 max_val)
 
 /*
  * Figure out how many btree ring blocks we'll need for all the btree
- * items that could be needed to describe this many segments.  The
- * allocator regions are nice and dense but the manifest entries can be
- * absolutely enormous.
+ * items that could be needed to describe this many segments.
+ *
+ * We can have either a free extent or manifest ref for every segment in
+ * the system.  Free extent items are smaller than manifest refs, and
+ * they merge if they're adjacent, so the largest possible tree is a ref
+ * for every segment.
  */
 static u64 calc_btree_ring_blocks(u64 total_segs)
 {
 	u64 blocks;
 
-	blocks = calc_btree_blocks(DIV_ROUND_UP(total_segs,
-						SCOUTFS_ALLOC_REGION_BITS),
-				   sizeof(struct scoutfs_alloc_region_btree_key),
-				   sizeof(struct scoutfs_alloc_region_btree_val));
+	/* key is smaller for wider parent fanout */
+	assert(sizeof(struct scoutfs_extent_btree_key) <=
+		     sizeof(struct scoutfs_manifest_btree_key));
 
-	blocks += calc_btree_blocks(total_segs,
+	/* 2 extent items is smaller than a manifest ref */
+	assert((2 * sizeof(struct scoutfs_extent_btree_key)) <=
+	       (sizeof(struct scoutfs_manifest_btree_key) +
+		sizeof(struct scoutfs_manifest_btree_val)));
+
+	blocks = calc_btree_blocks(total_segs,
 				sizeof(struct scoutfs_manifest_btree_key),
 				sizeof(struct scoutfs_manifest_btree_val));
 
@@ -158,6 +166,7 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_segment_block *sblk;
 	struct scoutfs_manifest_btree_key *mkey;
 	struct scoutfs_manifest_btree_val *mval;
+	struct scoutfs_extent_btree_key *ebk;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *btitem;
 	struct scoutfs_segment_item *item;
@@ -170,7 +179,10 @@ static int write_new_fs(char *path, int fd)
 	u64 size;
 	u64 ring_blocks;
 	u64 total_segs;
+	u64 total_blocks;
 	u64 first_segno;
+	u64 free_start;
+	u64 free_len;
 	int ret;
 	u64 i;
 
@@ -202,6 +214,7 @@ static int write_new_fs(char *path, int fd)
 	}
 
 	total_segs = size / SCOUTFS_SEGMENT_SIZE;
+	total_blocks = size / SCOUTFS_BLOCK_SIZE;
 
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SIZE);
@@ -212,7 +225,7 @@ static int write_new_fs(char *path, int fd)
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->next_seq = cpu_to_le64(1);
-	super->total_segs = cpu_to_le64(total_segs);
+	super->total_blocks = cpu_to_le64(total_blocks);
 	super->next_seg_seq = cpu_to_le64(2);
 
 	/* align the btree ring to the segment after the supers */
@@ -221,16 +234,57 @@ static int write_new_fs(char *path, int fd)
 	/* first usable segno follows manifest ring */
 	ring_blocks = calc_btree_ring_blocks(total_segs);
 	first_segno = (blkno + ring_blocks) / SCOUTFS_SEGMENT_BLOCKS;
+	free_start = ((first_segno + 1) << SCOUTFS_SEGMENT_BLOCK_SHIFT);
+	free_len = total_blocks - free_start;
 
+	super->free_blocks = cpu_to_le64(free_len);
 	super->bring.first_blkno = cpu_to_le64(blkno);
 	super->bring.nr_blocks = cpu_to_le64(ring_blocks);
-	super->bring.next_block = cpu_to_le64(1);
+	super->bring.next_block = cpu_to_le64(2);
 	super->bring.next_seq = cpu_to_le64(2);
 
-	/* allocator btree is empty, allocations start from super fields */
-	super->alloc_root.ref.blkno = cpu_to_le64(0);
-	super->alloc_root.ref.seq = cpu_to_le64(0);
-	super->alloc_root.height = 0;
+	/* allocator btree has item with space after first segno */
+	super->alloc_root.ref.blkno = cpu_to_le64(blkno);
+	super->alloc_root.ref.seq = cpu_to_le64(1);
+	super->alloc_root.height = 1;
+
+	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
+	bt->fsid = super->hdr.fsid;
+	bt->blkno = cpu_to_le64(blkno);
+	bt->seq = cpu_to_le64(1);
+	bt->nr_items = cpu_to_le16(2);
+
+	/* btree item allocated from the back of the block */
+	ebk = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*ebk);
+	btitem = (void *)ebk - sizeof(*btitem);
+
+	bt->item_hdrs[0].off = cpu_to_le16((long)btitem - (long)bt);
+	bt->free_end = bt->item_hdrs[0].off;
+	btitem->key_len = cpu_to_le16(sizeof(*ebk));
+	btitem->val_len = cpu_to_le16(0);
+
+	ebk->type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+	ebk->major = cpu_to_be64(free_start + free_len - 1);
+	ebk->minor = cpu_to_be64(free_len);
+
+	ebk = (void *)btitem - sizeof(*ebk);
+	btitem = (void *)ebk - sizeof(*btitem);
+
+	bt->item_hdrs[1].off = cpu_to_le16((long)btitem - (long)bt);
+	bt->free_end = bt->item_hdrs[1].off;
+	btitem->key_len = cpu_to_le16(sizeof(*ebk));
+	btitem->val_len = cpu_to_le16(0);
+
+	ebk->type = SCOUTFS_FREE_EXTENT_BLOCKS_TYPE;
+	ebk->major = cpu_to_be64(free_len);
+	ebk->minor = cpu_to_be64(free_start + free_len - 1);
+
+	bt->crc = cpu_to_le32(crc_btree_block(bt));
+
+	ret = write_raw_block(fd, blkno, bt);
+	if (ret)
+		goto out;
+	blkno++;
 
 	/* manifest btree has a block with an item for the segment */
 	super->manifest.root.ref.blkno = cpu_to_le64(blkno);
@@ -275,10 +329,6 @@ static int write_new_fs(char *path, int fd)
 	if (ret)
 		goto out;
 	blkno += ring_blocks;
-
-	/* alloc from uninit, don't need regions yet */
-	super->alloc_uninit = cpu_to_le64(first_segno + 1);
-	super->free_segs = cpu_to_le64(total_segs - (first_segno + 1));
 
 	/* write seg with root inode */
 	sblk->segno = cpu_to_le64(first_segno);
@@ -359,17 +409,19 @@ static int write_new_fs(char *path, int fd)
 	       "  format hash:        %llx\n"
 	       "  uuid:               %s\n"
 	       "  device bytes:	      "SIZE_FMT"\n"
+	       "  device blocks:      "SIZE_FMT"\n"
 	       "  btree ring blocks:  "SIZE_FMT"\n"
-	       "  usable segments:    "SIZE_FMT"\n",
+	       "  free blocks:        "SIZE_FMT"\n",
 		path,
 		le64_to_cpu(super->hdr.fsid),
 		le64_to_cpu(super->format_hash),
 		uuid_str,
 		SIZE_ARGS(size, 1),
+		SIZE_ARGS(total_blocks, SCOUTFS_BLOCK_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->bring.nr_blocks),
 			  SCOUTFS_BLOCK_SIZE),
-		SIZE_ARGS(le64_to_cpu(super->free_segs) + 1,
-			  SCOUTFS_SEGMENT_SIZE));
+		SIZE_ARGS(le64_to_cpu(super->free_blocks),
+			  SCOUTFS_BLOCK_SIZE));
 
 	ret = 0;
 out:

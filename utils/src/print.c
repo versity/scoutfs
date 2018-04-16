@@ -317,23 +317,24 @@ static int print_manifest_entry(void *key, unsigned key_len, void *val,
 	return 0;
 }
 
-static int print_alloc_region(void *key, unsigned key_len, void *val,
-			      unsigned val_len, void *arg)
+static int print_alloc_item(void *key, unsigned key_len, void *val,
+			    unsigned val_len, void *arg)
 {
-	struct scoutfs_alloc_region_btree_key *reg_key = key;
-	struct scoutfs_alloc_region_btree_val *reg_val = val;
-	int i;
+	struct scoutfs_extent_btree_key *ebk = key;
+	u64 start;
+	u64 len;
 
 	/* XXX check sizes */
 
-	printf("    index %llu bits", be64_to_cpu(reg_key->index));
+	len = be64_to_cpu(ebk->minor);
+	start = be64_to_cpu(ebk->major);
+	if (ebk->type == SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
+		swap(start, len);
+	start -= len - 1;
 
-	if (val == NULL)
-		return 0;
-
-	for (i = 0; i < array_size(reg_val->bits); i++)
-		printf(" %016llx", le64_to_cpu(reg_val->bits[i]));
-	printf("\n");
+	printf("    type %u major %llu minor %llu (start %llu len %llu)\n",
+			ebk->type, be64_to_cpu(ebk->major),
+			be64_to_cpu(ebk->minor), start, len);
 
 	return 0;
 }
@@ -456,7 +457,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_seq %llu next_seg_seq %llu\n"
-	       "  alloc_uninit %llu total_segs %llu free_segs %llu\n"
+	       "  total_blocks %llu free_blocks %llu alloc_cursor %llu\n"
 	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
 	       "next_seq %llu\n"
 	       "  alloc btree root: height %u blkno %llu seq %llu mig_len %u\n"
@@ -464,9 +465,9 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->next_seq),
 		le64_to_cpu(super->next_seg_seq),
-		le64_to_cpu(super->alloc_uninit),
-		le64_to_cpu(super->total_segs),
-		le64_to_cpu(super->free_segs),
+		le64_to_cpu(super->total_blocks),
+		le64_to_cpu(super->free_blocks),
+		le64_to_cpu(super->alloc_cursor),
 		le64_to_cpu(super->bring.first_blkno),
 		le64_to_cpu(super->bring.nr_blocks),
 		le64_to_cpu(super->bring.next_block),
@@ -494,6 +495,7 @@ static int print_super_blocks(int fd)
 	struct scoutfs_super_block *super;
 	struct scoutfs_super_block recent = { .hdr.seq = 0 };
 	unsigned long *seg_map;
+	u64 nr_segs;
 	int ret = 0;
 	int err;
 	int i;
@@ -516,24 +518,24 @@ static int print_super_blocks(int fd)
 
 	print_super_block(super, SCOUTFS_SUPER_BLKNO + r);
 
-	seg_map = alloc_bits(le64_to_cpu(super->total_segs));
+	nr_segs = le64_to_cpu(super->total_blocks) / SCOUTFS_SEGMENT_BLOCKS;
+	seg_map = alloc_bits(nr_segs);
 	if (!seg_map) {
 		ret = -ENOMEM;
 		fprintf(stderr, "failed to alloc %llu seg map: %s (%d)\n",
-			le64_to_cpu(super->total_segs),
-			strerror(errno), errno);
+			nr_segs, strerror(errno), errno);
 		return ret;
 	}
 
 	ret = print_btree(fd, super, "alloc", &super->alloc_root,
-			  print_alloc_region, NULL);
+			  print_alloc_item, NULL);
 
 	err = print_btree(fd, super, "manifest", &super->manifest.root,
 			  print_manifest_entry, seg_map);
 	if (err && !ret)
 		ret = err;
 
-	err = print_segments(fd, seg_map, le64_to_cpu(super->total_segs));
+	err = print_segments(fd, seg_map, nr_segs);
 	if (err && !ret)
 		ret = err;
 
