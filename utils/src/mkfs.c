@@ -408,7 +408,7 @@ static int write_new_fs(char *path, int fd)
 	       "  fsid:               %llx\n"
 	       "  format hash:        %llx\n"
 	       "  uuid:               %s\n"
-	       "  device bytes:	      "SIZE_FMT"\n"
+	       "  device bytes:       "SIZE_FMT"\n"
 	       "  device blocks:      "SIZE_FMT"\n"
 	       "  btree ring blocks:  "SIZE_FMT"\n"
 	       "  free blocks:        "SIZE_FMT"\n",
