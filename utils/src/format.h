@@ -645,4 +645,21 @@ struct scoutfs_fid {
 #define FILEID_SCOUTFS			0x81
 #define FILEID_SCOUTFS_WITH_PARENT	0x82
 
+/*
+ * Identifiers for sources of corruption that can generate messages.
+ */
+enum {
+	SC_DIRENT_NAME_LEN = 0,
+	SC_DIRENT_BACKREF_NAME_LEN,
+	SC_DIRENT_READDIR_NAME_LEN,
+	SC_SYMLINK_INODE_SIZE,
+	SC_SYMLINK_MISSING_ITEM,
+	SC_SYMLINK_NOT_NULL_TERM,
+	SC_BTREE_BLOCK_LEVEL,
+	SC_BTREE_NO_CHILD_REF,
+	SC_NR_SOURCES,
+};
+
+#define SC_NR_LONGS DIV_ROUND_UP(SC_NR_SOURCES, BITS_PER_LONG)
+
 #endif

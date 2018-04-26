@@ -1,0 +1,169 @@
+.TH scoutfs-corruption 7
+.SH NAME
+scoutfs-corruption \- corruption message details
+.SH DESCRIPTION
+If scoutfs detects corruption during operation it will output an error
+message describing the corruption.  This document gives details of the
+corruption described by the messages.
+.SH CORRUPTION MESSAGE IDENTIFIERS
+.TP
+.B SC_DIRENT_NAME_LEN
+A directory entry with an invalid name length was found during lookup.
+
+Directory entries are stored in the values of metadata items.  The item
+value contains a small header and the full entry name.  The length of
+the entry name is calculated by substracting the size of the header from
+the length of the item value.  This corruption is detected if the length
+of the calculated name length is invalid by being less than 1 or greater
+than 255.
+
+.BR dir_ino " - inode number of directory that contains the item"
+.br
+.BR hash " - hash value of search name"
+.br
+.BR key " - identifies the item with the invalid name length"
+.br
+.BR len " - the invalid calculaged name length"
+.sp
+.TP
+.B SC_DIRENT_READDIR_NAME_LEN
+A directory entry with an invalid name length was found during readdir.
+
+This corruption is very similar to
+.B SC_DIRENT_NAME_LEN
+except that the corruption is discovered during readdir instead of
+lookup.  The readdir search key is formed from the file position instead
+of from the hashed name as in lookup.   The dirent structure stored in
+the item value is the same.
+
+.BR dir_ino " - inode number of directory that contains the item"
+.br
+.BR pos " - the file position readdir was searching from"
+.br
+.BR key " - identifies the item with the invalid name length"
+.br
+.BR len " - the invalid calculaged name length"
+.sp
+
+.TP
+.B SC_DIRENT_BACKREF_NAME_LEN
+A directory entry with an invalid name length was found while finding
+entries that point to an inode.
+
+This corruption is very similar to
+.B SC_DIRENT_NAME_LEN
+except that the
+corruption is discovered while finding entries that refer to a specific
+inode.  The search key is formed from the inode and position of the
+referring entry instead of from the hashed name as in lookup.   The
+dirent structure stored in the item value is the same.
+
+.BR ino " - target inode number we're finding entries to"
+.br
+.BR dir_ino " - inode number of directory containing entries to search"
+.br
+.BR pos " - position in directory containing entries to search"
+.br
+.BR key " - identifies the item with the invalid name length"
+.br
+.BR len " - the invalid calculaged name length"
+.sp
+
+.TP
+.B SC_SYMLINK_INODE_SIZE
+The items that contain a symlink target path weren't found.
+
+The target path of a symlink is stored in a series of metadata items.
+The number of items can be calculated from the size of the path.  While
+trying to resolve a symlink one of the items wasn't found.
+
+.BR ino " - inode number of the symlink with the invalid size"
+.br
+.BR size " - the invalid size found in the inode"
+.sp
+
+.TP
+.B SC_SYMLINK_MISSING_ITEM
+A symlink inode contained an invalid size.
+
+The i_size field of the inode that stores a symlink records the length
+of the path of the symlink target.  The path length can't be less than 1
+or greater than the max size which is around 4KiB.
+
+.BR ino " - inode number of the symlink with the invalid size"
+.br
+.BR size " - the length of the target path"
+.sp
+
+.TP
+.B SC_SYMLINK_NOT_NULL_TERM
+A symlink target path wasn't null terminated.
+
+The target path stored in a symlink's metadata items wasn't null
+terminated.
+
+.BR ino " - inode number of the symlink with the invalid size"
+.br
+.BR last " - the value of the final byte of the path"
+.sp
+
+.TP
+.B SC_BTREE_BLOCK_LEVEL
+A btree block's header did not contain the expected level field.
+
+The btree root stores the height of the btree and each btree block
+stores its level in the tree.  During descent the level is loaded from
+the root and decremented as each block is traveresed.  This corruption
+occurs when a btree block's level field didn't match the level that was
+being calculated during descent.
+
+.BR root_height " - height of the tree in the root"
+.br
+.BR root_blkno " - block number of the first block in the root"
+.br
+.BR root_seq " - sequence number of the first block in the root"
+.br
+.BR blkno " - block number of the block with mismatched level"
+.br
+.BR seq " - sequence number of the block with mismatched level"
+.br
+.BR level " - level of the block with mismatched level"
+.br
+.BR expected " - expected level that was calculated during descent"
+.sp
+
+.TP
+.B SC_BTREE_NO_CHILD_REF
+A btree parent block didn't have a child item for a key.
+
+Each child reference in a parent btree block contains the greatest key
+that will be stored in the subtree rooted in the child.  The child
+references down the right side of the tree must have a key that is
+greater than all possible keys.
+
+This corruption occurs during descent when the search key was greater
+than the last child reference's key.
+
+.BR root_height " - height of the tree in the root"
+.br
+.BR root_blkno " - block number of the first block in the root"
+.br
+.BR root_seq " - sequence number of the first block in the root"
+.br
+.BR blkno " - block number of the block with mismatched level"
+.br
+.BR seq " - sequence number of the block with mismatched level"
+.br
+.BR level " - level of the block with mismatched level"
+.br
+.BR nr " - number of items in the parent block"
+.br
+.BR pos " - child item index that search found"
+.br
+.BR cmp " - comparison of search key and found"
+.sp
+
+.SH AUTHORS
+Zach Brown <zab@versity.com>
+
+
