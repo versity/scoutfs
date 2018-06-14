@@ -18,6 +18,8 @@
 static int stage_cmd(int argc, char **argv)
 {
 	struct scoutfs_ioctl_stage args;
+	unsigned int buf_len = 1024 * 1024;
+	unsigned int bytes;
 	char *endptr = NULL;
 	char *buf = NULL;
 	int afd = -1;
@@ -82,33 +84,45 @@ static int stage_cmd(int argc, char **argv)
 		goto out;
 	}
 
-	buf = malloc(count);
+	buf = malloc(buf_len);
 	if (!buf) {
-		fprintf(stderr, "couldn't allocate %llu byte buffer\n",
-			count);
+		fprintf(stderr, "couldn't allocate %u byte buffer\n", buf_len);
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	ret = read(afd, buf, count);
-	if (ret < count) {
-		fprintf(stderr, "archive read returned %d, not %llu: error %s (%d)\n",
-			ret, count, strerror(errno), errno);
-		ret = -EIO;
-		goto out;
+	while (count) {
+
+		bytes = min(count, buf_len);
+
+		ret = read(afd, buf, bytes);
+		if (ret <= 0) {
+			fprintf(stderr, "archive read returned %d: error %s (%d)\n",
+				ret, strerror(errno), errno);
+			ret = -EIO;
+			goto out;
+		}
+
+		bytes = ret;
+
+		args.data_version = vers;
+		args.buf_ptr = (unsigned long)buf;
+		args.offset = offset;
+		args.count = bytes;
+
+		count -= bytes;
+		offset += bytes;
+
+		ret = ioctl(fd, SCOUTFS_IOC_STAGE, &args);
+		if (ret != bytes) {
+			fprintf(stderr, "stage returned %d, not %u: error %s (%d)\n",
+				ret, bytes, strerror(errno), errno);
+			ret = -EIO;
+			goto out;
+		}
 	}
 
-	args.data_version = vers;
-	args.buf_ptr = (unsigned long)buf;
-	args.offset = offset;
-	args.count = count;
-
-	ret = ioctl(fd, SCOUTFS_IOC_STAGE, &args);
-	if (ret < count) {
-		fprintf(stderr, "stage returned %d, not %llu: error %s (%d)\n",
-			ret, count, strerror(errno), errno);
-		ret = -EIO;
-	}
+	ret = 0;
 out:
 	free(buf);
 	if (fd > -1)
