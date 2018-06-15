@@ -164,7 +164,7 @@ than the last child reference's key.
 .sp
 
 .TP
-.B SC_EXTENT_ADD_CLEANUP, SC_EXTENT_REM_CLEANUP, SC_DATA_EXTENT_TRUNC_CLEANUP, SC_DATA_EXTENT_ALLOC_CLEANUP, SC_SERVER_EXTENT_CLEANUP
+.B SC_EXTENT_ADD_CLEANUP, SC_EXTENT_REM_CLEANUP, SC_DATA_EXTENT_TRUNC_CLEANUP, SC_DATA_EXTENT_ALLOC_CLEANUP, SC_DATA_EXTENT_FALLOCATE_CLEANUP, SC_SERVER_EXTENT_CLEANUP
 
 Extents are used to track regions of blocks or files.  The process of
 modifying an extent creates and destroys intermediate extents, for
@@ -188,9 +188,10 @@ removing extents.
 The
 .I
 _DATA_EXTENT_
-cases occur in file mapping extents while either truncating (removing)
-extents from a file or while allocating extents for a newly written
-region of a file.
+cases occur in file mapping extents while truncating (removing)
+extents from a file, while allocating extents for a newly written
+region of a file, or while using fallocate to pre-allocate extents
+to the file.
 
 The
 .I
