@@ -1,0 +1,221 @@
+% This was derived from the usenix templates, whose introductory
+% comment is as follows:
+%
+% TEMPLATE for Usenix papers, specifically to meet requirements of
+%  USENIX '05
+% originally a template for producing IEEE-format articles using LaTeX.
+%   written by Matthew Ward, CS Department, Worcester Polytechnic Institute.
+% adapted by David Beazley for his excellent SWIG paper in Proceedings,
+%   Tcl 96
+% turned into a smartass generic template by De Clarke, with thanks to
+%   both the above pioneers
+% use at your own risk.  Complaints to /dev/null.
+% make it two column with no page numbering, default is 10 point
+
+% Munged by Fred Douglis <douglis@research.att.com> 10/97 to separate
+% the .sty file from the LaTeX source template, so that people can
+% more easily include the .sty file into an existing document.  Also
+% changed to more closely follow the style guidelines as represented
+% by the Word sample file. 
+
+% Note that since 2010, USENIX does not require endnotes. If you want
+% foot of page notes, don't include the endnotes package in the 
+% usepackage command, below.
+
+% This version uses the latex2e styles, not the very ancient 2.09 stuff.
+\documentclass[letterpaper,twocolumn,10pt]{article}
+\usepackage{usenix2019,epsfig}
+\begin{document}
+
+%don't want date printed
+\date{}
+
+%make title bold and 14 pt font (Latex default is non-bold, 16 pt)
+\title{\Large \bf scoutfs : A Scalable Archival Filesystem}
+
+%for single author (just remove % characters)
+\author{
+{\rm Zach Brown}\\
+Versity Software, Inc.
+}
+
+\maketitle
+
+% Use the following at camera-ready time to suppress page numbers.
+% Comment it out when you first submit the paper for review.
+% \thispagestyle{empty}
+
+\section{Metadata Items}
+
+scoutfs stores filesystem metadata in items that are identified by a
+key and contain a variable length value payload.\\
+
+Every key uses a generic structure with a fixed number of fields.
+
+{\tt \small
+\begin{verbatim}
+struct scoutfs_key {
+        __u8    sk_zone;
+        __le64  _sk_first;
+        __u8    sk_type;
+        __le64  _sk_second;
+        __le64  _sk_third;
+        __u8    _sk_fourth;
+};
+\end{verbatim}
+}
+
+Using a shared key struct lets us sort all the metadata items in the
+filesystem in one key space regardless of their form or function.  The
+generic keys are displayed, sorted, and computed (incrementing, finding
+difference) without needing to know the specific fields of each item
+type.
+
+Different structures are identified by their zone and type pair.  They
+then map their type's fields to the remaining generic fields to
+determine the sorting of the item keys within their type.
+
+For example, when storing inodes we use the {\tt SCOUTFS\_FS\_ZONE} and
+{\tt SCOUTFS\_INODE\_TYPE} and put the inode number in the first generic
+key field.
+
+{\tt \small
+\begin{verbatim}
+        #define ski_ino _sk_first
+\end{verbatim}
+}
+
+{\tt \small
+\begin{verbatim}
+        key.sk_zone = SCOUTFS_FS_ZONE;
+        key.ski_ino = ino;
+        key.sk_type = SCOUTFS_INODE_TYPE;
+\end{verbatim}
+}
+
+Continuing this example, metadata that is associated with inodes also
+use the {\tt SCOUTFS\_FS\_ZONE} and store the inode number in {\tt
+\_sk\_first} but then have different type values.  For example {\tt
+SCOUTFS\_XATTR\_TYPE} or {\tt SCOUTFS\_SYMLINK\_TYPE}.  When the items'
+keys are sorted we end up with all the items for a given inode stored
+near each other.
+
+\subsection{Directory Entries}
+
+A directory entry is stored in three different metadata items, each with
+a different key and used for a different purpose.  Each item shares the
+same key format and directory entry value payload, however.
+
+The key stores the entry's directory inode number and major and minor
+values associated with the type of directory entry being stored.
+
+{\tt \small
+\begin{verbatim}
+        #define skd_ino         _sk_first
+        #define skd_major       _sk_second
+        #define skd_minor       _sk_third
+\end{verbatim}
+}
+
+The value contains a directory entry struct with all the metadata
+associated with a directory entry, including the full entry name.
+
+{\tt \small
+\begin{verbatim}
+struct scoutfs_dirent {
+        __le64 ino;
+        __le64 hash;
+        __le64 pos;
+        __u8 type;
+        __u8 name[0];
+};
+\end{verbatim}
+}
+
+Each item contains a full copy of the item value.  This duplicates
+storage across each item type but also lets each operation be satisfied
+by one item lookup.  Once the item value is obtained its fields can be
+used to construct the keys for each of the items associated with the
+entry.
+
+\subsubsection{Directory Entry Lookup Items}
+
+{\tt \small
+\begin{verbatim}
+        key.sk_zone = SCOUTFS_FS_ZONE;
+        key.skd_ino = dir_ino;
+        key.sk_type = SCOUTFS_DIRENT_TYPE;
+        key.skd_major = hash(entry_name);
+        key.skd_minor = dir_pos;
+\end{verbatim}
+}
+
+Lookup entries are stored in the parent directory at the hash of the
+name of the entry.  These entries are used to map names to inode numbers
+during path traversal.
+
+The major key value is set to a 64bit hash of the file name.  These hash
+values can collide so the minor key value is set to the readdir position
+in the directory of the entry.  This readdir position is unique for
+every entry and ensures that keys are unique when hash values collide.
+
+A name lookup is performed by iterating over all the keys with the major
+that matches the hashed name.  The full name in the dirent value struct
+is compared to the search name.  It will be very rare to have more than
+one item with a given hash value.
+
+\subsubsection{Directory Entry Readdir Items}
+
+{\tt \small
+\begin{verbatim}
+        key.sk_zone = SCOUTFS_FS_ZONE;
+        key.skd_ino = dir_ino;
+        key.sk_type = SCOUTFS_READDIR_TYPE;
+        key.skd_major = dir_pos;
+        key.skd_minor = 0;
+\end{verbatim}
+}
+
+Readdir entries are used to iterate over entries for the readdir()
+call.  By providing a unique 64bit {\tt dir\_pos} for each entry we avoid
+having to track multiple entries for a given readdir position value.
+
+readdir() returns entries in {\tt dir\_pos} order which depends on entry
+creation order and matches inode allocation order.  Accessing the inodes
+that are referenced by the entries returned from readdir() will result
+in efficient forward iteration over the readdir and inode items,
+assuming that files were simply created.
+
+Renaming files or creating hard links to existing files creates a new
+entry but can't reassign the inode number and can result in mismatched
+access patterns of the readdir entry items and the inode items.
+
+\subsubsection{Directory Entry Link Backref Items}
+
+{\tt \small
+\begin{verbatim}
+        key.sk_zone = SCOUTFS_FS_ZONE;
+        key.skd_ino = target_ino;
+        key.sk_type = SCOUTFS_LINK_BACKREF_TYPE;
+        key.skd_major = dir_ino;
+        key.skd_minor = dir_pos;
+\end{verbatim}
+}
+
+Link backref entry items are stored with the target inode number and the
+inode number and readdir position of the entry in its directory.
+They're used to iterate over all the entries that refer to a given
+inode.  Full relative paths from the root directory to a target inode
+can be constructed by walking up through each parent entry as its
+discovered.
+
+Both inode numbers and readdir positions are allocated by strictly
+increasing the next free number.  Old inode numbers or readdir positions
+are never reused.  This means that resolving paths for existing inodes
+will always walk keys that are strictly sorted less than the keys that
+will be created as new files are created.  This tends to isolate read
+access patterns during backround archival policy processing from write
+access patterns during new file creation and increases performance by
+reducing contention.
+
+\end{document}

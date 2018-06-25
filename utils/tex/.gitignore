@@ -1,0 +1,8 @@
+missfont.log
+*.fls
+*.aux
+*.d
+*.d
+*.fdb_latexmk
+*.log
+*.pdf
