@@ -37,16 +37,3 @@ u32 crc_block(struct scoutfs_block_header *hdr)
 	return crc32c(~0, (char *)hdr + sizeof(hdr->crc),
 		      SCOUTFS_BLOCK_SIZE - sizeof(hdr->crc));
 }
-
-u32 crc_btree_block(struct scoutfs_btree_block *bt)
-{
-	__le32 old;
-	u32 crc;
-
-	old = bt->crc;
-	bt->crc = 0;
-	crc = crc32c(~0, bt, SCOUTFS_BLOCK_SIZE);
-	bt->crc = old;
-
-	return crc;
-}

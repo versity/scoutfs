@@ -184,7 +184,6 @@ static int write_new_fs(char *path, int fd)
 	u64 free_start;
 	u64 free_len;
 	int ret;
-	u64 i;
 
 	gettimeofday(&tv, NULL);
 
@@ -228,9 +227,8 @@ static int write_new_fs(char *path, int fd)
 	super->total_blocks = cpu_to_le64(total_blocks);
 	super->next_seg_seq = cpu_to_le64(2);
 
-	/* align the btree ring to the segment after the supers */
-	blkno = round_up(SCOUTFS_SUPER_BLKNO + SCOUTFS_SUPER_NR,
-			 SCOUTFS_SEGMENT_BLOCKS);
+	/* align the btree ring to the segment after the super */
+	blkno = round_up(SCOUTFS_SUPER_BLKNO + 1, SCOUTFS_SEGMENT_BLOCKS);
 	/* first usable segno follows manifest ring */
 	ring_blocks = calc_btree_ring_blocks(total_segs);
 	first_segno = (blkno + ring_blocks) / SCOUTFS_SEGMENT_BLOCKS;
@@ -249,9 +247,9 @@ static int write_new_fs(char *path, int fd)
 	super->alloc_root.height = 1;
 
 	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
-	bt->fsid = super->hdr.fsid;
-	bt->blkno = cpu_to_le64(blkno);
-	bt->seq = cpu_to_le64(1);
+	bt->hdr.fsid = super->hdr.fsid;
+	bt->hdr.blkno = cpu_to_le64(blkno);
+	bt->hdr.seq = cpu_to_le64(1);
 	bt->nr_items = cpu_to_le16(2);
 
 	/* btree item allocated from the back of the block */
@@ -279,7 +277,8 @@ static int write_new_fs(char *path, int fd)
 	ebk->major = cpu_to_be64(free_len);
 	ebk->minor = cpu_to_be64(free_start + free_len - 1);
 
-	bt->crc = cpu_to_le32(crc_btree_block(bt));
+	bt->hdr._pad = 0;
+	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
 
 	ret = write_raw_block(fd, blkno, bt);
 	if (ret)
@@ -293,9 +292,9 @@ static int write_new_fs(char *path, int fd)
 	super->manifest.level_counts[1] = cpu_to_le64(1);
 
 	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
-	bt->fsid = super->hdr.fsid;
-	bt->blkno = cpu_to_le64(blkno);
-	bt->seq = cpu_to_le64(1);
+	bt->hdr.fsid = super->hdr.fsid;
+	bt->hdr.blkno = cpu_to_le64(blkno);
+	bt->hdr.seq = cpu_to_le64(1);
 	bt->nr_items = cpu_to_le16(1);
 
 	/* btree item allocated from the back of the block */
@@ -323,7 +322,8 @@ static int write_new_fs(char *path, int fd)
 	ino_key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
 	ino_key->sk_type = SCOUTFS_INODE_TYPE;
 
-	bt->crc = cpu_to_le32(crc_btree_block(bt));
+	bt->hdr._pad = 0;
+	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
 
 	ret = write_raw_block(fd, blkno, bt);
 	if (ret)
@@ -385,14 +385,11 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
-	/* write the two super blocks */
-	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
-		super->hdr.seq = cpu_to_le64(i + 1);
-		ret = write_block(fd, SCOUTFS_SUPER_BLKNO + i, NULL,
-				  &super->hdr);
-		if (ret)
-			goto out;
-	}
+	/* write the super block */
+	super->hdr.seq = cpu_to_le64(1);
+	ret = write_block(fd, SCOUTFS_SUPER_BLKNO, NULL, &super->hdr);
+	if (ret)
+		goto out;
 
 	if (fsync(fd)) {
 		ret = -errno;

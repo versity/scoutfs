@@ -373,13 +373,13 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 
 	if (bt->level == level) {
 		printf("%s btree blkno %llu\n"
-		       "  fsid %llx blkno %llu seq %llu crc %08x \n"
+		       "  crc %08x fsid %llx seq %llu blkno %llu \n"
 		       "  level %u free_end %u free_reclaim %u nr_items %u\n",
 		       which, le64_to_cpu(ref->blkno),
-		       le64_to_cpu(bt->fsid),
-		       le64_to_cpu(bt->blkno),
-		       le64_to_cpu(bt->seq),
-		       le32_to_cpu(bt->crc),
+		       le32_to_cpu(bt->hdr.crc),
+		       le64_to_cpu(bt->hdr.fsid),
+		       le64_to_cpu(bt->hdr.seq),
+		       le64_to_cpu(bt->hdr.blkno),
 		       bt->level,
 		       le16_to_cpu(bt->free_end),
 		       le16_to_cpu(bt->free_reclaim),
@@ -490,33 +490,19 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("\n");
 }
 
-static int print_super_blocks(int fd)
+static int print_volume(int fd)
 {
-	struct scoutfs_super_block *super;
-	struct scoutfs_super_block recent = { .hdr.seq = 0 };
-	unsigned long *seg_map;
+	struct scoutfs_super_block *super = NULL;
+	unsigned long *seg_map = NULL;
 	u64 nr_segs;
 	int ret = 0;
 	int err;
-	int i;
-	int r = 0;
 
-	for (i = 0; i < SCOUTFS_SUPER_NR; i++) {
-		super = read_block(fd, SCOUTFS_SUPER_BLKNO + i);
-		if (!super)
-			return -ENOMEM;
+	super = read_block(fd, SCOUTFS_SUPER_BLKNO);
+	if (!super)
+		return -ENOMEM;
 
-		if (le64_to_cpu(super->hdr.seq) > le64_to_cpu(recent.hdr.seq)) {
-			memcpy(&recent, super, sizeof(recent));
-			r = i;
-		}
-
-		free(super);
-	}
-
-	super = &recent;
-
-	print_super_block(super, SCOUTFS_SUPER_BLKNO + r);
+	print_super_block(super, SCOUTFS_SUPER_BLKNO);
 
 	nr_segs = le64_to_cpu(super->total_blocks) / SCOUTFS_SEGMENT_BLOCKS;
 	seg_map = alloc_bits(nr_segs);
@@ -524,7 +510,7 @@ static int print_super_blocks(int fd)
 		ret = -ENOMEM;
 		fprintf(stderr, "failed to alloc %llu seg map: %s (%d)\n",
 			nr_segs, strerror(errno), errno);
-		return ret;
+		goto out;
 	}
 
 	ret = print_btree(fd, super, "alloc", &super->alloc_root,
@@ -539,6 +525,8 @@ static int print_super_blocks(int fd)
 	if (err && !ret)
 		ret = err;
 
+out:
+	free(super);
 	free(seg_map);
 
 	return ret;
@@ -564,7 +552,7 @@ static int print_cmd(int argc, char **argv)
 		return ret;
 	}
 
-	ret = print_super_blocks(fd);
+	ret = print_volume(fd);
 	close(fd);
 	return ret;
 };
