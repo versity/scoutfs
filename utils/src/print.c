@@ -457,7 +457,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_seq %llu next_seg_seq %llu\n"
-	       " next_node_id %llu\n"
+	       " next_node_id %llu next_compact_id %llu\n"
 	       "  total_blocks %llu free_blocks %llu alloc_cursor %llu\n"
 	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
 	       "next_seq %llu\n"
@@ -467,6 +467,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->next_seq),
 		le64_to_cpu(super->next_seg_seq),
 		le64_to_cpu(super->next_node_id),
+		le64_to_cpu(super->next_compact_id),
 		le64_to_cpu(super->total_blocks),
 		le64_to_cpu(super->free_blocks),
 		le64_to_cpu(super->alloc_cursor),

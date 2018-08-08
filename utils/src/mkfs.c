@@ -227,6 +227,7 @@ static int write_new_fs(char *path, int fd)
 	super->total_blocks = cpu_to_le64(total_blocks);
 	super->next_seg_seq = cpu_to_le64(2);
 	super->next_node_id = cpu_to_le64(1);
+	super->next_compact_id = cpu_to_le64(1);
 
 	/* align the btree ring to the segment after the super */
 	blkno = round_up(SCOUTFS_SUPER_BLKNO + 1, SCOUTFS_SEGMENT_BLOCKS);
