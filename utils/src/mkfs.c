@@ -377,6 +377,7 @@ static int write_new_fs(char *path, int fd)
 
 	item = (void *)(inode + 1);
 	sblk->total_bytes = cpu_to_le32((long)item - (long)sblk);
+	sblk->crc = cpu_to_le32(crc_segment(sblk));
 
 	ret = pwrite(fd, sblk, SCOUTFS_SEGMENT_SIZE,
 		     first_segno << SCOUTFS_SEGMENT_SHIFT);
