@@ -33,6 +33,22 @@ $(BIN): $(OBJ)
 	$(QU)  [SP $<]
 	$(VE)./sparse.sh -Wbitwise -D__CHECKER__ $(CFLAGS) $<
 
-.PHONY: clean
+.PHONY: .FORCE
+
+# - We use the git describe from tags to set up the RPM versioning
+RPM_VERSION := $(shell git describe --long --tags | awk -F '-' '{gsub(/^v/,""); print $$1}')
+RPM_GITHASH := $(shell git rev-parse --short HEAD)
+
+%.spec: %.spec.in .FORCE
+	sed -e 's/@@VERSION@@/$(RPM_VERSION)/g' \
+	    -e 's/@@GITHASH@@/$(RPM_GITHASH)/g' < $< > $@+
+	mv $@+ $@
+
+TARFILE = scoutfs-utils-$(RPM_VERSION).tar
+
+dist: $(RPM_DIR) scoutfs-utils.spec
+	git archive --format=tar --prefix scoutfs-utils-$(RPM_VERSION)/ HEAD^{tree} > $(TARFILE)
+	@ tar rf $(TARFILE) --transform="s@\(.*\)@scoutfs-utils-$(RPM_VERSION)/\1@" scoutfs-utils.spec
+
 clean:
 	@rm -f $(BIN) $(OBJ) $(DEPS) .sparse.*

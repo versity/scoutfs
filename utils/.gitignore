@@ -5,3 +5,5 @@ src/scoutfs
 .sparse*
 .mock.build*
 cscope.*
+scoutfs-utils.spec
+scoutfs-utils-*.tar

@@ -1,0 +1,66 @@
+%define pkg_version @@VERSION@@
+%define pkg_git_hash @@GITHASH@@
+%define pkg_date %(date +%%Y%%m%%d)
+
+%{!?_release: %global _release 0.%{pkg_date}git%{pkg_git_hash}}
+
+Name:           scoutfs-utils
+Summary:        scoutfs user space utilities
+Version:        %{pkg_version}
+Release:        %{_release}%{?dist}
+License:        GPLv2
+Group:          System Environment/Base
+URL:            http://scoutfs.org/
+
+BuildRequires:  git
+BuildRequires:  gzip
+BuildRequires:  libuuid-devel
+BuildRequires:  openssl-devel
+
+#Requires:	kmod-scoutfs = %{version}
+
+Source:		scoutfs-utils-%{pkg_version}.tar
+
+# Disable the building of the debug package(s).
+%define debug_package %{nil}
+
+%description
+scoutfs - user space utilities
+
+%package -n scoutfs-devel
+Summary:        scoutfs devel headers
+Version:        %{pkg_version}
+Release:        %{_release}%{?dist}
+License:        GPLv2
+Group:          Development/Libraries
+URL:            http://scoutfs.org/
+
+%description -n scoutfs-devel
+scoutfs - development headers
+
+%prep
+%setup -q -n scoutfs-utils-%{pkg_version}
+
+%build
+make
+gzip man/*.7
+
+%install
+mkdir -p $RPM_BUILD_ROOT%{_mandir}/man7
+cp man/*.7.gz $RPM_BUILD_ROOT%{_mandir}/man7/.
+install -m 755 -D src/scoutfs $RPM_BUILD_ROOT%{_sbindir}/scoutfs
+install -m 644 -D src/ioctl.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/ioctl.h
+install -m 644 -D src/format.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/format.h
+
+%files
+%defattr(644,root,root,755)
+%{_mandir}/man7/scoutfs-corruption.7.gz
+%{_sbindir}/scoutfs
+
+%files -n scoutfs-devel
+%defattr(644,root,root,755)
+%{_includedir}/scoutfs
+
+%clean
+rm -rf %{buildroot}
+
