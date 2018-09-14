@@ -55,6 +55,7 @@ install -m 644 -D src/format.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/format.h
 %files
 %defattr(644,root,root,755)
 %{_mandir}/man7/scoutfs-corruption.7.gz
+%defattr(755,root,root,755)
 %{_sbindir}/scoutfs
 
 %files -n scoutfs-devel
