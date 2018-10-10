@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <assert.h>
+#include <getopt.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <ctype.h>
 
 #include "sparse.h"
 #include "cmd.h"
@@ -157,7 +163,7 @@ static char *size_str(u64 nr, unsigned size)
  *  - btree ring blocks with manifest and allocator btree blocks
  *  - segment with root inode items
  */
-static int write_new_fs(char *path, int fd)
+static int write_new_fs(char *path, int fd, struct scoutfs_quorum_config *conf)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_key *ino_key;
@@ -170,10 +176,13 @@ static int write_new_fs(char *path, int fd)
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *btitem;
 	struct scoutfs_segment_item *item;
+	struct scoutfs_quorum_slot *slot;
 	struct scoutfs_key key;
+	struct in_addr in;
 	__le32 *prev_link;
 	struct timeval tv;
 	char uuid_str[37];
+	void *zeros;
 	u64 blkno;
 	u64 limit;
 	u64 size;
@@ -184,13 +193,15 @@ static int write_new_fs(char *path, int fd)
 	u64 free_start;
 	u64 free_len;
 	int ret;
+	int i;
 
 	gettimeofday(&tv, NULL);
 
 	super = calloc(1, SCOUTFS_BLOCK_SIZE);
 	bt = calloc(1, SCOUTFS_BLOCK_SIZE);
 	sblk = calloc(1, SCOUTFS_SEGMENT_SIZE);
-	if (!super || !bt || !sblk) {
+	zeros = calloc(1, SCOUTFS_SEGMENT_SIZE);
+	if (!super || !bt || !sblk || !zeros) {
 		ret = -errno;
 		fprintf(stderr, "failed to allocate block mem: %s (%d)\n",
 			strerror(errno), errno);
@@ -228,6 +239,9 @@ static int write_new_fs(char *path, int fd)
 	super->next_seg_seq = cpu_to_le64(2);
 	super->next_node_id = cpu_to_le64(1);
 	super->next_compact_id = cpu_to_le64(1);
+
+	super->quorum_config = *conf;
+	super->quorum_config.gen = cpu_to_le64(1);
 
 	/* align the btree ring to the segment after the super */
 	blkno = round_up(SCOUTFS_SUPER_BLKNO + 1, SCOUTFS_SEGMENT_BLOCKS);
@@ -388,6 +402,16 @@ static int write_new_fs(char *path, int fd)
 		goto out;
 	}
 
+	/* zero out quorum blocks */
+	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
+		ret = write_raw_block(fd, SCOUTFS_QUORUM_BLKNO + i, zeros);
+		if (ret < 0) {
+			fprintf(stderr, "error zeroing quorum block: %s (%d)\n",
+				strerror(-errno), -errno);
+			goto out;
+		}
+	}
+
 	/* write the super block */
 	super->hdr.seq = cpu_to_le64(1);
 	ret = write_block(fd, SCOUTFS_SUPER_BLKNO, NULL, &super->hdr);
@@ -423,6 +447,19 @@ static int write_new_fs(char *path, int fd)
 		SIZE_ARGS(le64_to_cpu(super->free_blocks),
 			  SCOUTFS_BLOCK_SIZE));
 
+	printf("  quorum slots:\n");
+	for (i = 0; i < array_size(super->quorum_config.slots); i++) {
+		slot = &super->quorum_config.slots[i];
+		if (slot->flags == 0)
+			continue;
+
+		in.s_addr = htonl(le32_to_cpu(slot->addr.addr));
+
+		printf("    [%2u]: name %s priority %u addr:port %s:%u\n",
+		       i, slot->name, slot->vote_priority,
+		       inet_ntoa(in), le16_to_cpu(slot->addr.port));
+	}
+
 	ret = 0;
 out:
 	if (super)
@@ -431,17 +468,171 @@ out:
 		free(bt);
 	if (sblk)
 		free(sblk);
+	if (zeros)
+		free(zeros);
+	return ret;
+}
+
+static struct option long_ops[] = {
+	{ "quorum_slot", 1, NULL, 'Q' },
+	{ NULL, 0, NULL, 0}
+};
+
+enum { NAME, PRIORITY, ADDR, PORT };
+
+static int parse_quorum_slot(struct scoutfs_quorum_config *conf, char *arg)
+{
+	struct scoutfs_quorum_slot *slot;
+	struct scoutfs_quorum_slot *sl;
+	struct in_addr in;
+	unsigned long port;
+	int free_slot;
+	char *save;
+	char *tok;
+	char *dup;
+	char *s;
+	int ret;
+	int i;
+
+	dup = strdup(arg);
+	if (!dup) {
+		printf("allocation failure while parsing quorum slot '%s'\n",
+		       arg);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < array_size(conf->slots); i++) {
+		if (conf->slots[i].flags == 0)
+			break;
+	}
+	if (i == array_size(conf->slots)) {
+		printf("too many quorum slots provided\n");
+		ret = -EINVAL;
+		goto out;
+	}
+	slot = &conf->slots[i];
+	free_slot = i;
+
+	slot->addr.port = cpu_to_le16(23853); /* randomly chosen */
+
+	for (save = NULL, s = dup, i = NAME; i <= PORT; i++, s = NULL) {
+		tok = strtok_r(s, ":", &save);
+
+		if (tok == NULL)
+			break;
+
+		/* assume flags and a default port */
+		if (i == PORT && !isdigit(tok[0]))
+			i = PRIORITY;
+
+		switch(i) {
+		case NAME:
+			if (strlen(tok) >= SCOUTFS_UNIQUE_NAME_MAX_BYTES) {
+				printf("quorum slot name too long: %s\n", tok);
+				return -EINVAL;
+			}
+			strcpy((char *)slot->name, tok);
+			break;
+
+		case PRIORITY:
+			slot->vote_priority = strtoul(tok, NULL, 0);
+			if (slot->vote_priority > 255) {
+				printf("invalid quorum slot priority: %s\n",
+				       tok);
+				ret = -EINVAL;
+				goto out;
+			}
+			break;
+
+		case ADDR:
+			if (inet_aton(tok, &in) == 0) {
+				printf("invalid quorum slot address: %s\n", tok);
+				ret = -EINVAL;
+				goto out;
+			}
+			slot->addr.addr = cpu_to_le32(htonl(in.s_addr));
+			break;
+
+		case PORT:
+			port = strtoul(tok, NULL, 0);
+			if (port == 0 || port >= 65535) {
+				printf("invalid quorum slot port: %s\n", tok);
+				ret = -EINVAL;
+				goto out;
+			}
+			slot->addr.port = cpu_to_le16(port);
+			break;
+
+		}
+	}
+
+	if (slot->name[0] == '\0') {
+		printf("quorum slot must specify name: %s\n", arg);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (slot->addr.addr == 0) {
+		printf("quorum slot must specify address: %s\n", arg);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	for (i = 0; i < free_slot; i++) {
+		sl = &conf->slots[i];
+
+		if (strcmp((char *)slot->name, (char *)sl->name) == 0) {
+			printf("duplicate quorum slot name: %s\n", arg);
+			ret = -EINVAL;
+			goto out;
+		}
+
+		if (memcmp(&slot->addr, &sl->addr, sizeof(slot->addr)) == 0) {
+			printf("duplicate quorum slot addr: %s\n", arg);
+			ret = -EINVAL;
+			goto out;
+		}
+	}
+
+	slot->flags = SCOUTFS_QUORUM_SLOT_ACTIVE;
+	ret = 0;
+out:
+	free(dup);
 	return ret;
 }
 
 static int mkfs_func(int argc, char *argv[])
 {
+	struct scoutfs_quorum_config conf = {0,};
+	bool have_quorum = false;
 	char *path = argv[1];
 	int ret;
 	int fd;
+	int c;
 
-	if (argc != 2) {
+	while ((c = getopt_long(argc, argv, "Q:", long_ops, NULL)) != -1) {
+		switch (c) {
+		case 'Q':
+			ret = parse_quorum_slot(&conf, optarg);
+			if (ret)
+				return ret;
+			have_quorum = true;
+			break;
+		case '?':
+		default:
+			return -EINVAL;
+		}
+	}
+
+	if (optind >= argc) {
 		printf("scoutfs: mkfs: a single path argument is required\n");
+		return -EINVAL;
+	}
+
+	path = argv[optind];
+
+	if (!have_quorum) {
+		printf("must configure quorum with --quorum_slot|-Q options\n");
 		return -EINVAL;
 	}
 
@@ -453,7 +644,7 @@ static int mkfs_func(int argc, char *argv[])
 		return ret;
 	}
 
-	ret = write_new_fs(path, fd);
+	ret = write_new_fs(path, fd, &conf);
 	close(fd);
 
 	return ret;

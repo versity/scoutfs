@@ -8,5 +8,5 @@
 
 void pseudo_random_bytes(void *data, unsigned int len)
 {
-	RAND_pseudo_bytes(data, len);
+	RAND_bytes(data, len);
 }

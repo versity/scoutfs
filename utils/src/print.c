@@ -9,6 +9,9 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <uuid/uuid.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "sparse.h"
 #include "util.h"
@@ -440,9 +443,68 @@ static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
 	return ret;
 }
 
+static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
+{
+	struct scoutfs_quorum_block *blk;
+	u64 blkno;
+	int ret;
+	int i;
+
+	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
+		blkno = SCOUTFS_QUORUM_BLKNO + i;
+		blk = read_block(fd, blkno);
+		if (!blk) {
+			ret = -ENOMEM;
+			break;
+		}
+
+		if (blk->fsid != 0 || blk->write_nr != 0) {
+			printf("quorum block blkno %llu\n"
+			       "  fsid %llx blkno %llu config_gen %llu crc 0x%08x\n"
+			       "  write_nr %llu elected_nr %llu vote_slot %u\n",
+			       blkno, le64_to_cpu(blk->fsid),
+			       le64_to_cpu(blk->blkno),
+			       le64_to_cpu(blk->config_gen),
+			       le32_to_cpu(blk->crc),
+			       le64_to_cpu(blk->write_nr),
+			       le64_to_cpu(blk->elected_nr),
+			       blk->vote_slot);
+		}
+
+		free(blk);
+		ret = 0;
+	}
+
+	return ret;
+}
+
+static void print_slot_flags(unsigned long flags)
+{
+	if (flags == 0) {
+		printf("-");
+		return;
+	}
+
+	while (flags) {
+		if (flags & SCOUTFS_QUORUM_SLOT_ACTIVE) {
+			printf("active");
+			flags &= ~SCOUTFS_QUORUM_SLOT_ACTIVE;
+
+		} else if (flags & SCOUTFS_QUORUM_SLOT_STALE) {
+			printf("stale");
+			flags &= ~SCOUTFS_QUORUM_SLOT_STALE;
+		}
+
+		if (flags)
+			printf(",");
+	}
+}
+
 static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 {
+	struct scoutfs_quorum_slot *slot;
 	char uuid_str[37];
+	struct in_addr in;
 	u64 count;
 	int i;
 
@@ -491,6 +553,22 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 			printf(" %u: %llu", i, count);
 	}
 	printf("\n");
+
+	printf("  quorum_config:\n    gen: %llu\n",
+	       le64_to_cpu(super->quorum_config.gen));
+	for (i = 0; i < array_size(super->quorum_config.slots); i++) {
+		slot = &super->quorum_config.slots[i];
+		if (slot->flags == 0)
+			continue;
+
+		in.s_addr = htonl(le32_to_cpu(slot->addr.addr));
+
+		printf("    [%2u]: name %s priority %u addr %s:%u flags ",
+		       i, slot->name, slot->vote_priority, inet_ntoa(in),
+		       le16_to_cpu(slot->addr.port));
+		print_slot_flags(slot->flags);
+		printf("\n");
+	}
 }
 
 static int print_volume(int fd)
@@ -516,8 +594,12 @@ static int print_volume(int fd)
 		goto out;
 	}
 
-	ret = print_btree(fd, super, "alloc", &super->alloc_root,
-			  print_alloc_item, NULL);
+	ret = print_quorum_blocks(fd, super);
+
+	err = print_btree(fd, super, "alloc", &super->alloc_root,
+  			  print_alloc_item, NULL);
+	if (err && !ret)
+		ret = err;
 
 	err = print_btree(fd, super, "manifest", &super->manifest.root,
 			  print_manifest_entry, seg_map);
