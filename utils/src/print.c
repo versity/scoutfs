@@ -72,9 +72,10 @@ static void print_block_header(struct scoutfs_block_header *hdr)
 	else
 		valid_str[0] = '\0';
 
-	printf("  hdr: crc %08x %sfsid %llx seq %llu blkno %llu\n",
-		le32_to_cpu(hdr->crc), valid_str, le64_to_cpu(hdr->fsid),
-		le64_to_cpu(hdr->seq), le64_to_cpu(hdr->blkno));
+	printf("  hdr: crc %08x %smagic %08x fsid %llx seq %llu blkno %llu\n",
+		le32_to_cpu(hdr->crc), valid_str, le32_to_cpu(hdr->magic),
+		le64_to_cpu(hdr->fsid), le64_to_cpu(hdr->blkno),
+		le64_to_cpu(hdr->seq));
 }
 
 static void print_inode(struct scoutfs_key *key, void *val, int val_len)
@@ -512,10 +513,8 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	printf("super blkno %llu\n", blkno);
 	print_block_header(&super->hdr);
-	printf("  id %llx format_hash %llx\n"
-	       "  uuid %s\n",
-	       le64_to_cpu(super->id), le64_to_cpu(super->format_hash),
-	       uuid_str);
+	printf("  format_hash %llx uuid %s\n",
+	       le64_to_cpu(super->format_hash), uuid_str);
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_seq %llu next_seg_seq %llu\n"

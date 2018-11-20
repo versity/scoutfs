@@ -229,8 +229,8 @@ static int write_new_fs(char *path, int fd, struct scoutfs_quorum_config *conf)
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SIZE);
 	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
+	super->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_SUPER);
 	super->hdr.seq = cpu_to_le64(1);
-	super->id = cpu_to_le64(SCOUTFS_SUPER_ID);
 	super->format_hash = cpu_to_le64(SCOUTFS_FORMAT_HASH);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
@@ -293,7 +293,7 @@ static int write_new_fs(char *path, int fd, struct scoutfs_quorum_config *conf)
 	ebk->major = cpu_to_be64(free_len);
 	ebk->minor = cpu_to_be64(free_start + free_len - 1);
 
-	bt->hdr._pad = 0;
+	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
 	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
 
 	ret = write_raw_block(fd, blkno, bt);
@@ -338,7 +338,7 @@ static int write_new_fs(char *path, int fd, struct scoutfs_quorum_config *conf)
 	ino_key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
 	ino_key->sk_type = SCOUTFS_INODE_TYPE;
 
-	bt->hdr._pad = 0;
+	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
 	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
 
 	ret = write_raw_block(fd, blkno, bt);
