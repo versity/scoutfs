@@ -320,7 +320,8 @@ struct scoutfs_segment_block {
 #define SCOUTFS_INODE_INDEX_ZONE		1
 #define SCOUTFS_NODE_ZONE			2
 #define SCOUTFS_FS_ZONE				3
-#define SCOUTFS_MAX_ZONE			4 /* power of 2 is efficient */
+#define SCOUTFS_LOCK_ZONE			4
+#define SCOUTFS_MAX_ZONE			8 /* power of 2 is efficient */
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -340,6 +341,9 @@ struct scoutfs_segment_block {
 #define SCOUTFS_SYMLINK_TYPE			6
 #define SCOUTFS_FILE_EXTENT_TYPE		7
 #define SCOUTFS_ORPHAN_TYPE			8
+
+/* lock zone, only ever found in lock ranges, never in persistent items */
+#define SCOUTFS_RENAME_TYPE			1
 
 #define SCOUTFS_MAX_TYPE			16 /* power of 2 is efficient */
 
@@ -556,26 +560,8 @@ enum {
 
 #define SCOUTFS_MAX_VAL_SIZE	SCOUTFS_XATTR_MAX_PART_SIZE
 
-/*
- * structures used by dlm
- */
-#define SCOUTFS_LOCK_SCOPE_GLOBAL 1
-#define SCOUTFS_LOCK_SCOPE_FS_ITEMS 2
-
-#define SCOUTFS_LOCK_TYPE_GLOBAL_RENAME 1
-#define SCOUTFS_LOCK_TYPE_GLOBAL_SERVER 2
-
-struct scoutfs_lock_name {
-	__u8 scope;
-	__u8 zone;
-	__u8 type;
-	__le64 first;
-	__le64 second;
-} __packed;
-
 #define SCOUTFS_LOCK_INODE_GROUP_NR	1024
 #define SCOUTFS_LOCK_INODE_GROUP_MASK	(SCOUTFS_LOCK_INODE_GROUP_NR - 1)
-
 #define SCOUTFS_LOCK_SEQ_GROUP_MASK	((1ULL << 10) - 1)
 
 /*
@@ -623,6 +609,7 @@ enum {
 	SCOUTFS_NET_CMD_GET_MANIFEST_ROOT,
 	SCOUTFS_NET_CMD_STATFS,
 	SCOUTFS_NET_CMD_COMPACT,
+	SCOUTFS_NET_CMD_LOCK,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };
 
@@ -741,6 +728,42 @@ struct scoutfs_net_compact_response {
 	__le64 id;
 	struct scoutfs_net_manifest_entry ents[SCOUTFS_COMPACTION_MAX_OUTPUT];
 } __packed;
+
+struct scoutfs_net_lock {
+	struct scoutfs_key key;
+	__u8 old_mode;
+	__u8 new_mode;
+} __packed;
+
+/* some enums for tracing */
+enum {
+	SLT_CLIENT,
+	SLT_SERVER,
+	SLT_GRANT,
+	SLT_INVALIDATE,
+	SLT_REQUEST,
+	SLT_RESPONSE,
+};
+
+/*
+ * Read and write locks operate as you'd expect.  Multiple readers can
+ * hold read locks while writers are excluded.  A single writer can hold
+ * a write lock which excludes other readers and writers.  Writers can
+ * read while holding a write lock.
+ *
+ * Multiple writers can hold write only locks but they can not read,
+ * they can only generate dirty items.  It's used when the system has
+ * other means of knowing that it's safe to overwrite items.
+ *
+ * The null mode provides no access and is used to destroy locks.
+ */
+enum {
+	SCOUTFS_LOCK_NULL = 0,
+	SCOUTFS_LOCK_READ,
+	SCOUTFS_LOCK_WRITE,
+	SCOUTFS_LOCK_WRITE_ONLY,
+	SCOUTFS_LOCK_INVALID,
+};
 
 /*
  * Scoutfs file handle structure - this can be copied out to userspace
