@@ -343,6 +343,16 @@ static int print_alloc_item(void *key, unsigned key_len, void *val,
 	return 0;
 }
 
+static int print_lock_clients_entry(void *key, unsigned key_len, void *val,
+				    unsigned val_len, void *arg)
+{
+	struct scoutfs_lock_client_btree_key *cbk = key;
+
+	printf("    node_ld %llu\n", be64_to_cpu(cbk->node_id));
+
+	return 0;
+}
+
 typedef int (*print_item_func)(void *key, unsigned key_len, void *val,
 			       unsigned val_len, void *arg);
 
@@ -522,6 +532,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  total_blocks %llu free_blocks %llu alloc_cursor %llu\n"
 	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
 	       "next_seq %llu\n"
+	       "  lock_clients root: height %u blkno %llu seq %llu mig_len %u\n"
 	       "  alloc btree root: height %u blkno %llu seq %llu mig_len %u\n"
 	       "  manifest btree root: height %u blkno %llu seq %llu mig_len %u\n",
 		le64_to_cpu(super->next_ino),
@@ -536,6 +547,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->bring.nr_blocks),
 		le64_to_cpu(super->bring.next_block),
 		le64_to_cpu(super->bring.next_seq),
+		super->lock_clients.height,
+		le64_to_cpu(super->lock_clients.ref.blkno),
+		le64_to_cpu(super->lock_clients.ref.seq),
+		le16_to_cpu(super->lock_clients.migration_key_len),
 		super->alloc_root.height,
 		le64_to_cpu(super->alloc_root.ref.blkno),
 		le64_to_cpu(super->alloc_root.ref.seq),
@@ -594,6 +609,11 @@ static int print_volume(int fd)
 	}
 
 	ret = print_quorum_blocks(fd, super);
+
+	err = print_btree(fd, super, "lock_clients", &super->lock_clients,
+			  print_lock_clients_entry, NULL);
+	if (err && !ret)
+		ret = err;
 
 	err = print_btree(fd, super, "alloc", &super->alloc_root,
   			  print_alloc_item, NULL);
