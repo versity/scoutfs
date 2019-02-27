@@ -234,7 +234,7 @@ static int write_new_fs(char *path, int fd, struct scoutfs_quorum_config *conf)
 	super->format_hash = cpu_to_le64(SCOUTFS_FORMAT_HASH);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
-	super->next_seq = cpu_to_le64(1);
+	super->next_trans_seq = cpu_to_le64(1);
 	super->total_blocks = cpu_to_le64(total_blocks);
 	super->next_seg_seq = cpu_to_le64(2);
 	super->next_node_id = cpu_to_le64(1);

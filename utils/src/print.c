@@ -353,6 +353,17 @@ static int print_lock_clients_entry(void *key, unsigned key_len, void *val,
 	return 0;
 }
 
+static int print_trans_seqs_entry(void *key, unsigned key_len, void *val,
+				  unsigned val_len, void *arg)
+{
+	struct scoutfs_trans_seq_btree_key *tsk = key;
+
+	printf("    trans_seq %llu node_ld %llu\n",
+	       be64_to_cpu(tsk->trans_seq), be64_to_cpu(tsk->node_id));
+
+	return 0;
+}
+
 typedef int (*print_item_func)(void *key, unsigned key_len, void *val,
 			       unsigned val_len, void *arg);
 
@@ -527,16 +538,17 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       le64_to_cpu(super->format_hash), uuid_str);
 
 	/* XXX these are all in a crazy order */
-	printf("  next_ino %llu next_seq %llu next_seg_seq %llu\n"
+	printf("  next_ino %llu next_trans_seq %llu next_seg_seq %llu\n"
 	       " next_node_id %llu next_compact_id %llu\n"
 	       "  total_blocks %llu free_blocks %llu alloc_cursor %llu\n"
 	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
 	       "next_seq %llu\n"
 	       "  lock_clients root: height %u blkno %llu seq %llu mig_len %u\n"
+	       "  trans_seqs root: height %u blkno %llu seq %llu mig_len %u\n"
 	       "  alloc btree root: height %u blkno %llu seq %llu mig_len %u\n"
 	       "  manifest btree root: height %u blkno %llu seq %llu mig_len %u\n",
 		le64_to_cpu(super->next_ino),
-		le64_to_cpu(super->next_seq),
+		le64_to_cpu(super->next_trans_seq),
 		le64_to_cpu(super->next_seg_seq),
 		le64_to_cpu(super->next_node_id),
 		le64_to_cpu(super->next_compact_id),
@@ -551,6 +563,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->lock_clients.ref.blkno),
 		le64_to_cpu(super->lock_clients.ref.seq),
 		le16_to_cpu(super->lock_clients.migration_key_len),
+		super->trans_seqs.height,
+		le64_to_cpu(super->trans_seqs.ref.blkno),
+		le64_to_cpu(super->trans_seqs.ref.seq),
+		le16_to_cpu(super->trans_seqs.migration_key_len),
 		super->alloc_root.height,
 		le64_to_cpu(super->alloc_root.ref.blkno),
 		le64_to_cpu(super->alloc_root.ref.seq),
@@ -612,6 +628,11 @@ static int print_volume(int fd)
 
 	err = print_btree(fd, super, "lock_clients", &super->lock_clients,
 			  print_lock_clients_entry, NULL);
+	if (err && !ret)
+		ret = err;
+
+	err = print_btree(fd, super, "trans_seqs", &super->trans_seqs,
+			  print_trans_seqs_entry, NULL);
 	if (err && !ret)
 		ret = err;
 
