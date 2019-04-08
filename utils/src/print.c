@@ -364,6 +364,19 @@ static int print_trans_seqs_entry(void *key, unsigned key_len, void *val,
 	return 0;
 }
 
+/* XXX should make sure that the val is null terminated */
+static int print_mounted_client_entry(void *key, unsigned key_len, void *val,
+				      unsigned val_len, void *arg)
+{
+	struct scoutfs_mounted_client_btree_key *mck = key;
+	struct scoutfs_mounted_client_btree_val *mcv = val;
+
+	printf("    node_id %llu name %s\n",
+			be64_to_cpu(mck->node_id), mcv->name);
+
+	return 0;
+}
+
 typedef int (*print_item_func)(void *key, unsigned key_len, void *val,
 			       unsigned val_len, void *arg);
 
@@ -483,13 +496,15 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 		if (blk->fsid != 0 || blk->write_nr != 0) {
 			printf("quorum block blkno %llu\n"
 			       "  fsid %llx blkno %llu config_gen %llu crc 0x%08x\n"
-			       "  write_nr %llu elected_nr %llu vote_slot %u\n",
+			       "  write_nr %llu elected_nr %llu "
+			       "unmount_barrier %llu vote_slot %u\n",
 			       blkno, le64_to_cpu(blk->fsid),
 			       le64_to_cpu(blk->blkno),
 			       le64_to_cpu(blk->config_gen),
 			       le32_to_cpu(blk->crc),
 			       le64_to_cpu(blk->write_nr),
 			       le64_to_cpu(blk->elected_nr),
+			       le64_to_cpu(blk->unmount_barrier),
 			       blk->vote_slot);
 		}
 
@@ -544,6 +559,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
 	       "next_seq %llu\n"
 	       "  lock_clients root: height %u blkno %llu seq %llu mig_len %u\n"
+	       "  mounted_clients root: height %u blkno %llu seq %llu mig_len %u\n"
 	       "  trans_seqs root: height %u blkno %llu seq %llu mig_len %u\n"
 	       "  alloc btree root: height %u blkno %llu seq %llu mig_len %u\n"
 	       "  manifest btree root: height %u blkno %llu seq %llu mig_len %u\n",
@@ -563,6 +579,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->lock_clients.ref.blkno),
 		le64_to_cpu(super->lock_clients.ref.seq),
 		le16_to_cpu(super->lock_clients.migration_key_len),
+		super->mounted_clients.height,
+		le64_to_cpu(super->mounted_clients.ref.blkno),
+		le64_to_cpu(super->mounted_clients.ref.seq),
+		le16_to_cpu(super->mounted_clients.migration_key_len),
 		super->trans_seqs.height,
 		le64_to_cpu(super->trans_seqs.ref.blkno),
 		le64_to_cpu(super->trans_seqs.ref.seq),
@@ -628,6 +648,11 @@ static int print_volume(int fd)
 
 	err = print_btree(fd, super, "lock_clients", &super->lock_clients,
 			  print_lock_clients_entry, NULL);
+	if (err && !ret)
+		ret = err;
+
+	err = print_btree(fd, super, "mounted_clients", &super->mounted_clients,
+			  print_mounted_client_entry, NULL);
 	if (err && !ret)
 		ret = err;
 
