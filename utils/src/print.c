@@ -497,7 +497,7 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 			printf("quorum block blkno %llu\n"
 			       "  fsid %llx blkno %llu config_gen %llu crc 0x%08x\n"
 			       "  write_nr %llu elected_nr %llu "
-			       "unmount_barrier %llu vote_slot %u\n",
+			       "unmount_barrier %llu vote_slot %u flags %02x\n",
 			       blkno, le64_to_cpu(blk->fsid),
 			       le64_to_cpu(blk->blkno),
 			       le64_to_cpu(blk->config_gen),
@@ -505,7 +505,7 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 			       le64_to_cpu(blk->write_nr),
 			       le64_to_cpu(blk->elected_nr),
 			       le64_to_cpu(blk->unmount_barrier),
-			       blk->vote_slot);
+			       blk->vote_slot, blk->flags);
 		}
 
 		free(blk);
