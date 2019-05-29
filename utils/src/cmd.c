@@ -60,7 +60,8 @@ static void usage(void)
 	}
 }
 
-int cmd_execute(int argc, char **argv)
+/* this returns a positive unix return code on error for some reason */
+char cmd_execute(int argc, char **argv)
 {
 	struct command *com = NULL;
 	int ret;

@@ -10,15 +10,9 @@
 
 int main(int argc, char **argv)
 {
-	int ret;
-
 	/*
 	 * XXX parse global options, env, configs, etc.
 	 */
 
-	ret = cmd_execute(argc, argv);
-	if (ret < 0)
-		return 1;
-
-	return 0;
+	return cmd_execute(argc, argv);
 }
