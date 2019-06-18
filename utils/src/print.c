@@ -197,6 +197,13 @@ static void print_inode_index(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->skii_major), le64_to_cpu(key->skii_ino));
 }
 
+static void print_xattr_index(struct scoutfs_key *key, void *val, int val_len)
+{
+	printf("      xattr index: hash 0x%016llx ino %llu id %llu\n",
+	       le64_to_cpu(key->skxi_hash), le64_to_cpu(key->skxi_ino),
+	       le64_to_cpu(key->skxi_id));
+}
+
 typedef void (*print_func_t)(struct scoutfs_key *key, void *val, int val_len);
 
 static print_func_t find_printer(u8 zone, u8 type)
@@ -205,6 +212,10 @@ static print_func_t find_printer(u8 zone, u8 type)
 	    type >= SCOUTFS_INODE_INDEX_META_SEQ_TYPE  &&
 	    type <= SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE)
 		return print_inode_index;
+
+	if (zone == SCOUTFS_XATTR_INDEX_ZONE &&
+	    type >= SCOUTFS_XATTR_INDEX_NAME_TYPE)
+		return print_xattr_index;
 
 	if (zone == SCOUTFS_NODE_ZONE) {
 		if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE ||
