@@ -217,7 +217,7 @@ static print_func_t find_printer(u8 zone, u8 type)
 	    type >= SCOUTFS_XATTR_INDEX_NAME_TYPE)
 		return print_xattr_index;
 
-	if (zone == SCOUTFS_NODE_ZONE) {
+	if (zone == SCOUTFS_RID_ZONE) {
 		if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE ||
 		    type == SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
 			return print_free_extent;
