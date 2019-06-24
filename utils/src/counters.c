@@ -78,7 +78,7 @@ static int counters_cmd(int argc, char **argv)
 		table = false;
 
 	if (dir_arg == NULL) {
-		printf("scoutfs counter-table: need sysfs scoutfs dir path (i.e. /sys/fs/scoutfs/$DEV)\n");
+		printf("scoutfs counter-table: need mount sysfs dir (i.e. /sys/fs/scoutfs/$fr)\n");
 		return -EINVAL;
 	}
 
@@ -278,7 +278,7 @@ out:
 
 static void __attribute__((constructor)) counters_ctor(void)
 {
-	cmd_register("counters", "[-t] <sysfs path>",
+	cmd_register("counters", "[-t] <sysfs dir>",
 		     "show [tablular] counters for a given mounted volume",
 		     counters_cmd);
 }
