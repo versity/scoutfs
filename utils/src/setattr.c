@@ -29,6 +29,7 @@ static struct option long_ops[] = {
 static int setattr_more_cmd(int argc, char **argv)
 {
 	struct scoutfs_ioctl_setattr_more sm;
+	struct timespec ctime;
 	char *path = NULL;
 	int ret;
 	int fd = -1;
@@ -39,7 +40,7 @@ static int setattr_more_cmd(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, "c:d:f:os:", long_ops, NULL)) != -1) {
 		switch (c) {
 		case 'c':
-			ret = parse_timespec(optarg, &sm.ctime);
+			ret = parse_timespec(optarg, &ctime);
 			if (ret)
 				goto out;
 			break;
@@ -84,6 +85,9 @@ static int setattr_more_cmd(int argc, char **argv)
 			path, strerror(errno), errno);
 		goto out;
 	}
+
+	sm.ctime_sec = ctime.tv_sec;
+	sm.ctime_nsec = ctime.tv_nsec;
 
 	ret = ioctl(fd, SCOUTFS_IOC_SETATTR_MORE, &sm);
 	if (ret < 0) {

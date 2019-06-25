@@ -45,13 +45,13 @@ int parse_u32(char *str, u32 *val_ret)
 	return 0;
 }
 
-int parse_timespec(char *str, struct scoutfs_timespec *ts)
+int parse_timespec(char *str, struct timespec *ts)
 {
 	unsigned long long sec;
 	unsigned int nsec;
 	int ret;
 
-	memset(ts, 0, sizeof(struct scoutfs_timespec));
+	memset(ts, 0, sizeof(struct timespec));
 
 	ret = sscanf(str, "%llu.%u", &sec, &nsec);
 	if (ret != 2)  {
@@ -64,8 +64,8 @@ int parse_timespec(char *str, struct scoutfs_timespec *ts)
 		return -EINVAL;
 	}
 
-	ts->sec = cpu_to_le64(sec);
-	ts->nsec = cpu_to_le32(nsec);
+	ts->tv_sec = sec;
+	ts->tv_nsec = nsec;
 
 	return 0;
 }

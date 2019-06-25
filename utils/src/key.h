@@ -38,6 +38,24 @@ static inline char *sk_type_str(u8 zone, u8 type)
 			le64_to_cpu((key)->_sk_third),			\
 			(key)->_sk_fourth
 
+/*
+ * copy fields between keys with the same fields but different types.
+ * The destination type might have internal padding so we zero it.
+ */
+#define scoutfs_key_copy_types(a, b)		\
+do {						\
+	__typeof__(a) _to = (a);		\
+	__typeof__(b) _from = (b);		\
+						\
+	memset(_to, 0, sizeof(*_to));		\
+	_to->sk_zone = _from->sk_zone;		\
+	_to->_sk_first = _from->_sk_first;	\
+	_to->sk_type = _from->sk_type;		\
+	_to->_sk_second = _from->_sk_second;	\
+	_to->_sk_third = _from->_sk_third;	\
+	_to->_sk_fourth = _from->_sk_fourth;	\
+} while (0)
+
 static inline void scoutfs_key_set_zeros(struct scoutfs_key *key)
 {
 	key->sk_zone = 0;

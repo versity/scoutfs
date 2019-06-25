@@ -19,7 +19,8 @@
 static int item_cache_keys(int argc, char **argv, int which)
 {
 	struct scoutfs_ioctl_item_cache_keys ick;
-	struct scoutfs_key keys[32];
+	struct scoutfs_ioctl_key ikeys[32];
+	struct scoutfs_key key;
 	int ret;
 	int fd;
 	int i;
@@ -38,8 +39,8 @@ static int item_cache_keys(int argc, char **argv, int which)
 	}
 
 	memset(&ick, 0, sizeof(ick));
-	ick.buf_ptr = (unsigned long)keys;
-	ick.buf_nr = array_size(keys);
+	ick.buf_ptr = (unsigned long)ikeys;
+	ick.buf_nr = array_size(ikeys);
 	ick.which = which;
 
 	for (;;) {
@@ -54,7 +55,8 @@ static int item_cache_keys(int argc, char **argv, int which)
 		}
 
 		for (i = 0; i < ret; i++) {
-			printf(SK_FMT, SK_ARG(&keys[i]));
+			scoutfs_key_copy_types(&key, &ikeys[i]);
+			printf(SK_FMT, SK_ARG(&key));
 
 			if (which == SCOUTFS_IOC_ITEM_CACHE_KEYS_ITEMS ||
 			    (i & 1))
@@ -63,8 +65,8 @@ static int item_cache_keys(int argc, char **argv, int which)
 				printf("  -  ");
 		}
 
-		ick.key = keys[i - 1];
-		scoutfs_key_inc(&ick.key);
+		scoutfs_key_inc(&key);
+		scoutfs_key_copy_types(&ick.ikey, &key);
 	}
 
 	close(fd);
