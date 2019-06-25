@@ -382,8 +382,8 @@ static int print_mounted_client_entry(void *key, unsigned key_len, void *val,
 	struct scoutfs_mounted_client_btree_key *mck = key;
 	struct scoutfs_mounted_client_btree_val *mcv = val;
 
-	printf("    node_id %llu name %s\n",
-			be64_to_cpu(mck->node_id), mcv->name);
+	printf("    node_id %llu flags 0x%x\n",
+			be64_to_cpu(mck->node_id), mcv->flags);
 
 	return 0;
 }
@@ -489,70 +489,89 @@ static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
 	return ret;
 }
 
+static char *alloc_addr_str(struct scoutfs_inet_addr *ia)
+{
+	struct in_addr addr;
+	char *quad;
+	char *str;
+	int len;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.s_addr = htonl(le32_to_cpu(ia->addr));
+	quad = inet_ntoa(addr);
+	if (quad == NULL)
+		return NULL;
+
+	len = snprintf(NULL, 0, "%s:%u", quad, le16_to_cpu(ia->port));
+	if (len < 1 || len > 22)
+		return NULL;
+
+	len++; /* null */
+	str = malloc(len);
+	if (!str)
+		return NULL;
+
+	snprintf(str, len, "%s:%u", quad, le16_to_cpu(ia->port));
+	return str;
+}
+
 static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 {
-	struct scoutfs_quorum_block *blk;
+	struct scoutfs_quorum_block *blk = NULL;
+	char *log_addr = NULL;
 	u64 blkno;
 	int ret;
 	int i;
+	int j;
 
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
 		blkno = SCOUTFS_QUORUM_BLKNO + i;
+		free(blk);
 		blk = read_block(fd, blkno);
 		if (!blk) {
 			ret = -ENOMEM;
-			break;
+			goto out;
 		}
 
-		if (blk->fsid != 0 || blk->write_nr != 0) {
+		if (blk->voter_rid != 0) {
 			printf("quorum block blkno %llu\n"
-			       "  fsid %llx blkno %llu config_gen %llu crc 0x%08x\n"
-			       "  write_nr %llu elected_nr %llu "
-			       "unmount_barrier %llu vote_slot %u flags %02x\n",
+			       "  fsid %llx blkno %llu crc 0x%08x\n"
+			       "  term %llu write_nr %llu voter_rid %016llx "
+			       "vote_for_rid %016llx\n"
+			       "  log_nr %u\n",
 			       blkno, le64_to_cpu(blk->fsid),
-			       le64_to_cpu(blk->blkno),
-			       le64_to_cpu(blk->config_gen),
-			       le32_to_cpu(blk->crc),
+			       le64_to_cpu(blk->blkno), le32_to_cpu(blk->crc),
+			       le64_to_cpu(blk->term),
 			       le64_to_cpu(blk->write_nr),
-			       le64_to_cpu(blk->elected_nr),
-			       le64_to_cpu(blk->unmount_barrier),
-			       blk->vote_slot, blk->flags);
+			       le64_to_cpu(blk->voter_rid),
+			       le64_to_cpu(blk->vote_for_rid),
+			       blk->log_nr);
+			for (j = 0; j < blk->log_nr; j++) {
+				free(log_addr);
+				log_addr = alloc_addr_str(&blk->log[j].addr);
+				if (!log_addr) {
+					ret = -ENOMEM;
+					goto out;
+				}
+				printf("  [%u]: term %llu rid %llu addr %s\n",
+					j, le64_to_cpu(blk->log[j].term),
+					le64_to_cpu(blk->log[j].rid),
+					log_addr);
+			}
 		}
-
-		free(blk);
-		ret = 0;
 	}
+
+	ret = 0;
+out:
+	free(log_addr);
 
 	return ret;
 }
 
-static void print_slot_flags(unsigned long flags)
-{
-	if (flags == 0) {
-		printf("-");
-		return;
-	}
-
-	while (flags) {
-		if (flags & SCOUTFS_QUORUM_SLOT_ACTIVE) {
-			printf("active");
-			flags &= ~SCOUTFS_QUORUM_SLOT_ACTIVE;
-
-		} else if (flags & SCOUTFS_QUORUM_SLOT_STALE) {
-			printf("stale");
-			flags &= ~SCOUTFS_QUORUM_SLOT_STALE;
-		}
-
-		if (flags)
-			printf(",");
-	}
-}
-
 static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 {
-	struct scoutfs_quorum_slot *slot;
 	char uuid_str[37];
-	struct in_addr in;
+	char *server_addr;
 	u64 count;
 	int i;
 
@@ -563,10 +582,16 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("  format_hash %llx uuid %s\n",
 	       le64_to_cpu(super->format_hash), uuid_str);
 
+	server_addr = alloc_addr_str(&super->server_addr);
+	if (!server_addr)
+		return;
+
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_trans_seq %llu next_seg_seq %llu\n"
 	       " next_node_id %llu next_compact_id %llu\n"
 	       "  total_blocks %llu free_blocks %llu alloc_cursor %llu\n"
+	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
+	       "  quorum_count %u server_addr %s\n"
 	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
 	       "next_seq %llu\n"
 	       "  lock_clients root: height %u blkno %llu seq %llu mig_len %u\n"
@@ -582,6 +607,11 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->total_blocks),
 		le64_to_cpu(super->free_blocks),
 		le64_to_cpu(super->alloc_cursor),
+		le64_to_cpu(super->quorum_fenced_term),
+		le64_to_cpu(super->quorum_server_term),
+		le64_to_cpu(super->unmount_barrier),
+		super->quorum_count,
+		server_addr,
 		le64_to_cpu(super->bring.first_blkno),
 		le64_to_cpu(super->bring.nr_blocks),
 		le64_to_cpu(super->bring.next_block),
@@ -615,21 +645,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	}
 	printf("\n");
 
-	printf("  quorum_config:\n    gen: %llu\n",
-	       le64_to_cpu(super->quorum_config.gen));
-	for (i = 0; i < array_size(super->quorum_config.slots); i++) {
-		slot = &super->quorum_config.slots[i];
-		if (slot->flags == 0)
-			continue;
-
-		in.s_addr = htonl(le32_to_cpu(slot->addr.addr));
-
-		printf("    [%2u]: name %s priority %u addr %s:%u flags ",
-		       i, slot->name, slot->vote_priority, inet_ntoa(in),
-		       le16_to_cpu(slot->addr.port));
-		print_slot_flags(slot->flags);
-		printf("\n");
-	}
+	free(server_addr);
 }
 
 static int print_volume(int fd)
