@@ -21,9 +21,9 @@ static struct option long_ops[] = {
 	{ NULL, 0, NULL, 0}
 };
 
-static int listxattr_raw_cmd(int argc, char **argv)
+static int listxattr_hidden_cmd(int argc, char **argv)
 {
-	struct scoutfs_ioctl_listxattr_raw lxr;
+	struct scoutfs_ioctl_listxattr_hidden lxh;
 	char *path = NULL;
 	char *buf = NULL;
 	char *name;
@@ -57,17 +57,17 @@ static int listxattr_raw_cmd(int argc, char **argv)
 		goto out;
 	}
 
-	memset(&lxr, 0, sizeof(lxr));
-	lxr.id_pos = 0;
-	lxr.hash_pos = 0;
-	lxr.buf_bytes = 256 * 1024;
+	memset(&lxh, 0, sizeof(lxh));
+	lxh.id_pos = 0;
+	lxh.hash_pos = 0;
+	lxh.buf_bytes = 256 * 1024;
 
-	buf = malloc(lxr.buf_bytes);
+	buf = malloc(lxh.buf_bytes);
 	if (!buf) {
 		fprintf(stderr, "xattr name buf alloc failed\n");
 		return -ENOMEM;
 	}
-	lxr.buf_ptr = (unsigned long)buf;
+	lxh.buf_ptr = (unsigned long)buf;
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
@@ -79,25 +79,25 @@ static int listxattr_raw_cmd(int argc, char **argv)
 
 	for (;;) {
 
-		ret = ioctl(fd, SCOUTFS_IOC_LISTXATTR_RAW, &lxr);
+		ret = ioctl(fd, SCOUTFS_IOC_LISTXATTR_HIDDEN, &lxh);
 		if (ret == 0)
 			break;
 		if (ret < 0) {
 			ret = -errno;
-			fprintf(stderr, "listxattr_raw ioctl failed: "
+			fprintf(stderr, "listxattr_hidden ioctl failed: "
 				"%s (%d)\n", strerror(errno), errno);
 			goto out;
 		}
 
 		bytes = ret;
 
-		if (bytes > lxr.buf_bytes) {
-			fprintf(stderr, "listxattr_raw overflowed\n");
+		if (bytes > lxh.buf_bytes) {
+			fprintf(stderr, "listxattr_hidden overflowed\n");
 			ret = -EFAULT;
 			goto out;
 		}
 		if (buf[bytes - 1] != '\0') {
-			fprintf(stderr, "listxattr_raw didn't term\n");
+			fprintf(stderr, "listxattr_hidden didn't term\n");
 			ret = -EINVAL;
 			goto out;
 		}
@@ -107,13 +107,13 @@ static int listxattr_raw_cmd(int argc, char **argv)
 		do {
 			len = strlen(name);
 			if (len == 0) {
-				fprintf(stderr, "listxattr_raw empty name\n");
+				fprintf(stderr, "listxattr_hidden empty name\n");
 				ret = -EINVAL;
 				goto out;
 			}
 
 			if (len > SCOUTFS_XATTR_MAX_NAME_LEN) {
-				fprintf(stderr, "listxattr_raw long name\n");
+				fprintf(stderr, "listxattr_hidden long name\n");
 				ret = -EINVAL;
 				goto out;
 			}
@@ -139,9 +139,9 @@ out:
 	return ret;
 };
 
-static void __attribute__((constructor)) listxattr_raw_ctor(void)
+static void __attribute__((constructor)) listxattr_hidden_ctor(void)
 {
-	cmd_register("listxattr-raw", "-f <path>",
-		     "print only the names of all xattrs on the file",
-		     listxattr_raw_cmd);
+	cmd_register("listxattr-hidden", "-f <path>",
+		     "print the names of hidden xattrs on the file",
+		     listxattr_hidden_cmd);
 }
