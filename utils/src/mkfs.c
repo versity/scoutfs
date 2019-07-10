@@ -235,7 +235,6 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	super->next_trans_seq = cpu_to_le64(1);
 	super->total_blocks = cpu_to_le64(total_blocks);
 	super->next_seg_seq = cpu_to_le64(2);
-	super->next_node_id = cpu_to_le64(1);
 	super->next_compact_id = cpu_to_le64(1);
 	super->quorum_count = quorum_count;
 

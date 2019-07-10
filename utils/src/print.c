@@ -359,7 +359,7 @@ static int print_lock_clients_entry(void *key, unsigned key_len, void *val,
 {
 	struct scoutfs_lock_client_btree_key *cbk = key;
 
-	printf("    node_ld %llu\n", be64_to_cpu(cbk->node_id));
+	printf("    rid %016llx\n", be64_to_cpu(cbk->rid));
 
 	return 0;
 }
@@ -369,8 +369,8 @@ static int print_trans_seqs_entry(void *key, unsigned key_len, void *val,
 {
 	struct scoutfs_trans_seq_btree_key *tsk = key;
 
-	printf("    trans_seq %llu node_ld %llu\n",
-	       be64_to_cpu(tsk->trans_seq), be64_to_cpu(tsk->node_id));
+	printf("    trans_seq %llu rid %016llx\n",
+	       be64_to_cpu(tsk->trans_seq), be64_to_cpu(tsk->rid));
 
 	return 0;
 }
@@ -382,8 +382,8 @@ static int print_mounted_client_entry(void *key, unsigned key_len, void *val,
 	struct scoutfs_mounted_client_btree_key *mck = key;
 	struct scoutfs_mounted_client_btree_val *mcv = val;
 
-	printf("    node_id %llu flags 0x%x\n",
-			be64_to_cpu(mck->node_id), mcv->flags);
+	printf("    rid %016llx flags 0x%x\n",
+			be64_to_cpu(mck->rid), mcv->flags);
 
 	return 0;
 }
@@ -588,7 +588,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_trans_seq %llu next_seg_seq %llu\n"
-	       " next_node_id %llu next_compact_id %llu\n"
+	       "  next_compact_id %llu\n"
 	       "  total_blocks %llu free_blocks %llu alloc_cursor %llu\n"
 	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
 	       "  quorum_count %u server_addr %s\n"
@@ -602,7 +602,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->next_trans_seq),
 		le64_to_cpu(super->next_seg_seq),
-		le64_to_cpu(super->next_node_id),
 		le64_to_cpu(super->next_compact_id),
 		le64_to_cpu(super->total_blocks),
 		le64_to_cpu(super->free_blocks),
