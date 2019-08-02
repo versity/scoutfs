@@ -1,0 +1,15 @@
+=== setup test file ===
+# file: /mnt/test/test/lock-shrink-consistency/dir/file
+user.test="aaa"
+
+=== commit dirty trans and revoke lock ===
+trigger statfs_lock_purge armed: 1
+trigger statfs_lock_purge after it fired: 0
+=== change xattr on other mount ===
+# file: /mnt/test/test/lock-shrink-consistency/dir/file
+user.test="bbb"
+
+=== verify new xattr under new lock on first mount ===
+# file: /mnt/test/test/lock-shrink-consistency/dir/file
+user.test="bbb"
+

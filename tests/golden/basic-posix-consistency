@@ -1,0 +1,55 @@
+== root inode updates flow back and forth
+== stat of created file matches
+== written file contents match
+== overwritten file contents match
+== appended file contents match
+== fiemap matches after racey appends
+== unlinked file isn't found
+== symlink targets match
+/mnt/test/test/basic-posix-consistency/file.targ
+/mnt/test/test/basic-posix-consistency/file.targ
+/mnt/test/test/basic-posix-consistency/file.targ2
+/mnt/test/test/basic-posix-consistency/file.targ2
+== new xattrs are visible
+# file: /mnt/test/test/basic-posix-consistency/file
+user.xat="1"
+
+# file: /mnt/test/test/basic-posix-consistency/file
+user.xat="1"
+
+== modified xattrs are updated
+# file: /mnt/test/test/basic-posix-consistency/file
+user.xat="2"
+
+# file: /mnt/test/test/basic-posix-consistency/file
+user.xat="2"
+
+== deleted xattrs
+/mnt/test/test/basic-posix-consistency/file: user.xat: No such attribute
+/mnt/test/test/basic-posix-consistency/file: user.xat: No such attribute
+== readdir after modification
+one
+two
+three
+four
+one
+two
+three
+four
+two
+four
+two
+four
+== can delete empty dir
+== some easy rename cases
+--- file between dirs
+--- file within dir
+--- dir within dir
+--- overwrite file
+--- can't overwrite non-empty dir
+mv: cannot move ‘/mnt/test/test/basic-posix-consistency/dir/c/clobber’ to ‘/mnt/test/test/basic-posix-consistency/dir/a/dir’: Directory not empty
+--- can overwrite empty dir
+== path resoluion
+== inode indexes match after syncing existing
+== inode indexes match after copying and syncing
+== inode indexes match after removing and syncing

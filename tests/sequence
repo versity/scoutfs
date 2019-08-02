@@ -1,0 +1,27 @@
+export-get-name-parent.sh
+basic-block-counts.sh
+inode-items-updated.sh
+simple-inode-index.sh
+simple-staging.sh
+simple-release-extents.sh
+offline-extent-waiting.sh
+simple-xattr-unit.sh
+segment-cache-fwd-back-iter.sh
+lock-refleak.sh
+lock-shrink-consistency.sh
+lock-pr-cw-conflict.sh
+lock-revoke-getcwd.sh
+createmany-parallel.sh
+createmany-large-names.sh
+stage-release-race-alloc.sh
+basic-posix-consistency.sh
+dirent-consistency.sh
+lock-ex-race-processes.sh
+lock-conflicting-batch-commit.sh
+cross-mount-data-free.sh
+mount-unmount-race.sh
+createmany-parallel-mounts.sh
+archive-light-cycle.sh
+# this creates a ton of tiny btree blocks so we do it last
+stale-btree-seg-read.sh
+xfstests.sh

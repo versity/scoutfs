@@ -1,0 +1,10 @@
+== create per node dirs
+== touch files on each node
+== recreate the files
+== turn the files into directories
+== rename parent dirs
+== rename parent dirs back
+== create some hard links
+== recreate one of the hard links
+== delete the remaining hard link
+== race to blow everything away

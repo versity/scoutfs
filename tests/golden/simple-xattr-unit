@@ -1,0 +1,18 @@
+=== XATTR_ flag combinations
+dumb_setxattr -p /mnt/test/test/simple-xattr-unit/file -n user.test -v val -c -r
+returned -1 errno 22 (Invalid argument)
+dumb_setxattr -p /mnt/test/test/simple-xattr-unit/file -n user.test -v val -r
+returned -1 errno 61 (No data available)
+dumb_setxattr -p /mnt/test/test/simple-xattr-unit/file -n user.test -v val -c
+returned 0
+dumb_setxattr -p /mnt/test/test/simple-xattr-unit/file -n user.test -v val -c
+returned -1 errno 17 (File exists)
+dumb_setxattr -p /mnt/test/test/simple-xattr-unit/file -n user.test -v val -r
+returned 0
+=== bad lengths
+setfattr: /mnt/test/test/simple-xattr-unit/file: Operation not supported
+setfattr: /mnt/test/test/simple-xattr-unit/file: Numerical result out of range
+setfattr: /mnt/test/test/simple-xattr-unit/file: Numerical result out of range
+setfattr: /mnt/test/test/simple-xattr-unit/file: Argument list too long
+=== good length boundaries
+=== 500 random lengths

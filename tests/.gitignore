@@ -1,0 +1,4 @@
+src/*.d
+src/createmany
+src/dumb_setxattr
+src/handle_cat

@@ -1,0 +1,53 @@
+== single block write
+online: 1
+offline: 0
+st_blocks: 8
+== single block overwrite
+online: 1
+offline: 0
+st_blocks: 8
+== append
+online: 2
+offline: 0
+st_blocks: 16
+== release
+online: 0
+offline: 2
+st_blocks: 16
+== duplicate release
+online: 0
+offline: 2
+st_blocks: 16
+== duplicate release past i_size
+online: 0
+offline: 2
+st_blocks: 16
+== stage
+online: 2
+offline: 0
+st_blocks: 16
+== duplicate stage
+online: 2
+offline: 0
+st_blocks: 16
+== larger file
+online: 256
+offline: 0
+st_blocks: 2048
+== partial truncate
+online: 128
+offline: 0
+st_blocks: 1024
+== single sparse block
+online: 1
+offline: 0
+st_blocks: 8
+== empty file
+online: 0
+offline: 0
+st_blocks: 0
+== non-regular file
+online: 0
+offline: 0
+st_blocks: 0
+== cleanup

@@ -1,0 +1,42 @@
+== create files
+== waiter shows up in ioctl
+offline wating should be empty:
+0
+offline waiting should now have one known entry:
+== multiple waiters on same block listed once
+offline waiting still has one known entry:
+== different blocks show up
+offline waiting now has two known entries:
+== staging wakes everyone
+offline wating should be empty again:
+0
+== interruption does no harm
+offline waiting should now have one known entry:
+offline waiting should be empty again:
+0
+== readahead while offline does no harm
+== waiting on interesting blocks works
+offline waiting is empty at block 0
+0
+offline waiting is empty at block 1
+0
+offline waiting is empty at block 128
+0
+offline waiting is empty at block 129
+0
+offline waiting is empty at block 254
+0
+offline waiting is empty at block 255
+0
+== contents match when staging blocks forward
+== contents match when staging blocks backwards
+== truncate to same size doesn't wait
+offline wating should be empty:
+0
+== truncating does wait
+truncate should be waiting for first block:
+trunate should no longer be waiting:
+0
+== writing waits
+should be waiting for write
+== cleanup
