@@ -31,7 +31,7 @@ t_ident()
 	fsid=$(scoutfs statfs -s fsid "$mnt")
 	rid=$(scoutfs statfs -s rid "$mnt")
 
-	echo "f.${fsid:0:4}.r.${rid:0:4}"
+	echo "f.${fsid:0:6}.r.${rid:0:6}"
 }
 
 #
