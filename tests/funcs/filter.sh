@@ -24,6 +24,8 @@ t_filter_dmesg()
 
 	# dm swizzling
 	re="$re|device doesn't appear to be in the dev hash table"
+	re="$re|device-mapper:.*uevent:.*version"
+	re="$re|device-mapper:.*ioctl:.*initialised"
 
 	# some tests try invalid devices
 	re="$re|scoutfs .* error reading super block"
@@ -48,7 +50,8 @@ t_filter_dmesg()
 
 	# tests that drop unmount io triggers fencing
 	re="$re|scoutfs .* error: fencing "
-	re="$re|scoutfs .* warning: waiting for .* lock clients"
+	re="$re|scoutfs .*: waiting for .* lock clients"
+	re="$re|scoutfs .*: all lock clients recovered"
 	re="$re|scoutfs .* error: client rid.*lock recovery timed out"
 
 	egrep -v "($re)" 
