@@ -131,9 +131,10 @@ void scoutfs_sysfs_init_attrs(struct super_block *sb,
  *  If this returns success then the file will be visible and show can
  *  be called until unmount.
  */
-int scoutfs_sysfs_create_attrs(struct super_block *sb,
-			       struct scoutfs_sysfs_attrs *ssa,
-			       struct attribute **attrs, char *fmt, ...)
+int scoutfs_sysfs_create_attrs_parent(struct super_block *sb,
+				      struct kobject *parent,
+				      struct scoutfs_sysfs_attrs *ssa,
+				      struct attribute **attrs, char *fmt, ...)
 {
 	va_list args;
 	size_t name_len;
@@ -174,8 +175,8 @@ int scoutfs_sysfs_create_attrs(struct super_block *sb,
 		goto out;
 	}
 
-	ret = kobject_init_and_add(&ssa->kobj, &ssa->ktype,
-				   scoutfs_sysfs_sb_dir(sb), "%s", ssa->name);
+	ret = kobject_init_and_add(&ssa->kobj, &ssa->ktype, parent,
+				   "%s", ssa->name);
 out:
 	if (ret) {
 		kfree(ssa->name);
