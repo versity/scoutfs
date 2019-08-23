@@ -10,6 +10,8 @@
 
 #define SCOUTFS_ATTR_RO(_name)						\
         static struct kobj_attribute scoutfs_attr_##_name = __ATTR_RO(_name)
+#define SCOUTFS_ATTR_RW(_name)						\
+        static struct kobj_attribute scoutfs_attr_##_name = __ATTR_RW(_name)
 
 #define SCOUTFS_ATTR_PTR(_name)						\
         &scoutfs_attr_##_name.attr
