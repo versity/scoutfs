@@ -222,7 +222,7 @@ if [ -n "$T_KMOD_REPO" ]; then
 	cmd cd "$T_KMOD_REPO"
 
 	cmd git fetch
-	cmd git rev-parse --verify "$T_KMOD_BRANCH"
+	cmd git rev-parse --verify "origin/$T_KMOD_BRANCH"
 	cmd git checkout -B "$T_KMOD_BRANCH" --track origin/$T_KMOD_BRANCH
 	cmd git pull --rebase
 	cmd make
@@ -238,7 +238,7 @@ if [ -n "$T_UTILS_REPO" ]; then
 	cmd cd "$T_UTILS_REPO"
 
 	cmd git fetch
-	cmd git rev-parse --verify "$T_UTILS_BRANCH"
+	cmd git rev-parse --verify "origin/$T_UTILS_BRANCH"
 	cmd git checkout -B "$T_UTILS_BRANCH" --track origin/$T_UTILS_BRANCH
 	cmd git pull --rebase
 	# might need git clean to remove stale src/*.o after update
