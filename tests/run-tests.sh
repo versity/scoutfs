@@ -214,7 +214,9 @@ test -z "$tests" && \
 	die "no tests found by including $T_INCLUDE and excluding $T_EXCLUDE"
 
 # create results dir 
-test -e "$T_RESULTS" || cmd mkdir -p "$T_RESULTS"
+test -e "$T_RESULTS" || mkdir -p "$T_RESULTS"
+test -d "$T_RESULTS" || \
+	 die "$T_RESULTS dir is not a directory"
 
 # checkout and build kernel module
 if [ -n "$T_KMOD_REPO" ]; then
