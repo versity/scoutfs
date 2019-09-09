@@ -19,6 +19,7 @@ dirent-consistency.sh
 lock-ex-race-processes.sh
 lock-conflicting-batch-commit.sh
 cross-mount-data-free.sh
+setup-error-teardown.sh
 mount-unmount-race.sh
 createmany-parallel-mounts.sh
 archive-light-cycle.sh
