@@ -8,6 +8,9 @@ u8 scoutfs_quorum_votes_needed(struct super_block *sb);
 void scoutfs_quorum_slot_sin(struct scoutfs_super_block *super, int i,
 			     struct sockaddr_in *sin);
 
+int scoutfs_quorum_fence_leader_blocks(struct super_block *sb, u64 term);
+int scoutfs_quorum_clear_rid_leader(struct super_block *sb, u64 rid);
+
 int scoutfs_quorum_setup(struct super_block *sb);
 void scoutfs_quorum_shutdown(struct super_block *sb);
 void scoutfs_quorum_destroy(struct super_block *sb);

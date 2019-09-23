@@ -2,6 +2,9 @@
 #define _SCOUTFS_FENCE_H_
 
 enum {
+	SCOUTFS_FENCE_CLIENT_RECOVERY,
+	SCOUTFS_FENCE_CLIENT_RECONNECT,
+	SCOUTFS_FENCE_QUORUM_BLOCK_LEADER,
 };
 
 int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int reason);

@@ -40,6 +40,7 @@
 #include "forest.h"
 #include "recov.h"
 #include "omap.h"
+#include "fence.h"
 
 /*
  * Every active mount can act as the server that listens on a net
@@ -106,6 +107,8 @@ struct server_info {
 
 	/* recovery timeout fences from work */
 	struct work_struct fence_pending_recov_work;
+	/* while running we check for fenced mounts to reclaim */
+	struct delayed_work reclaim_dwork;
 };
 
 #define DECLARE_SERVER_INFO(sb, name) \
@@ -1672,7 +1675,15 @@ static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
 			sizeof(struct scoutfs_mounted_client_btree_val));
 }
 
-static int reclaim_rid(struct super_block *sb, u64 rid)
+/*
+ * Reclaim all the resources for a mount which has gone away.  It's sent
+ * us a farewell promising to leave or we actively fenced it.
+ *
+ * It's safe to call this multiple times for a given rid.  Each
+ * individual action knows to recognize that it's already been performed
+ * and return success.
+ */
+static int reclaim_rid(struct super_block *sb, u64 rid, bool clear_leader)
 {
 	int ret;
 
@@ -1680,13 +1691,14 @@ static int reclaim_rid(struct super_block *sb, u64 rid)
 	if (ret < 0)
 		return ret;
 
-	/* delete mounted client last, client reconnect looks for it */
+	/* delete mounted client last, recovery looks for it */
 	ret = scoutfs_lock_server_farewell(sb, rid) ?:
 	      remove_trans_seq(sb, rid) ?:
 	      reclaim_log_trees(sb, rid) ?:
 	      cancel_srch_compact(sb, rid) ?:
-	      delete_mounted_client(sb, rid) ?:
-	      scoutfs_omap_remove_rid(sb, rid);
+	      scoutfs_omap_remove_rid(sb, rid) ?:
+	      (clear_leader ? scoutfs_quorum_clear_rid_leader(sb, rid) : 0) ?:
+	      delete_mounted_client(sb, rid);
 
 	return scoutfs_server_apply_commit(sb, ret);
 }
@@ -1816,9 +1828,9 @@ static void farewell_worker(struct work_struct *work)
 		}
 	}
 
-	/* process and send farewell responses */
+	/* clean up resources for mounts before sending responses */
 	list_for_each_entry_safe(fw, tmp, &send, entry) {
-		ret = reclaim_rid(sb, fw->rid);
+		ret = reclaim_rid(sb, fw->rid, false);
 		if (ret)
 			goto out;
 	}
@@ -2017,21 +2029,19 @@ static void fence_pending_recov_worker(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  fence_pending_recov_work);
 	struct super_block *sb = server->sb;
-	u64 rid;
+	u64 rid = 0;
 	int ret;
 
-	while ((rid = scoutfs_recov_next_pending(sb, SCOUTFS_RECOV_ALL)) > 0) {
+	while ((rid = scoutfs_recov_next_pending(sb, rid, SCOUTFS_RECOV_ALL)) > 0) {
 		scoutfs_err(sb, "%lu ms recovery timeout expired for client rid %016llx, fencing",
 			    SERVER_RECOV_TIMEOUT_MS, rid);
 
-		ret = reclaim_rid(sb, rid);
-		if (ret < 0) {
-			scoutfs_err(sb, "error %d reclaiming rid %016llx, shutting down", ret, rid);
-			stop_server(server);
+		ret = scoutfs_fence_start(sb, rid, 0, SCOUTFS_FENCE_CLIENT_RECOVERY);
+		if (ret) {
+			scoutfs_err(sb, "fence returned err %d, shutting down server", ret);
+			scoutfs_server_abort(sb);
 			break;
 		}
-
-		scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_ALL);
 	}
 }
 
@@ -2102,6 +2112,69 @@ out:
 	return ret;
 }
 
+static void queue_reclaim_work(struct server_info *server, unsigned long delay)
+{
+	if (!server->shutting_down)
+		queue_delayed_work(server->wq, &server->reclaim_dwork, delay);
+}
+
+#define RECLAIM_WORK_DELAY_MS	MSEC_PER_SEC
+
+/*
+ * Fencing is performed by userspace and can happen as we're elected
+ * leader before the server is running.  Once we're running we want to
+ * reclaim resources from any mounts that may have been fenced.
+ *
+ * The reclaim worker runs regularly in the background and reclaims the
+ * resources for mounts that have been fenced.  Once the fenced rid has
+ * been reclaimed the fence request can be removed.
+ *
+ * This is queued by the server work as it starts up, requeues itself
+ * until shutdown, and is then canceled by the server work as it shuts
+ * down.
+ */
+static void reclaim_worker(struct work_struct *work)
+{
+	struct server_info *server = container_of(work, struct server_info, reclaim_dwork.work);
+	struct super_block *sb = server->sb;
+	bool error;
+	int reason;
+	u64 rid;
+	int ret;
+
+	ret = scoutfs_fence_next(sb, &rid, &reason, &error);
+	if (ret < 0)
+		goto out;
+
+	if (error == true) {
+		scoutfs_err(sb, "saw error indicator on fence request for rid %016llx, shutting down server",
+			    rid);
+		scoutfs_server_abort(sb);
+		ret = -ESHUTDOWN;
+		goto out;
+	}
+
+	ret = reclaim_rid(sb, rid, reason == SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
+	if (ret < 0) {
+		scoutfs_err(sb, "failure to reclaim fenced rid %016llx: err %d, shutting down server",
+			    rid, ret);
+		scoutfs_server_abort(sb);
+		goto out;
+	}
+
+	scoutfs_info(sb, "successfully reclaimed resources for fenced rid %016llx", rid);
+	scoutfs_fence_free(sb, rid);
+	scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_ALL);
+	ret = 0;
+
+out:
+	/* queue next reclaim immediately if we're making progress */
+	if (ret == 0)
+		queue_reclaim_work(server, 0);
+	else
+		queue_reclaim_work(server, msecs_to_jiffies(RECLAIM_WORK_DELAY_MS));
+}
+
 static void scoutfs_server_worker(struct work_struct *work)
 {
 	struct server_info *server = container_of(work, struct server_info,
@@ -2117,6 +2190,11 @@ static void scoutfs_server_worker(struct work_struct *work)
 	int ret;
 
 	trace_scoutfs_server_work_enter(sb, 0, 0);
+
+	/* first make sure no other servers are still running */
+	ret = scoutfs_quorum_fence_leader_blocks(sb, server->term);
+	if (ret < 0)
+		goto out;
 
 	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server setting up at "SIN_FMT, SIN_ARG(&sin));
@@ -2189,6 +2267,8 @@ static void scoutfs_server_worker(struct work_struct *work)
 	scoutfs_info(sb, "server ready at "SIN_FMT, SIN_ARG(&sin));
 	complete(&server->start_comp);
 
+	queue_reclaim_work(server, 0);
+
 	/* wait_event/wake_up provide barriers */
 	wait_event_interruptible(server->waitq, server->shutting_down);
 
@@ -2197,6 +2277,7 @@ shutdown:
 
 	/* wait for farewell to finish sending messages */
 	flush_work(&server->farewell_work);
+	cancel_delayed_work_sync(&server->reclaim_dwork);
 
 	/* wait for requests to finish, no more requests */
 	scoutfs_net_shutdown(sb, conn);
@@ -2209,6 +2290,7 @@ shutdown:
 	/* wait for extra queues by requests, won't find waiters */
 	flush_work(&server->commit_work);
 
+	scoutfs_fence_stop(sb);
 	scoutfs_lock_server_destroy(sb);
 	scoutfs_omap_server_shutdown(sb);
 
@@ -2299,6 +2381,7 @@ int scoutfs_server_setup(struct super_block *sb)
 	seqcount_init(&server->volopt_seqcount);
 	mutex_init(&server->volopt_mutex);
 	INIT_WORK(&server->fence_pending_recov_work, fence_pending_recov_worker);
+	INIT_DELAYED_WORK(&server->reclaim_dwork, reclaim_worker);
 
 	server->wq = alloc_workqueue("scoutfs_server",
 				     WQ_UNBOUND | WQ_NON_REENTRANT, 0);

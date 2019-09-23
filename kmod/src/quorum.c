@@ -32,6 +32,7 @@
 #include "block.h"
 #include "net.h"
 #include "sysfs.h"
+#include "fence.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -461,28 +462,78 @@ static int update_quorum_block(struct super_block *sb, u64 blkno,
 	return ret;
 }
 
+/*
+ * The calling server had fenced previous leaders before starting up,
+ * now that it's up it has reclaimed their resources and can clear their
+ * leader flags.
+ */
+int scoutfs_quorum_clear_rid_leader(struct super_block *sb, u64 rid)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	struct mount_options *opts = &sbi->opts;
+	struct scoutfs_quorum_block blk;
+	int ret = 0;
+	u64 blkno;
+	int i;
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		if (i == opts->quorum_slot_nr || !quorum_slot_present(super, i))
+			continue;
+
+		blkno = SCOUTFS_QUORUM_BLKNO + i;
+		ret = read_quorum_block(sb, blkno, &blk, NULL);
+		if (ret < 0)
+			break;
+
+		if (le64_to_cpu(blk.set_leader.rid) == rid) {
+			blk.flags &= ~cpu_to_le64(SCOUTFS_QUORUM_BLOCK_LEADER);
+			set_quorum_block_event(sb, &blk, &blk.fenced);
+
+			ret = write_quorum_block(sb, blkno, &blk, NULL);
+			break;
+		}
+	}
+
+	if (ret < 0)
+		scoutfs_err(sb, "error %d clearing leader block for rid %016llx", ret, rid);
+
+	return ret;
+}
 
 /*
- * The calling server has been elected and updated their block, but
- * can't yet assume that it has exclusive access to the metadata device.
- * We read all the quorum blocks looking for previously elected leaders
- * to fence so that we're the only leader running.
+ * The calling server has been elected, had its block updated, and has
+ * started running but can't yet assume that it has exclusive access to
+ * the metadata device.  We read all the quorum blocks looking for
+ * previously elected leaders to fence so that we're the only leader
+ * running.
+ *
+ * We only wait for the previous leaders to be fenced.  We don't clear
+ * the leader bits because the server is going to reclaim their
+ * resources once its up and running.  Only then will the leader bits be
+ * cleared.
+ *
+ * Quorum will be sending heartbeats while we wait for fencing.  That
+ * keeps us from being fenced while we allow userspace fencing to take a
+ * reasonably long time.  We still want to timeout eventually.
  */
-static int fence_leader_blocks(struct super_block *sb)
+int scoutfs_quorum_fence_leader_blocks(struct super_block *sb, u64 term)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
 	struct mount_options *opts = &sbi->opts;
 	struct scoutfs_quorum_block blk;
 	struct sockaddr_in sin;
+	bool fence_started = false;
 	u64 blkno;
 	int ret = 0;
+	int err;
 	int i;
 
 	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (i == opts->quorum_slot_nr)
+		if (i == opts->quorum_slot_nr || !quorum_slot_present(super, i))
 			continue;
 
 		blkno = SCOUTFS_QUORUM_BLKNO + i;
@@ -490,27 +541,31 @@ static int fence_leader_blocks(struct super_block *sb)
 		if (ret < 0)
 			goto out;
 
-		if (!(le64_to_cpu(blk.flags) & SCOUTFS_QUORUM_BLOCK_LEADER))
+		if (!(le64_to_cpu(blk.flags) & SCOUTFS_QUORUM_BLOCK_LEADER) ||
+		    le64_to_cpu(blk.term) > term)
 			continue;
 
 		scoutfs_inc_counter(sb, quorum_fence_leader);
 		scoutfs_quorum_slot_sin(super, i, &sin);
 
-		scoutfs_err(sb, "fencing "SCSBF" at "SIN_FMT,
-			    SCSB_LEFR_ARGS(super->hdr.fsid, blk.set_leader.rid),
-			    SIN_ARG(&sin));
-
-		blk.flags &= ~cpu_to_le64(SCOUTFS_QUORUM_BLOCK_LEADER);
-		set_quorum_block_event(sb, &blk, &blk.fenced);
-
-		ret = write_quorum_block(sb, blkno, &blk, NULL);
+		scoutfs_info(sb, "fencing previous leader "SCSBF" in slot %u with address "SIN_FMT,
+			     SCSB_LEFR_ARGS(super->hdr.fsid, blk.set_leader.rid), i, SIN_ARG(&sin));
+		ret = scoutfs_fence_start(sb, le64_to_cpu(blk.set_leader.rid), sin.sin_addr.s_addr,
+					  SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
 		if (ret < 0)
 			goto out;
+		fence_started = true;
+
 	}
 
 out:
+	if (fence_started) {
+		err = scoutfs_fence_wait_fenced(sb, msecs_to_jiffies(SCOUTFS_QUORUM_FENCE_TO_MS));
+		if (ret == 0)
+			ret = err;
+	}
 	if (ret < 0) {
-		scoutfs_err(sb, "error %d fencing active", ret);
+		scoutfs_err(sb, "error %d fencing leader blocks", ret);
 		scoutfs_inc_counter(sb, quorum_fence_error);
 	}
 
@@ -670,10 +725,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 					qst.term);
 			qst.timeout = heartbeat_interval();
 
-			/* set our leader flag and fence */
-			ret = update_quorum_block(sb, blkno, &mark,
-						  qst.role, qst.term) ?:
-			      fence_leader_blocks(sb);
+			/* set our leader flag before starting server */
+			ret = update_quorum_block(sb, blkno, &mark, qst.role, qst.term);
 			if (ret < 0)
 				goto out;
 
@@ -727,6 +780,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	/* always try to stop a running server as we stop */
 	if (test_bit(QINF_FLAG_SERVER, &qinf->flags)) {
 		scoutfs_server_stop(sb);
+		scoutfs_fence_stop(sb);
 		send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
 				qst.term);
 	}

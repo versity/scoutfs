@@ -30,6 +30,7 @@
 #include "net.h"
 #include "endian_swap.h"
 #include "tseq.h"
+#include "fence.h"
 
 /*
  * scoutfs networking delivers requests and responses between nodes.
@@ -1220,6 +1221,7 @@ static void scoutfs_net_reconn_free_worker(struct work_struct *work)
 	unsigned long now = jiffies;
 	unsigned long deadline = 0;
 	bool requeue = false;
+	int ret;
 
 	trace_scoutfs_net_reconn_free_work_enter(sb, 0, 0);
 
@@ -1233,10 +1235,18 @@ restart:
 		     time_after_eq(now, acc->reconn_deadline))) {
 			set_conn_fl(acc, reconn_freeing);
 			spin_unlock(&conn->lock);
-			if (!test_conn_fl(conn, shutting_down))
-				scoutfs_info(sb, "client timed out "SIN_FMT" -> "SIN_FMT", can not reconnect",
-					     SIN_ARG(&acc->sockname),
+			if (!test_conn_fl(conn, shutting_down)) {
+				scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
 					     SIN_ARG(&acc->peername));
+				ret = scoutfs_fence_start(sb, acc->rid,
+						acc->peername.sin_addr.s_addr,
+						SCOUTFS_FENCE_CLIENT_RECONNECT);
+				if (ret) {
+					scoutfs_err(sb, "client fence returned err %d, shutting down server",
+						    ret);
+					scoutfs_server_abort(sb);
+				}
+			}
 			destroy_conn(acc);
 			goto restart;
 		}

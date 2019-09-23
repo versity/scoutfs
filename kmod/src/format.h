@@ -586,6 +586,12 @@ struct scoutfs_xattr {
 #define SCOUTFS_QUORUM_HB_IVAL_MS	100
 #define SCOUTFS_QUORUM_HB_TIMEO_MS	(5 * MSEC_PER_SEC)
 
+/*
+ * A newly elected leader will give fencing some time before giving up and
+ * shutting down.
+ */
+#define SCOUTFS_QUORUM_FENCE_TO_MS	(15 * MSEC_PER_SEC)
+
 struct scoutfs_quorum_message {
 	__le64 fsid;
 	__le64 version;

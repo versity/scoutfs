@@ -187,7 +187,9 @@ static ssize_t reason_show(struct kobject *kobj, struct kobj_attribute *attr,
 	unsigned r = fence->reason;
 	char *str = "unknown";
 	static char *reasons[] = {
-		[SCOUTFS_FENCE_TEST] = "test",
+		[SCOUTFS_FENCE_CLIENT_RECOVERY] = "client_recovery",
+		[SCOUTFS_FENCE_CLIENT_RECONNECT] = "client_reconnect",
+		[SCOUTFS_FENCE_QUORUM_BLOCK_LEADER] = "quorum_block_leader",
 	};
 
 	if (r < ARRAY_SIZE(reasons) && reasons[r])
