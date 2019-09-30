@@ -37,12 +37,3 @@ u32 crc_block(struct scoutfs_block_header *hdr)
 	return crc32c(~0, (char *)hdr + sizeof(hdr->crc),
 		      SCOUTFS_BLOCK_SIZE - sizeof(hdr->crc));
 }
-
-u32 crc_segment(struct scoutfs_segment_block *sblk)
-{
-	u32 off = offsetof(struct scoutfs_segment_block, _padding) +
-		  sizeof(sblk->_padding);
-
-	return crc32c(~0, (char *)sblk + off,
-		      le32_to_cpu(sblk->total_bytes) - off);
-}

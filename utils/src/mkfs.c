@@ -25,6 +25,7 @@
 #include "rand.h"
 #include "dev.h"
 #include "key.h"
+#include "bitops.h"
 
 static int write_raw_block(int fd, u64 blkno, void *blk)
 {
@@ -52,80 +53,6 @@ static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
 	hdr->crc = cpu_to_le32(crc_block(hdr));
 
 	return write_raw_block(fd, blkno, hdr);
-}
-
-/*
- * Calculate the greatest number of btree blocks that might be needed to
- * store the given item population.  At most all blocks will be half
- * full.  All keys will be the max size including parent items which
- * determines the fanout.
- *
- * We will never hit this in practice.  But some joker *could* fill a
- * filesystem with empty files with enormous file names.
- */
-static u64 calc_btree_blocks(u64 nr, u64 max_key, u64 max_val)
-{
-	u64 item_bytes;
-	u64 fanout;
-	u64 block_items;
-	u64 leaf_blocks;
-	u64 level_blocks;
-	u64 total_blocks;
-
-	/* figure out the parent fanout for these silly huge possible items */
-	item_bytes = sizeof(struct scoutfs_btree_item_header) +
-			    sizeof(struct scoutfs_btree_item) +
-			    max_key + sizeof(struct scoutfs_btree_ref);
-	fanout = ((SCOUTFS_BLOCK_SIZE - sizeof(struct scoutfs_btree_block) -
-		   SCOUTFS_BTREE_PARENT_MIN_FREE_BYTES) / 2) / item_bytes;
-
-	/* figure out how many items we have to store */
-	item_bytes = sizeof(struct scoutfs_btree_item_header) +
-			    sizeof(struct scoutfs_btree_item) +
-			    max_key + max_val;
-	block_items = ((SCOUTFS_BLOCK_SIZE -
-		       sizeof(struct scoutfs_btree_block)) / 2) / item_bytes;
-	leaf_blocks = DIV_ROUND_UP(nr, block_items);
-
-	/* then calc total blocks as we grow to have enough blocks for items */
-	level_blocks = 1;
-	total_blocks = level_blocks;
-	while (level_blocks < leaf_blocks) {
-		level_blocks *= fanout;
-		level_blocks = min(leaf_blocks, level_blocks);
-		total_blocks += level_blocks;
-	}
-
-	return total_blocks;
-}
-
-/*
- * Figure out how many btree ring blocks we'll need for all the btree
- * items that could be needed to describe this many segments.
- *
- * We can have either a free extent or manifest ref for every segment in
- * the system.  Free extent items are smaller than manifest refs, and
- * they merge if they're adjacent, so the largest possible tree is a ref
- * for every segment.
- */
-static u64 calc_btree_ring_blocks(u64 total_segs)
-{
-	u64 blocks;
-
-	/* key is smaller for wider parent fanout */
-	assert(sizeof(struct scoutfs_extent_btree_key) <=
-		     sizeof(struct scoutfs_manifest_btree_key));
-
-	/* 2 extent items is smaller than a manifest ref */
-	assert((2 * sizeof(struct scoutfs_extent_btree_key)) <=
-	       (sizeof(struct scoutfs_manifest_btree_key) +
-		sizeof(struct scoutfs_manifest_btree_val)));
-
-	blocks = calc_btree_blocks(total_segs,
-				sizeof(struct scoutfs_manifest_btree_key),
-				sizeof(struct scoutfs_manifest_btree_val));
-
-	return round_up(blocks * 4, SCOUTFS_SEGMENT_BLOCKS);
 }
 
 static float size_flt(u64 nr, unsigned size)
@@ -166,28 +93,22 @@ static char *size_str(u64 nr, unsigned size)
 static int write_new_fs(char *path, int fd, u8 quorum_count)
 {
 	struct scoutfs_super_block *super;
-	struct scoutfs_key *ino_key;
-	struct scoutfs_key *idx_key;
+	struct scoutfs_key_be *kbe;
 	struct scoutfs_inode *inode;
-	struct scoutfs_segment_block *sblk;
-	struct scoutfs_manifest_btree_key *mkey;
-	struct scoutfs_manifest_btree_val *mval;
 	struct scoutfs_extent_btree_key *ebk;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *btitem;
-	struct scoutfs_segment_item *item;
+	struct scoutfs_balloc_item_key *bik;
+	struct scoutfs_balloc_item_val *biv;
 	struct scoutfs_key key;
-	__le32 *prev_link;
 	struct timeval tv;
 	char uuid_str[37];
 	void *zeros;
 	u64 blkno;
 	u64 limit;
 	u64 size;
-	u64 ring_blocks;
-	u64 total_segs;
 	u64 total_blocks;
-	u64 first_segno;
+	u64 free_blkno;
 	u64 free_start;
 	u64 free_len;
 	int ret;
@@ -197,9 +118,8 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 
 	super = calloc(1, SCOUTFS_BLOCK_SIZE);
 	bt = calloc(1, SCOUTFS_BLOCK_SIZE);
-	sblk = calloc(1, SCOUTFS_SEGMENT_SIZE);
-	zeros = calloc(1, SCOUTFS_SEGMENT_SIZE);
-	if (!super || !bt || !sblk || !zeros) {
+	zeros = calloc(1, SCOUTFS_BLOCK_SIZE);
+	if (!super || !bt || !zeros) {
 		ret = -errno;
 		fprintf(stderr, "failed to allocate block mem: %s (%d)\n",
 			strerror(errno), errno);
@@ -213,15 +133,14 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 		goto out;
 	}
 
-	/* arbitrarily require space for a handful of segments */
-	limit = SCOUTFS_SEGMENT_SIZE * 16;
+	/* arbitrarily require a reasonably large device */
+	limit = 8ULL * (1024 * 1024 * 1024);
 	if (size < limit) {
 		fprintf(stderr, "%llu byte device too small for min %llu byte fs\n",
 			size, limit);
 		goto out;
 	}
 
-	total_segs = size / SCOUTFS_SEGMENT_SIZE;
 	total_blocks = size / SCOUTFS_BLOCK_SIZE;
 
 	/* partially initialize the super so we can use it to init others */
@@ -234,25 +153,21 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->next_trans_seq = cpu_to_le64(1);
 	super->total_blocks = cpu_to_le64(total_blocks);
-	super->next_seg_seq = cpu_to_le64(2);
-	super->next_compact_id = cpu_to_le64(1);
 	super->quorum_count = quorum_count;
 
-	/* align the btree ring to the segment after the super */
-	blkno = round_up(SCOUTFS_SUPER_BLKNO + 1, SCOUTFS_SEGMENT_BLOCKS);
-	/* first usable segno follows manifest ring */
-	ring_blocks = calc_btree_ring_blocks(total_segs);
-	first_segno = (blkno + ring_blocks) / SCOUTFS_SEGMENT_BLOCKS;
-	free_start = ((first_segno + 1) << SCOUTFS_SEGMENT_BLOCK_SHIFT);
+	/* metadata blocks start after the quorum blocks */
+	free_blkno = SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS;
+
+	/* extents start after btree blocks */
+	free_start = total_blocks - (total_blocks / 4);
 	free_len = total_blocks - free_start;
 
+	/* fill out some alloc boundaries before using */
 	super->free_blocks = cpu_to_le64(free_len);
-	super->bring.first_blkno = cpu_to_le64(blkno);
-	super->bring.nr_blocks = cpu_to_le64(ring_blocks);
-	super->bring.next_block = cpu_to_le64(2);
-	super->bring.next_seq = cpu_to_le64(2);
 
-	/* allocator btree has item with space after first segno */
+	/* extent allocator btree indexes free data extent */
+	blkno = free_blkno++;
+
 	super->alloc_root.ref.blkno = cpu_to_le64(blkno);
 	super->alloc_root.ref.seq = cpu_to_le64(1);
 	super->alloc_root.height = 1;
@@ -261,14 +176,13 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	bt->hdr.fsid = super->hdr.fsid;
 	bt->hdr.blkno = cpu_to_le64(blkno);
 	bt->hdr.seq = cpu_to_le64(1);
-	bt->nr_items = cpu_to_le16(2);
+	bt->nr_items = cpu_to_le32(2);
 
 	/* btree item allocated from the back of the block */
 	ebk = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*ebk);
 	btitem = (void *)ebk - sizeof(*btitem);
 
-	bt->item_hdrs[0].off = cpu_to_le16((long)btitem - (long)bt);
-	bt->free_end = bt->item_hdrs[0].off;
+	bt->item_hdrs[0].off = cpu_to_le32((long)btitem - (long)bt);
 	btitem->key_len = cpu_to_le16(sizeof(*ebk));
 	btitem->val_len = cpu_to_le16(0);
 
@@ -279,14 +193,15 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	ebk = (void *)btitem - sizeof(*ebk);
 	btitem = (void *)ebk - sizeof(*btitem);
 
-	bt->item_hdrs[1].off = cpu_to_le16((long)btitem - (long)bt);
-	bt->free_end = bt->item_hdrs[1].off;
+	bt->item_hdrs[1].off = cpu_to_le32((long)btitem - (long)bt);
 	btitem->key_len = cpu_to_le16(sizeof(*ebk));
 	btitem->val_len = cpu_to_le16(0);
 
 	ebk->type = SCOUTFS_FREE_EXTENT_BLOCKS_TYPE;
 	ebk->major = cpu_to_be64(free_len);
 	ebk->minor = cpu_to_be64(free_start + free_len - 1);
+
+	bt->free_end = bt->item_hdrs[le32_to_cpu(bt->nr_items) - 1].off;
 
 	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
 	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
@@ -296,85 +211,46 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 		goto out;
 	blkno++;
 
-	/* manifest btree has a block with an item for the segment */
-	super->manifest.root.ref.blkno = cpu_to_le64(blkno);
-	super->manifest.root.ref.seq = cpu_to_le64(1);
-	super->manifest.root.height = 1;
-	super->manifest.level_counts[1] = cpu_to_le64(1);
+	/* fs root starts with root inode and its index items */
+	blkno = free_blkno++;
+
+	super->fs_root.ref.blkno = cpu_to_le64(blkno);
+	super->fs_root.ref.seq = cpu_to_le64(1);
+	super->fs_root.height = 1;
 
 	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
 	bt->hdr.fsid = super->hdr.fsid;
 	bt->hdr.blkno = cpu_to_le64(blkno);
 	bt->hdr.seq = cpu_to_le64(1);
-	bt->nr_items = cpu_to_le16(1);
+	bt->nr_items = cpu_to_le32(2);
 
 	/* btree item allocated from the back of the block */
-	mval = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*mval);
-	ino_key = &mval->last_key;
-	mkey = (void *)mval - sizeof(*mkey);
-	btitem = (void *)mkey - sizeof(*btitem);
+	kbe = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*kbe);
+	btitem = (void *)kbe - sizeof(*btitem);
 
-	bt->item_hdrs[0].off = cpu_to_le16((long)btitem - (long)bt);
-	bt->free_end = bt->item_hdrs[0].off;
+	bt->item_hdrs[0].off = cpu_to_le32((long)btitem - (long)bt);
+	btitem->key_len = cpu_to_le16(sizeof(*kbe));
+	btitem->val_len = cpu_to_le16(0);
 
-	btitem->key_len = cpu_to_le16(sizeof(*mkey));
-	btitem->val_len = cpu_to_le16(sizeof(*mval));
-
-	mkey->level = 1;
-	mkey->seq = cpu_to_be64(1);
 	memset(&key, 0, sizeof(key));
 	key.sk_zone = SCOUTFS_INODE_INDEX_ZONE;
 	key.sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
 	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	scoutfs_key_to_be(&mkey->first_key, &key);
+	scoutfs_key_to_be(kbe, &key);
 
-	mval->segno = cpu_to_le64(first_segno);
-	ino_key->sk_zone = SCOUTFS_FS_ZONE;
-	ino_key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	ino_key->sk_type = SCOUTFS_INODE_TYPE;
+	inode = (void *)btitem - sizeof(*inode);
+	kbe = (void *)inode - sizeof(*kbe);
+	btitem = (void *)kbe - sizeof(*btitem);
 
-	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
-	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
+	bt->item_hdrs[1].off = cpu_to_le32((long)btitem - (long)bt);
+	btitem->key_len = cpu_to_le16(sizeof(*kbe));
+	btitem->val_len = cpu_to_le16(sizeof(*inode));
 
-	ret = write_raw_block(fd, blkno, bt);
-	if (ret)
-		goto out;
-	blkno += ring_blocks;
-
-	/* write seg with root inode */
-	sblk->segno = cpu_to_le64(first_segno);
-	sblk->seq = cpu_to_le64(1);
-	prev_link = &sblk->skip_links[0];
-
-	item = (void *)(sblk + 1);
-	*prev_link = cpu_to_le32((long)item -(long)sblk);
-	prev_link = &item->skip_links[0];
-
-	item->val_len = 0;
-	item->nr_links = 1;
-	le32_add_cpu(&sblk->nr_items, 1);
-
-	idx_key = &item->key;
-	idx_key->sk_zone = SCOUTFS_INODE_INDEX_ZONE;
-	idx_key->sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
-	idx_key->skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-
-	item = (void *)&item->skip_links[1];
-	*prev_link = cpu_to_le32((long)item -(long)sblk);
-	prev_link = &item->skip_links[0];
-
-	sblk->last_item_off = cpu_to_le32((long)item - (long)sblk);
-
-	ino_key = (void *)&item->key;
-	inode = (void *)&item->skip_links[1];
-
-	item->val_len = cpu_to_le16(sizeof(struct scoutfs_inode));
-	item->nr_links = 1;
-	le32_add_cpu(&sblk->nr_items, 1);
-
-	ino_key->sk_zone = SCOUTFS_FS_ZONE;
-	ino_key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	ino_key->sk_type = SCOUTFS_INODE_TYPE;
+	memset(&key, 0, sizeof(key));
+	key.sk_zone = SCOUTFS_FS_ZONE;
+	key.ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	key.sk_type = SCOUTFS_INODE_TYPE;
+	scoutfs_key_to_be(kbe, &key);
 
 	inode->next_readdir_pos = cpu_to_le64(2);
 	inode->nlink = cpu_to_le32(SCOUTFS_DIRENT_FIRST_POS);
@@ -386,16 +262,55 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	inode->mtime.sec = inode->atime.sec;
 	inode->mtime.nsec = inode->atime.nsec;
 
-	item = (void *)(inode + 1);
-	sblk->total_bytes = cpu_to_le32((long)item - (long)sblk);
-	sblk->crc = cpu_to_le32(crc_segment(sblk));
+	bt->free_end = bt->item_hdrs[le32_to_cpu(bt->nr_items) - 1].off;
 
-	ret = pwrite(fd, sblk, SCOUTFS_SEGMENT_SIZE,
-		     first_segno << SCOUTFS_SEGMENT_SHIFT);
-	if (ret != SCOUTFS_SEGMENT_SIZE) {
-		ret = -EIO;
+	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
+	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
+
+	ret = write_raw_block(fd, blkno, bt);
+	if (ret)
 		goto out;
-	}
+
+	/* metadata block allocator has single item, server continues init */
+	blkno = free_blkno++;
+
+	super->core_balloc_alloc.root.ref.blkno = cpu_to_le64(blkno);
+	super->core_balloc_alloc.root.ref.seq = cpu_to_le64(1);
+	super->core_balloc_alloc.root.height = 1;
+
+	/* XXX magic */
+
+	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
+	bt->hdr.fsid = super->hdr.fsid;
+	bt->hdr.blkno = cpu_to_le64(blkno);
+	bt->hdr.seq = cpu_to_le64(1);
+	bt->nr_items = cpu_to_le32(1);
+
+	/* btree item allocated from the back of the block */
+	biv = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*biv);
+	bik = (void *)biv - sizeof(*bik);
+	btitem = (void *)bik - sizeof(*btitem);
+
+	bt->item_hdrs[0].off = cpu_to_le32((long)btitem - (long)bt);
+	btitem->key_len = cpu_to_le16(sizeof(*bik));
+	btitem->val_len = cpu_to_le16(sizeof(*biv));
+
+	bik->base = cpu_to_be64(0); /* XXX true? */
+
+	/* set all the bits past our final used blkno */
+	super->core_balloc_free.total_free =
+			cpu_to_le64(SCOUTFS_BALLOC_ITEM_BITS - free_blkno);
+	for (i = free_blkno; i < SCOUTFS_BALLOC_ITEM_BITS; i++)
+		set_bit_le(i, &biv->bits);
+
+	bt->free_end = bt->item_hdrs[le32_to_cpu(bt->nr_items) - 1].off;
+
+	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
+	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
+
+	ret = write_raw_block(fd, blkno, bt);
+	if (ret)
+		goto out;
 
 	/* zero out quorum blocks */
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
@@ -406,6 +321,8 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 			goto out;
 		}
 	}
+
+	super->next_uninit_free_block = cpu_to_le64(SCOUTFS_BALLOC_ITEM_BITS);
 
 	/* write the super block */
 	super->hdr.seq = cpu_to_le64(1);
@@ -423,22 +340,21 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  device path:        %s\n"
-	       "  fsid:               %llx\n"
-	       "  format hash:        %llx\n"
-	       "  uuid:               %s\n"
-	       "  device bytes:       "SIZE_FMT"\n"
-	       "  device blocks:      "SIZE_FMT"\n"
-	       "  btree ring blocks:  "SIZE_FMT"\n"
-	       "  free blocks:        "SIZE_FMT"\n"
-	       "  quorum count:       %u\n",
+	       "  device path:          %s\n"
+	       "  fsid:                 %llx\n"
+	       "  format hash:          %llx\n"
+	       "  uuid:                 %s\n"
+	       "  device blocks:        "SIZE_FMT"\n"
+	       "  metadata blocks:      "SIZE_FMT"\n"
+	       "  file extent blocks:   "SIZE_FMT"\n"
+	       "  quorum count:         %u\n",
 		path,
 		le64_to_cpu(super->hdr.fsid),
 		le64_to_cpu(super->format_hash),
 		uuid_str,
-		SIZE_ARGS(size, 1),
 		SIZE_ARGS(total_blocks, SCOUTFS_BLOCK_SIZE),
-		SIZE_ARGS(le64_to_cpu(super->bring.nr_blocks),
+		SIZE_ARGS(le64_to_cpu(super->total_blocks) -
+			  le64_to_cpu(super->free_blocks),
 			  SCOUTFS_BLOCK_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->free_blocks),
 			  SCOUTFS_BLOCK_SIZE),
@@ -450,8 +366,6 @@ out:
 		free(super);
 	if (bt)
 		free(bt);
-	if (sblk)
-		free(sblk);
 	if (zeros)
 		free(zeros);
 	return ret;

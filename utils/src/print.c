@@ -41,27 +41,6 @@ static void *read_block(int fd, u64 blkno)
 	return buf;
 }
 
-static void *read_segment(int fd, u64 segno)
-{
-	ssize_t ret;
-	void *buf;
-
-	buf = malloc(SCOUTFS_SEGMENT_SIZE);
-	if (!buf)
-		return NULL;
-
-	ret = pread(fd, buf, SCOUTFS_SEGMENT_SIZE,
-		    segno << SCOUTFS_SEGMENT_SHIFT);
-	if (ret != SCOUTFS_SEGMENT_SIZE) {
-		fprintf(stderr, "read segno %llu returned %zd: %s (%d)\n",
-			segno, ret, strerror(errno), errno);
-		free(buf);
-		buf = NULL;
-	}
-
-	return buf;
-}
-
 static void print_block_header(struct scoutfs_block_header *hdr)
 {
 	u32 crc = crc_block(hdr);
@@ -240,93 +219,92 @@ static print_func_t find_printer(u8 zone, u8 type)
 	return NULL;
 }
 
-static void print_item(struct scoutfs_segment_block *sblk,
-		       struct scoutfs_segment_item *item, u32 which, u32 off)
+static int print_fs_item(void *key, unsigned key_len, void *val,
+			 unsigned val_len, void *arg)
 {
+	struct scoutfs_key item_key;
 	print_func_t printer;
-	void *val;
-	int i;
 
-	val = (char *)&item->skip_links[item->nr_links];
+	scoutfs_key_from_be(&item_key, key);
 
-	printer = find_printer(item->key.sk_zone, item->key.sk_type);
+	printf("    "SK_FMT"\n", SK_ARG(&item_key));
 
-	printf("  [%u]: key "SK_FMT" off %u val_len %u nr_links %u flags %x%s\n",
-		which, SK_ARG(&item->key), off, le16_to_cpu(item->val_len),
-		item->nr_links,
-		item->flags, printer ? "" : " (unrecognized zone+type)");
-	printf("    links:");
-	for (i = 0; i < item->nr_links; i++)
-		printf(" %u", le32_to_cpu(item->skip_links[i]));
-	printf("\n");
-
-	if (printer)
-		printer(&item->key, val, le16_to_cpu(item->val_len));
-}
-
-static void print_segment_block(struct scoutfs_segment_block *sblk)
-{
-	int i;
-
-	printf("  sblk: segno %llu seq %llu last_item_off %u total_bytes %u "
-	       "nr_items %u\n",
-		le64_to_cpu(sblk->segno), le64_to_cpu(sblk->seq),
-		le32_to_cpu(sblk->last_item_off), le32_to_cpu(sblk->total_bytes),
-		le32_to_cpu(sblk->nr_items));
-	printf("    links:");
-	for (i = 0; sblk->skip_links[i]; i++)
-		printf(" %u", le32_to_cpu(sblk->skip_links[i]));
-	printf("\n");
-}
-
-static int print_segments(int fd, unsigned long *seg_map, u64 total)
-{
-	struct scoutfs_segment_block *sblk;
-	struct scoutfs_segment_item *item;
-	u32 off;
-	u64 s;
-	u64 i;
-
-	for (s = 0; (s = find_next_set_bit(seg_map, s, total)) < total; s++) {
-		sblk = read_segment(fd, s);
-		if (!sblk)
-			return -ENOMEM;
-
-		printf("segment segno %llu\n", s);
-		print_segment_block(sblk);
-
-		off = le32_to_cpu(sblk->skip_links[0]);
-		for (i = 0; i < le32_to_cpu(sblk->nr_items); i++) {
-			item = (void *)sblk + off;
-			print_item(sblk, item, i, off);
-			off = le32_to_cpu(item->skip_links[0]);
-		}
-
-		free(sblk);
+	/* only items in leaf blocks have values */
+	if (val) {
+		printer = find_printer(item_key.sk_zone, item_key.sk_type);
+		if (printer)
+			printer(&item_key, val, val_len);
+		else
+			printf("      (unknown zone %u type %u)\n",
+			       item_key.sk_zone, item_key.sk_type);
 	}
 
 	return 0;
 }
 
-static int print_manifest_entry(void *key, unsigned key_len, void *val,
-			        unsigned val_len, void *arg)
+/* same as fs item but with a small header in the value */
+static int print_logs_item(void *key, unsigned key_len, void *val,
+			   unsigned val_len, void *arg)
 {
-	struct scoutfs_manifest_btree_key *mkey = key;
-	struct scoutfs_manifest_btree_val *mval = val;
-	struct scoutfs_key first;
-	unsigned long *seg_map = arg;
+	struct scoutfs_key item_key;
+	struct scoutfs_log_item_value *liv;
+	print_func_t printer;
 
-	scoutfs_key_from_be(&first, &mkey->first_key);
+	scoutfs_key_from_be(&item_key, key);
 
-	printf("    level %u first "SK_FMT" seq %llu\n",
-	       mkey->level, SK_ARG(&first), be64_to_cpu(mkey->seq));
+	printf("    "SK_FMT"\n", SK_ARG(&item_key));
 
 	/* only items in leaf blocks have values */
 	if (val) {
-		printf("    segno %llu last "SK_FMT"\n",
-		       le64_to_cpu(mval->segno), SK_ARG(&mval->last_key));
+		liv = val;
+		printf("    log_item_value: vers %llu flags %x\n",
+		       le64_to_cpu(liv->vers), liv->flags);
 
-		set_bit(seg_map, le64_to_cpu(mval->segno));
+		/* deletion items don't have values */
+		if (!(liv->flags & SCOUTFS_LOG_ITEM_FLAG_DELETION)) {
+			printer = find_printer(item_key.sk_zone,
+					       item_key.sk_type);
+			if (printer)
+				printer(&item_key, val + sizeof(*liv),
+					val_len - sizeof(*liv));
+			else
+				printf("      (unknown zone %u type %u)\n",
+				       item_key.sk_zone, item_key.sk_type);
+		}
+	}
+
+	return 0;
+}
+
+/* same as fs item but with a small header in the value */
+static int print_log_trees_item(void *key, unsigned key_len, void *val,
+				unsigned val_len, void *arg)
+{
+	struct scoutfs_log_trees_key *ltk = key;
+	struct scoutfs_log_trees_val *ltv = val;
+
+	printf("    rid %llu nr %llu\n",
+	       be64_to_cpu(ltk->rid), be64_to_cpu(ltk->nr));
+
+	/* only items in leaf blocks have values */
+	if (val) {
+		printf("      alloc_root: total_free %llu root: height %u blkno %llu seq %llu\n"
+		       "      free_root: total_free %llu root: height %u blkno %llu seq %llu\n"
+		       "      item_root: height %u blkno %llu seq %llu\n"
+		       "      bloom_ref: blkno %llu seq %llu\n",
+			le64_to_cpu(ltv->alloc_root.total_free),
+			ltv->alloc_root.root.height,
+			le64_to_cpu(ltv->alloc_root.root.ref.blkno),
+			le64_to_cpu(ltv->alloc_root.root.ref.seq),
+			le64_to_cpu(ltv->free_root.total_free),
+			ltv->free_root.root.height,
+			le64_to_cpu(ltv->free_root.root.ref.blkno),
+			le64_to_cpu(ltv->free_root.root.ref.seq),
+			ltv->item_root.height,
+			le64_to_cpu(ltv->item_root.ref.blkno),
+			le64_to_cpu(ltv->item_root.ref.seq),
+			le64_to_cpu(ltv->bloom_ref.blkno),
+			le64_to_cpu(ltv->bloom_ref.seq));
 	}
 
 	return 0;
@@ -375,7 +353,18 @@ static int print_trans_seqs_entry(void *key, unsigned key_len, void *val,
 	return 0;
 }
 
-/* XXX should make sure that the val is null terminated */
+static int print_balloc_entry(void *key, unsigned key_len, void *val,
+			      unsigned val_len, void *arg)
+{
+	struct scoutfs_balloc_item_key *bik = key;
+//	struct scoutfs_balloc_item_val *biv = val;
+
+	printf("    base %llu\n",
+			be64_to_cpu(bik->base));
+
+	return 0;
+}
+
 static int print_mounted_client_entry(void *key, unsigned key_len, void *val,
 				      unsigned val_len, void *arg)
 {
@@ -423,20 +412,19 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 	if (bt->level == level) {
 		printf("%s btree blkno %llu\n"
 		       "  crc %08x fsid %llx seq %llu blkno %llu \n"
-		       "  level %u free_end %u free_reclaim %u nr_items %u\n",
+		       "  level %u free_end %u nr_items %u\n",
 		       which, le64_to_cpu(ref->blkno),
 		       le32_to_cpu(bt->hdr.crc),
 		       le64_to_cpu(bt->hdr.fsid),
 		       le64_to_cpu(bt->hdr.seq),
 		       le64_to_cpu(bt->hdr.blkno),
 		       bt->level,
-		       le16_to_cpu(bt->free_end),
-		       le16_to_cpu(bt->free_reclaim),
-		       le16_to_cpu(bt->nr_items));
+		       le32_to_cpu(bt->free_end),
+		       le32_to_cpu(bt->nr_items));
 	}
 
-	for (i = 0; i < le16_to_cpu(bt->nr_items); i++) {
-		item = (void *)bt + le16_to_cpu(bt->item_hdrs[i].off);
+	for (i = 0; i < le32_to_cpu(bt->nr_items); i++) {
+		item = (void *)bt + le32_to_cpu(bt->item_hdrs[i].off);
 		key_len = le16_to_cpu(item->key_len);
 		val_len = le16_to_cpu(item->val_len);
 		key = (void *)(item + 1);
@@ -455,7 +443,7 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 		}
 
 		printf("  item [%u] off %u key_len %u val_len %u\n",
-			i, le16_to_cpu(bt->item_hdrs[i].off), key_len, val_len);
+			i, le32_to_cpu(bt->item_hdrs[i].off), key_len, val_len);
 
 		if (level)
 			print_btree_ref(key, key_len, val, val_len, func, arg);
@@ -487,6 +475,98 @@ static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
 	}
 
 	return ret;
+}
+
+struct print_recursion_args {
+	struct scoutfs_super_block *super;
+	int fd;
+};
+
+/* same as fs item but with a small header in the value */
+static int print_log_trees_roots(void *key, unsigned key_len, void *val,
+				unsigned val_len, void *arg)
+{
+	struct scoutfs_log_trees_key *ltk = key;
+	struct scoutfs_log_trees_val *ltv = val;
+	struct print_recursion_args *pa = arg;
+	struct log_trees_roots {
+		char *fmt;
+		struct scoutfs_btree_root *root;
+		print_item_func func;
+	} roots[] = {
+		{ "log_tree_rid:%llu_nr:%llu_alloc",
+		  &ltv->alloc_root.root,
+		  print_balloc_entry,
+		},
+		{ "log_tree_rid:%llu_nr:%llu_free",
+		  &ltv->free_root.root,
+		  print_balloc_entry,
+		},
+		{ "log_tree_rid:%llu_nr:%llu_item",
+		  &ltv->item_root,
+		  print_logs_item,
+		},
+	};
+	char which[100];
+	int ret;
+	int err;
+	int i;
+
+	/* XXX doesn't print the bloom block */
+
+	ret = 0;
+	for (i = 0; i < array_size(roots); i++) {
+		snprintf(which, sizeof(which) - 1, roots[i].fmt,
+			 be64_to_cpu(ltk->rid), be64_to_cpu(ltk->nr));
+
+		err = print_btree(pa->fd, pa->super, which, roots[i].root,
+				  roots[i].func, NULL);
+		if (err && !ret)
+			ret = err;
+	}
+
+	return ret;
+}
+
+static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
+				  struct scoutfs_btree_ref *ref,
+				  print_item_func func, void *arg)
+{
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_block *bt;
+	unsigned key_len;
+	unsigned val_len;
+	void *key;
+	void *val;
+	int ret;
+	int i;
+
+	if (ref->blkno == 0)
+		return 0;
+
+	bt = read_block(fd, le64_to_cpu(ref->blkno));
+	if (!bt)
+		return -ENOMEM;
+
+	for (i = 0; i < le32_to_cpu(bt->nr_items); i++) {
+		item = (void *)bt + le32_to_cpu(bt->item_hdrs[i].off);
+		key_len = le16_to_cpu(item->key_len);
+		val_len = le16_to_cpu(item->val_len);
+		key = (void *)(item + 1);
+		val = (void *)key + key_len;
+
+		if (bt->level > 0) {
+			ret = print_btree_leaf_items(fd, super, val, func, arg);
+			if (ret)
+				break;
+			continue;
+		} else {
+			func(key, key_len, val, val_len, arg);
+		}
+	}
+
+	free(bt);
+	return 0;
 }
 
 static char *alloc_addr_str(struct scoutfs_inet_addr *ia)
@@ -572,8 +652,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 {
 	char uuid_str[37];
 	char *server_addr;
-	u64 count;
-	int i;
 
 	uuid_unparse(super->uuid, uuid_str);
 
@@ -587,62 +665,52 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		return;
 
 	/* XXX these are all in a crazy order */
-	printf("  next_ino %llu next_trans_seq %llu next_seg_seq %llu\n"
-	       "  next_compact_id %llu\n"
-	       "  total_blocks %llu free_blocks %llu alloc_cursor %llu\n"
+	printf("  next_ino %llu next_trans_seq %llu\n"
+	       "  total_blocks %llu free_blocks %llu\n"
+	       "  next_uninit_free_block %llu core_balloc_blocks %llu\n"
 	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
 	       "  quorum_count %u server_addr %s\n"
-	       "  btree ring: first_blkno %llu nr_blocks %llu next_block %llu "
-	       "next_seq %llu\n"
-	       "  lock_clients root: height %u blkno %llu seq %llu mig_len %u\n"
-	       "  mounted_clients root: height %u blkno %llu seq %llu mig_len %u\n"
-	       "  trans_seqs root: height %u blkno %llu seq %llu mig_len %u\n"
-	       "  alloc btree root: height %u blkno %llu seq %llu mig_len %u\n"
-	       "  manifest btree root: height %u blkno %llu seq %llu mig_len %u\n",
+	       "  core_balloc_alloc: total_free %llu root: height %u blkno %llu seq %llu\n"
+	       "  core_balloc_free: total_free %llu root: height %u blkno %llu seq %llu\n"
+	       "  lock_clients root: height %u blkno %llu seq %llu\n"
+	       "  mounted_clients root: height %u blkno %llu seq %llu\n"
+	       "  trans_seqs root: height %u blkno %llu seq %llu\n"
+	       "  alloc btree root: height %u blkno %llu seq %llu\n"
+	       "  fs_root btree root: height %u blkno %llu seq %llu\n",
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->next_trans_seq),
-		le64_to_cpu(super->next_seg_seq),
-		le64_to_cpu(super->next_compact_id),
 		le64_to_cpu(super->total_blocks),
 		le64_to_cpu(super->free_blocks),
-		le64_to_cpu(super->alloc_cursor),
+		le64_to_cpu(super->next_uninit_free_block),
+		le64_to_cpu(super->core_balloc_cursor),
 		le64_to_cpu(super->quorum_fenced_term),
 		le64_to_cpu(super->quorum_server_term),
 		le64_to_cpu(super->unmount_barrier),
 		super->quorum_count,
 		server_addr,
-		le64_to_cpu(super->bring.first_blkno),
-		le64_to_cpu(super->bring.nr_blocks),
-		le64_to_cpu(super->bring.next_block),
-		le64_to_cpu(super->bring.next_seq),
+		le64_to_cpu(super->core_balloc_alloc.total_free),
+		super->core_balloc_alloc.root.height,
+		le64_to_cpu(super->core_balloc_alloc.root.ref.blkno),
+		le64_to_cpu(super->core_balloc_alloc.root.ref.seq),
+		le64_to_cpu(super->core_balloc_free.total_free),
+		super->core_balloc_free.root.height,
+		le64_to_cpu(super->core_balloc_free.root.ref.blkno),
+		le64_to_cpu(super->core_balloc_free.root.ref.seq),
 		super->lock_clients.height,
 		le64_to_cpu(super->lock_clients.ref.blkno),
 		le64_to_cpu(super->lock_clients.ref.seq),
-		le16_to_cpu(super->lock_clients.migration_key_len),
 		super->mounted_clients.height,
 		le64_to_cpu(super->mounted_clients.ref.blkno),
 		le64_to_cpu(super->mounted_clients.ref.seq),
-		le16_to_cpu(super->mounted_clients.migration_key_len),
 		super->trans_seqs.height,
 		le64_to_cpu(super->trans_seqs.ref.blkno),
 		le64_to_cpu(super->trans_seqs.ref.seq),
-		le16_to_cpu(super->trans_seqs.migration_key_len),
 		super->alloc_root.height,
 		le64_to_cpu(super->alloc_root.ref.blkno),
 		le64_to_cpu(super->alloc_root.ref.seq),
-		le16_to_cpu(super->alloc_root.migration_key_len),
-		super->manifest.root.height,
-		le64_to_cpu(super->manifest.root.ref.blkno),
-		le64_to_cpu(super->manifest.root.ref.seq),
-		le16_to_cpu(super->manifest.root.migration_key_len));
-
-	printf("  level_counts:");
-	for (i = 0; i < SCOUTFS_MANIFEST_MAX_LEVEL; i++) {
-		count = le64_to_cpu(super->manifest.level_counts[i]);
-		if (count)
-			printf(" %u: %llu", i, count);
-	}
-	printf("\n");
+		super->fs_root.height,
+		le64_to_cpu(super->fs_root.ref.blkno),
+		le64_to_cpu(super->fs_root.ref.seq));
 
 	free(server_addr);
 }
@@ -650,8 +718,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 static int print_volume(int fd)
 {
 	struct scoutfs_super_block *super = NULL;
-	unsigned long *seg_map = NULL;
-	u64 nr_segs;
+	struct print_recursion_args pa;
 	int ret = 0;
 	int err;
 
@@ -660,15 +727,6 @@ static int print_volume(int fd)
 		return -ENOMEM;
 
 	print_super_block(super, SCOUTFS_SUPER_BLKNO);
-
-	nr_segs = le64_to_cpu(super->total_blocks) / SCOUTFS_SEGMENT_BLOCKS;
-	seg_map = alloc_bits(nr_segs);
-	if (!seg_map) {
-		ret = -ENOMEM;
-		fprintf(stderr, "failed to alloc %llu seg map: %s (%d)\n",
-			nr_segs, strerror(errno), errno);
-		goto out;
-	}
 
 	ret = print_quorum_blocks(fd, super);
 
@@ -687,23 +745,41 @@ static int print_volume(int fd)
 	if (err && !ret)
 		ret = err;
 
+	err = print_btree(fd, super, "core_balloc_alloc",
+			  &super->core_balloc_alloc.root,
+			  print_balloc_entry, NULL);
+	if (err && !ret)
+		ret = err;
+
+	err = print_btree(fd, super, "core_balloc_free",
+			  &super->core_balloc_free.root,
+			  print_balloc_entry, NULL);
+	if (err && !ret)
+		ret = err;
+
 	err = print_btree(fd, super, "alloc", &super->alloc_root,
   			  print_alloc_item, NULL);
 	if (err && !ret)
 		ret = err;
 
-	err = print_btree(fd, super, "manifest", &super->manifest.root,
-			  print_manifest_entry, seg_map);
+	err = print_btree(fd, super, "logs_root", &super->logs_root,
+			  print_log_trees_item, NULL);
 	if (err && !ret)
 		ret = err;
 
-	err = print_segments(fd, seg_map, nr_segs);
+	pa.super = super;
+	pa.fd = fd;
+	err = print_btree_leaf_items(fd, super, &super->logs_root.ref,
+				     print_log_trees_roots, &pa);
 	if (err && !ret)
 		ret = err;
 
-out:
+	err = print_btree(fd, super, "fs_root", &super->fs_root,
+			  print_fs_item, NULL);
+	if (err && !ret)
+		ret = err;
+
 	free(super);
-	free(seg_map);
 
 	return ret;
 }
