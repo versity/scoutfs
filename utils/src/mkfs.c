@@ -95,7 +95,6 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	struct scoutfs_super_block *super;
 	struct scoutfs_key_be *kbe;
 	struct scoutfs_inode *inode;
-	struct scoutfs_extent_btree_key *ebk;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *btitem;
 	struct scoutfs_balloc_item_key *bik;
@@ -108,9 +107,10 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	u64 limit;
 	u64 size;
 	u64 total_blocks;
-	u64 free_blkno;
-	u64 free_start;
-	u64 free_len;
+	u64 next_meta;
+	u64 last_meta;
+	u64 next_data;
+	u64 last_data;
 	int ret;
 	int i;
 
@@ -156,63 +156,16 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	super->quorum_count = quorum_count;
 
 	/* metadata blocks start after the quorum blocks */
-	free_blkno = SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS;
+	next_meta = SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS;
 
-	/* extents start after btree blocks */
-	free_start = total_blocks - (total_blocks / 4);
-	free_len = total_blocks - free_start;
-
-	/* fill out some alloc boundaries before using */
-	super->free_blocks = cpu_to_le64(free_len);
-
-	/* extent allocator btree indexes free data extent */
-	blkno = free_blkno++;
-
-	super->alloc_root.ref.blkno = cpu_to_le64(blkno);
-	super->alloc_root.ref.seq = cpu_to_le64(1);
-	super->alloc_root.height = 1;
-
-	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
-	bt->hdr.fsid = super->hdr.fsid;
-	bt->hdr.blkno = cpu_to_le64(blkno);
-	bt->hdr.seq = cpu_to_le64(1);
-	bt->nr_items = cpu_to_le32(2);
-
-	/* btree item allocated from the back of the block */
-	ebk = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*ebk);
-	btitem = (void *)ebk - sizeof(*btitem);
-
-	bt->item_hdrs[0].off = cpu_to_le32((long)btitem - (long)bt);
-	btitem->key_len = cpu_to_le16(sizeof(*ebk));
-	btitem->val_len = cpu_to_le16(0);
-
-	ebk->type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
-	ebk->major = cpu_to_be64(free_start + free_len - 1);
-	ebk->minor = cpu_to_be64(free_len);
-
-	ebk = (void *)btitem - sizeof(*ebk);
-	btitem = (void *)ebk - sizeof(*btitem);
-
-	bt->item_hdrs[1].off = cpu_to_le32((long)btitem - (long)bt);
-	btitem->key_len = cpu_to_le16(sizeof(*ebk));
-	btitem->val_len = cpu_to_le16(0);
-
-	ebk->type = SCOUTFS_FREE_EXTENT_BLOCKS_TYPE;
-	ebk->major = cpu_to_be64(free_len);
-	ebk->minor = cpu_to_be64(free_start + free_len - 1);
-
-	bt->free_end = bt->item_hdrs[le32_to_cpu(bt->nr_items) - 1].off;
-
-	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
-	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
-
-	ret = write_raw_block(fd, blkno, bt);
-	if (ret)
-		goto out;
-	blkno++;
+	/* data blocks are after metadata, we'll say 1:4 for now */
+	next_data = round_up(next_meta + ((total_blocks - next_meta) / 5),
+			     SCOUTFS_BLOCK_BITMAP_BITS);
+	last_meta = next_data - 1;
+	last_data = total_blocks - 1;
 
 	/* fs root starts with root inode and its index items */
-	blkno = free_blkno++;
+	blkno = next_meta++;
 
 	super->fs_root.ref.blkno = cpu_to_le64(blkno);
 	super->fs_root.ref.seq = cpu_to_le64(1);
@@ -272,7 +225,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 		goto out;
 
 	/* metadata block allocator has single item, server continues init */
-	blkno = free_blkno++;
+	blkno = next_meta++;
 
 	super->core_balloc_alloc.root.ref.blkno = cpu_to_le64(blkno);
 	super->core_balloc_alloc.root.ref.seq = cpu_to_le64(1);
@@ -299,9 +252,10 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 
 	/* set all the bits past our final used blkno */
 	super->core_balloc_free.total_free =
-			cpu_to_le64(SCOUTFS_BALLOC_ITEM_BITS - free_blkno);
-	for (i = free_blkno; i < SCOUTFS_BALLOC_ITEM_BITS; i++)
+			cpu_to_le64(SCOUTFS_BALLOC_ITEM_BITS - next_meta);
+	for (i = next_meta; i < SCOUTFS_BALLOC_ITEM_BITS; i++)
 		set_bit_le(i, &biv->bits);
+	next_meta = i;
 
 	bt->free_end = bt->item_hdrs[le32_to_cpu(bt->nr_items) - 1].off;
 
@@ -322,7 +276,12 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 		}
 	}
 
-	super->next_uninit_free_block = cpu_to_le64(SCOUTFS_BALLOC_ITEM_BITS);
+	/* fill out allocator fields now that we've written our blocks */
+	super->next_uninit_meta_blkno = cpu_to_le64(next_meta);
+	super->last_uninit_meta_blkno = cpu_to_le64(last_meta);
+	super->next_uninit_data_blkno = cpu_to_le64(next_data);
+	super->last_uninit_data_blkno = cpu_to_le64(last_data);
+	super->free_blocks = cpu_to_le64(total_blocks - next_meta);
 
 	/* write the super block */
 	super->hdr.seq = cpu_to_le64(1);
@@ -346,17 +305,16 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	       "  uuid:                 %s\n"
 	       "  device blocks:        "SIZE_FMT"\n"
 	       "  metadata blocks:      "SIZE_FMT"\n"
-	       "  file extent blocks:   "SIZE_FMT"\n"
+	       "  data blocks:          "SIZE_FMT"\n"
 	       "  quorum count:         %u\n",
 		path,
 		le64_to_cpu(super->hdr.fsid),
 		le64_to_cpu(super->format_hash),
 		uuid_str,
 		SIZE_ARGS(total_blocks, SCOUTFS_BLOCK_SIZE),
-		SIZE_ARGS(le64_to_cpu(super->total_blocks) -
-			  le64_to_cpu(super->free_blocks),
+		SIZE_ARGS(last_meta - next_meta + 1,
 			  SCOUTFS_BLOCK_SIZE),
-		SIZE_ARGS(le64_to_cpu(super->free_blocks),
+		SIZE_ARGS(last_data - next_data + 1,
 			  SCOUTFS_BLOCK_SIZE),
 		super->quorum_count);
 

@@ -144,30 +144,14 @@ static void print_symlink(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->sks_ino), le64_to_cpu(key->sks_nr), name);
 }
 
-static void print_file_extent(struct scoutfs_key *key, void *val, int val_len)
+static void print_packed_extent(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_file_extent *fex = val;
-	u64 iblock = le64_to_cpu(key->skfe_last) - le64_to_cpu(fex->len) + 1;
+	struct scoutfs_packed_extent *pe = val;
 
-	printf("      extent: ino %llu (last %llu) iblock %llu len %llu "
-	       "blkno %llu flags 0x%x\n",
-	       le64_to_cpu(key->skfe_ino), le64_to_cpu(key->skfe_last),
-	       iblock, le64_to_cpu(fex->len), le64_to_cpu(fex->blkno),
-	       fex->flags);
-}
-
-static void print_free_extent(struct scoutfs_key *key, void *val, int val_len)
-{
-	u64 start = le64_to_cpu(key->sknf_major);
-	u64 len = le64_to_cpu(key->sknf_minor);
-	if (key->sk_type == SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
-		swap(start, len);
-	start -= (len - 1);
-
-	printf("      free extent: major %llu minor %llu (start %llu "
-	       "len %llu)\n",
-	       le64_to_cpu(key->sknf_major), le64_to_cpu(key->sknf_minor),
-	       start, len);
+	printf("      packed_extent: ino %llu base %llu part %u count %u diff_bytes %u flags 0x%x final %u\n",
+	       le64_to_cpu(key->skpe_ino), le64_to_cpu(key->skpe_base),
+	       key->skpe_part, le16_to_cpu(pe->count), pe->diff_bytes,
+	       pe->flags, pe->final);
 }
 
 static void print_inode_index(struct scoutfs_key *key, void *val, int val_len)
@@ -197,9 +181,6 @@ static print_func_t find_printer(u8 zone, u8 type)
 		return print_xattr_index;
 
 	if (zone == SCOUTFS_RID_ZONE) {
-		if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE ||
-		    type == SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
-			return print_free_extent;
 		if (type == SCOUTFS_ORPHAN_TYPE)
 			return print_orphan;
 	}
@@ -212,7 +193,8 @@ static print_func_t find_printer(u8 zone, u8 type)
 			case SCOUTFS_READDIR_TYPE: return print_dirent;
 			case SCOUTFS_SYMLINK_TYPE: return print_symlink;
 			case SCOUTFS_LINK_BACKREF_TYPE: return print_dirent;
-			case SCOUTFS_FILE_EXTENT_TYPE: return print_file_extent;
+			case SCOUTFS_PACKED_EXTENT_TYPE:
+				return print_packed_extent;
 		}
 	}
 
@@ -291,7 +273,9 @@ static int print_log_trees_item(void *key, unsigned key_len, void *val,
 		printf("      alloc_root: total_free %llu root: height %u blkno %llu seq %llu\n"
 		       "      free_root: total_free %llu root: height %u blkno %llu seq %llu\n"
 		       "      item_root: height %u blkno %llu seq %llu\n"
-		       "      bloom_ref: blkno %llu seq %llu\n",
+		       "      bloom_ref: blkno %llu seq %llu\n"
+		       "      data_alloc: total_free %llu root: height %u blkno %llu seq %llu\n"
+		       "      data_free: total_free %llu root: height %u blkno %llu seq %llu\n",
 			le64_to_cpu(ltv->alloc_root.total_free),
 			ltv->alloc_root.root.height,
 			le64_to_cpu(ltv->alloc_root.root.ref.blkno),
@@ -304,30 +288,16 @@ static int print_log_trees_item(void *key, unsigned key_len, void *val,
 			le64_to_cpu(ltv->item_root.ref.blkno),
 			le64_to_cpu(ltv->item_root.ref.seq),
 			le64_to_cpu(ltv->bloom_ref.blkno),
-			le64_to_cpu(ltv->bloom_ref.seq));
+			le64_to_cpu(ltv->bloom_ref.seq),
+			le64_to_cpu(ltv->data_alloc.total_free),
+			ltv->data_alloc.root.height,
+			le64_to_cpu(ltv->data_alloc.root.ref.blkno),
+			le64_to_cpu(ltv->data_alloc.root.ref.seq),
+			le64_to_cpu(ltv->data_free.total_free),
+			ltv->data_free.root.height,
+			le64_to_cpu(ltv->data_free.root.ref.blkno),
+			le64_to_cpu(ltv->data_free.root.ref.seq));
 	}
-
-	return 0;
-}
-
-static int print_alloc_item(void *key, unsigned key_len, void *val,
-			    unsigned val_len, void *arg)
-{
-	struct scoutfs_extent_btree_key *ebk = key;
-	u64 start;
-	u64 len;
-
-	/* XXX check sizes */
-
-	len = be64_to_cpu(ebk->minor);
-	start = be64_to_cpu(ebk->major);
-	if (ebk->type == SCOUTFS_FREE_EXTENT_BLOCKS_TYPE)
-		swap(start, len);
-	start -= len - 1;
-
-	printf("    type %u major %llu minor %llu (start %llu len %llu)\n",
-			ebk->type, be64_to_cpu(ebk->major),
-			be64_to_cpu(ebk->minor), start, len);
 
 	return 0;
 }
@@ -361,6 +331,19 @@ static int print_balloc_entry(void *key, unsigned key_len, void *val,
 
 	printf("    base %llu\n",
 			be64_to_cpu(bik->base));
+
+	return 0;
+}
+
+static int print_bitmap_entry(void *key, unsigned key_len, void *val,
+			      unsigned val_len, void *arg)
+{
+	struct scoutfs_block_bitmap_key *bbk = key;
+	struct scoutfs_packed_bitmap *pb = val;
+
+	printf("    type %u base %llu present 0x%016llx set 0x%016llx\n",
+			bbk->type, be64_to_cpu(bbk->base),
+			le64_to_cpu(pb->present), le64_to_cpu(pb->set));
 
 	return 0;
 }
@@ -501,6 +484,14 @@ static int print_log_trees_roots(void *key, unsigned key_len, void *val,
 		{ "log_tree_rid:%llu_nr:%llu_free",
 		  &ltv->free_root.root,
 		  print_balloc_entry,
+		},
+		{ "log_tree_rid:%llu_nr:%llu_data_alloc",
+		  &ltv->data_alloc.root,
+		  print_bitmap_entry,
+		},
+		{ "log_tree_rid:%llu_nr:%llu_data_free",
+		  &ltv->data_free.root,
+		  print_bitmap_entry,
 		},
 		{ "log_tree_rid:%llu_nr:%llu_item",
 		  &ltv->item_root,
@@ -667,22 +658,29 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_trans_seq %llu\n"
 	       "  total_blocks %llu free_blocks %llu\n"
-	       "  next_uninit_free_block %llu core_balloc_blocks %llu\n"
+	       "  next_uninit_meta_blkno %llu last_uninit_meta_blkno %llu\n"
+	       "  next_uninit_data_blkno %llu last_uninit_data_blkno %llu\n"
+	       "  core_balloc_cursor %llu core_data_alloc_cursor %llu\n"
 	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
 	       "  quorum_count %u server_addr %s\n"
 	       "  core_balloc_alloc: total_free %llu root: height %u blkno %llu seq %llu\n"
 	       "  core_balloc_free: total_free %llu root: height %u blkno %llu seq %llu\n"
+	       "  core_data_alloc: total_free %llu root: height %u blkno %llu seq %llu\n"
+	       "  core_data_free: total_free %llu root: height %u blkno %llu seq %llu\n"
 	       "  lock_clients root: height %u blkno %llu seq %llu\n"
 	       "  mounted_clients root: height %u blkno %llu seq %llu\n"
 	       "  trans_seqs root: height %u blkno %llu seq %llu\n"
-	       "  alloc btree root: height %u blkno %llu seq %llu\n"
 	       "  fs_root btree root: height %u blkno %llu seq %llu\n",
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->next_trans_seq),
 		le64_to_cpu(super->total_blocks),
 		le64_to_cpu(super->free_blocks),
-		le64_to_cpu(super->next_uninit_free_block),
+		le64_to_cpu(super->next_uninit_meta_blkno),
+		le64_to_cpu(super->last_uninit_meta_blkno),
+		le64_to_cpu(super->next_uninit_data_blkno),
+		le64_to_cpu(super->last_uninit_data_blkno),
 		le64_to_cpu(super->core_balloc_cursor),
+		le64_to_cpu(super->core_data_alloc_cursor),
 		le64_to_cpu(super->quorum_fenced_term),
 		le64_to_cpu(super->quorum_server_term),
 		le64_to_cpu(super->unmount_barrier),
@@ -696,6 +694,14 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		super->core_balloc_free.root.height,
 		le64_to_cpu(super->core_balloc_free.root.ref.blkno),
 		le64_to_cpu(super->core_balloc_free.root.ref.seq),
+		le64_to_cpu(super->core_data_alloc.total_free),
+		super->core_data_alloc.root.height,
+		le64_to_cpu(super->core_data_alloc.root.ref.blkno),
+		le64_to_cpu(super->core_data_alloc.root.ref.seq),
+		le64_to_cpu(super->core_data_free.total_free),
+		super->core_data_free.root.height,
+		le64_to_cpu(super->core_data_free.root.ref.blkno),
+		le64_to_cpu(super->core_data_free.root.ref.seq),
 		super->lock_clients.height,
 		le64_to_cpu(super->lock_clients.ref.blkno),
 		le64_to_cpu(super->lock_clients.ref.seq),
@@ -705,9 +711,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		super->trans_seqs.height,
 		le64_to_cpu(super->trans_seqs.ref.blkno),
 		le64_to_cpu(super->trans_seqs.ref.seq),
-		super->alloc_root.height,
-		le64_to_cpu(super->alloc_root.ref.blkno),
-		le64_to_cpu(super->alloc_root.ref.seq),
 		super->fs_root.height,
 		le64_to_cpu(super->fs_root.ref.blkno),
 		le64_to_cpu(super->fs_root.ref.seq));
@@ -757,8 +760,15 @@ static int print_volume(int fd)
 	if (err && !ret)
 		ret = err;
 
-	err = print_btree(fd, super, "alloc", &super->alloc_root,
-  			  print_alloc_item, NULL);
+	err = print_btree(fd, super, "core_data_alloc",
+			  &super->core_data_alloc.root,
+			  print_bitmap_entry, NULL);
+	if (err && !ret)
+		ret = err;
+
+	err = print_btree(fd, super, "core_data_free",
+			  &super->core_data_free.root,
+			  print_bitmap_entry, NULL);
 	if (err && !ret)
 		ret = err;
 
