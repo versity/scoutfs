@@ -404,7 +404,7 @@ for t in $tests; do
 	for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 		dir="${T_M[$i]}/test/$test_name"
 
-		test $i == 1 && cmd mkdir -p "$dir"
+		test $i == 0 && cmd mkdir -p "$dir"
 
 		eval T_D$i=$dir
 		T_D[$i]=$dir
