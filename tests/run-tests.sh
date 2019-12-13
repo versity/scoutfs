@@ -38,6 +38,7 @@ $(basename $0) options:
     -a        | Abort after the first test failure, leave fs mounted.
     -d <file> | Specify the storage device path that contains the
               | file system to be tested.  Will be clobbered by -m mkfs.
+    -D        | Dump accumulated ftrace buffer to the console on oops.
     -E <re>   | Exclude tests whose file name matches the regular expression.
               | Can be provided multiple times
     -e <file> | Specify an extra storage device for testing.  Will be clobbered.
@@ -52,12 +53,12 @@ $(basename $0) options:
               | tests.  Implies unmounting existing mounts first.
     -n        | The number of devices and mounts to test.
     -p        | Exit script after preparing mounts only, don't run tests.
+    -P        | Output trace events with printk as they're generated.
     -q <nr>   | Specify the quorum count needed to mount.  This is 
               | used when running mkfs and is needed by a few tests.
     -r <dir>  | Specify the directory in which to store results of
               | test runs.  The directory will be created if it doesn't
               | exist.  Previous results will be deleted as each test runs.
-    -T        | Output trace events with printk.
     -t        | Enabled trace events that match the given glob argument.
     -U        | scouts-utils-dev git repo. Used to build kernel module.
     -u        | Branch to checkout in scoutfs-utils-dev repo.
@@ -71,6 +72,10 @@ for v in ${!T_*}; do
 	eval unset $v
 done
 
+# set some T_ defaults
+T_TRACE_DUMP="0"
+T_TRACE_PRINTK="0"
+
 while true; do
 	case $1 in
 	-a)
@@ -80,6 +85,9 @@ while true; do
 		test -n "$2" || die "-d must have device file argument"
 		T_DEVICE="$2"
 		shift
+		;;
+	-D)
+		T_TRACE_DUMP="1"
 		;;
 	-E)
 		test -n "$2" || die "-E must have test exclusion regex argument"
@@ -120,6 +128,9 @@ while true; do
 	-p)
 		T_PREPARE="1"
 		;;
+	-P)
+		T_TRACE_PRINTK="1"
+		;;
 	-q)
 		test -n "$2" || die "-q must have quorum count argument"
 		T_QUORUM="$2"
@@ -129,9 +140,6 @@ while true; do
 		test -n "$2" || die "-r must have results dir argument"
 		T_RESULTS="$2"
 		shift
-		;;
-	-T)
-		T_TRACE_PRINTK="1"
 		;;
 	-t)
 		test -n "$2" || die "-t must have trace glob argument"
@@ -318,11 +326,8 @@ if [ -n "$T_TRACE_GLOB" ]; then
 		done
 	done
 
-	if [ -n "$T_TRACE_PRINTK" ]; then
-		echo 1 > /sys/kernel/debug/tracing/options/trace_printk
-	fi
-
-	echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
+	echo "$T_TRACE_DUMP" > /proc/sys/kernel/ftrace_dump_on_oops
+	echo "$T_TRACE_PRINTK" > /sys/kernel/debug/tracing/options/trace_printk
 
 	cmd cat /sys/kernel/debug/tracing/set_event
 	cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
