@@ -18,7 +18,7 @@ t_require_commands() {
 # make sure that we have at least this many mounts
 #
 t_require_mounts() {
-	local req="1"
+	local req="$1"
 
 	test "$T_NR_MOUNTS" -ge "$req" || \
 		t_fail "$req mounts required, only have $T_NR_MOUNTS"
