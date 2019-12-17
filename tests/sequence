@@ -6,7 +6,6 @@ simple-staging.sh
 simple-release-extents.sh
 offline-extent-waiting.sh
 simple-xattr-unit.sh
-segment-cache-fwd-back-iter.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
 lock-pr-cw-conflict.sh
