@@ -18,7 +18,8 @@
 #
 
 # nothing to do if we can't unmount
-test "$T_NR_MOUNTS" == "$T_QUORUM" && t_skip
+test "$T_NR_MOUNTS" == "$T_QUORUM" && \
+	t_skip "only quorum members mounted, can't unmount"
 
 nr_mounted=$T_NR_MOUNTS
 nr_quorum=$T_QUORUM
