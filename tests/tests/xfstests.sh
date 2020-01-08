@@ -18,7 +18,7 @@
 #   
 
 # make sure we have our config
-if [ -z "$T_XFSTESTS_REPO" -o -z "$T_XFSTESTS_REPO" ]; then
+if [ -z "$T_XFSTESTS_REPO" -o -z "$T_XFSTESTS_BRANCH" ]; then
 	t_fail "xfstests requires -X repo and -x branch"
 fi
 
@@ -79,9 +79,8 @@ EOF
 t_restore_output
 echo "(showing output of xfstests)"
 
-./check -g quick -E local.exclude
-#./check tests/generic/001
-#./check tests/generic/006
+args="-E local.exclude ${T_XFSTESTS_ARGS:--g quick}"
+./check $args
 # the fs is unmounted when check finishes
 
 #

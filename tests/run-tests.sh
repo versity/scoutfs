@@ -64,6 +64,7 @@ $(basename $0) options:
     -u        | Branch to checkout in scoutfs-utils-dev repo.
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
+    -y        | xfstests ./check additional args
 EOF
 }
 
@@ -164,6 +165,11 @@ while true; do
 	-x)
 		test -n "$2" || die "-x requires xfstests git branch argument"
 		T_XFSTESTS_BRANCH="$2"
+		shift
+		;;
+	-y)
+		test -n "$2" || die "-x requires xfstests ./check args argument"
+		T_XFSTESTS_ARGS="$2"
 		shift
 		;;
 	-h|-\?|--help)
