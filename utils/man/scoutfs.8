@@ -1,0 +1,435 @@
+.TH scoutfs 8
+.SH NAME
+scoutfs \- scoutfs management utility
+.SH DESCRIPTION
+The
+.b
+scoutfs
+utility provides commands to manage a scoutfs filesystem.
+.SH COMMANDS
+.TP
+.BI "counters [\-t\] <sysfs topdir>"
+.sp
+Displays the counters and their values for a mounted scoutfs filesystem.
+Each counter and its value are printed on a line to stdout with
+sufficient spaces seperating the name and value to align the values
+after
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "\-t"
+Format the counters into a table that fills the display instead of
+printing one counter per line.  The names and values are padded to
+create columns that fill the current width of the terminal.
+.TP
+.B "sysfs topdir"
+Specify the mount's sysfs directory in which to find the
+.B counters/
+directory when then contains files for each counter.
+The sysfs directory is typically
+of the form
+.I /sys/fs/scoutfs/f.<fsid>.r.<rid>/
+\&.
+.RE
+.PD
+
+.TP
+.BI "data-waiting <ino> <iblock> <path>"
+.sp
+Displays all the files and blocks for which there is a task blocked waiting on
+offline data.
+.sp
+The results are sorted by the file's inode number and the
+logical block offset that is being waited on.
+.sp
+Each line of output specifies a block in a file that has a task waiting
+and is formatted as:
+.I "ino <nr> iblock <nr> ops [str]"
+\&. The ops string indicates blocked operations seperated by commas and can
+include 
+.B read
+for a read operation,
+.B write
+for a write operation, and
+.B change_size
+for a truncate or extending write.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "ino"
+Start iterating over waiting tasks from the given inode number.
+Specifying 0 will show all waiting tasks.
+.TP
+.B "iblock"
+Start iterating over waiting tasks from the given logical block number
+in the starting inode.  Specifying 0 will show blocks in the first inode
+and then continue to show all blocks with tasks waiting in all the
+remaining inodes.
+.TP
+.B "path"
+A path to any inode in the target filesystem, typically the root
+directory.
+.RE
+.PD
+
+.TP
+.BI "find-xattrs <\-n\ name> <\-f path>"
+.sp
+Displays the inode numbers of inodes in the filesystem which may have
+an extended attribute with the given name.
+.sp
+The results may contain false positives.  The returned inode numbers
+should be checked to verify that the extended attribute is in fact
+present on the inode.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-n name"
+Specifies the full name of the extended attribute to search for as
+described in the
+.BR xattr (7)
+manual page.
+.TP
+.B "-f path"
+Specifies the path to any inode in the filesystem to search. 
+.RE
+.PD
+
+.TP
+.BI "ino-path <ino> <path>"
+.sp
+Displays all the paths to links to the given inode number.
+.sp
+All the relative paths from the root directory to each link of the
+target inode are output, one result per line.  Each output path is
+guaranteed to have been a valid path to a link at some point in the
+past.  An individual path won't be corrupted by a rename that occurs
+during the search.  The set of paths can be modified while the search is
+running.  A rename of a parent directory of all the paths, for example,
+can result in output where the parent directory name component changes
+in the middle of outputting all the paths.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "ino"
+The inode number of the target inode to resolve.
+.TP
+.B "path"
+A path to any inode in the target filesystem, typically the root
+directory.
+.RE
+.PD
+
+.TP
+.BI "listxattr-hidden <\-f path>"
+.sp
+Displays all the extended attributes starting with the
+.BR scoutfs.
+prefix and which contain the
+.BR hide.
+tag
+which makes them invisible to 
+.BR listxattr (2)
+\&.
+The names of each attribute are output, one name per line.  Their order
+is determined by internal indexing implementation details and should not
+be relied on.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-f path"
+The path to the file whose extended attributes will be listed.  The
+user must have read permission to the inode.
+.RE
+.PD
+
+.TP
+.BI "mkfs <\-Q nr> <path>"
+.sp
+Initialize a new empty filesystem in the target device by writing empty
+structures and a new superblock.
+.sp
+This 
+.B unconditionally destroys
+the contents of the device, regardless of what it contains or who may be
+using it.  It simply writes new data structures into known offsets.
+.B Be very careful that the device does not contain data and is not actively in use.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-Q nr"
+Specify the number of mounts needed to reach quorum and elect a mount
+to start the server.  Mounts of the device will hang until this many
+mounts are operational and can elect a server amongst themselves.
+.sp
+Mounts with the 
+.B server_addr
+mount option participate in quorum.  The safest quorum number is the
+smallest majority of an odd number of participating mounts.  For
+example,
+two out of three total mounts.  This ensures that there can only be one
+set of mounts that can establish quorum.
+.sp
+Degenerate quorums are possible, for example by specifying half of an
+even number of mounts or less than half of the mount count, down to even
+just one mount establishing quorum. These minority quorums carry the
+risk of multiple quorums being established concurrently.  Each quorum's
+elected servers race to fence each other and can have the unlikely
+outcome of continually racing to fence each other resulting in a
+persistent loss of service.
+.TP
+.B "path"
+The path to the device whose contents will be unconditionally destroyed.
+.RE
+.PD
+
+.TP
+.BI "print <path>"
+.sp
+Prints out all of the metadata in the file system.  This makes no effort
+to ensure that the structures are consistent as they're traversed and
+can present structures that seem corrupt as they change as they're
+output.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "path"
+The path to the device that contains the filesystem whose metadata will
+be printed.  The command reads from the buffer cache of the device which
+may not reflect the current blocks in the filesystem that may have been
+written through another host or device.  The local device's cache can be
+manually flused before printing, perhaps with the
+.B \--flushbufs
+command in the
+.BR blockdev (8)
+command.
+.RE
+.PD
+
+.TP
+.BI "release <path> <vers> <4KB block offset> <4KB block count>"
+.sp
+.B Release
+the given logical block region of the file.  That is, truncate away
+any data blocks but leave behind offline data regions and do not change
+the main inode metadata.  Future attempts to read or write the block
+region
+will block until the region is restored by a 
+.B stage
+write.  This is used by userspace archive managers to store file data
+in a remote archive tier.
+.sp
+This only works on regular files and with write permission.  Releasing
+regions that are already offline or are sparse, including past the end
+of the file, silently succeed.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "path"
+The path to the regular file whose region will be released.
+.TP
+.B "version"
+The current data version of the contents of the file.  This ensures
+that a release operation is truncating the version of the data that it
+expects.  It can't throw away data that was newly written while it was
+performing its release operation.  An inode's data_version is read
+by the SCOUTFS_IOC_STATFS_MORE
+ioctl.
+.TP
+.B "4KB block offset"
+The 64bit logical block offset of the start of the region in units of 4KB.
+.TP
+.B "4KB block count"
+The 64bit length of the region to release in units of 4KB blocks.
+.RE
+.PD
+
+.TP
+.BI "setattr <\-c ctime> <\-d data_version> -o <\-s i_size> <\-f path>
+.sp
+Set scoutfs specific metadata on a newly created inode without updating
+other inode metadata.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-c ctime"
+Specify the inode's creation GMT timespec with 64bit seconds and 32bit
+nanoseconds formatted as 
+.B sec.nsec
+\&.
+.TP
+.B "-d data_version"
+Specify the inode's data version.  This can only be set on regular files whose
+current data_version is 0.
+.TP
+.B "-o"
+Create an offline region for all of the file's data up to the specified
+file size.  This can only be set on regular files whose data_version is
+0 and i_size must also be specified.
+.TP
+.B "-s i_size"
+Set the inode's i_size.  This can only be set on regular files whose
+data_version is 0.
+.TP
+.B "-f path"
+The file whose metadata will be set.
+.RE
+.PD
+
+.TP
+.BI "stage <file> <vers> <offset> <count> <archive file>"
+.sp
+.B Stage
+the contents of the file by reading a region of another archive file and writing it
+into the file region without updating regular inode metadata.  Any tasks
+that are blocked by the offline region will proceed once it has been
+staged.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "file"
+The regular file whose contents will be staged.
+.TP
+.B "vers"
+The data_version of the contents to be staged.  It must match the
+current data_version of the file.
+.TP
+.B "offset"
+The starting byte offset of the region to write.  This must be aligned
+to 4KB blocks.
+.TP
+.B "count"
+The length of the region to write in bytes.  A length of 0 is a noop
+and will immediately return success.  The length must be a multiple
+of 4KB blocks unless it is writing the final partial block in which
+case it must end at i_size.
+.TP
+.B "archive file"
+A file whose contents will be read and written as the staged region.
+The start of the archive file will be used as the start of the region.
+.RE
+.PD
+
+.TP
+.BI "stat [-s single] <path>"
+.sp
+Display scoutfs metadata fields for the given inode.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-s single"
+Only ontput a single stat instead of all the stats with one stat per
+line.  The possible stat names are those given in the output.
+.TP
+.B "path"
+The path to the file whose inode field will be output.
+.sp
+.TP
+.RE
+.PD
+The fields are as follows:
+.RS 1.0i
+.PD 0
+.TP
+.B "meta_seq"
+The metadata change sequence.  This changes each time the inode's metadata
+is changed during a mount's transaction.
+.TP
+.B "data_seq"
+The data change sequence.  This changes each time the inode's data
+is changed during a mount's transaction.
+.TP
+.B "data_version"
+The data version changes every time any contents of the file changes,
+including size changes.  It can change many times during a syscall in a
+transactions.
+.TP
+.B "online_blocks"
+The number of 4Kb data blocks that contain data and can be read.
+.TP
+.B "online_blocks"
+The number of 4Kb data blocks that are offline and would need to be
+staged to be read.
+.RE
+.PD
+
+.TP
+.BI "statfs [-s single] <path>"
+.sp
+Display scoutfs metadata fields for a scoutfs filesystem.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-s single"
+Only ontput a single stat instead of all the stats with one stat per
+line.  The possible stat names are those given in the output.
+.TP
+.B "path"
+The path to any inode in the filesystem.
+.sp
+.TP
+.RE
+.PD
+The fields are as follows:
+.RS 1.0i
+.PD 0
+.TP
+.B "fsid"
+The unique 64bit filesystem identifier for this filesystem.
+.TP
+.B "rid"
+The unique 64bit random identifier for this mount of the filesystem.
+This is generated for every new mount of the file system.
+.RE
+.PD
+
+.TP
+.BI "walk-inodes <index> <first> <last> <path>"
+.sp
+Walks an inode index in the file system and outputs the inode numbers
+that are found within the first and last positions in the index.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "index"
+Specifies the index to walk.  The currently supported indices are
+.B meta_seq
+and
+.B data_seq
+\&.
+.TP
+.B "first"
+The starting position of the index walk.
+.I 0
+is the first possible position in every index.
+.TP
+.B "last"
+The last position to include in the index walk.
+.I \-1
+can be given as shorthand for the U64_MAX last possible position in
+every index.
+.TP
+.B "path"
+A path to any inode in the filesystem, typically the root directory.
+.RE
+.PD
+
+.SH SEE ALSO
+.BR scoutfs (5),
+.BR xattr (7).
+
+.SH AUTHORS
+Zach Brown <zab@versity.com>

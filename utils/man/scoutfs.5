@@ -1,0 +1,48 @@
+.TH scoutfs 5
+.SH NAME
+scoutfs \- overview and mount options for the scoutfs filesystem
+.SH DESCRIPTION
+A scoutfs filesystem is stored on a block device.  Multiple mounts of
+the filesystem are supported between hosts that share access to the
+block device.  A new filesystem is created with the
+.B mkfs
+command in the
+.BR scoutfs (8)
+utility.
+.SH MOUNT OPTIONS
+The following mount options are supported by scoutfs in addition to the
+general mount options described in the
+.BR mount (8)
+manual page.
+.TP
+.B server_addr=<ipv4:port>
+The server_addr option indicates that this mount will participate in
+quorum election to try and run a server for all the mounts of its
+filesystem.   The option specifies the local TCP IPv4 address that the
+mount's elected server will listen on for connections from all other
+mounts of the filesystem.
+.sp
+The IPv4 address must be specified as a dotted quad, name resolution is
+not supported.  A specific port may be provided after a seperating
+colon.  If no port is specified then a random port will be chosen.  The
+address will be used for the lifetime of the mount and can not be
+changed.  The mount must be unmounted to specify a different address.
+.sp
+If server_addr is not specified then the mount will read the filesystem
+until it sees the address of an elected server to connect to.
+.SH FURTHER READING
+A
+.B scoutfs
+filesystem can detect corruption at runtime.  A catalog of kernel log
+messages that indicate corruption can be found in
+.BR scoutfs-corruption (8)
+\&.
+
+.SH SEE ALSO
+.BR scoutfs (8),
+.BR scoutfs-corruption (7).
+
+.SH AUTHORS
+Zach Brown <zab@versity.com>
+
+

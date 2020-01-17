@@ -43,18 +43,20 @@ scoutfs - development headers
 
 %build
 make
-gzip man/*.7
+gzip man/*.?
 
 %install
-mkdir -p $RPM_BUILD_ROOT%{_mandir}/man7
+mkdir -p $RPM_BUILD_ROOT%{_mandir}/man{5,7,8}
+cp man/*.5.gz $RPM_BUILD_ROOT%{_mandir}/man5/.
 cp man/*.7.gz $RPM_BUILD_ROOT%{_mandir}/man7/.
+cp man/*.8.gz $RPM_BUILD_ROOT%{_mandir}/man8/.
 install -m 755 -D src/scoutfs $RPM_BUILD_ROOT%{_sbindir}/scoutfs
 install -m 644 -D src/ioctl.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/ioctl.h
 install -m 644 -D src/format.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/format.h
 
 %files
 %defattr(644,root,root,755)
-%{_mandir}/man7/scoutfs-corruption.7.gz
+%{_mandir}/man*/scoutfs*.gz
 %defattr(755,root,root,755)
 %{_sbindir}/scoutfs
 
