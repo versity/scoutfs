@@ -262,8 +262,8 @@ if [ -n "$T_UTILS_REPO" ]; then
 	cmd sync
 	cmd cd -
 
-	# we can now run the built scoutfs binary
-	PATH="$PATH:$T_UTILS_REPO/src"
+	# we can now run the built scoutfs binary, prefer over installed
+	PATH="$T_UTILS_REPO/src:$PATH"
 fi
 
 # verify xfstests branch
@@ -389,8 +389,8 @@ fi
 . funcs/exec.sh
 . funcs/filter.sh
 
-# give tests access to built binaries in src/
-PATH="$PATH:$PWD/src"
+# give tests access to built binaries in src/, prefer over installed
+PATH="$PWD/src:$PATH"
 
 msg "running tests"
 > "$T_RESULTS/skip.log"
