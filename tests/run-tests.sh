@@ -474,15 +474,17 @@ for t in $tests; do
 		message=$(cat "$T_TMPDIR/status.msg")
 	fi
 
-	# see if anything unexpected showed up in dmesg
+	# see if anything unexpected was added to dmesg
 	if [ "$sts" == "$T_PASS_STATUS" ]; then
 		dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.after"
-		diff -u "$T_TMPDIR/dmesg.before" "$T_TMPDIR/dmesg.after" > \
-			"$T_TMPDIR/dmesg.diff"
-		if [ -s "$T_TMPDIR/dmesg.diff" ]; then
+		diff --old-line-format="" --unchanged-line-format="" \
+			"$T_TMPDIR/dmesg.before" "$T_TMPDIR/dmesg.after" > \
+			"$T_TMPDIR/dmesg.new"
+
+		if [ -s "$T_TMPDIR/dmesg.new" ]; then
 			message="unexpected messages in dmesg"
 			sts=$T_FAIL_STATUS
-			cat "$T_TMPDIR/dmesg.diff" >> "$T_RESULTS/fail.log"
+			cat "$T_TMPDIR/dmesg.new" >> "$T_RESULTS/fail.log"
 		fi
 	fi
 
