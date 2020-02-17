@@ -8,6 +8,7 @@
 #define SCOUTFS_BLOCK_MAGIC_SUPER	0x103c428b
 #define SCOUTFS_BLOCK_MAGIC_BTREE	0xe597f96d
 #define SCOUTFS_BLOCK_MAGIC_BLOOM	0x31995604
+#define SCOUTFS_BLOCK_MAGIC_RADIX	0xebeb5e65
 
 /*
  * The super block and btree blocks are fixed 4k.
@@ -132,6 +133,43 @@ struct scoutfs_key {
 #define skpe_base	_sk_second
 #define skpe_part	_sk_fourth
 
+struct scoutfs_radix_block {
+	struct scoutfs_block_header hdr;
+	__le32 sm_first;
+	__le32 lg_first;
+	union {
+		struct scoutfs_radix_ref {
+			__le64 blkno;
+			__le64 seq;
+			__le64 sm_total;
+			__le64 lg_total;
+		} __packed refs[0];
+		__le64 bits[0];
+	} __packed;
+} __packed;
+
+struct scoutfs_radix_root {
+	__u8 height;
+	__le64 next_find_bit;
+	struct scoutfs_radix_ref ref;
+} __packed;
+
+#define SCOUTFS_RADIX_REFS \
+	((SCOUTFS_BLOCK_SIZE - offsetof(struct scoutfs_radix_block, refs[0])) /\
+		sizeof(struct scoutfs_radix_ref))
+
+/* 8 meg regions with 4k data blocks */
+#define SCOUTFS_RADIX_LG_SHIFT	11
+#define SCOUTFS_RADIX_LG_BITS	(1 << SCOUTFS_RADIX_LG_SHIFT)
+#define SCOUTFS_RADIX_LG_MASK	(SCOUTFS_RADIX_LG_BITS - 1)
+
+/* round block bits down to a multiple of large ranges */
+#define SCOUTFS_RADIX_BITS					\
+	(((SCOUTFS_BLOCK_SIZE -					\
+	   offsetof(struct scoutfs_radix_block, bits[0])) * 8) &	\
+	 ~(__u64)SCOUTFS_RADIX_LG_MASK)
+#define SCOUTFS_RADIX_BITS_BYTES (SCOUTFS_RADIX_BITS / 8)
+
 /*
  * The btree still uses memcmp() to compare keys.  We should fix that
  * before too long.
@@ -209,55 +247,6 @@ struct scoutfs_btree_block {
 } __packed;
 
 /*
- * Free metadata blocks are tracked by block allocator items.
- */
-struct scoutfs_balloc_root {
-	struct scoutfs_btree_root root;
-	__le64 total_free;
-} __packed;
-struct scoutfs_balloc_item_key {
-	__be64 base;
-} __packed;
-
-#define SCOUTFS_BALLOC_ITEM_BYTES	    256
-#define SCOUTFS_BALLOC_ITEM_U64S	    (SCOUTFS_BALLOC_ITEM_BYTES / \
-					     sizeof(__u64))
-#define SCOUTFS_BALLOC_ITEM_BITS	    (SCOUTFS_BALLOC_ITEM_BYTES * 8)
-#define SCOUTFS_BALLOC_ITEM_BASE_SHIFT	    ilog2(SCOUTFS_BALLOC_ITEM_BITS)
-#define SCOUTFS_BALLOC_ITEM_BIT_MASK	    (SCOUTFS_BALLOC_ITEM_BITS - 1)
-
-struct scoutfs_balloc_item_val {
-	__le64 bits[SCOUTFS_BALLOC_ITEM_U64S];
-} __packed;
-
-/*
- * Free data blocks are tracked in bitmaps stored in btree items.
- */
-struct scoutfs_block_bitmap_key {
-	__u8 type;
-	__be64 base;
-} __packed;
-
-#define SCOUTFS_BLOCK_BITMAP_BIG	0
-#define SCOUTFS_BLOCK_BITMAP_LITTLE	1
-
-#define SCOUTFS_PACKED_BITMAP_WORDS	32
-#define SCOUTFS_PACKED_BITMAP_BITS	(SCOUTFS_PACKED_BITMAP_WORDS * 64)
-#define SCOUTFS_PACKED_BITMAP_MAX_BYTES				\
-	    offsetof(struct scoutfs_packed_bitmap,		\
-		     words[SCOUTFS_PACKED_BITMAP_WORDS])
-
-#define SCOUTFS_BLOCK_BITMAP_BITS	SCOUTFS_PACKED_BITMAP_BITS
-#define SCOUTFS_BLOCK_BITMAP_BIT_MASK	(SCOUTFS_PACKED_BITMAP_BITS - 1)
-#define SCOUTFS_BLOCK_BITMAP_BASE_SHIFT	(ilog2(SCOUTFS_PACKED_BITMAP_BITS))
-
-struct scoutfs_packed_bitmap {
-	__le64 present;
-	__le64 set;
-	__le64 words[0];
-};
-
-/*
  * The lock server keeps a persistent record of connected clients so that
  * server failover knows who to wait for before resuming operations.
  */
@@ -293,12 +282,12 @@ struct scoutfs_mounted_client_btree_val {
  * about item logs, it's about clients making changes to trees.
  */
 struct scoutfs_log_trees {
-	struct scoutfs_balloc_root alloc_root;
-	struct scoutfs_balloc_root free_root;
+	struct scoutfs_radix_root meta_avail;
+	struct scoutfs_radix_root meta_freed;
 	struct scoutfs_btree_root item_root;
 	struct scoutfs_btree_ref bloom_ref;
-	struct scoutfs_balloc_root data_alloc;
-	struct scoutfs_balloc_root data_free;
+	struct scoutfs_radix_root data_avail;
+	struct scoutfs_radix_root data_freed;
 	__le64 rid;
 	__le64 nr;
 } __packed;
@@ -309,12 +298,12 @@ struct scoutfs_log_trees_key {
 } __packed;
 
 struct scoutfs_log_trees_val {
-	struct scoutfs_balloc_root alloc_root;
-	struct scoutfs_balloc_root free_root;
+	struct scoutfs_radix_root meta_avail;
+	struct scoutfs_radix_root meta_freed;
 	struct scoutfs_btree_root item_root;
 	struct scoutfs_btree_ref bloom_ref;
-	struct scoutfs_balloc_root data_alloc;
-	struct scoutfs_balloc_root data_free;
+	struct scoutfs_radix_root data_avail;
+	struct scoutfs_radix_root data_freed;
 } __packed;
 
 struct scoutfs_log_item_value {
@@ -489,25 +478,22 @@ struct scoutfs_super_block {
 	__u8 uuid[SCOUTFS_UUID_BYTES];
 	__le64 next_ino;
 	__le64 next_trans_seq;
-	__le64 total_blocks;
-	__le64 next_uninit_meta_blkno;
-	__le64 last_uninit_meta_blkno;
-	__le64 next_uninit_data_blkno;
-	__le64 last_uninit_data_blkno;
-	__le64 core_balloc_cursor;
-	__le64 core_data_alloc_cursor;
+	__le64 total_meta_blocks;	/* both static and dynamic */
+	__le64 first_meta_blkno;	/* first dynamically allocated */
+	__le64 last_meta_blkno;
+	__le64 total_data_blocks;
+	__le64 first_data_blkno;
+	__le64 last_data_blkno;
 	__le64 free_blocks;
-	__le64 first_fs_blkno;
-	__le64 last_fs_blkno;
 	__le64 quorum_fenced_term;
 	__le64 quorum_server_term;
 	__le64 unmount_barrier;
 	__u8 quorum_count;
 	struct scoutfs_inet_addr server_addr;
-	struct scoutfs_balloc_root core_balloc_alloc;
-	struct scoutfs_balloc_root core_balloc_free;
-	struct scoutfs_balloc_root core_data_alloc;
-	struct scoutfs_balloc_root core_data_free;
+	struct scoutfs_radix_root core_meta_avail;
+	struct scoutfs_radix_root core_meta_freed;
+	struct scoutfs_radix_root core_data_avail;
+	struct scoutfs_radix_root core_data_freed;
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
 	struct scoutfs_btree_root lock_clients;

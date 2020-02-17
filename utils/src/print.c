@@ -20,6 +20,7 @@
 #include "cmd.h"
 #include "crc.h"
 #include "key.h"
+#include "radix.h"
 
 static void *read_block(int fd, u64 blkno)
 {
@@ -258,6 +259,18 @@ static int print_logs_item(void *key, unsigned key_len, void *val,
 	return 0;
 }
 
+#define RADREF_F \
+	"blkno %llu seq %llu sm_total %llu lg_total %llu"
+#define RADREF_A(ref) \
+	le64_to_cpu((ref)->blkno), le64_to_cpu((ref)->seq), \
+	le64_to_cpu((ref)->sm_total), le64_to_cpu((ref)->lg_total)
+
+#define RADROOT_F \
+	"height %u next_find_bit %llu ref: "RADREF_F
+#define RADROOT_A(root) \
+	(root)->height, le64_to_cpu((root)->next_find_bit), \
+	RADREF_A(&(root)->ref)
+
 /* same as fs item but with a small header in the value */
 static int print_log_trees_item(void *key, unsigned key_len, void *val,
 				unsigned val_len, void *arg)
@@ -270,33 +283,21 @@ static int print_log_trees_item(void *key, unsigned key_len, void *val,
 
 	/* only items in leaf blocks have values */
 	if (val) {
-		printf("      alloc_root: total_free %llu root: height %u blkno %llu seq %llu\n"
-		       "      free_root: total_free %llu root: height %u blkno %llu seq %llu\n"
+		printf("      meta_avail: "RADROOT_F"\n"
+		       "      meta_freed: "RADROOT_F"\n"
 		       "      item_root: height %u blkno %llu seq %llu\n"
 		       "      bloom_ref: blkno %llu seq %llu\n"
-		       "      data_alloc: total_free %llu root: height %u blkno %llu seq %llu\n"
-		       "      data_free: total_free %llu root: height %u blkno %llu seq %llu\n",
-			le64_to_cpu(ltv->alloc_root.total_free),
-			ltv->alloc_root.root.height,
-			le64_to_cpu(ltv->alloc_root.root.ref.blkno),
-			le64_to_cpu(ltv->alloc_root.root.ref.seq),
-			le64_to_cpu(ltv->free_root.total_free),
-			ltv->free_root.root.height,
-			le64_to_cpu(ltv->free_root.root.ref.blkno),
-			le64_to_cpu(ltv->free_root.root.ref.seq),
+		       "      data_avail: "RADROOT_F"\n"
+		       "      data_freed: "RADROOT_F"\n",
+		       RADROOT_A(&ltv->meta_avail),
+		       RADROOT_A(&ltv->meta_freed),
 			ltv->item_root.height,
 			le64_to_cpu(ltv->item_root.ref.blkno),
 			le64_to_cpu(ltv->item_root.ref.seq),
 			le64_to_cpu(ltv->bloom_ref.blkno),
 			le64_to_cpu(ltv->bloom_ref.seq),
-			le64_to_cpu(ltv->data_alloc.total_free),
-			ltv->data_alloc.root.height,
-			le64_to_cpu(ltv->data_alloc.root.ref.blkno),
-			le64_to_cpu(ltv->data_alloc.root.ref.seq),
-			le64_to_cpu(ltv->data_free.total_free),
-			ltv->data_free.root.height,
-			le64_to_cpu(ltv->data_free.root.ref.blkno),
-			le64_to_cpu(ltv->data_free.root.ref.seq));
+		       RADROOT_A(&ltv->data_avail),
+		       RADROOT_A(&ltv->data_freed));
 	}
 
 	return 0;
@@ -319,31 +320,6 @@ static int print_trans_seqs_entry(void *key, unsigned key_len, void *val,
 
 	printf("    trans_seq %llu rid %016llx\n",
 	       be64_to_cpu(tsk->trans_seq), be64_to_cpu(tsk->rid));
-
-	return 0;
-}
-
-static int print_balloc_entry(void *key, unsigned key_len, void *val,
-			      unsigned val_len, void *arg)
-{
-	struct scoutfs_balloc_item_key *bik = key;
-//	struct scoutfs_balloc_item_val *biv = val;
-
-	printf("    base %llu\n",
-			be64_to_cpu(bik->base));
-
-	return 0;
-}
-
-static int print_bitmap_entry(void *key, unsigned key_len, void *val,
-			      unsigned val_len, void *arg)
-{
-	struct scoutfs_block_bitmap_key *bbk = key;
-	struct scoutfs_packed_bitmap *pb = val;
-
-	printf("    type %u base %llu present 0x%016llx set 0x%016llx\n",
-			bbk->type, be64_to_cpu(bbk->base),
-			le64_to_cpu(pb->present), le64_to_cpu(pb->set));
 
 	return 0;
 }
@@ -460,6 +436,71 @@ static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
 	return ret;
 }
 
+static int print_radix_block(int fd, struct scoutfs_radix_ref *par, int level)
+{
+	struct scoutfs_radix_block *rdx;
+	u64 blkno;
+	int prev;
+	int ret;
+	int err;
+	int i;
+
+	/* XXX not printing bitmap leaf blocks */
+	blkno = le64_to_cpu(par->blkno);
+	if (blkno == 0 || blkno == U64_MAX || level == 0)
+		return 0;
+
+	rdx = read_block(fd, le64_to_cpu(par->blkno));
+	if (!rdx) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	printf("radix parent block blkno %llu\n", le64_to_cpu(par->blkno));
+	print_block_header(&rdx->hdr);
+	printf("  sm_first %u lg_first %u\n",
+	       le32_to_cpu(rdx->sm_first), le32_to_cpu(rdx->lg_first));
+
+	prev = 0;
+	for (i = 0; i < SCOUTFS_RADIX_REFS; i++) {
+		/* only skip if the next ref is identically full/empty */
+		if ((le64_to_cpu(rdx->refs[i].blkno) == 0 ||
+		     le64_to_cpu(rdx->refs[i].blkno) == U64_MAX) &&
+		    (i + 1) < SCOUTFS_RADIX_REFS &&
+		    (le64_to_cpu(rdx->refs[i].blkno) ==
+		     le64_to_cpu(rdx->refs[i + 1].blkno))) {
+			prev++;
+			continue;
+		}
+
+		if (prev) {
+			printf("  [%u - %u]: (%s): ", i - prev, i,
+			     (le64_to_cpu(rdx->refs[i].blkno) == 0) ? "empty" :
+								      "full");
+			prev = 0;
+		} else {
+			printf("  [%u]: ", i);
+		}
+
+		printf(RADREF_F"\n", RADREF_A(&rdx->refs[i]));
+	}
+
+	ret = 0;
+	for (i = 0; i < SCOUTFS_RADIX_REFS; i++) {
+		if (le64_to_cpu(rdx->refs[i].blkno) != 0 &&
+		    le64_to_cpu(rdx->refs[i].blkno) != U64_MAX) {
+			err = print_radix_block(fd, &rdx->refs[i], level - 1);
+			if (err < 0 && ret == 0)
+				ret = err;
+		}
+	}
+
+out:
+	free(rdx);
+
+	return ret;
+}
+
 struct print_recursion_args {
 	struct scoutfs_super_block *super;
 	int fd;
@@ -469,52 +510,35 @@ struct print_recursion_args {
 static int print_log_trees_roots(void *key, unsigned key_len, void *val,
 				unsigned val_len, void *arg)
 {
-	struct scoutfs_log_trees_key *ltk = key;
+//	struct scoutfs_log_trees_key *ltk = key;
 	struct scoutfs_log_trees_val *ltv = val;
 	struct print_recursion_args *pa = arg;
-	struct log_trees_roots {
-		char *fmt;
-		struct scoutfs_btree_root *root;
-		print_item_func func;
-	} roots[] = {
-		{ "log_tree_rid:%llu_nr:%llu_alloc",
-		  &ltv->alloc_root.root,
-		  print_balloc_entry,
-		},
-		{ "log_tree_rid:%llu_nr:%llu_free",
-		  &ltv->free_root.root,
-		  print_balloc_entry,
-		},
-		{ "log_tree_rid:%llu_nr:%llu_data_alloc",
-		  &ltv->data_alloc.root,
-		  print_bitmap_entry,
-		},
-		{ "log_tree_rid:%llu_nr:%llu_data_free",
-		  &ltv->data_free.root,
-		  print_bitmap_entry,
-		},
-		{ "log_tree_rid:%llu_nr:%llu_item",
-		  &ltv->item_root,
-		  print_logs_item,
-		},
-	};
-	char which[100];
-	int ret;
+	int ret = 0;
 	int err;
-	int i;
 
 	/* XXX doesn't print the bloom block */
 
-	ret = 0;
-	for (i = 0; i < array_size(roots); i++) {
-		snprintf(which, sizeof(which) - 1, roots[i].fmt,
-			 be64_to_cpu(ltk->rid), be64_to_cpu(ltk->nr));
+	err = print_radix_block(pa->fd, &ltv->meta_avail.ref,
+				ltv->meta_avail.height - 1);
+	if (err && !ret)
+		ret = err;
+	err = print_radix_block(pa->fd, &ltv->meta_freed.ref,
+				ltv->meta_avail.height - 1);
+	if (err && !ret)
+		ret = err;
+	err = print_radix_block(pa->fd, &ltv->data_avail.ref,
+				ltv->data_avail.height - 1);
+	if (err && !ret)
+		ret = err;
+	err = print_radix_block(pa->fd, &ltv->meta_freed.ref,
+				ltv->data_avail.height - 1);
+	if (err && !ret)
+		ret = err;
 
-		err = print_btree(pa->fd, pa->super, which, roots[i].root,
-				  roots[i].func, NULL);
-		if (err && !ret)
-			ret = err;
-	}
+	err = print_btree(pa->fd, pa->super, "", &ltv->item_root,
+			  print_logs_item, NULL);
+	if (err && !ret)
+		ret = err;
 
 	return ret;
 }
@@ -657,51 +681,37 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_trans_seq %llu\n"
-	       "  total_blocks %llu free_blocks %llu\n"
-	       "  next_uninit_meta_blkno %llu last_uninit_meta_blkno %llu\n"
-	       "  next_uninit_data_blkno %llu last_uninit_data_blkno %llu\n"
-	       "  core_balloc_cursor %llu core_data_alloc_cursor %llu\n"
+	       "  total_meta_blocks %llu first_meta_blkno %llu last_meta_blkno %llu\n"
+	       "  total_data_blocks %llu first_data_blkno %llu last_data_blkno %llu\n"
+	       "  free_blocks %llu\n"
 	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
 	       "  quorum_count %u server_addr %s\n"
-	       "  core_balloc_alloc: total_free %llu root: height %u blkno %llu seq %llu\n"
-	       "  core_balloc_free: total_free %llu root: height %u blkno %llu seq %llu\n"
-	       "  core_data_alloc: total_free %llu root: height %u blkno %llu seq %llu\n"
-	       "  core_data_free: total_free %llu root: height %u blkno %llu seq %llu\n"
+	       "  core_meta_avail: "RADROOT_F"\n"
+	       "  core_meta_freed: "RADROOT_F"\n"
+	       "  core_data_avail: "RADROOT_F"\n"
+	       "  core_data_freed: "RADROOT_F"\n"
 	       "  lock_clients root: height %u blkno %llu seq %llu\n"
 	       "  mounted_clients root: height %u blkno %llu seq %llu\n"
 	       "  trans_seqs root: height %u blkno %llu seq %llu\n"
 	       "  fs_root btree root: height %u blkno %llu seq %llu\n",
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->next_trans_seq),
-		le64_to_cpu(super->total_blocks),
+		le64_to_cpu(super->total_meta_blocks),
+		le64_to_cpu(super->first_meta_blkno),
+		le64_to_cpu(super->last_meta_blkno),
+		le64_to_cpu(super->total_data_blocks),
+		le64_to_cpu(super->first_data_blkno),
+		le64_to_cpu(super->last_data_blkno),
 		le64_to_cpu(super->free_blocks),
-		le64_to_cpu(super->next_uninit_meta_blkno),
-		le64_to_cpu(super->last_uninit_meta_blkno),
-		le64_to_cpu(super->next_uninit_data_blkno),
-		le64_to_cpu(super->last_uninit_data_blkno),
-		le64_to_cpu(super->core_balloc_cursor),
-		le64_to_cpu(super->core_data_alloc_cursor),
 		le64_to_cpu(super->quorum_fenced_term),
 		le64_to_cpu(super->quorum_server_term),
 		le64_to_cpu(super->unmount_barrier),
 		super->quorum_count,
 		server_addr,
-		le64_to_cpu(super->core_balloc_alloc.total_free),
-		super->core_balloc_alloc.root.height,
-		le64_to_cpu(super->core_balloc_alloc.root.ref.blkno),
-		le64_to_cpu(super->core_balloc_alloc.root.ref.seq),
-		le64_to_cpu(super->core_balloc_free.total_free),
-		super->core_balloc_free.root.height,
-		le64_to_cpu(super->core_balloc_free.root.ref.blkno),
-		le64_to_cpu(super->core_balloc_free.root.ref.seq),
-		le64_to_cpu(super->core_data_alloc.total_free),
-		super->core_data_alloc.root.height,
-		le64_to_cpu(super->core_data_alloc.root.ref.blkno),
-		le64_to_cpu(super->core_data_alloc.root.ref.seq),
-		le64_to_cpu(super->core_data_free.total_free),
-		super->core_data_free.root.height,
-		le64_to_cpu(super->core_data_free.root.ref.blkno),
-		le64_to_cpu(super->core_data_free.root.ref.seq),
+		RADROOT_A(&super->core_meta_avail),
+		RADROOT_A(&super->core_meta_freed),
+		RADROOT_A(&super->core_data_avail),
+		RADROOT_A(&super->core_data_freed),
 		super->lock_clients.height,
 		le64_to_cpu(super->lock_clients.ref.blkno),
 		le64_to_cpu(super->lock_clients.ref.seq),
@@ -748,27 +758,20 @@ static int print_volume(int fd)
 	if (err && !ret)
 		ret = err;
 
-	err = print_btree(fd, super, "core_balloc_alloc",
-			  &super->core_balloc_alloc.root,
-			  print_balloc_entry, NULL);
+	err = print_radix_block(fd, &super->core_meta_avail.ref,
+				super->core_meta_avail.height - 1);
 	if (err && !ret)
 		ret = err;
-
-	err = print_btree(fd, super, "core_balloc_free",
-			  &super->core_balloc_free.root,
-			  print_balloc_entry, NULL);
+	err = print_radix_block(fd, &super->core_meta_freed.ref,
+				super->core_meta_freed.height - 1);
 	if (err && !ret)
 		ret = err;
-
-	err = print_btree(fd, super, "core_data_alloc",
-			  &super->core_data_alloc.root,
-			  print_bitmap_entry, NULL);
+	err = print_radix_block(fd, &super->core_data_avail.ref,
+				super->core_data_avail.height - 1);
 	if (err && !ret)
 		ret = err;
-
-	err = print_btree(fd, super, "core_data_free",
-			  &super->core_data_free.root,
-			  print_bitmap_entry, NULL);
+	err = print_radix_block(fd, &super->core_data_freed.ref,
+				super->core_data_freed.height - 1);
 	if (err && !ret)
 		ret = err;
 
