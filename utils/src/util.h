@@ -49,6 +49,12 @@ do {				\
 					\
 	((a) + _b - 1) & ~(_b - 1);	\
 })
+#define round_down(a, b)		\
+({					\
+	__typeof__(a) _b = (b);		\
+					\
+	((a) & ~(_b - 1));		\
+})
 
 #define DIV_ROUND_UP(x, y)  (((x) + (y) - 1) / (y))
 #define ALIGN(x, y)  (((x) + (y) - 1) & ~((y) - 1))
@@ -65,6 +71,13 @@ do {				\
 #define U16_MAX ((u16)~0ULL)
 #define U32_MAX ((u32)~0ULL)
 #define U64_MAX ((u64)~0ULL)
+
+#define flsll(x)					\
+({							\
+	unsigned long long _x = (x);			\
+							\
+	(_x == 0 ? 0 : 64 - __builtin_clzll(_x));	\
+})
 
 /*
  * return -1,0,+1 based on the memcmp comparison of the minimum of their
