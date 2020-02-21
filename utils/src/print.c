@@ -52,7 +52,7 @@ static void print_block_header(struct scoutfs_block_header *hdr)
 	else
 		valid_str[0] = '\0';
 
-	printf("  hdr: crc %08x %smagic %08x fsid %llx seq %llu blkno %llu\n",
+	printf("  hdr: crc %08x %smagic %08x fsid %llx blkno %llu seq %llu\n",
 		le32_to_cpu(hdr->crc), valid_str, le32_to_cpu(hdr->magic),
 		le64_to_cpu(hdr->fsid), le64_to_cpu(hdr->blkno),
 		le64_to_cpu(hdr->seq));
