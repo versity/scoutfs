@@ -13,7 +13,10 @@ create_file() {
 	local file="$1"
 	local size="$2"
 
-	t_quiet xfs_io -f -c "pwrite 0 $size" "$file"
+	t_quiet xfs_io -f \
+		-c "falloc 0 $size" \
+		-c "pwrite 0 $size" \
+		"$file"
 }
 
 # if vers is "stat" then we ask stat_more for the data_version
