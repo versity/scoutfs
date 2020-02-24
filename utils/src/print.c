@@ -681,9 +681,8 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_trans_seq %llu\n"
-	       "  total_meta_blocks %llu first_meta_blkno %llu last_meta_blkno %llu\n"
-	       "  total_data_blocks %llu first_data_blkno %llu last_data_blkno %llu\n"
-	       "  free_blocks %llu\n"
+	       "  total_meta_blocks %llu first_meta_blkno %llu last_meta_blkno %llu free_meta_blocks %llu\n"
+	       "  total_data_blocks %llu first_data_blkno %llu last_data_blkno %llu free_data_blocks %llu\n"
 	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
 	       "  quorum_count %u server_addr %s\n"
 	       "  core_meta_avail: "RADROOT_F"\n"
@@ -699,10 +698,11 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->total_meta_blocks),
 		le64_to_cpu(super->first_meta_blkno),
 		le64_to_cpu(super->last_meta_blkno),
+		le64_to_cpu(super->free_meta_blocks),
 		le64_to_cpu(super->total_data_blocks),
 		le64_to_cpu(super->first_data_blkno),
 		le64_to_cpu(super->last_data_blkno),
-		le64_to_cpu(super->free_blocks),
+		le64_to_cpu(super->free_data_blocks),
 		le64_to_cpu(super->quorum_fenced_term),
 		le64_to_cpu(super->quorum_server_term),
 		le64_to_cpu(super->unmount_barrier),

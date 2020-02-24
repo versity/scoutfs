@@ -457,7 +457,8 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	}
 
 	/* fill out allocator fields now that we've written our blocks */
-	super->free_blocks = cpu_to_le64(total_blocks - next_meta);
+	super->free_meta_blocks = cpu_to_le64(last_meta - next_meta + 1);
+	super->free_data_blocks = cpu_to_le64(last_data - next_data + 1);
 
 	/* write the super block */
 	super->hdr.seq = cpu_to_le64(1);
