@@ -147,12 +147,68 @@ static void print_symlink(struct scoutfs_key *key, void *val, int val_len)
 
 static void print_packed_extent(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_packed_extent *pe = val;
+	struct scoutfs_packed_extent *pe;
+	__le64 led;
+	u64 iblock;
+	u64 blkno = 0;
+	u64 diff;
+	int off = 0;
+	int i = 0;
 
-	printf("      packed_extent: ino %llu base %llu part %u count %u diff_bytes %u flags 0x%x final %u\n",
-	       le64_to_cpu(key->skpe_ino), le64_to_cpu(key->skpe_base),
-	       key->skpe_part, le16_to_cpu(pe->count), pe->diff_bytes,
-	       pe->flags, pe->final);
+
+	/*
+	 * Ugh, this is the only item that has state between items.  It
+	 * probably shouldn't.  And I'm too lazy to plumb an arg through
+	 * all the printers.
+	 */
+	static struct scoutfs_key next_key;
+	static u64 next_blkno;
+
+	if (scoutfs_key_compare(key, &next_key) == 0)
+		blkno = next_blkno;
+
+	iblock = le64_to_cpu(key->skpe_base) << SCOUTFS_PACKEXT_BASE_SHIFT;
+
+	while (off < val_len) {
+		printf("      [%u] off %u: ibl %llu ", i, off, iblock);
+
+		if (off + sizeof(struct scoutfs_packed_extent) > val_len) {
+			printf("(packed extent struct exceeds item)\n");
+			return;
+		}
+
+		pe = val + off;
+		printf("cnt %u dfb %u fl %x fin %u ",
+			le16_to_cpu(pe->count), pe->diff_bytes, pe->flags,
+			pe->final);
+
+		off += sizeof(struct scoutfs_packed_extent);
+
+		if (off + pe->diff_bytes > val_len) {
+			printf("(packed extent diff bytes exceeds item)\n");
+			return;
+		}
+
+		if (pe->diff_bytes) {
+			led = 0;
+			memcpy(&led, pe->le_blkno_diff, pe->diff_bytes);
+			diff = le64_to_cpu(led);
+			diff = (diff >> 1) ^ (-(diff & 1));
+			blkno += diff;
+			printf("dif %lld blk %llu\n", (s64)diff, blkno);
+			blkno += le16_to_cpu(pe->count) - 1;
+		} else {
+			printf("(sparse)\n");
+		}
+
+		iblock += le16_to_cpu(pe->count);
+		off += pe->diff_bytes;
+		i++;
+	}
+
+	next_blkno = blkno;
+	next_key = *key;
+	scoutfs_key_inc(&next_key);
 }
 
 static void print_inode_index(struct scoutfs_key *key, void *val, int val_len)
