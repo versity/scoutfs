@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /*
  * Generate build warnings if the condition is false but generate no
@@ -77,6 +78,11 @@ do {				\
 	unsigned long long _x = (x);			\
 							\
 	(_x == 0 ? 0 : 64 - __builtin_clzll(_x));	\
+})
+
+#define ilog2(x)					\
+({							\
+	((unsigned long)log2l((long double)x));		\
 })
 
 /*
