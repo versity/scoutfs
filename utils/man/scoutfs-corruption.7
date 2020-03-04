@@ -163,53 +163,6 @@ than the last child reference's key.
 .BR cmp " - comparison of search key and found"
 .sp
 
-.TP
-.B SC_EXTENT_ADD_CLEANUP, SC_EXTENT_REM_CLEANUP, SC_DATA_EXTENT_TRUNC_CLEANUP, SC_DATA_EXTENT_ALLOC_CLEANUP, SC_DATA_EXTENT_FALLOCATE_CLEANUP, SC_SERVER_EXTENT_CLEANUP
-
-Extents are used to track regions of blocks or files.  The process of
-modifying an extent creates and destroys intermediate extents, for
-example as two disjoint extents are merged with a third that is created
-between the two.   If an error occurs during this process the
-intermediate extents must be returned to the original state.  If an
-error occurs during this cleanup process then the resulting extents,
-taken as a whole, can be inconsistent.
-
-They can describe overlapping regions. They can forget a region that was
-previously described.  The consequences of these inconsistencies depend
-on the extent type.
-
-The
-.I
-_EXTENT_
-cases occur as core library code is modifying extents.  It can happen on
-behalf of both file data extents and free extents and while adding or
-removing extents.
-
-The
-.I
-_DATA_EXTENT_
-cases occur in file mapping extents while truncating (removing)
-extents from a file, while allocating extents for a newly written
-region of a file, or while using fallocate to pre-allocate extents
-to the file.
-
-The
-.I
-_SERVER_EXTENT_
-case occurs as the server is tracking free extents on behalf of all
-nodes.
-
-Each corruption type message describes the extent and operation.
-
-.BR clean " - extent that was being cleaned up after an error"
-.br
-.BR ext " - primary extent that was being operated on before the error"
-.br
-.BR ret " - negative errno of the first error encountered"
-.br
-.BR op " - the operation the server was performing on the extent"
-.sp
-
 .SH AUTHORS
 Zach Brown <zab@versity.com>
 
