@@ -4,6 +4,7 @@ inode-items-updated.sh
 simple-inode-index.sh
 simple-staging.sh
 simple-release-extents.sh
+setattr_more.sh
 offline-extent-waiting.sh
 simple-xattr-unit.sh
 lock-refleak.sh

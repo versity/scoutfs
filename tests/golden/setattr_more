@@ -1,0 +1,29 @@
+== 0 data_version arg fails
+setattr_more ioctl failed on '/mnt/test/test/setattr_more/file': Invalid argument (22)
+scoutfs: setattr failed: Invalid argument (22)
+== args must specify size and offline
+setattr_more ioctl failed on '/mnt/test/test/setattr_more/file': Invalid argument (22)
+scoutfs: setattr failed: Invalid argument (22)
+== only works on regular files
+failed to open '/mnt/test/test/setattr_more/dir': Is a directory (21)
+scoutfs: setattr failed: Is a directory (21)
+setattr_more ioctl failed on '/mnt/test/test/setattr_more/char': Inappropriate ioctl for device (25)
+scoutfs: setattr failed: Inappropriate ioctl for device (25)
+== non-zero file size fails
+setattr_more ioctl failed on '/mnt/test/test/setattr_more/file': Invalid argument (22)
+scoutfs: setattr failed: Invalid argument (22)
+== non-zero file data_version fails
+setattr_more ioctl failed on '/mnt/test/test/setattr_more/file': Invalid argument (22)
+scoutfs: setattr failed: Invalid argument (22)
+== large size is set
+578437695752307201
+== large data_version is set
+578437695752307201
+== large ctime is set
+1972-02-19 00:06:25.999999999 +0000
+== large offline extents are created
+Filesystem type is: 554f4353
+File size of /mnt/test/test/setattr_more/file is 40988672 (10007 blocks of 4096 bytes)
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..   10239:          0..     10239:  10240:             unknown,eof
+/mnt/test/test/setattr_more/file: 1 extent found
