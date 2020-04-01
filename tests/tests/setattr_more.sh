@@ -61,4 +61,11 @@ scoutfs setattr -d 1 -o -s $((10007 * 4096)) -f "$FILE" 2>&1 | t_filter_fs
 filefrag -v -b4096 "$FILE" 2>&1 | t_filter_fs
 rm "$FILE"
 
+# had a bug where we were creating extents that were too long
+echo "== correct offline extent length"
+touch "$FILE"
+scoutfs setattr -d 1 -o -s 4000000000 -f "$FILE" 2>&1 | t_filter_fs
+scoutfs stat -s offline_blocks "$FILE"
+rm "$FILE"
+
 t_pass

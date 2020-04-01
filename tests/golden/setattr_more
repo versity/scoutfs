@@ -25,5 +25,7 @@ scoutfs: setattr failed: Invalid argument (22)
 Filesystem type is: 554f4353
 File size of /mnt/test/test/setattr_more/file is 40988672 (10007 blocks of 4096 bytes)
  ext:     logical_offset:        physical_offset: length:   expected: flags:
-   0:        0..   10239:          0..     10239:  10240:             unknown,eof
+   0:        0..   10006:          0..     10006:  10007:             unknown,eof
 /mnt/test/test/setattr_more/file: 1 extent found
+== correct offline extent length
+976563
