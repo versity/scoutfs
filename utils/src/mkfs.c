@@ -287,11 +287,10 @@ out:
 static int write_new_fs(char *path, int fd, u8 quorum_count)
 {
 	struct scoutfs_super_block *super;
-	struct scoutfs_key_be *kbe;
 	struct scoutfs_inode *inode;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *btitem;
-	struct scoutfs_key key;
+	struct scoutfs_key *key;
 	struct timeval tv;
 	char uuid_str[37];
 	void *zeros;
@@ -374,32 +373,28 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	bt->nr_items = cpu_to_le32(2);
 
 	/* btree item allocated from the back of the block */
-	kbe = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*kbe);
-	btitem = (void *)kbe - sizeof(*btitem);
+	key = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*key);
+	btitem = (void *)key - sizeof(*btitem);
 
 	bt->item_hdrs[0].off = cpu_to_le32((long)btitem - (long)bt);
-	btitem->key_len = cpu_to_le16(sizeof(*kbe));
 	btitem->val_len = cpu_to_le16(0);
 
-	memset(&key, 0, sizeof(key));
-	key.sk_zone = SCOUTFS_INODE_INDEX_ZONE;
-	key.sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
-	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	scoutfs_key_to_be(kbe, &key);
+	memset(key, 0, sizeof(*key));
+	key->sk_zone = SCOUTFS_INODE_INDEX_ZONE;
+	key->sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
+	key->skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
 
 	inode = (void *)btitem - sizeof(*inode);
-	kbe = (void *)inode - sizeof(*kbe);
-	btitem = (void *)kbe - sizeof(*btitem);
+	key = (void *)inode - sizeof(*key);
+	btitem = (void *)key - sizeof(*btitem);
 
 	bt->item_hdrs[1].off = cpu_to_le32((long)btitem - (long)bt);
-	btitem->key_len = cpu_to_le16(sizeof(*kbe));
 	btitem->val_len = cpu_to_le16(sizeof(*inode));
 
-	memset(&key, 0, sizeof(key));
-	key.sk_zone = SCOUTFS_FS_ZONE;
-	key.ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	key.sk_type = SCOUTFS_INODE_TYPE;
-	scoutfs_key_to_be(kbe, &key);
+	memset(key, 0, sizeof(*key));
+	key->sk_zone = SCOUTFS_FS_ZONE;
+	key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	key->sk_type = SCOUTFS_INODE_TYPE;
 
 	inode->next_readdir_pos = cpu_to_le64(2);
 	inode->nlink = cpu_to_le32(SCOUTFS_DIRENT_FIRST_POS);

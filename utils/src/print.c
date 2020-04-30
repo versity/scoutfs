@@ -258,40 +258,34 @@ static print_func_t find_printer(u8 zone, u8 type)
 	return NULL;
 }
 
-static int print_fs_item(void *key, unsigned key_len, void *val,
+static int print_fs_item(struct scoutfs_key *key, void *val,
 			 unsigned val_len, void *arg)
 {
-	struct scoutfs_key item_key;
 	print_func_t printer;
 
-	scoutfs_key_from_be(&item_key, key);
-
-	printf("    "SK_FMT"\n", SK_ARG(&item_key));
+	printf("    "SK_FMT"\n", SK_ARG(key));
 
 	/* only items in leaf blocks have values */
 	if (val) {
-		printer = find_printer(item_key.sk_zone, item_key.sk_type);
+		printer = find_printer(key->sk_zone, key->sk_type);
 		if (printer)
-			printer(&item_key, val, val_len);
+			printer(key, val, val_len);
 		else
 			printf("      (unknown zone %u type %u)\n",
-			       item_key.sk_zone, item_key.sk_type);
+			       key->sk_zone, key->sk_type);
 	}
 
 	return 0;
 }
 
 /* same as fs item but with a small header in the value */
-static int print_logs_item(void *key, unsigned key_len, void *val,
+static int print_logs_item(struct scoutfs_key *key, void *val,
 			   unsigned val_len, void *arg)
 {
-	struct scoutfs_key item_key;
 	struct scoutfs_log_item_value *liv;
 	print_func_t printer;
 
-	scoutfs_key_from_be(&item_key, key);
-
-	printf("    "SK_FMT"\n", SK_ARG(&item_key));
+	printf("    "SK_FMT"\n", SK_ARG(key));
 
 	/* only items in leaf blocks have values */
 	if (val) {
@@ -301,14 +295,14 @@ static int print_logs_item(void *key, unsigned key_len, void *val,
 
 		/* deletion items don't have values */
 		if (!(liv->flags & SCOUTFS_LOG_ITEM_FLAG_DELETION)) {
-			printer = find_printer(item_key.sk_zone,
-					       item_key.sk_type);
+			printer = find_printer(key->sk_zone,
+					       key->sk_type);
 			if (printer)
-				printer(&item_key, val + sizeof(*liv),
+				printer(key, val + sizeof(*liv),
 					val_len - sizeof(*liv));
 			else
 				printf("      (unknown zone %u type %u)\n",
-				       item_key.sk_zone, item_key.sk_type);
+				       key->sk_zone, key->sk_type);
 		}
 	}
 
@@ -328,14 +322,13 @@ static int print_logs_item(void *key, unsigned key_len, void *val,
 	RADREF_A(&(root)->ref)
 
 /* same as fs item but with a small header in the value */
-static int print_log_trees_item(void *key, unsigned key_len, void *val,
+static int print_log_trees_item(struct scoutfs_key *key, void *val,
 				unsigned val_len, void *arg)
 {
-	struct scoutfs_log_trees_key *ltk = key;
 	struct scoutfs_log_trees_val *ltv = val;
 
 	printf("    rid %llu nr %llu\n",
-	       be64_to_cpu(ltk->rid), be64_to_cpu(ltk->nr));
+	       le64_to_cpu(key->sklt_rid), le64_to_cpu(key->sklt_nr));
 
 	/* only items in leaf blocks have values */
 	if (val) {
@@ -359,48 +352,43 @@ static int print_log_trees_item(void *key, unsigned key_len, void *val,
 	return 0;
 }
 
-static int print_lock_clients_entry(void *key, unsigned key_len, void *val,
+static int print_lock_clients_entry(struct scoutfs_key *key, void *val,
 				    unsigned val_len, void *arg)
 {
-	struct scoutfs_lock_client_btree_key *cbk = key;
-
-	printf("    rid %016llx\n", be64_to_cpu(cbk->rid));
+	printf("    rid %016llx\n", le64_to_cpu(key->sklc_rid));
 
 	return 0;
 }
 
-static int print_trans_seqs_entry(void *key, unsigned key_len, void *val,
+static int print_trans_seqs_entry(struct scoutfs_key *key, void *val,
 				  unsigned val_len, void *arg)
 {
-	struct scoutfs_trans_seq_btree_key *tsk = key;
-
 	printf("    trans_seq %llu rid %016llx\n",
-	       be64_to_cpu(tsk->trans_seq), be64_to_cpu(tsk->rid));
+	       le64_to_cpu(key->skts_trans_seq), le64_to_cpu(key->skts_rid));
 
 	return 0;
 }
 
-static int print_mounted_client_entry(void *key, unsigned key_len, void *val,
+static int print_mounted_client_entry(struct scoutfs_key *key, void *val,
 				      unsigned val_len, void *arg)
 {
-	struct scoutfs_mounted_client_btree_key *mck = key;
 	struct scoutfs_mounted_client_btree_val *mcv = val;
 
 	printf("    rid %016llx flags 0x%x\n",
-			be64_to_cpu(mck->rid), mcv->flags);
+	       le64_to_cpu(key->skmc_rid), mcv->flags);
 
 	return 0;
 }
 
-typedef int (*print_item_func)(void *key, unsigned key_len, void *val,
+typedef int (*print_item_func)(struct scoutfs_key *key, void *val,
 			       unsigned val_len, void *arg);
 
-static int print_btree_ref(void *key, unsigned key_len, void *val,
+static int print_btree_ref(struct scoutfs_key *key, void *val,
 			   unsigned val_len, print_item_func func, void *arg)
 {
 	struct scoutfs_btree_ref *ref = val;
 
-	func(key, key_len, NULL, 0, arg);
+	func(key, NULL, 0, arg);
 	printf("    ref blkno %llu seq %llu\n",
 		le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq));
 
@@ -413,9 +401,8 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 {
 	struct scoutfs_btree_item *item;
 	struct scoutfs_btree_block *bt;
-	unsigned key_len;
+	struct scoutfs_key *key;
 	unsigned val_len;
-	void *key;
 	void *val;
 	int ret;
 	int i;
@@ -440,10 +427,9 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 
 	for (i = 0; i < le32_to_cpu(bt->nr_items); i++) {
 		item = (void *)bt + le32_to_cpu(bt->item_hdrs[i].off);
-		key_len = le16_to_cpu(item->key_len);
 		val_len = le16_to_cpu(item->val_len);
-		key = (void *)(item + 1);
-		val = (void *)key + key_len;
+		key = &item->key;
+		val = item->val;
 
 		if (level < bt->level) {
 			ref = val;
@@ -457,13 +443,13 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 			continue;
 		}
 
-		printf("  item [%u] off %u key_len %u val_len %u\n",
-			i, le32_to_cpu(bt->item_hdrs[i].off), key_len, val_len);
+		printf("  item [%u] off %u val_len %u\n",
+			i, le32_to_cpu(bt->item_hdrs[i].off), val_len);
 
 		if (level)
-			print_btree_ref(key, key_len, val, val_len, func, arg);
+			print_btree_ref(key, val, val_len, func, arg);
 		else
-			func(key, key_len, val, val_len, arg);
+			func(key, val, val_len, arg);
 	}
 
 	free(bt);
@@ -563,10 +549,9 @@ struct print_recursion_args {
 };
 
 /* same as fs item but with a small header in the value */
-static int print_log_trees_roots(void *key, unsigned key_len, void *val,
+static int print_log_trees_roots(struct scoutfs_key *key, void *val,
 				unsigned val_len, void *arg)
 {
-//	struct scoutfs_log_trees_key *ltk = key;
 	struct scoutfs_log_trees_val *ltv = val;
 	struct print_recursion_args *pa = arg;
 	int ret = 0;
@@ -605,7 +590,6 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 {
 	struct scoutfs_btree_item *item;
 	struct scoutfs_btree_block *bt;
-	unsigned key_len;
 	unsigned val_len;
 	void *key;
 	void *val;
@@ -621,10 +605,9 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 
 	for (i = 0; i < le32_to_cpu(bt->nr_items); i++) {
 		item = (void *)bt + le32_to_cpu(bt->item_hdrs[i].off);
-		key_len = le16_to_cpu(item->key_len);
 		val_len = le16_to_cpu(item->val_len);
 		key = (void *)(item + 1);
-		val = (void *)key + key_len;
+		val = (void *)(key + 1);
 
 		if (bt->level > 0) {
 			ret = print_btree_leaf_items(fd, super, val, func, arg);
@@ -632,7 +615,7 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 				break;
 			continue;
 		} else {
-			func(key, key_len, val, val_len, arg);
+			func(key, val, val_len, arg);
 		}
 	}
 
