@@ -105,19 +105,17 @@ __gen_functions(cast, be)
 #error "machine is neither BIG_ENDIAN nor LITTLE_ENDIAN"
 #endif
 
-static inline void le32_add_cpu(__le32 *val, u32 delta)
-{
-	*val = cpu_to_le32(le32_to_cpu(*val) + delta);
+#define __gen_add_funcs(end, size)					  \
+static inline void end##size##_add_cpu(__##end##size *val, u##size delta) \
+{									  \
+	*val = cpu_to_##end##size(end##size##_to_cpu(*val) + delta);	  \
 }
 
-static inline void le64_add_cpu(__le64 *val, u64 delta)
-{
-	*val = cpu_to_le64(le64_to_cpu(*val) + delta);
-}
-
-static inline void be64_add_cpu(__be64 *val, u64 delta)
-{
-	*val = cpu_to_be64(be64_to_cpu(*val) + delta);
-}
+__gen_add_funcs(le, 16)
+__gen_add_funcs(le, 32)
+__gen_add_funcs(le, 64)
+__gen_add_funcs(be, 16)
+__gen_add_funcs(be, 32)
+__gen_add_funcs(be, 64)
 
 #endif
