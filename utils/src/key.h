@@ -7,34 +7,10 @@
 #include "cmp.h"
 #include "endian_swap.h"
 
-extern char *scoutfs_zone_strings[SCOUTFS_MAX_ZONE];
-extern char *scoutfs_type_strings[SCOUTFS_MAX_ZONE][SCOUTFS_MAX_TYPE];
-#define U8_STR_MAX 5 /* u%3u'\0' */
-extern char scoutfs_unknown_u8_strings[U8_MAX][U8_STR_MAX];
-
-static inline char *sk_zone_str(u8 zone)
-{
-	if (zone >= SCOUTFS_MAX_ZONE || scoutfs_zone_strings[zone] == NULL)
-		return scoutfs_unknown_u8_strings[zone];
-
-	return scoutfs_zone_strings[zone];
-}
-
-static inline char *sk_type_str(u8 zone, u8 type)
-{
-	if (zone >= SCOUTFS_MAX_ZONE || type >= SCOUTFS_MAX_TYPE ||
-	    scoutfs_type_strings[zone][type] == NULL)
-		return scoutfs_unknown_u8_strings[type];
-
-	return scoutfs_type_strings[zone][type];
-}
-
-#define SK_FMT		"%s.%llu.%s.%llu.%llu.%u"
+#define SK_FMT		"%u.%llu.%u.%llu.%llu.%u"
 /* This does not support null keys */
-#define SK_ARG(key)	sk_zone_str((key)->sk_zone),			\
-			le64_to_cpu((key)->_sk_first),			\
-			sk_type_str((key)->sk_zone, (key)->sk_type),	\
-			le64_to_cpu((key)->_sk_second),			\
+#define SK_ARG(key)	(key)->sk_zone, le64_to_cpu((key)->_sk_first),	\
+			(key)->sk_type,	le64_to_cpu((key)->_sk_second),	\
 			le64_to_cpu((key)->_sk_third),			\
 			(key)->_sk_fourth
 
