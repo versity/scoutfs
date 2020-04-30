@@ -21,6 +21,8 @@
 #include "crc.h"
 #include "key.h"
 #include "radix.h"
+#include "avl.h"
+#include "leaf_item_hash.h"
 
 static void *read_block(int fd, u64 blkno)
 {
@@ -395,14 +397,48 @@ static int print_btree_ref(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
+static void print_leaf_item_hash(struct scoutfs_btree_block *bt)
+{
+	__le16 *b;
+	int col;
+	int nr;
+	int i;
+
+	/* print the leaf item hash */
+	printf("  item hash: ");
+	col = 13;
+
+	b = leaf_item_hash_buckets(bt);
+	nr = 0;
+	for (i = 0; i < SCOUTFS_BTREE_LEAF_ITEM_HASH_NR; i++) {
+		if (b[i] == 0)
+			continue;
+
+		nr++;
+		col += snprintf(NULL, 0, "%u,%u ", i, le16_to_cpu(b[i]));
+		if (col >= 78) {
+			printf("\n   ");
+			col = 3;
+		}
+		printf("%u,%u ", i, le16_to_cpu(b[i]));
+	}
+	if (col != 3)
+		printf("\n");
+	printf("    (%u / %u populated, %u%% load)\n",
+	       nr, (int)SCOUTFS_BTREE_LEAF_ITEM_HASH_NR,
+	       nr * 100 / (int)SCOUTFS_BTREE_LEAF_ITEM_HASH_NR);
+}
+
 static int print_btree_block(int fd, struct scoutfs_super_block *super,
 			     char *which, struct scoutfs_btree_ref *ref,
 			     print_item_func func, void *arg, u8 level)
 {
 	struct scoutfs_btree_item *item;
+	struct scoutfs_avl_node *node;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_key *key;
-	unsigned val_len;
+	unsigned int val_len;
+	unsigned int off;
 	void *val;
 	int ret;
 	int i;
@@ -414,22 +450,35 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 	if (bt->level == level) {
 		printf("%s btree blkno %llu\n"
 		       "  crc %08x fsid %llx seq %llu blkno %llu \n"
-		       "  level %u free_end %u nr_items %u\n",
+		       "  total_item_bytes %u mid_free_len %u last_free_off %u "
+		       "last_free_len %u\n"
+		       "  level %u nr_items %u item_root.node %u\n",
 		       which, le64_to_cpu(ref->blkno),
 		       le32_to_cpu(bt->hdr.crc),
 		       le64_to_cpu(bt->hdr.fsid),
 		       le64_to_cpu(bt->hdr.seq),
 		       le64_to_cpu(bt->hdr.blkno),
+		       le16_to_cpu(bt->total_item_bytes),
+		       le16_to_cpu(bt->mid_free_len),
+		       le16_to_cpu(bt->last_free_off),
+		       le16_to_cpu(bt->last_free_len),
 		       bt->level,
-		       le32_to_cpu(bt->free_end),
-		       le32_to_cpu(bt->nr_items));
+		       le16_to_cpu(bt->nr_items),
+		       le16_to_cpu(bt->item_root.node));
+
+		if (bt->level == 0)
+			print_leaf_item_hash(bt);
 	}
 
-	for (i = 0; i < le32_to_cpu(bt->nr_items); i++) {
-		item = (void *)bt + le32_to_cpu(bt->item_hdrs[i].off);
+	for (i = 0, node = avl_first(&bt->item_root);
+	     node;
+	     i++, node = avl_next(&bt->item_root, node)) {
+
+		item = container_of(node, struct scoutfs_btree_item, node);
+		off = (void *)item - (void *)bt;
 		val_len = le16_to_cpu(item->val_len);
 		key = &item->key;
-		val = item->val;
+		val = (void *)bt + le16_to_cpu(item->val_off);
 
 		if (level < bt->level) {
 			ref = val;
@@ -443,8 +492,12 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 			continue;
 		}
 
-		printf("  item [%u] off %u val_len %u\n",
-			i, le32_to_cpu(bt->item_hdrs[i].off), val_len);
+		printf("  [%u] off %u par %u l %u r %u h %u vo %u vl %u\n",
+			i, off, le16_to_cpu(item->node.parent),
+			le16_to_cpu(item->node.left),
+			le16_to_cpu(item->node.right),
+			item->node.height, le16_to_cpu(item->val_off),
+			val_len);
 
 		if (level)
 			print_btree_ref(key, val, val_len, func, arg);
@@ -589,12 +642,12 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 				  print_item_func func, void *arg)
 {
 	struct scoutfs_btree_item *item;
+	struct scoutfs_avl_node *node;
 	struct scoutfs_btree_block *bt;
 	unsigned val_len;
 	void *key;
 	void *val;
 	int ret;
-	int i;
 
 	if (ref->blkno == 0)
 		return 0;
@@ -603,11 +656,12 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 	if (!bt)
 		return -ENOMEM;
 
-	for (i = 0; i < le32_to_cpu(bt->nr_items); i++) {
-		item = (void *)bt + le32_to_cpu(bt->item_hdrs[i].off);
+	node = avl_first(&bt->item_root);
+	while (node) {
+		item = container_of(node, struct scoutfs_btree_item, node);
 		val_len = le16_to_cpu(item->val_len);
-		key = (void *)(item + 1);
-		val = (void *)(key + 1);
+		key = &item->key;
+		val = (void *)bt + le16_to_cpu(item->val_off);
 
 		if (bt->level > 0) {
 			ret = print_btree_leaf_items(fd, super, val, func, arg);
@@ -617,6 +671,8 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 		} else {
 			func(key, val, val_len, arg);
 		}
+
+		node = avl_next(&bt->item_root, node);
 	}
 
 	free(bt);

@@ -27,6 +27,7 @@
 #include "key.h"
 #include "bitops.h"
 #include "radix.h"
+#include "leaf_item_hash.h"
 
 static int write_raw_block(int fd, u64 blkno, void *blk)
 {
@@ -290,9 +291,11 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	struct scoutfs_inode *inode;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_btree_item *btitem;
+	struct scoutfs_avl_node *par;
 	struct scoutfs_key *key;
 	struct timeval tv;
 	char uuid_str[37];
+	__le16 *own;
 	void *zeros;
 	u64 blkno;
 	u64 limit;
@@ -370,28 +373,43 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	bt->hdr.fsid = super->hdr.fsid;
 	bt->hdr.blkno = cpu_to_le64(blkno);
 	bt->hdr.seq = cpu_to_le64(1);
-	bt->nr_items = cpu_to_le32(2);
 
-	/* btree item allocated from the back of the block */
-	key = (void *)bt + SCOUTFS_BLOCK_SIZE - sizeof(*key);
-	btitem = (void *)key - sizeof(*btitem);
+	/* meta seq index for the root inode */
+	btitem = &bt->items[le16_to_cpu(bt->nr_items)];
+	le16_add_cpu(&bt->nr_items, 1);
+	key = &btitem->key;
 
-	bt->item_hdrs[0].off = cpu_to_le32((long)btitem - (long)bt);
+	bt->item_root.node = cpu_to_le16((void *)&btitem->node -
+					 (void *)&bt->item_root);
+	btitem->node.height = 2;
 	btitem->val_len = cpu_to_le16(0);
 
-	memset(key, 0, sizeof(*key));
 	key->sk_zone = SCOUTFS_INODE_INDEX_ZONE;
 	key->sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
 	key->skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
 
-	inode = (void *)btitem - sizeof(*inode);
-	key = (void *)inode - sizeof(*key);
-	btitem = (void *)key - sizeof(*btitem);
+	leaf_item_hash_insert(bt, &btitem->key,
+			      cpu_to_le16((void *)btitem - (void *)bt));
 
-	bt->item_hdrs[1].off = cpu_to_le32((long)btitem - (long)bt);
+	/* root inode */
+	par = &btitem->node;
+	btitem = &bt->items[le16_to_cpu(bt->nr_items)];
+	le16_add_cpu(&bt->nr_items, 1);
+	key = &btitem->key;
+	own = (void *)bt + SCOUTFS_BLOCK_SIZE -
+	      SCOUTFS_BTREE_LEAF_ITEM_HASH_BYTES -
+	      SCOUTFS_BTREE_VAL_OWNER_BYTES;
+	inode = (void *)own - sizeof(*inode);
+
+	par->right = cpu_to_le16((void *)&btitem->node -
+				 (void *)&bt->item_root);
+	btitem->node.height = 1;
+	btitem->node.parent = cpu_to_le16((void *)par - (void *)&bt->item_root);
+	btitem->val_off = cpu_to_le16((void *)inode - (void *)bt);
 	btitem->val_len = cpu_to_le16(sizeof(*inode));
+	le16_add_cpu(&bt->total_item_bytes, le16_to_cpu(btitem->val_len) +
+					    SCOUTFS_BTREE_VAL_OWNER_BYTES);
 
-	memset(key, 0, sizeof(*key));
 	key->sk_zone = SCOUTFS_FS_ZONE;
 	key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
 	key->sk_type = SCOUTFS_INODE_TYPE;
@@ -406,8 +424,14 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	inode->mtime.sec = inode->atime.sec;
 	inode->mtime.nsec = inode->atime.nsec;
 
-	bt->free_end = bt->item_hdrs[le32_to_cpu(bt->nr_items) - 1].off;
+	leaf_item_hash_insert(bt, &btitem->key,
+			      cpu_to_le16((void *)btitem - (void *)bt));
+	*own = cpu_to_le16((void *)btitem - (void *)bt);
 
+	le16_add_cpu(&bt->total_item_bytes, le16_to_cpu(bt->nr_items) *
+		     sizeof(struct scoutfs_btree_item));
+	bt->mid_free_len = cpu_to_le16((void *)inode -
+				(void *)&bt->items[le16_to_cpu(bt->nr_items)]);
 	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
 	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
 
