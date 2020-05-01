@@ -16,7 +16,7 @@ int leaf_item_hash_ind(struct scoutfs_key *key)
 
 __le16 *leaf_item_hash_buckets(struct scoutfs_btree_block *bt)
 {
-	return (void *)bt + SCOUTFS_BLOCK_SIZE -
+	return (void *)bt + SCOUTFS_BLOCK_LG_SIZE -
 		SCOUTFS_BTREE_LEAF_ITEM_HASH_BYTES;
 }
 

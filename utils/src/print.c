@@ -24,17 +24,18 @@
 #include "avl.h"
 #include "leaf_item_hash.h"
 
-static void *read_block(int fd, u64 blkno)
+static void *read_block(int fd, u64 blkno, int shift)
 {
+	size_t size = 1ULL << shift;
 	ssize_t ret;
 	void *buf;
 
-	buf = malloc(SCOUTFS_BLOCK_SIZE);
+	buf = malloc(size);
 	if (!buf)
 		return NULL;
 
-	ret = pread(fd, buf, SCOUTFS_BLOCK_SIZE, blkno << SCOUTFS_BLOCK_SHIFT);
-	if (ret != SCOUTFS_BLOCK_SIZE) {
+	ret = pread(fd, buf, size, blkno << shift);
+	if (ret != size) {
 		fprintf(stderr, "read blkno %llu returned %zd: %s (%d)\n",
 			blkno, ret, strerror(errno), errno);
 		free(buf);
@@ -44,9 +45,9 @@ static void *read_block(int fd, u64 blkno)
 	return buf;
 }
 
-static void print_block_header(struct scoutfs_block_header *hdr)
+static void print_block_header(struct scoutfs_block_header *hdr, int size)
 {
-	u32 crc = crc_block(hdr);
+	u32 crc = crc_block(hdr, size);
 	char valid_str[40];
 
 	if (crc != le32_to_cpu(hdr->crc))
@@ -443,7 +444,7 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 	int ret;
 	int i;
 
-	bt = read_block(fd, le64_to_cpu(ref->blkno));
+	bt = read_block(fd, le64_to_cpu(ref->blkno), SCOUTFS_BLOCK_LG_SHIFT);
 	if (!bt)
 		return -ENOMEM;
 
@@ -545,14 +546,14 @@ static int print_radix_block(int fd, struct scoutfs_radix_ref *par, int level)
 	if (blkno == 0 || blkno == U64_MAX || level == 0)
 		return 0;
 
-	rdx = read_block(fd, le64_to_cpu(par->blkno));
+	rdx = read_block(fd, le64_to_cpu(par->blkno) , SCOUTFS_BLOCK_LG_SHIFT);
 	if (!rdx) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	printf("radix parent block blkno %llu\n", le64_to_cpu(par->blkno));
-	print_block_header(&rdx->hdr);
+	print_block_header(&rdx->hdr, SCOUTFS_BLOCK_LG_SIZE);
 	printf("  sm_first %u lg_first %u\n",
 	       le32_to_cpu(rdx->sm_first), le32_to_cpu(rdx->lg_first));
 
@@ -652,7 +653,7 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 	if (ref->blkno == 0)
 		return 0;
 
-	bt = read_block(fd, le64_to_cpu(ref->blkno));
+	bt = read_block(fd, le64_to_cpu(ref->blkno), SCOUTFS_BLOCK_LG_SHIFT);
 	if (!bt)
 		return -ENOMEM;
 
@@ -717,7 +718,7 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
 		blkno = SCOUTFS_QUORUM_BLKNO + i;
 		free(blk);
-		blk = read_block(fd, blkno);
+		blk = read_block(fd, blkno, SCOUTFS_BLOCK_SM_SHIFT);
 		if (!blk) {
 			ret = -ENOMEM;
 			goto out;
@@ -766,7 +767,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("super blkno %llu\n", blkno);
-	print_block_header(&super->hdr);
+	print_block_header(&super->hdr, SCOUTFS_BLOCK_SM_SIZE);
 	printf("  format_hash %llx uuid %s\n",
 	       le64_to_cpu(super->format_hash), uuid_str);
 
@@ -830,7 +831,7 @@ static int print_volume(int fd)
 	int ret = 0;
 	int err;
 
-	super = read_block(fd, SCOUTFS_SUPER_BLKNO);
+	super = read_block(fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT);
 	if (!super)
 		return -ENOMEM;
 

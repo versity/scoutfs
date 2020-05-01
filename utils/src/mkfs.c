@@ -29,12 +29,13 @@
 #include "radix.h"
 #include "leaf_item_hash.h"
 
-static int write_raw_block(int fd, u64 blkno, void *blk)
+static int write_raw_block(int fd, u64 blkno, int shift, void *blk)
 {
+	size_t size = 1ULL << shift;
 	ssize_t ret;
 
-	ret = pwrite(fd, blk, SCOUTFS_BLOCK_SIZE, blkno << SCOUTFS_BLOCK_SHIFT);
-	if (ret != SCOUTFS_BLOCK_SIZE) {
+	ret = pwrite(fd, blk, size, blkno << shift);
+	if (ret != size) {
 		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
 			blkno, ret, strerror(errno), errno);
 		return -errno;
@@ -46,15 +47,18 @@ static int write_raw_block(int fd, u64 blkno, void *blk)
 /*
  * Update the block's header and write it out.
  */
-static int write_block(int fd, u64 blkno, struct scoutfs_super_block *super,
+static int write_block(int fd, u64 blkno, int shift,
+		       struct scoutfs_super_block *super,
 		       struct scoutfs_block_header *hdr)
 {
+	size_t size = 1ULL << shift;
+
 	if (super)
 		*hdr = super->hdr;
 	hdr->blkno = cpu_to_le64(blkno);
-	hdr->crc = cpu_to_le32(crc_block(hdr));
+	hdr->crc = cpu_to_le32(crc_block(hdr, size));
 
-	return write_raw_block(fd, blkno, hdr);
+	return write_raw_block(fd, blkno, shift, hdr);
 }
 
 static float size_flt(u64 nr, unsigned size)
@@ -231,7 +235,7 @@ static int write_radix_blocks(struct scoutfs_super_block *super, int fd,
 		return -ENOMEM;
 
 	for (i = 0; i < alloced; i++) {
-		blocks[i] = calloc(1, SCOUTFS_BLOCK_SIZE);
+		blocks[i] = calloc(1, SCOUTFS_BLOCK_LG_SIZE);
 		if (blocks[i] == NULL) {
 			ret = -ENOMEM;
 			goto out;
@@ -262,8 +266,10 @@ static int write_radix_blocks(struct scoutfs_super_block *super, int fd,
 		rdx->hdr.fsid = super->hdr.fsid;
 		rdx->hdr.seq = cpu_to_le64(1);
 		rdx->hdr.blkno = cpu_to_le64(blkno + i);
-		rdx->hdr.crc = cpu_to_le32(crc_block(&rdx->hdr));
-		ret = write_raw_block(fd, blkno + i, rdx);
+		rdx->hdr.crc = cpu_to_le32(crc_block(&rdx->hdr,
+					             SCOUTFS_BLOCK_LG_SIZE));
+		ret = write_raw_block(fd, blkno + i, SCOUTFS_BLOCK_LG_SHIFT,
+				      rdx);
 		if (ret < 0)
 			goto out;
 	}
@@ -300,20 +306,19 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	u64 blkno;
 	u64 limit;
 	u64 size;
-	u64 total_blocks;
 	u64 meta_alloc_blocks;
 	u64 next_meta;
 	u64 last_meta;
-	u64 next_data;
+	u64 first_data;
 	u64 last_data;
 	int ret;
 	int i;
 
 	gettimeofday(&tv, NULL);
 
-	super = calloc(1, SCOUTFS_BLOCK_SIZE);
-	bt = calloc(1, SCOUTFS_BLOCK_SIZE);
-	zeros = calloc(1, SCOUTFS_BLOCK_SIZE);
+	super = calloc(1, SCOUTFS_BLOCK_SM_SIZE);
+	bt = calloc(1, SCOUTFS_BLOCK_LG_SIZE);
+	zeros = calloc(1, SCOUTFS_BLOCK_SM_SIZE);
 	if (!super || !bt || !zeros) {
 		ret = -errno;
 		fprintf(stderr, "failed to allocate block mem: %s (%d)\n",
@@ -336,17 +341,17 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 		goto out;
 	}
 
-	total_blocks = size / SCOUTFS_BLOCK_SIZE;
 	/* metadata blocks start after the quorum blocks */
-	next_meta = SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS;
-	/* data blocks are after metadata, we'll say 1:4 for now */
-	next_data = round_up(next_meta + ((total_blocks - next_meta) / 5),
-			     SCOUTFS_RADIX_BITS);
-	last_meta = next_data - 1;
-	last_data = total_blocks - 1;
+	next_meta = (SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS) >>
+		    SCOUTFS_BLOCK_SM_LG_SHIFT;
+	/* use about 1/5 of the device for metadata blocks */
+	last_meta = next_meta + ((size / 5) >> SCOUTFS_BLOCK_LG_SHIFT);
+	/* The rest of the device is data blocks */
+	first_data = (last_meta + 1) << SCOUTFS_BLOCK_SM_LG_SHIFT;
+	last_data = size >> SCOUTFS_BLOCK_SM_SHIFT;
 
 	/* partially initialize the super so we can use it to init others */
-	memset(super, 0, SCOUTFS_BLOCK_SIZE);
+	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
 	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
 	super->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_SUPER);
 	super->hdr.seq = cpu_to_le64(1);
@@ -357,8 +362,8 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	super->total_meta_blocks = cpu_to_le64(last_meta + 1);
 	super->first_meta_blkno = cpu_to_le64(next_meta);
 	super->last_meta_blkno = cpu_to_le64(last_meta);
-	super->total_data_blocks = cpu_to_le64(last_data - next_data + 1);
-	super->first_data_blkno = cpu_to_le64(next_data);
+	super->total_data_blocks = cpu_to_le64(last_data - first_data + 1);
+	super->first_data_blkno = cpu_to_le64(first_data);
 	super->last_data_blkno = cpu_to_le64(last_data);
 	super->quorum_count = quorum_count;
 
@@ -369,7 +374,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	super->fs_root.ref.seq = cpu_to_le64(1);
 	super->fs_root.height = 1;
 
-	memset(bt, 0, SCOUTFS_BLOCK_SIZE);
+	memset(bt, 0, SCOUTFS_BLOCK_LG_SIZE);
 	bt->hdr.fsid = super->hdr.fsid;
 	bt->hdr.blkno = cpu_to_le64(blkno);
 	bt->hdr.seq = cpu_to_le64(1);
@@ -396,7 +401,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	btitem = &bt->items[le16_to_cpu(bt->nr_items)];
 	le16_add_cpu(&bt->nr_items, 1);
 	key = &btitem->key;
-	own = (void *)bt + SCOUTFS_BLOCK_SIZE -
+	own = (void *)bt + SCOUTFS_BLOCK_LG_SIZE -
 	      SCOUTFS_BTREE_LEAF_ITEM_HASH_BYTES -
 	      SCOUTFS_BTREE_VAL_OWNER_BYTES;
 	inode = (void *)own - sizeof(*inode);
@@ -433,15 +438,16 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	bt->mid_free_len = cpu_to_le16((void *)inode -
 				(void *)&bt->items[le16_to_cpu(bt->nr_items)]);
 	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
-	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr));
+	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
+					    SCOUTFS_BLOCK_LG_SIZE));
 
-	ret = write_raw_block(fd, blkno, bt);
+	ret = write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
 	if (ret)
 		goto out;
 
 	/* write out radix allocator blocks for data */
 	ret = write_radix_blocks(super, fd, &super->core_data_avail, next_meta,
-				 next_data, last_data);
+				 first_data, last_data);
 	if (ret < 0)
 		goto out;
 	next_meta += ret;
@@ -467,7 +473,8 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 
 	/* zero out quorum blocks */
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		ret = write_raw_block(fd, SCOUTFS_QUORUM_BLKNO + i, zeros);
+		ret = write_raw_block(fd, SCOUTFS_QUORUM_BLKNO + i,
+				      SCOUTFS_BLOCK_SM_SHIFT, zeros);
 		if (ret < 0) {
 			fprintf(stderr, "error zeroing quorum block: %s (%d)\n",
 				strerror(-errno), -errno);
@@ -477,11 +484,12 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 
 	/* fill out allocator fields now that we've written our blocks */
 	super->free_meta_blocks = cpu_to_le64(last_meta - next_meta + 1);
-	super->free_data_blocks = cpu_to_le64(last_data - next_data + 1);
+	super->free_data_blocks = cpu_to_le64(last_data - first_data + 1);
 
 	/* write the super block */
 	super->hdr.seq = cpu_to_le64(1);
-	ret = write_block(fd, SCOUTFS_SUPER_BLKNO, NULL, &super->hdr);
+	ret = write_block(fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			  NULL, &super->hdr);
 	if (ret)
 		goto out;
 
@@ -499,19 +507,17 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	       "  fsid:                 %llx\n"
 	       "  format hash:          %llx\n"
 	       "  uuid:                 %s\n"
-	       "  device blocks:        "SIZE_FMT"\n"
-	       "  metadata blocks:      "SIZE_FMT"\n"
-	       "  data blocks:          "SIZE_FMT"\n"
+	       "  64KB metadata blocks: "SIZE_FMT"\n"
+	       "  4KB data blocks:      "SIZE_FMT"\n"
 	       "  quorum count:         %u\n",
 		path,
 		le64_to_cpu(super->hdr.fsid),
 		le64_to_cpu(super->format_hash),
 		uuid_str,
-		SIZE_ARGS(total_blocks, SCOUTFS_BLOCK_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->total_meta_blocks),
-			  SCOUTFS_BLOCK_SIZE),
+			  SCOUTFS_BLOCK_LG_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->total_data_blocks),
-			  SCOUTFS_BLOCK_SIZE),
+			  SCOUTFS_BLOCK_SM_SIZE),
 		super->quorum_count);
 
 	ret = 0;
