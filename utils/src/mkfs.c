@@ -102,17 +102,7 @@ static void update_parent_ref(struct scoutfs_radix_ref *ref,
 	ref->sm_total = cpu_to_le64(0);
 	ref->lg_total = cpu_to_le64(0);
 
-	rdx->sm_first = cpu_to_le32(SCOUTFS_RADIX_REFS);
-	rdx->lg_first = cpu_to_le32(SCOUTFS_RADIX_REFS);
-
 	for (i = 0; i < SCOUTFS_RADIX_REFS; i++) {
-		if (le32_to_cpu(rdx->sm_first) == SCOUTFS_RADIX_REFS &&
-		    rdx->refs[i].sm_total != 0)
-			rdx->sm_first = cpu_to_le32(i);
-		if (le32_to_cpu(rdx->lg_first) == SCOUTFS_RADIX_REFS &&
-		    rdx->refs[i].lg_total != 0)
-			rdx->lg_first = cpu_to_le32(i);
-
 		le64_add_cpu(&ref->sm_total,
 			     le64_to_cpu(rdx->refs[i].sm_total));
 		le64_add_cpu(&ref->lg_total,
@@ -138,6 +128,7 @@ static void set_radix_path(struct scoutfs_super_block *super, int *inds,
 			   u64 first, u64 last)
 {
 	struct scoutfs_radix_block *rdx;
+	bool shared;
 	int lg_ind;
 	int lg_after;
 	u64 bno;
@@ -160,24 +151,24 @@ static void set_radix_path(struct scoutfs_super_block *super, int *inds,
 		if (ref->sm_total == 0) {
 			for (i = 0; i < SCOUTFS_RADIX_REFS; i++)
 				radix_init_ref(&rdx->refs[i], level - 1, false);
+			shared = false;
+		} else {
+			shared = true;
 		}
 
 		if (left) {
 			/* initialize full refs from left to end */
 			for (i = ind + 1; i < SCOUTFS_RADIX_REFS; i++)
 				radix_init_ref(&rdx->refs[i], level - 1, true);
-		} else {
-			/* initialize full refs from start or left to right */
-			for (i = le32_to_cpu(rdx->sm_first) !=
-							SCOUTFS_RADIX_REFS ?
-				 le32_to_cpu(rdx->sm_first) + 1 : 0;
-			     i < ind; i++)
-				radix_init_ref(&rdx->refs[i], level - 1, true);
 
-			/* wipe full refs from right (maybe including) to end */
-			for (i = le64_to_cpu(rdx->refs[ind].blkno) == U64_MAX ?
-				 ind : ind + 1; i < SCOUTFS_RADIX_REFS; i++)
+		} else if (shared) {
+			/* wipe full refs including right to end */
+			for (i = ind; i < SCOUTFS_RADIX_REFS; i++)
 				radix_init_ref(&rdx->refs[i], level - 1, false);
+		} else {
+			/* initialize full refs from start to right */
+			for (i = 0; i < ind - 1; i++)
+				radix_init_ref(&rdx->refs[i], level - 1, true);
 		}
 
 		set_radix_path(super, inds, &rdx->refs[ind], level - 1, left,
@@ -185,21 +176,17 @@ static void set_radix_path(struct scoutfs_super_block *super, int *inds,
 		update_parent_ref(ref, rdx);
 
 	} else {
+
 		ind = first - radix_calc_leaf_bit(first);
 		end = last - radix_calc_leaf_bit(last);
 		for (i = ind; i <= end; i++)
 			set_bit_le(i, rdx->bits);
 
-		rdx->sm_first = cpu_to_le32(ind);
 		ref->sm_total = cpu_to_le64(end - ind + 1);
 
 		lg_ind = round_up(ind, SCOUTFS_RADIX_LG_BITS);
 		lg_after = round_down(end + 1, SCOUTFS_RADIX_LG_BITS);
 
-		if (lg_ind < SCOUTFS_RADIX_BITS)
-			rdx->lg_first = cpu_to_le32(lg_ind);
-		else
-			rdx->lg_first = cpu_to_le32(SCOUTFS_RADIX_BITS);
 		ref->lg_total = cpu_to_le64(lg_after - lg_ind);
 	}
 }

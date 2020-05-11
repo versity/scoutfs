@@ -554,8 +554,6 @@ static int print_radix_block(int fd, struct scoutfs_radix_ref *par, int level)
 
 	printf("radix parent block blkno %llu\n", le64_to_cpu(par->blkno));
 	print_block_header(&rdx->hdr, SCOUTFS_BLOCK_LG_SIZE);
-	printf("  sm_first %u lg_first %u\n",
-	       le32_to_cpu(rdx->sm_first), le32_to_cpu(rdx->lg_first));
 
 	prev = 0;
 	for (i = 0; i < SCOUTFS_RADIX_REFS; i++) {
