@@ -76,6 +76,30 @@ wait "$pid" 2> /dev/null
 echo "offline waiting should be empty again:"
 scoutfs data-waiting 0 0 "$DIR" | wc -l
 
+echo "== EIO injection for waiting readers works"
+ino=$(stat -c "%i" "$DIR/file")
+dd if="$DIR/file" bs=$BS skip=0 of=/dev/null 2>&1 | \
+	t_filter_fs | head -3 > $T_TMP.cat1 &
+pid="$!"
+dd if="$DIR/file" bs=$BS skip=1 of=/dev/null 2>&1 | \
+	t_filter_fs | head -3 > $T_TMP.cat2 &
+pid2="$!"
+sleep .1
+echo "offline waiting should now have two known entries:"
+scoutfs data-waiting 0 0 "$DIR" | wc -l
+expect_wait "$DIR/file" "read" $ino 0 $ino 1
+scoutfs data-wait-err "$DIR" "$ino" "$vers" 0 $((BS*2)) read -5
+sleep .1
+echo "offline waiting should now have 0 known entries:"
+scoutfs data-waiting 0 0 "$DIR" | wc -l
+# silence terminated message
+wait "$pid" 2> /dev/null
+wait "$pid2" 2> /dev/null
+cat $T_TMP.cat1
+cat $T_TMP.cat2
+echo "offline waiting should be empty again:"
+scoutfs data-waiting 0 0 "$DIR" | wc -l
+
 echo "== readahead while offline does no harm"
 xfs_io -c "fadvise -w 0 $BYTES" "$DIR/file"
 scoutfs stage "$DIR/file" "$vers" 0 $BYTES "$DIR/golden"

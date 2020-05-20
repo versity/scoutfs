@@ -14,6 +14,20 @@ offline wating should be empty again:
 offline waiting should now have one known entry:
 offline waiting should be empty again:
 0
+== EIO injection for waiting readers works
+offline waiting should now have two known entries:
+2
+data_wait_err found 2 waiters.
+offline waiting should now have 0 known entries:
+0
+dd: error reading ‘/mnt/test/test/offline-extent-waiting/dir/file’: Input/output error
+0+0 records in
+0+0 records out
+dd: error reading ‘/mnt/test/test/offline-extent-waiting/dir/file’: Input/output error
+0+0 records in
+0+0 records out
+offline waiting should be empty again:
+0
 == readahead while offline does no harm
 == waiting on interesting blocks works
 offline waiting is empty at block 0
