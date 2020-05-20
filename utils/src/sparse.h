@@ -33,6 +33,7 @@ typedef u16 __u16;
 typedef u32 __u32;
 typedef s32 __s32;
 typedef u64 __u64;
+typedef s64 __s64;
 
 typedef u16 __sp_biwise __le16;
 typedef u16 __sp_biwise __be16;

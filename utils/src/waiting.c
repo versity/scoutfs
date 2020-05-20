@@ -14,25 +14,11 @@
 #include "format.h"
 #include "ioctl.h"
 #include "cmd.h"
+#include "parse.h"
 
-static int parse_u64(char *str, u64 *val_ret)
-{
-	unsigned long long ull;
-	char *endptr = NULL;
-
-	ull = strtoull(str, &endptr, 0);
-	if (*endptr != '\0' ||
-	    ((ull == LLONG_MIN || ull == LLONG_MAX) &&
-	     errno == ERANGE)) {
-		fprintf(stderr, "invalid 64bit value: '%s'\n", str);
-		*val_ret = 0;
-		return -EINVAL;
-	}
-
-	*val_ret = ull;
-
-	return 0;
-}
+#ifndef MAX_ERRNO
+#define MAX_ERRNO 4095
+#endif
 
 #define OP_FMT "%s%s"
 
@@ -109,4 +95,72 @@ static void __attribute__((constructor)) waiting_ctor(void)
 {
 	cmd_register("data-waiting", "<ino> <iblock> <path>",
 		     "print ops waiting for data blocks", waiting_cmd);
+}
+
+static int data_wait_err_cmd(int argc, char **argv)
+{
+	struct scoutfs_ioctl_data_wait_err args;
+	int fd = -1;
+	int ret;
+
+	memset(&args, 0, sizeof(args));
+
+	if (argc != 8) {
+		fprintf(stderr, "must specify path, ino, version, offset, count,op, and err\n");
+		return -EINVAL;
+	}
+
+	ret = parse_u64(argv[2], &args.ino) ?:
+	      parse_u64(argv[3], &args.data_version) ?:
+	      parse_u64(argv[4], &args.offset) ?:
+	      parse_u64(argv[5], &args.count) ?:
+	      parse_s64(argv[7], &args.err);
+	if (ret)
+		return ret;
+
+	if ((args.err >= 0) || (args.err < -MAX_ERRNO)) {
+		fprintf(stderr, "err %lld invalid\n", args.err);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (!strcmp(argv[6], "read")) {
+		args.op = SCOUTFS_IOC_DWO_READ;
+	} else if (!strcmp(argv[6], "write")) {
+		args.op = SCOUTFS_IOC_DWO_WRITE;
+	} else if (!strcmp(argv[6], "change_size")) {
+		args.op = SCOUTFS_IOC_DWO_CHANGE_SIZE;
+	} else {
+		fprintf(stderr, "invalid data wait op: '%s'\n", argv[6]);
+		return -EINVAL;
+	}
+
+	fd = open(argv[1], O_RDONLY);
+	if (fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "failed to open '%s': %s (%d)\n",
+			argv[1], strerror(errno), errno);
+		return ret;
+	}
+
+	ret = ioctl(fd, SCOUTFS_IOC_DATA_WAIT_ERR, &args);
+	if (ret < 0) {
+		fprintf(stderr, "data_wait_err returned %d: error %s (%d)\n",
+			ret, strerror(errno), errno);
+		ret = -EIO;
+		goto out;
+	}
+	printf("data_wait_err found %d waiters.\n", ret);
+
+out:
+	if (fd > -1)
+		close(fd);
+	return ret;
+};
+
+static void __attribute__((constructor)) data_wait_err_ctor(void)
+{
+	cmd_register("data-wait-err", "<path> <ino> <vers> <offset> <count> <op> <err>",
+		     "return error from matching waiters",
+		     data_wait_err_cmd);
 }
