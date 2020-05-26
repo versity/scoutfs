@@ -4,7 +4,8 @@ SHELL := /usr/bin/bash
 # each binary command is built from a single .c file
 BIN := src/createmany			\
 	src/dumb_setxattr		\
-	src/handle_cat
+	src/handle_cat			\
+	src/bulk_create_paths
 
 DEPS := $(wildcard src/*.d)
 
