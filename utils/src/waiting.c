@@ -67,7 +67,7 @@ static int waiting_cmd(int argc, char **argv)
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[4], strerror(errno), errno);
+			argv[3], strerror(errno), errno);
 		return ret;
 	}
 
