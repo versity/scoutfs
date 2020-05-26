@@ -29,6 +29,25 @@ int parse_u64(char *str, u64 *val_ret)
 	return 0;
 }
 
+int parse_s64(char *str, s64 *val_ret)
+{
+	long long ll;
+	char *endptr = NULL;
+
+	ll = strtoll(str, &endptr, 0);
+	if (*endptr != '\0' ||
+	    ((ll == LLONG_MIN || ll == LLONG_MAX) &&
+	     errno == ERANGE)) {
+		fprintf(stderr, "invalid 64bit value: '%s'\n", str);
+		*val_ret = 0;
+		return -EINVAL;
+	}
+
+	*val_ret = ll;
+
+	return 0;
+}
+
 int parse_u32(char *str, u32 *val_ret)
 {
 	u64 val;
