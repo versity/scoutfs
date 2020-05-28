@@ -31,6 +31,7 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error reading super block"
 	re="$re| EXT4-fs (.*): get root inode failed"
 	re="$re| EXT4-fs (.*): mount failed"
+	re="$re| EXT4-fs (.*): no journal found"
 
 	# dropping caches is fine
 	re="$re| drop_caches: "
