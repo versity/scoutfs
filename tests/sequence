@@ -23,6 +23,5 @@ setup-error-teardown.sh
 mount-unmount-race.sh
 createmany-parallel-mounts.sh
 archive-light-cycle.sh
-# this creates a ton of tiny btree blocks so we do it last
-stale-btree-seg-read.sh
+stale-btree-read.sh
 xfstests.sh
