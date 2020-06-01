@@ -335,7 +335,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	last_meta = next_meta + ((size / 5) >> SCOUTFS_BLOCK_LG_SHIFT);
 	/* The rest of the device is data blocks */
 	first_data = (last_meta + 1) << SCOUTFS_BLOCK_SM_LG_SHIFT;
-	last_data = size >> SCOUTFS_BLOCK_SM_SHIFT;
+	last_data = (size >> SCOUTFS_BLOCK_SM_SHIFT) - 1;
 
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
