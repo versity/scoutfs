@@ -7,6 +7,8 @@
 #include <sys/types.h>
 #include <limits.h>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <sys/xattr.h>
 
 /*
  * Read lines of paths from stdin and use them as relative paths to
@@ -28,6 +30,16 @@
  * parse paths for regular files, then the paths begin after the
  * metadata.
  */
+
+struct opts {
+	unsigned int dry_run:1,
+		     ls_output:1,
+		     quiet:1,
+		     user_xattr:1,
+		     same_srch_xattr:1,
+		     group_srch_xattr:1,
+		     unique_srch_xattr:1;
+};
 
 struct str_list {
 	struct str_list *next;
@@ -115,10 +127,15 @@ static void free_dir(struct dir *dir)
 	free(dir);
 }
 
-static void create_dir(struct dir *dir)
+static void create_dir(struct dir *dir, struct opts *opts,
+		       unsigned long long counter)
 {
 	struct str_list *s;
+	char name[100];
+	char val[] = "v";
+	size_t vs = sizeof(val);
 	int rc;
+	int i;
 
 	for (s = dir->parents; s; s = s->next) {
 		rc = access(s->str, R_OK|W_OK|X_OK);
@@ -132,9 +149,33 @@ static void create_dir(struct dir *dir)
 		error_exit(rc, "chdir %s failed"ERRF, s->str, ERRA);
 	}
 
-	for (s = dir->files; s; s = s->next) {
+	for (s = dir->files, i = 0; s; s = s->next, i++) {
 		rc = mknod(s->str, S_IFREG | 0644, 0);
 		error_exit(rc, "mknod %s failed"ERRF, s->str, ERRA);
+
+		rc = 0;
+		if (rc == 0 && opts->user_xattr) {
+			strcpy(name, "user.scoutfs_bcp");
+			rc = setxattr(s->str, name, val, vs, 0);
+		}
+		if (rc == 0 && opts->same_srch_xattr) {
+			strcpy(name, "scoutfs.srch.scoutfs_bcp");
+			rc = setxattr(s->str, name, val, vs, 0);
+		}
+		if (rc == 0 && opts->group_srch_xattr) {
+			snprintf(name, sizeof(name),
+				 "scoutfs.srch.scoutfs_bcp.group.%llu",
+				 (counter + i) / 10000);
+			rc = setxattr(s->str, name, val, vs, 0);
+		}
+		if (rc == 0 && opts->unique_srch_xattr) {
+			snprintf(name, sizeof(name),
+				 "scoutfs.srch.scoutfs_bcp.unique.%llu",
+				 counter + i);
+			rc = setxattr(s->str, name, val, vs, 0);
+		}
+
+		error_exit(rc, "setxattr %s %s failed"ERRF, s->str, name, ERRA);
 	}
 }
 
@@ -297,21 +338,17 @@ static void usage(void)
 {
 	printf("usage:\n"
 	       " -d DIR | create all files in DIR top level directory\n"
-	       " -L     | parse ls output; only reg, skip meta, paths at ./\n"
 	       " -n     | dry run, only parse, don't create any files\n"
-	       " -q     | quiet, don't regularly print rates\n");
+	       " -q     | quiet, don't regularly print rates\n"
+	       " -L     | parse ls output; only reg, skip meta, paths at ./\n"
+	       " -X     | set the same user. xattr name in all files\n"
+	       " -S     | set the same .srch. xattr name in all files\n"
+	       " -G     | set a .srch. xattr name shared by groups of files\n"
+	       " -U     | set a unique .srch. xattr name in all files\n");
 }
 
 int main(int argc, char **argv)
 {
-	union opts {
-		struct {
-			unsigned int dry_run:1,
-				     ls_output:1,
-				     quiet:1;
-		};
-		unsigned int all;
-	} opts;
 	unsigned int buf_off = 0;
 	unsigned int buf_len = 0;
 	unsigned long done_dirs = 0;
@@ -322,26 +359,39 @@ int main(int argc, char **argv)
 	char *top_dir = NULL;
 	struct timeval last_start;
 	struct timeval start;
+	struct opts opts;
 	struct dir *dir;
 	char *buf;
 	int rc;
 	int c;
 
-	opts.all = 0;
+	memset(&opts, 0, sizeof(opts));
 
-        while ((c = getopt(argc, argv, "d:Lnq")) != -1) {
+        while ((c = getopt(argc, argv, "d:nqLXSGU")) != -1) {
                 switch(c) {
                 case 'd':
                         top_dir = strdup(optarg);
-                        break;
-                case 'L':
-                        opts.ls_output = 1;
                         break;
                 case 'n':
                         opts.dry_run = 1;
                         break;
                 case 'q':
                         opts.quiet = 1;
+                        break;
+                case 'L':
+                        opts.ls_output = 1;
+                        break;
+                case 'X':
+                        opts.user_xattr = 1;
+                        break;
+                case 'S':
+                        opts.same_srch_xattr = 1;
+                        break;
+                case 'G':
+                        opts.group_srch_xattr = 1;
+                        break;
+                case 'U':
+                        opts.unique_srch_xattr = 1;
                         break;
                 case '?':
                         printf("Unknown option '%c'\n", optopt);
@@ -379,7 +429,7 @@ int main(int argc, char **argv)
 		if (dir == NULL)
 			break;
 		if (!opts.dry_run)
-			create_dir(dir);
+			create_dir(dir, &opts, done_files);
 		done_files += dir->nr_files;
 		done_dirs++;
 		free_dir(dir);
