@@ -22,6 +22,7 @@
 #include "key.h"
 #include "radix.h"
 #include "avl.h"
+#include "srch.h"
 #include "leaf_item_hash.h"
 
 static void *read_block(int fd, u64 blkno, int shift)
@@ -324,6 +325,19 @@ static int print_logs_item(struct scoutfs_key *key, void *val,
 	(root)->height, le64_to_cpu((root)->next_find_bit), \
 	RADREF_A(&(root)->ref)
 
+#define SRE_FMT "%016llx.%llu.%llu"
+#define SRE_A(sre)						\
+	le64_to_cpu((sre)->hash), le64_to_cpu((sre)->ino),	\
+	le64_to_cpu((sre)->id)
+
+#define SRF_FMT \
+	"f "SRE_FMT" l "SRE_FMT" blks %llu ents %llu hei %u blkno %llu seq %016llx"
+#define SRF_A(srf)						\
+	SRE_A(&(srf)->first), SRE_A(&(srf)->last),		\
+	le64_to_cpu((srf)->blocks), le64_to_cpu((srf)->entries), \
+	(srf)->height, le64_to_cpu((srf)->ref.blkno),		\
+	le64_to_cpu((srf)->ref.seq)
+
 /* same as fs item but with a small header in the value */
 static int print_log_trees_item(struct scoutfs_key *key, void *val,
 				unsigned val_len, void *arg)
@@ -340,7 +354,8 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      item_root: height %u blkno %llu seq %llu\n"
 		       "      bloom_ref: blkno %llu seq %llu\n"
 		       "      data_avail: "RADROOT_F"\n"
-		       "      data_freed: "RADROOT_F"\n",
+		       "      data_freed: "RADROOT_F"\n"
+		       "      srch_file: "SRF_FMT"\n",
 		       RADROOT_A(&ltv->meta_avail),
 		       RADROOT_A(&ltv->meta_freed),
 			ltv->item_root.height,
@@ -349,7 +364,37 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 			le64_to_cpu(ltv->bloom_ref.blkno),
 			le64_to_cpu(ltv->bloom_ref.seq),
 		       RADROOT_A(&ltv->data_avail),
-		       RADROOT_A(&ltv->data_freed));
+		       RADROOT_A(&ltv->data_freed),
+		       SRF_A(&ltv->srch_file));
+	}
+
+	return 0;
+}
+
+static int print_srch_root_item(struct scoutfs_key *key, void *val,
+				unsigned val_len, void *arg)
+{
+	struct scoutfs_srch_file *sfl = val;
+	struct scoutfs_srch_compact_input *scin = val;
+	int i;
+
+	printf("    "SK_FMT"\n", SK_ARG(key));
+
+	/* only items in leaf blocks have values */
+	if (val) {
+		if (key->sk_type == SCOUTFS_SRCH_BUSY_TYPE) {
+			scin = val;
+			printf("      compact: nr_in %u in_flags 0x%x\n",
+				scin->nr, scin->flags);
+			for (i = 0; i < scin->nr; i++) {
+				sfl = &scin->sfl[i];
+				printf("        [%u] "SRF_FMT"\n",
+				       i, SRF_A(sfl));
+			}
+		} else {
+			sfl = val;
+			printf("      "SRF_FMT"\n", SRF_A(sfl));
+		}
 	}
 
 	return 0;
@@ -595,6 +640,79 @@ out:
 	return ret;
 }
 
+static int print_srch_block(int fd, struct scoutfs_srch_ref *ref, int level)
+{
+	struct scoutfs_srch_parent *srp;
+	struct scoutfs_srch_block *srb;
+	struct scoutfs_srch_entry sre;
+	struct scoutfs_srch_entry prev;
+	u64 blkno;
+	int pos;
+	int ret;
+	int err;
+	int i;
+
+	blkno = le64_to_cpu(ref->blkno);
+	if (blkno == 0)
+		return 0;
+
+	srp = read_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT);
+	if (!srp) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	srb = (void *)srp;
+
+	printf("srch %sblock blkno %llu\n", level ? "parent " : "", blkno);
+	print_block_header(&srp->hdr, SCOUTFS_BLOCK_LG_SIZE);
+
+	for (i = 0; level > 0 && i < SCOUTFS_SRCH_PARENT_REFS; i++) {
+		if (le64_to_cpu(srp->refs[i].blkno) == 0)
+			continue;
+		printf("  [%u]: blkno %llu seq %llu\n",
+		       i, le64_to_cpu(srp->refs[i].blkno),
+		       le64_to_cpu(srp->refs[i].seq));
+	}
+
+	ret = 0;
+	for (i = 0; level > 0 && i < SCOUTFS_SRCH_PARENT_REFS; i++) {
+		if (le64_to_cpu(srp->refs[i].blkno) == 0)
+			continue;
+		err = print_srch_block(fd, &srp->refs[i], level - 1);
+		if (err < 0 && ret == 0)
+			ret = err;
+	}
+
+	if (level > 0)
+		goto out;
+
+	printf("  first "SRE_FMT" last "SRE_FMT" tail "SRE_FMT"\n"
+	       "  entry_nr %u entry_bytes %u\n",
+	       SRE_A(&srb->first), SRE_A(&srb->last), SRE_A(&srb->tail),
+	       le32_to_cpu(srb->entry_nr), le32_to_cpu(srb->entry_bytes));
+
+	memset(&prev, 0, sizeof(prev));
+	pos = 0;
+	for (i = 0; level == 0 && i < le32_to_cpu(srb->entry_nr); i++) {
+		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
+			ret = EIO;
+			break;
+		}
+
+		ret = srch_decode_entry(srb->entries + pos, &sre, &prev);
+		if (ret < 0)
+			break;
+		pos += ret;
+		prev = sre;
+		printf("  [%u]: (%u) "SRE_FMT"\n", i, ret, SRE_A(&sre));
+	}
+
+out:
+	free(srp);
+
+	return ret;
+}
+
 struct print_recursion_args {
 	struct scoutfs_super_block *super;
 	int fd;
@@ -627,11 +745,42 @@ static int print_log_trees_roots(struct scoutfs_key *key, void *val,
 				ltv->data_avail.height - 1);
 	if (err && !ret)
 		ret = err;
+	err = print_srch_block(pa->fd, &ltv->srch_file.ref,
+			       ltv->srch_file.height - 1);
+	if (err && !ret)
+		ret = err;
 
 	err = print_btree(pa->fd, pa->super, "", &ltv->item_root,
 			  print_logs_item, NULL);
 	if (err && !ret)
 		ret = err;
+
+	return ret;
+}
+
+static int print_srch_root_files(struct scoutfs_key *key, void *val,
+				 unsigned val_len, void *arg)
+{
+	struct print_recursion_args *pa = arg;
+	struct scoutfs_srch_compact_input *scin;
+	struct scoutfs_srch_file *sfl;
+	int ret = 0;
+	int i;
+
+	if (key->sk_type == SCOUTFS_SRCH_BUSY_TYPE) {
+		scin = val;
+		for (i = 0; i < scin->nr; i++) {
+			sfl = &scin->sfl[i];
+			ret = print_srch_block(pa->fd, &sfl->ref,
+					       sfl->height - 1);
+			if (ret < 0)
+				break;
+		}
+
+	} else {
+		sfl = val;
+		ret = print_srch_block(pa->fd, &sfl->ref, sfl->height - 1);
+	}
 
 	return ret;
 }
@@ -785,6 +934,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  core_data_freed: "RADROOT_F"\n"
 	       "  lock_clients root: height %u blkno %llu seq %llu\n"
 	       "  mounted_clients root: height %u blkno %llu seq %llu\n"
+	       "  srch_root root: height %u blkno %llu seq %llu\n"
 	       "  trans_seqs root: height %u blkno %llu seq %llu\n"
 	       "  fs_root btree root: height %u blkno %llu seq %llu\n",
 		le64_to_cpu(super->next_ino),
@@ -812,6 +962,9 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		super->mounted_clients.height,
 		le64_to_cpu(super->mounted_clients.ref.blkno),
 		le64_to_cpu(super->mounted_clients.ref.seq),
+		super->srch_root.height,
+		le64_to_cpu(super->srch_root.ref.blkno),
+		le64_to_cpu(super->srch_root.ref.seq),
 		super->trans_seqs.height,
 		le64_to_cpu(super->trans_seqs.ref.blkno),
 		le64_to_cpu(super->trans_seqs.ref.seq),
@@ -869,6 +1022,10 @@ static int print_volume(int fd)
 	if (err && !ret)
 		ret = err;
 
+	err = print_btree(fd, super, "srch_root", &super->srch_root,
+			  print_srch_root_item, NULL);
+	if (err && !ret)
+		ret = err;
 	err = print_btree(fd, super, "logs_root", &super->logs_root,
 			  print_log_trees_item, NULL);
 	if (err && !ret)
@@ -876,6 +1033,10 @@ static int print_volume(int fd)
 
 	pa.super = super;
 	pa.fd = fd;
+	err = print_btree_leaf_items(fd, super, &super->srch_root.ref,
+				     print_srch_root_files, &pa);
+	if (err && !ret)
+		ret = err;
 	err = print_btree_leaf_items(fd, super, &super->logs_root.ref,
 				     print_log_trees_roots, &pa);
 	if (err && !ret)
