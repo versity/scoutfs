@@ -6,6 +6,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "sparse.h"
+
 /*
  * Generate build warnings if the condition is false but generate no
  * code at run time if it's true.
@@ -84,6 +86,17 @@ do {				\
 ({							\
 	((unsigned long)log2l((long double)x));		\
 })
+
+#define emit_get_unaligned_le(nr)			\
+static inline __u##nr get_unaligned_le##nr(void *buf)	\
+{							\
+	__le##nr x;					\
+	memcpy(&x, buf, sizeof(x));			\
+	return le##nr##_to_cpu(x);			\
+}
+emit_get_unaligned_le(16)
+emit_get_unaligned_le(32)
+emit_get_unaligned_le(64)
 
 /*
  * return -1,0,+1 based on the memcmp comparison of the minimum of their
