@@ -1,7 +1,7 @@
 #include "sparse.h"
 #include "util.h"
 #include "format.h"
-#include "crc.h"
+#include "hash.h"
 #include "leaf_item_hash.h"
 
 /*
@@ -10,7 +10,7 @@
 
 int leaf_item_hash_ind(struct scoutfs_key *key)
 {
-	return crc32c(~0, key, sizeof(struct scoutfs_key)) %
+	return scoutfs_hash32(key, sizeof(struct scoutfs_key)) %
 	       SCOUTFS_BTREE_LEAF_ITEM_HASH_NR;
 }
 
