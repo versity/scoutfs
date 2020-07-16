@@ -67,6 +67,7 @@ static void print_inode_field(void *st, size_t off)
 static struct stat_more_field fs_fields[] = {
 	FS_FIELD(fsid),
 	FS_FIELD(rid),
+	FS_FIELD(committed_seq),
 	{ NULL, }
 };
 
@@ -80,6 +81,9 @@ static void print_fs_field(void *st, size_t off)
 			break;
 		case FS_FIELD_OFF(rid):
 			printf("%016llx", sfm->rid);
+			break;
+		case FS_FIELD_OFF(committed_seq):
+			printf("%llu", sfm->committed_seq);
 			break;
 	};
 }
