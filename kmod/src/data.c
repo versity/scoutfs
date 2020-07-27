@@ -1922,6 +1922,73 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 	return ret;
 }
 
+static int scoutfs_data_filemap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	struct file *file = vma->vm_file;
+	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
+	DECLARE_DATA_WAIT(dw);
+	loff_t pos;
+	int err;
+	vm_fault_t ret = VM_FAULT_SIGBUS;
+
+	pos = vmf->pgoff;
+	pos <<= PAGE_SHIFT;
+
+retry:
+	err = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+	if (err < 0)
+		return vmf_error(err);
+
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
+		/* protect checked extents from stage/release */
+		atomic_inc(&inode->i_dio_count);
+
+		err = scoutfs_data_wait_check(inode, pos, PAGE_SIZE,
+					      SEF_OFFLINE, SCOUTFS_IOC_DWO_READ,
+					      &dw, inode_lock);
+		if (err != 0) {
+			if (err < 0)
+				ret = vmf_error(err);
+			goto out;
+		}
+	}
+
+	ret = filemap_fault(vma, vmf);
+
+out:
+	if (scoutfs_per_task_del(&si->pt_data_lock, &pt_ent))
+		inode_dio_done(inode);
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	if (scoutfs_data_wait_found(&dw)) {
+		err = scoutfs_data_wait(inode, &dw);
+		if (err == 0)
+			goto retry;
+
+		ret = VM_FAULT_RETRY;
+	}
+
+	return ret;
+}
+
+static const struct vm_operations_struct scoutfs_data_file_vm_ops = {
+	.fault		= scoutfs_data_filemap_fault,
+	.remap_pages	= generic_file_remap_pages,
+};
+
+static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	if ((vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_MAYWRITE))
+		return -EINVAL;
+	file_accessed(file);
+	vma->vm_ops = &scoutfs_data_file_vm_ops;
+	return 0;
+}
+
 const struct address_space_operations scoutfs_file_aops = {
 #ifdef KC_MPAGE_READ_FOLIO
 	.dirty_folio		= block_dirty_folio,
@@ -1953,6 +2020,7 @@ const struct file_operations scoutfs_file_fops = {
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
 #endif
+	.mmap		= scoutfs_file_mmap,
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= scoutfs_file_llseek,
