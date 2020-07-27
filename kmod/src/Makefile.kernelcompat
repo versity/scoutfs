@@ -431,3 +431,19 @@ endif
 ifneq (,$(shell grep 'struct file.*bdev_file_open_by_path.const char.*path' include/linux/blkdev.h))
 ccflags-y += -DKC_BDEV_FILE_OPEN_BY_PATH
 endif
+
+# v4.0-rc7-1796-gfe0f07d08ee3
+#
+# direct-io changes modify inode_dio_done to now be called inode_dio_end
+ifneq (,$(shell grep 'void inode_dio_end.struct inode' include/linux/fs.h))
+ccflags-y += -DKC_INODE_DIO_END
+endif
+
+#
+# v5.0-6476-g3d3539018d2c
+#
+# page fault handlers return a bitmask vm_fault_t instead
+# Note: el8's header has a slightly modified prefix here
+ifneq (,$(shell grep 'typedef.*__bitwise unsigned.*int vm_fault_t' include/linux/mm_types.h))
+ccflags-y += -DKC_MM_VM_FAULT_T
+endif
