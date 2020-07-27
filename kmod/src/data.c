@@ -559,7 +559,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 	u64 offset;
 	int ret;
 
-	WARN_ON_ONCE(create && !inode_is_locked(inode));
+	WARN_ON_ONCE(create && !rwsem_is_locked(&si->extent_sem));
 
 	/* make sure caller holds a cluster lock */
 	lock = scoutfs_per_task_get(&si->pt_data_lock);
@@ -1922,6 +1922,142 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 	return ret;
 }
 
+static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
+				     struct vm_fault *vmf)
+{
+	struct page *page = vmf->page;
+	struct file *file = vma->vm_file;
+	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
+	DECLARE_DATA_WAIT(dw);
+	struct write_begin_data wbd;
+	u64 ind_seq;
+	loff_t pos;
+	loff_t size;
+	unsigned int len = PAGE_SIZE;
+	vm_fault_t ret = VM_FAULT_SIGBUS;
+	int err;
+
+	pos = vmf->pgoff << PAGE_SHIFT;
+
+	sb_start_pagefault(sb);
+
+	err = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
+	if (err) {
+		ret = vmf_error(err);
+		goto out;
+	}
+
+	size = i_size_read(inode);
+
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, lock)) {
+		/* data_version is per inode, whole file must be online */
+		err = scoutfs_data_wait_check(inode, 0, size,
+					      SEF_OFFLINE,
+					      SCOUTFS_IOC_DWO_WRITE,
+					      &dw, lock);
+		if (err != 0) {
+			if (err < 0)
+				ret = vmf_error(err);
+			goto out_unlock;
+		}
+	}
+
+	down_write(&si->extent_sem);
+
+	if (!trylock_page(page)) {
+		ret = VM_FAULT_NOPAGE;
+		goto out_sem;
+	}
+	ret = VM_FAULT_LOCKED;
+
+	if ((page->mapping != inode->i_mapping) ||
+	    (!PageUptodate(page)) ||
+	    (page_offset(page) > size))	 {
+		unlock_page(page);
+		ret = VM_FAULT_NOPAGE;
+		goto out_sem;
+	}
+
+	if (page->index == (size - 1) >> PAGE_SHIFT)
+		len = ((size - 1) & ~PAGE_MASK) + 1;
+
+	/* scoutfs_write_begin */
+	memset(&wbd, 0, sizeof(wbd));
+	INIT_LIST_HEAD(&wbd.ind_locks);
+	wbd.lock = lock;
+
+	do {
+		err = scoutfs_inode_index_start(sb, &ind_seq) ?:
+			scoutfs_inode_index_prepare(sb, &wbd.ind_locks, inode,
+						    true) ?:
+			scoutfs_inode_index_try_lock_hold(sb, &wbd.ind_locks,
+							  ind_seq, false);
+	} while (err > 0);
+	if (err < 0) {
+		ret = vmf_error(err);
+		unlock_page(page);
+		goto out_sem;
+	}
+
+	err = __block_write_begin(page, pos, PAGE_SIZE, scoutfs_get_block);
+	if (err) {
+		ret = vmf_error(err);
+		unlock_page(page);
+		goto out_release_trans;
+	}
+	/* end scoutfs_write_begin */
+
+	/*
+	 * We mark the page dirty already here so that when freeze is in
+	 * progress, we are guaranteed that writeback during freezing will
+	 * see the dirty page and writeprotect it again.
+	 */
+	set_page_dirty(page);
+	wait_for_stable_page(page);
+
+	/* scoutfs_write_end */
+	scoutfs_inode_set_data_seq(inode);
+	scoutfs_inode_inc_data_version(inode);
+
+	file_update_time(vma->vm_file);
+
+	scoutfs_update_inode_item(inode, wbd.lock, &wbd.ind_locks);
+	scoutfs_inode_queue_writeback(inode);
+out_release_trans:
+	scoutfs_release_trans(sb);
+	scoutfs_inode_index_unlock(sb, &wbd.ind_locks);
+	/* end scoutfs_write_end */
+
+out_sem:
+	up_write(&si->extent_sem);
+
+out_unlock:
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+
+out:
+	sb_end_pagefault(sb);
+
+	if (scoutfs_data_wait_found(&dw)) {
+		/*
+		 * It'd be really nice to not hold the mmap_sem lock here
+		 * before waiting for data, and then return VM_FAULT_RETRY
+		 */
+		err = scoutfs_data_wait(inode, &dw);
+		if (err == 0)
+			ret = VM_FAULT_NOPAGE;
+		else
+			ret = vmf_error(err);
+	}
+
+	return ret;
+}
+
 static int scoutfs_data_filemap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct file *file = vma->vm_file;
@@ -1977,13 +2113,12 @@ out:
 
 static const struct vm_operations_struct scoutfs_data_file_vm_ops = {
 	.fault		= scoutfs_data_filemap_fault,
+	.page_mkwrite	= scoutfs_data_page_mkwrite,
 	.remap_pages	= generic_file_remap_pages,
 };
 
 static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	if ((vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_MAYWRITE))
-		return -EINVAL;
 	file_accessed(file);
 	vma->vm_ops = &scoutfs_data_file_vm_ops;
 	return 0;
