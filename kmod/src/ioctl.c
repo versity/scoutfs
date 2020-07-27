@@ -367,6 +367,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 	struct super_block *sb = file_inode(file)->i_sb;
 	struct scoutfs_ioctl_data_wait_err args;
 	struct scoutfs_lock *lock = NULL;
+	struct scoutfs_inode_info *si;
 	struct inode *inode = NULL;
 	u64 sblock;
 	u64 eblock;
@@ -398,6 +399,8 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 	}
 
 	inode_lock(inode);
+	si = SCOUTFS_I(inode);
+	mutex_lock(&si->s_i_mutex);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -415,6 +418,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 unlock:
+	mutex_unlock(&si->s_i_mutex);
 	inode_unlock(inode);
 	iput(inode);
 out:
@@ -658,6 +662,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 		goto out;
 
 	inode_lock(inode);
+	mutex_lock(&si->s_i_mutex);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -701,6 +706,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 unlock:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	mutex_unlock(&si->s_i_mutex);
 	inode_unlock(inode);
 	mnt_drop_write_file(file);
 out:
