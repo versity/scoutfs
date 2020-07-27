@@ -21,6 +21,12 @@ struct scoutfs_inode_info {
 	u64 offline_blocks;
 	u32 flags;
 
+	/* We can't use inode->i_mutex to protect i_dio_count due to lock
+	 * ordering in the kernel between i_mutex and mmap_sem.  Use this
+	 * as an inner lock.
+	 */
+	struct mutex s_i_mutex;
+
 	/*
 	 * Protects per-inode extent items, most particularly readers
 	 * who want to serialize writers without holding i_mutex. (only
