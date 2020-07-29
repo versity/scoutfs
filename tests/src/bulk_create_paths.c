@@ -41,6 +41,16 @@ struct opts {
 		     unique_srch_xattr:1;
 };
 
+struct stats {
+	struct timeval start;
+	struct timeval prev;
+	unsigned long dirs;
+	unsigned long prev_dirs;
+	unsigned long files;
+	unsigned long prev_files;
+	unsigned long lines;
+};
+
 struct str_list {
 	struct str_list *next;
 	char str[0];
@@ -76,19 +86,24 @@ static double tv_sub_secf(struct timeval *a, struct timeval *b)
 	return tv_secf(a) - tv_secf(b);
 }
 
-static char dashes[] = "---------------------------------------------";
-
-static void rate_banner(struct timeval *tot_start, unsigned long tot_dirs,
-			unsigned long tot_files, struct timeval *start,
-			unsigned long dirs, unsigned long files,
-			unsigned long lines)
+static void rate_banner(struct opts *opts, struct stats *stats)
 {
+	static char dashes[] = "---------------------------------------------";
 	struct timeval now;
+	unsigned long dirs;
+	unsigned long files;
 	double secs;
+
+	if (opts->dry_run || opts->quiet)
+		return;
 
 	gettimeofday(&now, NULL);
 
-	if (lines % 25 == 0) {
+	/* output a banner once a second */
+	if (now.tv_sec == stats->prev.tv_sec)
+		return;
+
+	if (stats->lines % 25 == 0) {
 		printf("%.15s%9s%.14s | %.10s%10s%.10s\n",
 		       dashes, " overall ", dashes,
 		       dashes, " previous ", dashes);
@@ -98,15 +113,22 @@ static void rate_banner(struct timeval *tot_start, unsigned long tot_dirs,
 		       "dirs", "files", "secs", "d/s", "f/s");
 	}
 
-	secs = tv_sub_secf(&now, tot_start);
+	secs = tv_sub_secf(&now, &stats->start);
 	printf("%7lu %9lu %7.2f %5.0f %6.0f | ",
-	       tot_dirs, tot_files, secs, (double)tot_dirs / secs,
-	       (double)tot_files / secs);
+	       stats->dirs, stats->files, secs, (double)stats->dirs / secs,
+	       (double)stats->files / secs);
 
-	secs = tv_sub_secf(&now, start);
+	secs = tv_sub_secf(&now, &stats->prev);
+	dirs = stats->dirs - stats->prev_dirs;
+	files = stats->files - stats->prev_files;
 	printf("%4lu %6lu %5.2f %5.0f %6.0f\n",
 	       dirs, files, secs, (double)dirs / secs,
 	       (double)files / secs);
+
+	stats->prev_dirs = stats->dirs;
+	stats->prev_files = stats->files;
+	stats->prev = now;
+	stats->lines++;
 }
 
 static void free_str_list(struct str_list *s)
@@ -128,7 +150,7 @@ static void free_dir(struct dir *dir)
 }
 
 static void create_dir(struct dir *dir, struct opts *opts,
-		       unsigned long long counter)
+		       struct stats *stats)
 {
 	struct str_list *s;
 	char name[100];
@@ -144,6 +166,7 @@ static void create_dir(struct dir *dir, struct opts *opts,
 		if (rc == -1 && errno == ENOENT) {
 			rc = mkdir(s->str, 0755);
 			error_exit(rc, "mkdir %s failed"ERRF, s->str, ERRA);
+			stats->dirs++;
 		}
 		rc = chdir(s->str);
 		error_exit(rc, "chdir %s failed"ERRF, s->str, ERRA);
@@ -164,18 +187,21 @@ static void create_dir(struct dir *dir, struct opts *opts,
 		}
 		if (rc == 0 && opts->group_srch_xattr) {
 			snprintf(name, sizeof(name),
-				 "scoutfs.srch.scoutfs_bcp.group.%llu",
-				 (counter + i) / 10000);
+				 "scoutfs.srch.scoutfs_bcp.group.%lu",
+				 stats->files / 10000);
 			rc = setxattr(s->str, name, val, vs, 0);
 		}
 		if (rc == 0 && opts->unique_srch_xattr) {
 			snprintf(name, sizeof(name),
-				 "scoutfs.srch.scoutfs_bcp.unique.%llu",
-				 counter + i);
+				 "scoutfs.srch.scoutfs_bcp.unique.%lu",
+				 stats->files);
 			rc = setxattr(s->str, name, val, vs, 0);
 		}
 
 		error_exit(rc, "setxattr %s %s failed"ERRF, s->str, name, ERRA);
+
+		stats->files++;
+		rate_banner(opts, stats);
 	}
 }
 
@@ -351,14 +377,8 @@ int main(int argc, char **argv)
 {
 	unsigned int buf_off = 0;
 	unsigned int buf_len = 0;
-	unsigned long done_dirs = 0;
-	unsigned long done_files = 0;
-	unsigned long last_dirs = 0;
-	unsigned long last_files = 0;
-	unsigned long banner_lines = 0;
+	struct stats stats = {{0,}};
 	char *top_dir = NULL;
-	struct timeval last_start;
-	struct timeval start;
 	struct opts opts;
 	struct dir *dir;
 	char *buf;
@@ -419,8 +439,8 @@ int main(int argc, char **argv)
 		printf("(dry run: printing final path reading rate)\n");
 	}
 
-	gettimeofday(&start, NULL);
-	last_start = start;
+	gettimeofday(&stats.start, NULL);
+	stats.prev = stats.start;
 
 	for (;;) {
 
@@ -429,20 +449,8 @@ int main(int argc, char **argv)
 		if (dir == NULL)
 			break;
 		if (!opts.dry_run)
-			create_dir(dir, &opts, done_files);
-		done_files += dir->nr_files;
-		done_dirs++;
+			create_dir(dir, &opts, &stats);
 		free_dir(dir);
-
-		if (!opts.dry_run && !opts.quiet &&
-		    (done_files - last_files) >= 10000) {
-			rate_banner(&start, done_dirs, done_files, &last_start,
-				    done_dirs - last_dirs,
-				    done_files - last_files, banner_lines++);
-			last_dirs = done_dirs;
-			last_files = done_files;
-			gettimeofday(&last_start, NULL);
-		}
 
 		if (!opts.dry_run) {
 			rc = chdir(top_dir);
@@ -450,8 +458,10 @@ int main(int argc, char **argv)
 		}
 	}
 
-	rate_banner(&start, done_dirs, done_files, &last_start,
-		    done_dirs - last_dirs, done_files - last_files, 1);
+	/* force a final banner with a header, even for dry runs */
+	stats.lines = 0;
+	opts.dry_run = 0;
+	rate_banner(&opts, &stats);
 
 	free(buf);
 
