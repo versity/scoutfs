@@ -10,6 +10,14 @@ static struct scoutfs_avl_node *node_ptr(struct scoutfs_avl_root *root,
 	return off ? (void *)root + le16_to_cpu(off) : NULL;
 }
 
+__le16 avl_node_off(struct scoutfs_avl_root *root,
+		    struct scoutfs_avl_node *node)
+{
+	if (!node)
+		return 0;
+	return cpu_to_le16((void *)node - (void *)root);
+}
+
 struct scoutfs_avl_node *avl_first(struct scoutfs_avl_root *root)
 {
 	struct scoutfs_avl_node *node = node_ptr(root, root->node);

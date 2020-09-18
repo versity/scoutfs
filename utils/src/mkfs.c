@@ -27,6 +27,7 @@
 #include "key.h"
 #include "bitops.h"
 #include "radix.h"
+#include "btree.h"
 #include "leaf_item_hash.h"
 
 static int write_raw_block(int fd, u64 blkno, int shift, void *blk)
@@ -281,14 +282,11 @@ out:
 static int write_new_fs(char *path, int fd, u8 quorum_count)
 {
 	struct scoutfs_super_block *super;
-	struct scoutfs_inode *inode;
+	struct scoutfs_inode inode;
 	struct scoutfs_btree_block *bt;
-	struct scoutfs_btree_item *btitem;
-	struct scoutfs_avl_node *par;
-	struct scoutfs_key *key;
+	struct scoutfs_key key;
 	struct timeval tv;
 	char uuid_str[37];
-	__le16 *own;
 	void *zeros;
 	u64 blkno;
 	u64 limit;
@@ -356,75 +354,31 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 
 	/* fs root starts with root inode and its index items */
 	blkno = next_meta++;
+	btree_init_root_single(&super->fs_root, bt, blkno, 1, super->hdr.fsid);
 
-	super->fs_root.ref.blkno = cpu_to_le64(blkno);
-	super->fs_root.ref.seq = cpu_to_le64(1);
-	super->fs_root.height = 1;
+	memset(&key, 0, sizeof(key));
+	key.sk_zone = SCOUTFS_INODE_INDEX_ZONE;
+	key.sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
+	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	btree_append_item(bt, &key, NULL, 0);
 
-	memset(bt, 0, SCOUTFS_BLOCK_LG_SIZE);
-	bt->hdr.fsid = super->hdr.fsid;
-	bt->hdr.blkno = cpu_to_le64(blkno);
-	bt->hdr.seq = cpu_to_le64(1);
+	memset(&key, 0, sizeof(key));
+	key.sk_zone = SCOUTFS_FS_ZONE;
+	key.ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	key.sk_type = SCOUTFS_INODE_TYPE;
 
-	/* meta seq index for the root inode */
-	btitem = &bt->items[le16_to_cpu(bt->nr_items)];
-	le16_add_cpu(&bt->nr_items, 1);
-	key = &btitem->key;
+	memset(&inode, 0, sizeof(inode));
+	inode.next_readdir_pos = cpu_to_le64(2);
+	inode.nlink = cpu_to_le32(SCOUTFS_DIRENT_FIRST_POS);
+	inode.mode = cpu_to_le32(0755 | 0040000);
+	inode.atime.sec = cpu_to_le64(tv.tv_sec);
+	inode.atime.nsec = cpu_to_le32(tv.tv_usec * 1000);
+	inode.ctime.sec = inode.atime.sec;
+	inode.ctime.nsec = inode.atime.nsec;
+	inode.mtime.sec = inode.atime.sec;
+	inode.mtime.nsec = inode.atime.nsec;
+	btree_append_item(bt, &key, &inode, sizeof(inode));
 
-	bt->item_root.node = cpu_to_le16((void *)&btitem->node -
-					 (void *)&bt->item_root);
-	btitem->node.height = 2;
-	btitem->val_len = cpu_to_le16(0);
-
-	key->sk_zone = SCOUTFS_INODE_INDEX_ZONE;
-	key->sk_type = SCOUTFS_INODE_INDEX_META_SEQ_TYPE;
-	key->skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-
-	leaf_item_hash_insert(bt, &btitem->key,
-			      cpu_to_le16((void *)btitem - (void *)bt));
-
-	/* root inode */
-	par = &btitem->node;
-	btitem = &bt->items[le16_to_cpu(bt->nr_items)];
-	le16_add_cpu(&bt->nr_items, 1);
-	key = &btitem->key;
-	own = (void *)bt + SCOUTFS_BLOCK_LG_SIZE -
-	      SCOUTFS_BTREE_LEAF_ITEM_HASH_BYTES -
-	      SCOUTFS_BTREE_VAL_OWNER_BYTES;
-	inode = (void *)own - sizeof(*inode);
-
-	par->right = cpu_to_le16((void *)&btitem->node -
-				 (void *)&bt->item_root);
-	btitem->node.height = 1;
-	btitem->node.parent = cpu_to_le16((void *)par - (void *)&bt->item_root);
-	btitem->val_off = cpu_to_le16((void *)inode - (void *)bt);
-	btitem->val_len = cpu_to_le16(sizeof(*inode));
-	le16_add_cpu(&bt->total_item_bytes, le16_to_cpu(btitem->val_len) +
-					    SCOUTFS_BTREE_VAL_OWNER_BYTES);
-
-	key->sk_zone = SCOUTFS_FS_ZONE;
-	key->ski_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	key->sk_type = SCOUTFS_INODE_TYPE;
-
-	inode->next_readdir_pos = cpu_to_le64(2);
-	inode->nlink = cpu_to_le32(SCOUTFS_DIRENT_FIRST_POS);
-	inode->mode = cpu_to_le32(0755 | 0040000);
-	inode->atime.sec = cpu_to_le64(tv.tv_sec);
-	inode->atime.nsec = cpu_to_le32(tv.tv_usec * 1000);
-	inode->ctime.sec = inode->atime.sec;
-	inode->ctime.nsec = inode->atime.nsec;
-	inode->mtime.sec = inode->atime.sec;
-	inode->mtime.nsec = inode->atime.nsec;
-
-	leaf_item_hash_insert(bt, &btitem->key,
-			      cpu_to_le16((void *)btitem - (void *)bt));
-	*own = cpu_to_le16((void *)btitem - (void *)bt);
-
-	le16_add_cpu(&bt->total_item_bytes, le16_to_cpu(bt->nr_items) *
-		     sizeof(struct scoutfs_btree_item));
-	bt->mid_free_len = cpu_to_le16((void *)inode -
-				(void *)&bt->items[le16_to_cpu(bt->nr_items)]);
-	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
 	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
 					    SCOUTFS_BLOCK_LG_SIZE));
 
