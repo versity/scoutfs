@@ -20,7 +20,6 @@
 #include "cmd.h"
 #include "crc.h"
 #include "key.h"
-#include "radix.h"
 #include "avl.h"
 #include "srch.h"
 #include "leaf_item_hash.h"
@@ -149,70 +148,17 @@ static void print_symlink(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->sks_ino), le64_to_cpu(key->sks_nr), name);
 }
 
-static void print_packed_extent(struct scoutfs_key *key, void *val, int val_len)
+static void print_data_extent(struct scoutfs_key *key, void *val, int val_len)
 {
-	struct scoutfs_packed_extent *pe;
-	__le64 led;
+	struct scoutfs_data_extent_val *dv = val;
 	u64 iblock;
-	u64 blkno = 0;
-	u64 diff;
-	int off = 0;
-	int i = 0;
 
+	iblock = le64_to_cpu(key->skdx_end) - le64_to_cpu(key->skdx_len) + 1;
 
-	/*
-	 * Ugh, this is the only item that has state between items.  It
-	 * probably shouldn't.  And I'm too lazy to plumb an arg through
-	 * all the printers.
-	 */
-	static struct scoutfs_key next_key;
-	static u64 next_blkno;
-
-	if (scoutfs_key_compare(key, &next_key) == 0)
-		blkno = next_blkno;
-
-	iblock = le64_to_cpu(key->skpe_base) << SCOUTFS_PACKEXT_BASE_SHIFT;
-
-	while (off < val_len) {
-		printf("      [%u] off %u: ibl %llu ", i, off, iblock);
-
-		if (off + sizeof(struct scoutfs_packed_extent) > val_len) {
-			printf("(packed extent struct exceeds item)\n");
-			return;
-		}
-
-		pe = val + off;
-		printf("cnt %u dfb %u fl %x fin %u ",
-			le16_to_cpu(pe->count), pe->diff_bytes, pe->flags,
-			pe->final);
-
-		off += sizeof(struct scoutfs_packed_extent);
-
-		if (off + pe->diff_bytes > val_len) {
-			printf("(packed extent diff bytes exceeds item)\n");
-			return;
-		}
-
-		if (pe->diff_bytes) {
-			led = 0;
-			memcpy(&led, pe->le_blkno_diff, pe->diff_bytes);
-			diff = le64_to_cpu(led);
-			diff = (diff >> 1) ^ (-(diff & 1));
-			blkno += diff;
-			printf("dif %lld blk %llu\n", (s64)diff, blkno);
-			blkno += le16_to_cpu(pe->count) - 1;
-		} else {
-			printf("(sparse)\n");
-		}
-
-		iblock += le16_to_cpu(pe->count);
-		off += pe->diff_bytes;
-		i++;
-	}
-
-	next_blkno = blkno;
-	next_key = *key;
-	scoutfs_key_inc(&next_key);
+	printf("    extent: ino %llu iblock %llu len %llu blkno %llu flags %x\n",
+	       le64_to_cpu(key->skdx_ino), iblock,
+	       le64_to_cpu(key->skdx_len),
+	       le64_to_cpu(dv->blkno), dv->flags);
 }
 
 static void print_inode_index(struct scoutfs_key *key, void *val, int val_len)
@@ -243,8 +189,7 @@ static print_func_t find_printer(u8 zone, u8 type)
 			case SCOUTFS_READDIR_TYPE: return print_dirent;
 			case SCOUTFS_SYMLINK_TYPE: return print_symlink;
 			case SCOUTFS_LINK_BACKREF_TYPE: return print_dirent;
-			case SCOUTFS_PACKED_EXTENT_TYPE:
-				return print_packed_extent;
+			case SCOUTFS_DATA_EXTENT_TYPE: return print_data_extent;
 		}
 	}
 
@@ -302,17 +247,31 @@ static int print_logs_item(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-#define RADREF_F \
-	"blkno %llu seq %llu sm_total %llu lg_total %llu"
-#define RADREF_A(ref) \
-	le64_to_cpu((ref)->blkno), le64_to_cpu((ref)->seq), \
-	le64_to_cpu((ref)->sm_total), le64_to_cpu((ref)->lg_total)
+#define BTREF_F \
+	"blkno %llu seq %llu"
+#define BTREF_A(ref) \
+	le64_to_cpu((ref)->blkno), le64_to_cpu((ref)->seq)
 
-#define RADROOT_F \
-	"height %u next_find_bit %llu ref: "RADREF_F
-#define RADROOT_A(root) \
-	(root)->height, le64_to_cpu((root)->next_find_bit), \
-	RADREF_A(&(root)->ref)
+#define BTROOT_F \
+	BTREF_F" height %u"
+#define BTROOT_A(root) \
+	BTREF_A(&(root)->ref), (root)->height
+
+#define AL_REF_F \
+	"blkno %llu seq %llu"
+#define AL_REF_A(p) \
+	le64_to_cpu((p)->blkno), le64_to_cpu((p)->seq)
+
+#define AL_HEAD_F \
+	AL_REF_F" total_nr %llu first_nr %u"
+#define AL_HEAD_A(p)					\
+	AL_REF_A(&(p)->ref), le64_to_cpu((p)->total_nr),\
+	le32_to_cpu((p)->first_nr)
+
+#define ALCROOT_F \
+	BTROOT_F" total_len %llu"
+#define ALCROOT_A(ar) \
+	BTROOT_A(&(ar)->root), le64_to_cpu((ar)->total_len)
 
 #define SRE_FMT "%016llx.%llu.%llu"
 #define SRE_A(sre)						\
@@ -338,22 +297,22 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 
 	/* only items in leaf blocks have values */
 	if (val) {
-		printf("      meta_avail: "RADROOT_F"\n"
-		       "      meta_freed: "RADROOT_F"\n"
+		printf("      meta_avail: "AL_HEAD_F"\n"
+		       "      meta_freed: "AL_HEAD_F"\n"
 		       "      item_root: height %u blkno %llu seq %llu\n"
 		       "      bloom_ref: blkno %llu seq %llu\n"
-		       "      data_avail: "RADROOT_F"\n"
-		       "      data_freed: "RADROOT_F"\n"
+		       "      data_avail: "ALCROOT_F"\n"
+		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n",
-		       RADROOT_A(&ltv->meta_avail),
-		       RADROOT_A(&ltv->meta_freed),
+		       AL_HEAD_A(&ltv->meta_avail),
+		       AL_HEAD_A(&ltv->meta_freed),
 			ltv->item_root.height,
 			le64_to_cpu(ltv->item_root.ref.blkno),
 			le64_to_cpu(ltv->item_root.ref.seq),
 			le64_to_cpu(ltv->bloom_ref.blkno),
 			le64_to_cpu(ltv->bloom_ref.seq),
-		       RADROOT_A(&ltv->data_avail),
-		       RADROOT_A(&ltv->data_freed),
+		       ALCROOT_A(&ltv->data_avail),
+		       ALCROOT_A(&ltv->data_freed),
 		       SRF_A(&ltv->srch_file));
 	}
 
@@ -413,6 +372,24 @@ static int print_mounted_client_entry(struct scoutfs_key *key, void *val,
 
 	printf("    rid %016llx flags 0x%x\n",
 	       le64_to_cpu(key->skmc_rid), mcv->flags);
+
+	return 0;
+}
+
+static int print_alloc_item(struct scoutfs_key *key, void *val,
+			    unsigned val_len, void *arg)
+{
+	if (key->sk_type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE)
+		printf("    free extent: blkno %llu len %llu end %llu\n",
+		       le64_to_cpu(key->skfb_end) -
+		       le64_to_cpu(key->skfb_len) + 1,
+		       le64_to_cpu(key->skfb_len),
+		       le64_to_cpu(key->skfb_end));
+	else
+		printf("    free extent: blkno %llu len %llu neglen %lld\n",
+		       le64_to_cpu(key->skfl_blkno),
+		       -le64_to_cpu(key->skfl_neglen),
+		       (long long)le64_to_cpu(key->skfl_neglen));
 
 	return 0;
 }
@@ -566,67 +543,55 @@ static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
 	return ret;
 }
 
-static int print_radix_block(int fd, struct scoutfs_radix_ref *par, int level)
+static int print_alloc_list_block(int fd, char *str,
+				  struct scoutfs_alloc_list_ref *ref)
 {
-	struct scoutfs_radix_block *rdx;
+	struct scoutfs_alloc_list_block *lblk;
+	struct scoutfs_alloc_list_ref next;
 	u64 blkno;
-	int prev;
-	int ret;
-	int err;
+	u64 start;
+	u64 len;
+	int wid;
 	int i;
 
-	/* XXX not printing bitmap leaf blocks */
-	blkno = le64_to_cpu(par->blkno);
-	if (blkno == 0 || blkno == U64_MAX || level == 0)
+	blkno = le64_to_cpu(ref->blkno);
+	if (blkno == 0)
 		return 0;
 
-	rdx = read_block(fd, le64_to_cpu(par->blkno) , SCOUTFS_BLOCK_LG_SHIFT);
-	if (!rdx) {
-		ret = -ENOMEM;
-		goto out;
+	lblk = read_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT);
+	if (!lblk)
+		return -ENOMEM;
+
+	printf("%s alloc_list_block blkno %llu\n", str, blkno);
+	print_block_header(&lblk->hdr, SCOUTFS_BLOCK_LG_SIZE);
+	printf("  next "AL_REF_F" start %u nr %u\n",
+	       AL_REF_A(&lblk->next), le32_to_cpu(lblk->start),
+	       le32_to_cpu(lblk->nr));
+
+	if (lblk->nr) {
+		wid = printf("  exts: ");
+		start = 0;
+		len = 0;
+		for (i = 0; i < le32_to_cpu(lblk->nr); i++) {
+			if (len == 0)
+				start = le64_to_cpu(lblk->blknos[i]);
+			len++;
+
+			if (i == (le32_to_cpu(lblk->nr) - 1) ||
+			    start + len != le64_to_cpu(lblk->blknos[i + 1])) {
+				if (wid >= 72)
+					wid = printf("\n        ");
+
+				wid += printf("%llu,%llu ", start, len);
+				len = 0;
+			}
+		}
+		printf("\n");
 	}
 
-	printf("radix parent block blkno %llu\n", le64_to_cpu(par->blkno));
-	print_block_header(&rdx->hdr, SCOUTFS_BLOCK_LG_SIZE);
-
-	prev = 0;
-	for (i = 0; i < SCOUTFS_RADIX_REFS; i++) {
-		/* only skip if the next ref is identically full/empty */
-		if ((le64_to_cpu(rdx->refs[i].blkno) == 0 ||
-		     le64_to_cpu(rdx->refs[i].blkno) == U64_MAX) &&
-		    (i + 1) < SCOUTFS_RADIX_REFS &&
-		    (le64_to_cpu(rdx->refs[i].blkno) ==
-		     le64_to_cpu(rdx->refs[i + 1].blkno))) {
-			prev++;
-			continue;
-		}
-
-		if (prev) {
-			printf("  [%u - %u]: (%s): ", i - prev, i,
-			     (le64_to_cpu(rdx->refs[i].blkno) == 0) ? "empty" :
-								      "full");
-			prev = 0;
-		} else {
-			printf("  [%u]: ", i);
-		}
-
-		printf(RADREF_F"\n", RADREF_A(&rdx->refs[i]));
-	}
-
-	ret = 0;
-	for (i = 0; i < SCOUTFS_RADIX_REFS; i++) {
-		if (le64_to_cpu(rdx->refs[i].blkno) != 0 &&
-		    le64_to_cpu(rdx->refs[i].blkno) != U64_MAX) {
-			err = print_radix_block(fd, &rdx->refs[i], level - 1);
-			if (err < 0 && ret == 0)
-				ret = err;
-		}
-	}
-
-out:
-	free(rdx);
-
-	return ret;
+	next = lblk->next;
+	free(lblk);
+	return print_alloc_list_block(fd, str, &next);
 }
 
 static int print_srch_block(int fd, struct scoutfs_srch_ref *ref, int level)
@@ -718,20 +683,20 @@ static int print_log_trees_roots(struct scoutfs_key *key, void *val,
 
 	/* XXX doesn't print the bloom block */
 
-	err = print_radix_block(pa->fd, &ltv->meta_avail.ref,
-				ltv->meta_avail.height - 1);
+	err = print_alloc_list_block(pa->fd, "ltv_meta_avail",
+				     &ltv->meta_avail.ref);
 	if (err && !ret)
 		ret = err;
-	err = print_radix_block(pa->fd, &ltv->meta_freed.ref,
-				ltv->meta_avail.height - 1);
+	err = print_alloc_list_block(pa->fd, "ltv_meta_freed",
+				     &ltv->meta_freed.ref);
 	if (err && !ret)
 		ret = err;
-	err = print_radix_block(pa->fd, &ltv->data_avail.ref,
-				ltv->data_avail.height - 1);
+	err = print_btree(pa->fd, pa->super, "data_avail",
+			  &ltv->data_avail.root, print_alloc_item, NULL);
 	if (err && !ret)
 		ret = err;
-	err = print_radix_block(pa->fd, &ltv->meta_freed.ref,
-				ltv->data_avail.height - 1);
+	err = print_btree(pa->fd, pa->super, "data_freed",
+			  &ltv->data_freed.root, print_alloc_item, NULL);
 	if (err && !ret)
 		ret = err;
 	err = print_srch_block(pa->fd, &ltv->srch_file.ref,
@@ -917,10 +882,13 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  total_data_blocks %llu first_data_blkno %llu last_data_blkno %llu free_data_blocks %llu\n"
 	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
 	       "  quorum_count %u server_addr %s\n"
-	       "  core_meta_avail: "RADROOT_F"\n"
-	       "  core_meta_freed: "RADROOT_F"\n"
-	       "  core_data_avail: "RADROOT_F"\n"
-	       "  core_data_freed: "RADROOT_F"\n"
+	       "  meta_alloc[0]: "ALCROOT_F"\n"
+	       "  meta_alloc[1]: "ALCROOT_F"\n"
+	       "  data_alloc: "ALCROOT_F"\n"
+	       "  server_meta_avail[0]: "AL_HEAD_F"\n"
+	       "  server_meta_avail[1]: "AL_HEAD_F"\n"
+	       "  server_meta_freed[0]: "AL_HEAD_F"\n"
+	       "  server_meta_freed[1]: "AL_HEAD_F"\n"
 	       "  lock_clients root: height %u blkno %llu seq %llu\n"
 	       "  mounted_clients root: height %u blkno %llu seq %llu\n"
 	       "  srch_root root: height %u blkno %llu seq %llu\n"
@@ -941,10 +909,13 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->unmount_barrier),
 		super->quorum_count,
 		server_addr,
-		RADROOT_A(&super->core_meta_avail),
-		RADROOT_A(&super->core_meta_freed),
-		RADROOT_A(&super->core_data_avail),
-		RADROOT_A(&super->core_data_freed),
+		ALCROOT_A(&super->meta_alloc[0]),
+		ALCROOT_A(&super->meta_alloc[1]),
+		ALCROOT_A(&super->data_alloc),
+		AL_HEAD_A(&super->server_meta_avail[0]),
+		AL_HEAD_A(&super->server_meta_avail[1]),
+		AL_HEAD_A(&super->server_meta_freed[0]),
+		AL_HEAD_A(&super->server_meta_freed[1]),
 		super->lock_clients.height,
 		le64_to_cpu(super->lock_clients.ref.blkno),
 		le64_to_cpu(super->lock_clients.ref.seq),
@@ -968,8 +939,10 @@ static int print_volume(int fd)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct print_recursion_args pa;
+	char str[80];
 	int ret = 0;
 	int err;
+	int i;
 
 	super = read_block(fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT);
 	if (!super)
@@ -994,20 +967,32 @@ static int print_volume(int fd)
 	if (err && !ret)
 		ret = err;
 
-	err = print_radix_block(fd, &super->core_meta_avail.ref,
-				super->core_meta_avail.height - 1);
-	if (err && !ret)
-		ret = err;
-	err = print_radix_block(fd, &super->core_meta_freed.ref,
-				super->core_meta_freed.height - 1);
-	if (err && !ret)
-		ret = err;
-	err = print_radix_block(fd, &super->core_data_avail.ref,
-				super->core_data_avail.height - 1);
-	if (err && !ret)
-		ret = err;
-	err = print_radix_block(fd, &super->core_data_freed.ref,
-				super->core_data_freed.height - 1);
+	for (i = 0; i < array_size(super->server_meta_avail); i++) {
+		snprintf(str, sizeof(str), "server_meta_avail[%u]", i);
+		err = print_alloc_list_block(fd, str,
+					&super->server_meta_avail[i].ref);
+		if (err && !ret)
+			ret = err;
+	}
+
+	for (i = 0; i < array_size(super->server_meta_freed); i++) {
+		snprintf(str, sizeof(str), "server_meta_freed[%u]", i);
+		err = print_alloc_list_block(fd, str,
+					&super->server_meta_freed[i].ref);
+		if (err && !ret)
+			ret = err;
+	}
+
+	for (i = 0; i < array_size(super->meta_alloc); i++) {
+		snprintf(str, sizeof(str), "meta_alloc[%u]", i);
+		err = print_btree(fd, super, str, &super->meta_alloc[i].root,
+				  print_alloc_item, NULL);
+		if (err && !ret)
+			ret = err;
+	}
+
+	err = print_btree(fd, super, "data_alloc", &super->data_alloc.root,
+			  print_alloc_item, NULL);
 	if (err && !ret)
 		ret = err;
 

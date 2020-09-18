@@ -11,6 +11,7 @@
 #define SCOUTFS_BLOCK_MAGIC_RADIX	0xebeb5e65
 #define SCOUTFS_BLOCK_MAGIC_SRCH_BLOCK	0x897e4a7d
 #define SCOUTFS_BLOCK_MAGIC_SRCH_PARENT	0xb23a2a05
+#define SCOUTFS_BLOCK_MAGIC_ALLOC_LIST	0x8a93ac83
 
 /*
  * The super block, quorum block, and file data allocation granularity
@@ -143,10 +144,10 @@ struct scoutfs_key {
 #define sks_ino		_sk_first
 #define sks_nr		_sk_second
 
-/* packed extents */
-#define skpe_ino	_sk_first
-#define skpe_base	_sk_second
-#define skpe_part	_sk_fourth
+/* data extents */
+#define skdx_ino	_sk_first
+#define skdx_end	_sk_second
+#define skdx_len	_sk_third
 
 /* log trees */
 #define sklt_rid	_sk_first
@@ -161,6 +162,13 @@ struct scoutfs_key {
 
 /* mounted clients */
 #define skmc_rid	_sk_first
+
+/* free extents by blkno */
+#define skfb_end	_sk_second
+#define skfb_len	_sk_third
+/* free extents by len */
+#define skfl_neglen	_sk_second
+#define skfl_blkno	_sk_third
 
 struct scoutfs_radix_block {
 	struct scoutfs_block_header hdr;
@@ -266,6 +274,53 @@ struct scoutfs_btree_block {
 #define SCOUTFS_BTREE_LEAF_ITEM_HASH_BYTES \
 	(SCOUTFS_BTREE_LEAF_ITEM_HASH_NR * sizeof(__le16))
 
+struct scoutfs_alloc_list_ref {
+	__le64 blkno;
+	__le64 seq;
+}__packed;
+
+/*
+ * first_nr tracks the nr of the first block in the list and is used for
+ * allocation sizing. total_nr is the sum of the nr of all the blocks in
+ * the list and is used for calculating total free block counts.
+ */
+struct scoutfs_alloc_list_head {
+	struct scoutfs_alloc_list_ref ref;
+	__le64 total_nr;
+	__le32 first_nr;
+}__packed;
+
+/*
+ * While the main allocator uses extent items in btree blocks, metadata
+ * allocations for a single transaction are recorded in arrays in
+ * blocks.  This limits the number of allocations and frees needed to
+ * cow and modify the structure.  The blocks can be stored in a list
+ * which lets us create a persistent log of pending frees that are
+ * generated as we cow btree blocks to insert freed extents.
+ *
+ * The array floats in the block so that both adding and removing blknos
+ * only modifies an index.
+ */
+struct scoutfs_alloc_list_block {
+	struct scoutfs_block_header hdr;
+	struct scoutfs_alloc_list_ref next;
+	__le32 start;
+	__le32 nr;
+	__le64 blknos[0]; /* naturally aligned for sorting */
+}__packed;
+
+#define SCOUTFS_ALLOC_LIST_MAX_BLOCKS					      \
+	((SCOUTFS_BLOCK_LG_SIZE - sizeof(struct scoutfs_alloc_list_block)) /  \
+	 (member_sizeof(struct scoutfs_alloc_list_block, blknos[0])))
+
+/*
+ * These can safely be initialized to all-zeros.
+ */
+struct scoutfs_alloc_root {
+	__le64 total_len;
+	struct scoutfs_btree_root root;
+}__packed;
+
 struct scoutfs_mounted_client_btree_val {
 	__u8 flags;
 } __packed;
@@ -338,8 +393,8 @@ struct scoutfs_srch_block {
 #define SCOUTFS_SRCH_COMPACT_NR		(1 << SCOUTFS_SRCH_COMPACT_ORDER)
 
 struct scoutfs_srch_compact_input {
-	struct scoutfs_radix_root meta_avail;
-	struct scoutfs_radix_root meta_freed;
+	struct scoutfs_alloc_list_head meta_avail;
+	struct scoutfs_alloc_list_head meta_freed;
 	__le64 id;
 	__u8 nr;
 	__u8 flags;
@@ -347,8 +402,8 @@ struct scoutfs_srch_compact_input {
 } __packed;
 
 struct scoutfs_srch_compact_result {
-	struct scoutfs_radix_root meta_avail;
-	struct scoutfs_radix_root meta_freed;
+	struct scoutfs_alloc_list_head meta_avail;
+	struct scoutfs_alloc_list_head meta_freed;
 	__le64 id;
 	__u8 flags;
 	struct scoutfs_srch_file sfl;
@@ -365,24 +420,24 @@ struct scoutfs_srch_compact_result {
  * about item logs, it's about clients making changes to trees.
  */
 struct scoutfs_log_trees {
-	struct scoutfs_radix_root meta_avail;
-	struct scoutfs_radix_root meta_freed;
+	struct scoutfs_alloc_list_head meta_avail;
+	struct scoutfs_alloc_list_head meta_freed;
 	struct scoutfs_btree_root item_root;
 	struct scoutfs_btree_ref bloom_ref;
-	struct scoutfs_radix_root data_avail;
-	struct scoutfs_radix_root data_freed;
+	struct scoutfs_alloc_root data_avail;
+	struct scoutfs_alloc_root data_freed;
 	struct scoutfs_srch_file srch_file;
 	__le64 rid;
 	__le64 nr;
 } __packed;
 
 struct scoutfs_log_trees_val {
-	struct scoutfs_radix_root meta_avail;
-	struct scoutfs_radix_root meta_freed;
+	struct scoutfs_alloc_list_head meta_avail;
+	struct scoutfs_alloc_list_head meta_freed;
 	struct scoutfs_btree_root item_root;
 	struct scoutfs_btree_ref bloom_ref;
-	struct scoutfs_radix_root data_avail;
-	struct scoutfs_radix_root data_freed;
+	struct scoutfs_alloc_root data_avail;
+	struct scoutfs_alloc_root data_freed;
 	struct scoutfs_srch_file srch_file;
 } __packed;
 
@@ -434,6 +489,7 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_TRANS_SEQ_ZONE			8
 #define SCOUTFS_MOUNTED_CLIENT_ZONE		9
 #define SCOUTFS_SRCH_ZONE			10
+#define SCOUTFS_FREE_EXTENT_ZONE		11
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -450,7 +506,7 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_READDIR_TYPE			4
 #define SCOUTFS_LINK_BACKREF_TYPE		5
 #define SCOUTFS_SYMLINK_TYPE			6
-#define SCOUTFS_PACKED_EXTENT_TYPE		7
+#define SCOUTFS_DATA_EXTENT_TYPE		7
 
 /* lock zone, only ever found in lock ranges, never in persistent items */
 #define SCOUTFS_RENAME_TYPE			1
@@ -459,6 +515,10 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_SRCH_LOG_TYPE		1
 #define SCOUTFS_SRCH_BLOCKS_TYPE	2
 #define SCOUTFS_SRCH_BUSY_TYPE		3
+
+/* free extents in allocator btrees in client and server, by blkno or len */
+#define SCOUTFS_FREE_EXTENT_BLKNO_TYPE	1
+#define SCOUTFS_FREE_EXTENT_LEN_TYPE	2
 
 /*
  * The extents that map blocks in a fixed-size logical region of a file
@@ -490,6 +550,12 @@ struct scoutfs_packed_extent {
 #define SCOUTFS_PACKEXT_BASE_SHIFT   (ilog2(SCOUTFS_PACKEXT_BLOCKS))
 #define SCOUTFS_PACKEXT_BASE_MASK    (~((__u64)SCOUTFS_PACKEXT_BLOCKS - 1))
 #define SCOUTFS_PACKEXT_MAX_BYTES    SCOUTFS_MAX_VAL_SIZE
+
+/* file data extents have start and len in key */
+struct scoutfs_data_extent_val {
+	__le64 blkno;
+	__u8 flags;
+} __packed;
 
 #define SEF_OFFLINE	(1 << 0)
 #define SEF_UNWRITTEN	(1 << 1)
@@ -575,10 +641,10 @@ struct scoutfs_super_block {
 	__le64 unmount_barrier;
 	__u8 quorum_count;
 	struct scoutfs_inet_addr server_addr;
-	struct scoutfs_radix_root core_meta_avail;
-	struct scoutfs_radix_root core_meta_freed;
-	struct scoutfs_radix_root core_data_avail;
-	struct scoutfs_radix_root core_data_freed;
+	struct scoutfs_alloc_root meta_alloc[2];
+	struct scoutfs_alloc_root data_alloc;
+	struct scoutfs_alloc_list_head server_meta_avail[2];
+	struct scoutfs_alloc_list_head server_meta_freed[2];
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
 	struct scoutfs_btree_root lock_clients;

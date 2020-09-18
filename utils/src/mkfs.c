@@ -26,7 +26,6 @@
 #include "dev.h"
 #include "key.h"
 #include "bitops.h"
-#include "radix.h"
 #include "btree.h"
 #include "leaf_item_hash.h"
 
@@ -92,185 +91,39 @@ static char *size_str(u64 nr, unsigned size)
 #define SIZE_ARGS(nr, sz) (nr), size_flt(nr, sz), size_str(nr, sz)
 
 /*
- * Update a reference to a block of references that has been modified.  We
- * walk all the references and rebuild the ref tracking.
+ * Write the single btree block that contains the blkno and len indexed
+ * items to store the given extent, and update the root to point to it.
  */
-static void update_parent_ref(struct scoutfs_radix_ref *ref,
-			      struct scoutfs_radix_block *rdx)
+static int write_alloc_root(struct scoutfs_super_block *super, int fd,
+			    struct scoutfs_alloc_root *root,
+			    struct scoutfs_btree_block *bt,
+			    u64 blkno, u64 start, u64 len)
 {
-	int i;
+	struct scoutfs_key key;
 
-	ref->sm_total = cpu_to_le64(0);
-	ref->lg_total = cpu_to_le64(0);
+	btree_init_root_single(&root->root, bt, blkno, 1, super->hdr.fsid);
+	root->total_len = cpu_to_le64(len);
 
-	for (i = 0; i < SCOUTFS_RADIX_REFS; i++) {
-		le64_add_cpu(&ref->sm_total,
-			     le64_to_cpu(rdx->refs[i].sm_total));
-		le64_add_cpu(&ref->lg_total,
-			     le64_to_cpu(rdx->refs[i].lg_total));
-	}
-}
+	memset(&key, 0, sizeof(key));
+	key.sk_zone = SCOUTFS_FREE_EXTENT_ZONE;
+	key.sk_type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	key.skfb_end = cpu_to_le64(start + len - 1);
+	key.skfb_len = cpu_to_le64(len);
+	btree_append_item(bt, &key, NULL, 0);
 
-/*
- * Initialize all the blocks in a path to a leaf with the given blocks
- * set.  We know that we're being called to set all the bits in a region
- * by setting the left and right partial leafs of the region.  We first
- * set the left and set full references down the left path, then we're
- * called on the right and set full to the left and clear full refs past
- * the right.
- *
- * The caller provides an array of block buffers and a starting block
- * number to allocate blocks from and reference blocks within.  It's the
- * world's dumbest block cache.
- */
-static void set_radix_path(struct scoutfs_super_block *super, int *inds,
-			   struct scoutfs_radix_ref *ref, int level, bool left,
-			   void **blocks, u64 blkno_base, u64 *next_blkno,
-			   u64 first, u64 last)
-{
-	struct scoutfs_radix_block *rdx;
-	bool shared;
-	int lg_ind;
-	int lg_after;
-	u64 bno;
-	int ind;
-	int end;
-	int i;
+	memset(&key, 0, sizeof(key));
+	key.sk_zone = SCOUTFS_FREE_EXTENT_ZONE;
+	key.sk_type = SCOUTFS_FREE_EXTENT_LEN_TYPE;
+	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	key.skfl_neglen = cpu_to_le64(-len);
+	key.skfl_blkno = cpu_to_le64(start);
+	btree_append_item(bt, &key, NULL, 0);
 
-	if (ref->blkno == 0) {
-		bno = (*next_blkno)++;
-		ref->blkno = cpu_to_le64(bno);
-		ref->seq = cpu_to_le64(1);
-	}
+	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
+					    SCOUTFS_BLOCK_LG_SIZE));
 
-	rdx = blocks[le64_to_cpu(ref->blkno) - blkno_base];
-
-	if (level) {
-		ind = inds[level];
-
-		/* initialize empty parent blocks with empty refs */
-		if (ref->sm_total == 0) {
-			for (i = 0; i < SCOUTFS_RADIX_REFS; i++)
-				radix_init_ref(&rdx->refs[i], level - 1, false);
-			shared = false;
-		} else {
-			shared = true;
-		}
-
-		if (left) {
-			/* initialize full refs from left to end */
-			for (i = ind + 1; i < SCOUTFS_RADIX_REFS; i++)
-				radix_init_ref(&rdx->refs[i], level - 1, true);
-
-		} else if (shared) {
-			/* wipe full refs including right to end */
-			for (i = ind; i < SCOUTFS_RADIX_REFS; i++)
-				radix_init_ref(&rdx->refs[i], level - 1, false);
-		} else {
-			/* initialize full refs from start to right */
-			for (i = 0; i < ind - 1; i++)
-				radix_init_ref(&rdx->refs[i], level - 1, true);
-		}
-
-		set_radix_path(super, inds, &rdx->refs[ind], level - 1, left,
-			       blocks, blkno_base, next_blkno, first, last);
-		update_parent_ref(ref, rdx);
-
-	} else {
-
-		ind = first - radix_calc_leaf_bit(first);
-		end = last - radix_calc_leaf_bit(last);
-		for (i = ind; i <= end; i++)
-			set_bit_le(i, rdx->bits);
-
-		ref->sm_total = cpu_to_le64(end - ind + 1);
-
-		lg_ind = round_up(ind, SCOUTFS_RADIX_LG_BITS);
-		lg_after = round_down(end + 1, SCOUTFS_RADIX_LG_BITS);
-
-		ref->lg_total = cpu_to_le64(lg_after - lg_ind);
-	}
-}
-
-/*
- * Initialize a new radix allocator with the region of bits set.  We
- * initialize and write populated blocks down the paths to the two ends
- * of the interval and write full refs in between.
- */
-static int write_radix_blocks(struct scoutfs_super_block *super, int fd,
-			      struct scoutfs_radix_root *root,
-			      u64 blkno, u64 first, u64 last)
-{
-	struct scoutfs_radix_block *rdx;
-	void **blocks;
-	u64 next_blkno;
-	u64 edge;
-	u8 height;
-	int alloced;
-	int used;
-	int *inds;
-	int ret;
-	int i;
-
-	height = radix_height_from_last(last);
-	inds = alloca(sizeof(inds[0]) * height);
-	alloced = height * 2;
-	next_blkno = blkno;
-
-	/* allocate all the blocks we might need */
-	blocks = calloc(alloced, sizeof(*blocks));
-	if (!blocks)
-		return -ENOMEM;
-
-	for (i = 0; i < alloced; i++) {
-		blocks[i] = calloc(1, SCOUTFS_BLOCK_LG_SIZE);
-		if (blocks[i] == NULL) {
-			ret = -ENOMEM;
-			goto out;
-		}
-	}
-
-	/* initialize empty root ref */
-	memset(root, 0, sizeof(struct scoutfs_radix_root));
-	root->height = height;
-	radix_init_ref(&root->ref, height - 1, false);
-
-	edge = radix_calc_leaf_bit(first) + SCOUTFS_RADIX_BITS - 1;
-	radix_calc_level_inds(inds, height, first);
-	set_radix_path(super, inds, &root->ref, root->height - 1, true, blocks,
-		       blkno, &next_blkno, first, min(edge, last));
-
-	edge = radix_calc_leaf_bit(last);
-	radix_calc_level_inds(inds, height, last);
-	set_radix_path(super, inds, &root->ref, root->height - 1, false, blocks,
-		       blkno, &next_blkno, max(first, edge), last);
-
-	used = next_blkno - blkno;
-
-	/* write out all the dirtied blocks */
-	for (i = 0; i < used; i++) {
-		rdx = blocks[i];
-		rdx->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_RADIX);
-		rdx->hdr.fsid = super->hdr.fsid;
-		rdx->hdr.seq = cpu_to_le64(1);
-		rdx->hdr.blkno = cpu_to_le64(blkno + i);
-		rdx->hdr.crc = cpu_to_le32(crc_block(&rdx->hdr,
-					             SCOUTFS_BLOCK_LG_SIZE));
-		ret = write_raw_block(fd, blkno + i, SCOUTFS_BLOCK_LG_SHIFT,
-				      rdx);
-		if (ret < 0)
-			goto out;
-	}
-
-	ret = used;
-out:
-	if (blocks) {
-		for (i = 0; i < alloced && blocks[i]; i++)
-			free(blocks[i]);
-		free(blocks);
-	}
-
-	return ret;
+	return write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
 }
 
 /*
@@ -283,6 +136,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_inode inode;
+	struct scoutfs_alloc_list_block *lblk;
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_key key;
 	struct timeval tv;
@@ -291,11 +145,12 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	u64 blkno;
 	u64 limit;
 	u64 size;
-	u64 meta_alloc_blocks;
 	u64 next_meta;
 	u64 last_meta;
 	u64 first_data;
 	u64 last_data;
+	u64 meta_start;
+	u64 meta_len;
 	int ret;
 	int i;
 
@@ -386,31 +241,62 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	if (ret)
 		goto out;
 
-	/* write out radix allocator blocks for data */
-	ret = write_radix_blocks(super, fd, &super->core_data_avail, next_meta,
-				 first_data, last_data);
+	/* fill an avail list block for the first server transaction */
+	blkno = next_meta++;
+	lblk = (void *)bt;
+	memset(lblk, 0, SCOUTFS_BLOCK_LG_SIZE);
+
+	lblk->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_ALLOC_LIST);
+	lblk->hdr.fsid = super->hdr.fsid;
+	lblk->hdr.blkno = cpu_to_le64(blkno);
+	lblk->hdr.seq = cpu_to_le64(1);
+
+	meta_len = (64 * 1024 * 1024) >> SCOUTFS_BLOCK_LG_SHIFT;
+	for (i = 0; i < meta_len; i++) {
+		lblk->blknos[i] = cpu_to_le64(next_meta);
+		next_meta++;
+	}
+	lblk->nr = cpu_to_le32(i);
+
+	super->server_meta_avail[0].ref.blkno = lblk->hdr.blkno;
+	super->server_meta_avail[0].ref.seq = lblk->hdr.seq;
+	super->server_meta_avail[0].total_nr = le32_to_le64(lblk->nr);
+	super->server_meta_avail[0].first_nr = lblk->nr;
+
+	lblk->hdr.crc = cpu_to_le32(crc_block(&bt->hdr, SCOUTFS_BLOCK_LG_SIZE));
+	ret = write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, lblk);
+	if (ret)
+		goto out;
+
+	/* the data allocator has a single extent */
+	blkno = next_meta++;
+	ret = write_alloc_root(super, fd, &super->data_alloc, bt,
+			       blkno, first_data,
+			       le64_to_cpu(super->total_data_blocks));
 	if (ret < 0)
 		goto out;
-	next_meta += ret;
-
-	super->core_data_freed.height = super->core_data_avail.height;
-	radix_init_ref(&super->core_data_freed.ref, 0, false);
-
-	meta_alloc_blocks = radix_blocks_needed(next_meta, last_meta);
 
 	/*
-	 * Write out radix alloc blocks, knowing that the region we mark
-	 * has to start after the blocks we store the allocator itself in.
+	 * Initialize all the meta_alloc roots with an equal portion of
+	 * the free metadata extents, excluding the blocks we're going
+	 * to use for the allocators.
 	 */
-	ret = write_radix_blocks(super, fd, &super->core_meta_avail,
-				 next_meta, next_meta + meta_alloc_blocks,
-				 last_meta);
-	if (ret < 0)
-		goto out;
-	next_meta += ret;
+	meta_start = next_meta + array_size(super->meta_alloc);
+	meta_len = DIV_ROUND_UP(last_meta - meta_start + 1,
+			        array_size(super->meta_alloc));
 
-	super->core_meta_freed.height = super->core_meta_avail.height;
-	radix_init_ref(&super->core_meta_freed.ref, 0, false);
+	/* each meta alloc root contains a portion of free metadata extents */
+	for (i = 0; i < array_size(super->meta_alloc); i++) {
+		blkno = next_meta++;
+		ret = write_alloc_root(super, fd, &super->meta_alloc[i], bt,
+				       blkno, meta_start,
+				       min(meta_len,
+					   last_meta - meta_start + 1));
+		if (ret < 0)
+			goto out;
+
+		meta_start += meta_len;
+	}
 
 	/* zero out quorum blocks */
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
