@@ -9,4 +9,7 @@
 #define be32_to_le32(x) cpu_to_le32(be32_to_cpu(x))
 #define be16_to_le16(x) cpu_to_le16(be16_to_cpu(x))
 
+#define le16_to_le64(x) cpu_to_le64(le16_to_cpu(x))
+#define le32_to_le64(x) cpu_to_le64(le32_to_cpu(x))
+
 #endif
