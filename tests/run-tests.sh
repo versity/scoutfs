@@ -59,6 +59,7 @@ $(basename $0) options:
     -r <dir>  | Specify the directory in which to store results of
               | test runs.  The directory will be created if it doesn't
               | exist.  Previous results will be deleted as each test runs.
+    -s        | Skip git repo checkouts.
     -t        | Enabled trace events that match the given glob argument.
     -U        | scouts-utils-dev git repo. Used to build kernel module.
     -u        | Branch to checkout in scoutfs-utils-dev repo.
@@ -142,6 +143,9 @@ while true; do
 		T_RESULTS="$2"
 		shift
 		;;
+	-s)
+	        T_SKIP_CHECKOUT="1"
+		;;
 	-t)
 		test -n "$2" || die "-t must have trace glob argument"
 		T_TRACE_GLOB="$2"
@@ -197,14 +201,16 @@ test -e "$T_DEVICE" || die "fs device -d '$T_DEVICE' doesn't exist"
 test -n "$T_EXDEV" || die "must specify -e extra device"
 test -e "$T_EXDEV" || die "fs device -d '$T_EXDEV' doesn't exist"
 test -n "$T_KMOD_REPO" || die "must specify -K kmod repo dir"
-test -n "$T_KMOD_BRANCH" || die "must specify -k kmod branch"
+test -n "$T_KMOD_BRANCH" -a -z "T_SKIP_CHECKOUT" && \
+        die "must specify -k kmod branch"
 test -n "$T_MKFS" -a -z "$T_QUORUM" && die "mkfs (-m) requires quorum (-q)"
 test -n "$T_RESULTS" || die "must specify -r results dir"
-test -n "$T_UTILS_REPO" || die "must specify -K utils repo dir"
-test -n "$T_UTILS_BRANCH" || die "must specify -k utils branch"
-test -n "$T_XFSTESTS_REPO" -a -z "$T_XFSTESTS_BRANCH" && \
+test -n "$T_UTILS_REPO" || die "must specify -U utils repo dir"
+test -n "$T_UTILS_BRANCH" -a -z "T_SKIP_CHECKOUT" &&
+        die "must specify -u utils branch"
+test -n "$T_XFSTESTS_REPO" -a -z "$T_XFSTESTS_BRANCH" -a -z "T_SKIP_CHECKOUT" && \
 	die "-X xfstests repo requires -x xfstests branch"
-test -n "$T_XFSTESTS_BRANCH" -a -z "$T_XFSTESTS_REPO" && \
+test -n "$T_XFSTESTS_BRANCH" -a -z "$T_XFSTESTS_REPO" -a -z "T_SKIP_CHECKOUT" && \
 	die "-X xfstests branch requires -x xfstests repo"
 
 test -n "$T_NR_MOUNTS" || die "must specify -n nr mounts"
@@ -237,10 +243,12 @@ if [ -n "$T_KMOD_REPO" ]; then
 	msg "building kmod repo $T_KMOD_REPO branch $T_KMOD_BRANCH"
 	cmd cd "$T_KMOD_REPO"
 
-	cmd git fetch
-	cmd git rev-parse --verify "origin/$T_KMOD_BRANCH"
-	cmd git checkout -B "$T_KMOD_BRANCH" --track origin/$T_KMOD_BRANCH
-	cmd git pull --rebase
+	if [ -n "$T_KMOD_BRANCH" ]; then
+	    cmd git fetch
+	    cmd git rev-parse --verify "origin/$T_KMOD_BRANCH"
+	    cmd git checkout -B "$T_KMOD_BRANCH" --track origin/$T_KMOD_BRANCH
+	    cmd git pull --rebase
+	fi
 	cmd make
 	cmd sync
 	cmd cd -
@@ -253,11 +261,13 @@ if [ -n "$T_UTILS_REPO" ]; then
 	msg "building utils repo $T_UTILS_REPO branch $T_UTILS_BRANCH"
 	cmd cd "$T_UTILS_REPO"
 
-	cmd git fetch
-	cmd git rev-parse --verify "origin/$T_UTILS_BRANCH"
-	cmd git checkout -B "$T_UTILS_BRANCH" --track origin/$T_UTILS_BRANCH
-	cmd git pull --rebase
-	# might need git clean to remove stale src/*.o after update
+	if [ -n "$T_UTILS_BRANCH" ]; then
+	    cmd git fetch
+	    cmd git rev-parse --verify "origin/$T_UTILS_BRANCH"
+	    cmd git checkout -B "$T_UTILS_BRANCH" --track origin/$T_UTILS_BRANCH
+	    cmd git pull --rebase
+	    # might need git clean to remove stale src/*.o after update
+	fi
 	cmd make
 	cmd sync
 	cmd cd -
@@ -267,7 +277,7 @@ if [ -n "$T_UTILS_REPO" ]; then
 fi
 
 # verify xfstests branch
-if [ -n "$T_XFSTESTS_REPO" ]; then
+if [ -n "$T_XFSTESTS_REPO" ] && [ -z "T_SKIP_CHECKOUT" ]; then
 	msg "verifying xfstests repo $T_XFSTESTS_REPO branch $T_XFSTESTS_BRANCH"
 	cmd cd "$T_XFSTESTS_REPO"
 	cmd git rev-parse --verify "$T_XFSTESTS_BRANCH"
