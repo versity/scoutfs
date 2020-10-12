@@ -68,6 +68,8 @@ static struct stat_more_field fs_fields[] = {
 	FS_FIELD(fsid),
 	FS_FIELD(rid),
 	FS_FIELD(committed_seq),
+	FS_FIELD(total_meta_blocks),
+	FS_FIELD(total_data_blocks),
 	{ NULL, }
 };
 
@@ -84,6 +86,12 @@ static void print_fs_field(void *st, size_t off)
 			break;
 		case FS_FIELD_OFF(committed_seq):
 			printf("%llu", sfm->committed_seq);
+			break;
+		case FS_FIELD_OFF(total_meta_blocks):
+			printf("%llu", sfm->total_meta_blocks);
+			break;
+		case FS_FIELD_OFF(total_data_blocks):
+			printf("%llu", sfm->total_data_blocks);
 			break;
 	};
 }
