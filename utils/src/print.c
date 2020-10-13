@@ -466,8 +466,7 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 	if (bt->level == level) {
 		printf("%s btree blkno %llu\n"
 		       "  crc %08x fsid %llx seq %llu blkno %llu \n"
-		       "  total_item_bytes %u mid_free_len %u last_free_off %u "
-		       "last_free_len %u\n"
+		       "  total_item_bytes %u mid_free_len %u\n"
 		       "  level %u nr_items %u item_root.node %u\n",
 		       which, le64_to_cpu(ref->blkno),
 		       le32_to_cpu(bt->hdr.crc),
@@ -476,8 +475,6 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 		       le64_to_cpu(bt->hdr.blkno),
 		       le16_to_cpu(bt->total_item_bytes),
 		       le16_to_cpu(bt->mid_free_len),
-		       le16_to_cpu(bt->last_free_off),
-		       le16_to_cpu(bt->last_free_len),
 		       bt->level,
 		       le16_to_cpu(bt->nr_items),
 		       le16_to_cpu(bt->item_root.node));

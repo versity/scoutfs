@@ -59,8 +59,6 @@ void btree_append_item(struct scoutfs_btree_block *bt,
 {
 	struct scoutfs_btree_item *item;
 	struct scoutfs_avl_node *prev;
-	__le16 *own_buf;
-	__le16 own;
 	void *val_buf;
 
 	item = &bt->items[le16_to_cpu(bt->nr_items)];
@@ -85,10 +83,6 @@ void btree_append_item(struct scoutfs_btree_block *bt,
 			      cpu_to_le16((void *)item - (void *)bt));
 	if (val_len == 0)
 		return;
-
-	own_buf = alloc_val(bt, SCOUTFS_BTREE_VAL_OWNER_BYTES);
-	own = cpu_to_le16((void *)item - (void *)bt);
-	memcpy(own_buf, &own, sizeof(own));
 
 	val_buf = alloc_val(bt, val_len);
 	item->val_off = cpu_to_le16((void *)val_buf - (void *)bt);
