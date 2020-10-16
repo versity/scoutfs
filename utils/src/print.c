@@ -322,22 +322,26 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 static int print_srch_root_item(struct scoutfs_key *key, void *val,
 				unsigned val_len, void *arg)
 {
-	struct scoutfs_srch_file *sfl = val;
-	struct scoutfs_srch_compact_input *scin = val;
+	struct scoutfs_srch_compact *sc;
+	struct scoutfs_srch_file *sfl;
 	int i;
 
 	printf("    "SK_FMT"\n", SK_ARG(key));
 
 	/* only items in leaf blocks have values */
 	if (val) {
-		if (key->sk_type == SCOUTFS_SRCH_BUSY_TYPE) {
-			scin = val;
-			printf("      compact: nr_in %u in_flags 0x%x\n",
-				scin->nr, scin->flags);
-			for (i = 0; i < scin->nr; i++) {
-				sfl = &scin->sfl[i];
-				printf("        [%u] "SRF_FMT"\n",
-				       i, SRF_A(sfl));
+		if (key->sk_type == SCOUTFS_SRCH_PENDING_TYPE ||
+		    key->sk_type == SCOUTFS_SRCH_BUSY_TYPE) {
+			sc = val;
+			printf("      compact %s: nr %u flags 0x%x\n",
+			       key->sk_type == SCOUTFS_SRCH_PENDING_TYPE ?
+					"pending" : "busy",
+			       sc->nr, sc->flags);
+			for (i = 0; i < sc->nr; i++) {
+				printf("        [%u] blk %llu pos %llu sfl "SRF_FMT"\n",
+				       i, le64_to_cpu(sc->in[i].blk),
+				       le64_to_cpu(sc->in[i].pos),
+				       SRF_A(&sc->in[i].sfl));
 			}
 		} else {
 			sfl = val;
@@ -716,15 +720,16 @@ static int print_srch_root_files(struct scoutfs_key *key, void *val,
 				 unsigned val_len, void *arg)
 {
 	struct print_recursion_args *pa = arg;
-	struct scoutfs_srch_compact_input *scin;
+	struct scoutfs_srch_compact *sc;
 	struct scoutfs_srch_file *sfl;
 	int ret = 0;
 	int i;
 
-	if (key->sk_type == SCOUTFS_SRCH_BUSY_TYPE) {
-		scin = val;
-		for (i = 0; i < scin->nr; i++) {
-			sfl = &scin->sfl[i];
+	if (key->sk_type == SCOUTFS_SRCH_PENDING_TYPE ||
+	    key->sk_type == SCOUTFS_SRCH_BUSY_TYPE) {
+		sc = val;
+		for (i = 0; i < sc->nr; i++) {
+			sfl = &sc->in[i].sfl;
 			ret = print_srch_block(pa->fd, &sfl->ref,
 					       sfl->height - 1);
 			if (ret < 0)
