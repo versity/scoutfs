@@ -149,23 +149,24 @@ user must have read permission to the inode.
 .PD
 
 .TP
-.BI "mkfs <\-Q nr> <path>"
+.BI "mkfs <\-Q nr> <meta_dev_path> <data_dev_path> [-M meta_size] [-D data_size]"
 .sp
-Initialize a new empty filesystem in the target device by writing empty
-structures and a new superblock.
+Initialize a new empty filesystem in the target devices by writing empty
+structures and a new superblock. Since ScoutFS uses separate block
+devices for its metadata and data storage, both must be given.
 .sp
 This 
 .B unconditionally destroys
-the contents of the device, regardless of what it contains or who may be
-using it.  It simply writes new data structures into known offsets.
-.B Be very careful that the device does not contain data and is not actively in use.
+the contents of the devices, regardless of what they contain or who may be
+using them.  It simply writes new data structures into known offsets.
+.B Be very careful that the devices do not contain data and are not actively in use.
 .RS 1.0i
 .PD 0
 .TP
 .sp
 .B "-Q nr"
 Specify the number of mounts needed to reach quorum and elect a mount
-to start the server.  Mounts of the device will hang until this many
+to start the server.  Mounts of the filesystem will hang until this many
 mounts are operational and can elect a server amongst themselves.
 .sp
 Mounts with the 
@@ -184,13 +185,24 @@ elected servers race to fence each other and can have the unlikely
 outcome of continually racing to fence each other resulting in a
 persistent loss of service.
 .TP
-.B "-S 4KB_blocks"
-Limit the device size used by the filesystem to the given size in units
-of 4KB blocks.  It must be larger than the mkfs minimum size and fit
-within the device.
+.B "meta_dev_path"
+The path to the device to be used for ScoutFS metadata.  If possible,
+use a faster block device for the metadata device.  Its contents will be
+unconditionally destroyed.
 .TP
-.B "path"
-The path to the device whose contents will be unconditionally destroyed.
+.B "data_dev_path"
+The path to the device to be used for ScoutFS file data.  If possible,
+use a larger block device for the data device.  Its contents will be
+unconditionally destroyed.
+.TP
+.B "-M meta_size"
+Limit the space used by the filesystem on the metadata device to the
+given size, rather than using the entire block device. Size is given as
+an integer followed by a units digit: "K", "M", "G", "T", "P", to denote
+kibibytes, mebibytes, etc.
+.TP
+.B "-D data_size"
+Same as previous, but for limiting the size of the data device.
 .RE
 .PD
 
@@ -206,11 +218,11 @@ output.
 .TP
 .sp
 .B "path"
-The path to the device that contains the filesystem whose metadata will
+The path to the metadata device for filesystem whose metadata will
 be printed.  The command reads from the buffer cache of the device which
 may not reflect the current blocks in the filesystem that may have been
 written through another host or device.  The local device's cache can be
-manually flused before printing, perhaps with the
+manually flushed before printing, perhaps with the
 .B \--flushbufs
 command in the
 .BR blockdev (8)

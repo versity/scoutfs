@@ -10,6 +10,70 @@
 
 #include "parse.h"
 
+/*
+ * Convert size with multiplicative suffix to bytes.
+ * e.g. "40M", "10G", "4T"
+ *
+ * These are powers-of-two prefixes - K means 1024 not 1000.
+ *
+ * One can go pretty far with variations but keeping relatively simple for
+ * now: commas, decimals, and multichar suffixes not handled.
+ */
+int parse_human(char* str, u64 *val_ret)
+{
+	unsigned long long ull;
+	char *endptr = NULL;
+	int sh;
+	int ret = 0;
+
+	ull = strtoull(str, &endptr, 0);
+	if (((ull == LLONG_MIN || ull == LLONG_MAX) &&
+	     errno == ERANGE)) {
+		fprintf(stderr, "invalid 64bit value: '%s'\n", str);
+		*val_ret = 0;
+		ret = -EINVAL;
+		goto error;
+	}
+
+	switch (*endptr) {
+	case 'K':
+		sh = 10;
+		break;
+	case 'M':
+		sh = 20;
+		break;
+	case 'G':
+		sh = 30;
+		break;
+	case 'T':
+		sh = 40;
+		break;
+	case 'P':
+		sh = 50;
+		break;
+	case '\0':
+		sh = 0;
+		break;
+	default:
+		fprintf(stderr, "unknown suffix: '%s'\n", endptr);
+		ret = -ERANGE;
+		goto error;
+	}
+
+	if (ull > (SIZE_MAX >> sh)) {
+		fprintf(stderr, "size too big: '%s'\n", str);
+		ret = -ERANGE;
+		goto error;
+	}
+
+	ull <<= sh;
+
+	*val_ret = ull;
+
+error:
+	return ret;
+}
+
 int parse_u64(char *str, u64 *val_ret)
 {
 	unsigned long long ull;

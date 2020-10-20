@@ -16,6 +16,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <inttypes.h>
 
 #include "sparse.h"
 #include "cmd.h"
@@ -62,35 +63,6 @@ static int write_block(int fd, u64 blkno, int shift,
 	return write_raw_block(fd, blkno, shift, hdr);
 }
 
-static float size_flt(u64 nr, unsigned size)
-{
-	float x = (float)nr * (float)size;
-
-	while (x >= 1024)
-		x /= 1024;
-
-	return x;
-}
-
-static char *size_str(u64 nr, unsigned size)
-{
-	float x = (float)nr * (float)size;
-	static char *suffixes[] = {
-		"B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB",
-	};
-	int i = 0;
-
-	while (x >= 1024) {
-		x /= 1024;
-		i++;
-	}
-
-	return suffixes[i];
-}
-
-#define SIZE_FMT "%llu (%.2f %s)"
-#define SIZE_ARGS(nr, sz) (nr), size_flt(nr, sz), size_str(nr, sz)
-
 /*
  * Write the single btree block that contains the blkno and len indexed
  * items to store the given extent, and update the root to point to it.
@@ -132,8 +104,14 @@ static int write_alloc_root(struct scoutfs_super_block *super, int fd,
  *  - super blocks
  *  - btree ring blocks with manifest and allocator btree blocks
  *  - segment with root inode items
+ *
+ * Superblock is written to both metadata and data devices, everything else is
+ * written only to the metadata device.
  */
-static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
+static int write_new_fs(char *meta_path, char *data_path,
+			int meta_fd, int data_fd,
+			u8 quorum_count,
+			u64 max_meta_size, u64 max_data_size)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_inode inode;
@@ -144,8 +122,8 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 	char uuid_str[37];
 	void *zeros;
 	u64 blkno;
-	u64 limit;
-	u64 size;
+	u64 meta_size;
+	u64 data_size;
 	u64 next_meta;
 	u64 last_meta;
 	u64 first_data;
@@ -167,40 +145,24 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 		goto out;
 	}
 
-	ret = device_size(path, fd, &size);
-	if (ret) {
-		fprintf(stderr, "failed to stat '%s': %s (%d)\n",
-			path, strerror(errno), errno);
+	ret = device_size(meta_path, meta_fd, 2ULL * (1024 * 1024 * 1024),
+			  max_meta_size, "meta", &meta_size);
+	if (ret)
 		goto out;
-	}
 
-	if (dev_blocks > 0 && size < (dev_blocks << SCOUTFS_BLOCK_SM_SHIFT)) {
-		fprintf(stderr, "device size limit %llu in 4KB blocks given with -S is greater than device byte size %llu\n",
-			dev_blocks, size);
-		ret = -EINVAL;
+	ret = device_size(data_path, data_fd, 8ULL * (1024 * 1024 * 1024),
+			  max_data_size, "data", &data_size);
+	if (ret)
 		goto out;
-	}
-
-	if (dev_blocks > 0 && size > (dev_blocks << SCOUTFS_BLOCK_SM_SHIFT))
-		size = dev_blocks << SCOUTFS_BLOCK_SM_SHIFT;
-
-	/* arbitrarily require a reasonably large device */
-	limit = 8ULL * (1024 * 1024 * 1024);
-	if (size < limit) {
-		fprintf(stderr, "%llu byte device too small for min %llu byte fs\n",
-			size, limit);
-		ret = -EINVAL;
-		goto out;
-	}
 
 	/* metadata blocks start after the quorum blocks */
 	next_meta = (SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS) >>
 		    SCOUTFS_BLOCK_SM_LG_SHIFT;
-	/* use about 1/5 of the device for metadata blocks */
-	last_meta = next_meta + ((size / 5) >> SCOUTFS_BLOCK_LG_SHIFT);
-	/* The rest of the device is data blocks */
-	first_data = (last_meta + 1) << SCOUTFS_BLOCK_SM_LG_SHIFT;
-	last_data = (size >> SCOUTFS_BLOCK_SM_SHIFT) - 1;
+	/* rest of meta dev is available for metadata blocks */
+	last_meta = (meta_size >> SCOUTFS_BLOCK_LG_SHIFT) - 1;
+	/* Data blocks go on the data dev */
+	first_data = SCOUTFS_DATA_DEV_START_BLKNO;
+	last_data = (data_size >> SCOUTFS_BLOCK_SM_SHIFT) - 1;
 
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
@@ -249,7 +211,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
 					    SCOUTFS_BLOCK_LG_SIZE));
 
-	ret = write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
+	ret = write_raw_block(meta_fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
 	if (ret)
 		goto out;
 
@@ -276,13 +238,13 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 	super->server_meta_avail[0].first_nr = lblk->nr;
 
 	lblk->hdr.crc = cpu_to_le32(crc_block(&bt->hdr, SCOUTFS_BLOCK_LG_SIZE));
-	ret = write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, lblk);
+	ret = write_raw_block(meta_fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, lblk);
 	if (ret)
 		goto out;
 
 	/* the data allocator has a single extent */
 	blkno = next_meta++;
-	ret = write_alloc_root(super, fd, &super->data_alloc, bt,
+	ret = write_alloc_root(super, meta_fd, &super->data_alloc, bt,
 			       blkno, first_data,
 			       le64_to_cpu(super->total_data_blocks));
 	if (ret < 0)
@@ -300,7 +262,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 	/* each meta alloc root contains a portion of free metadata extents */
 	for (i = 0; i < array_size(super->meta_alloc); i++) {
 		blkno = next_meta++;
-		ret = write_alloc_root(super, fd, &super->meta_alloc[i], bt,
+		ret = write_alloc_root(super, meta_fd, &super->meta_alloc[i], bt,
 				       blkno, meta_start,
 				       min(meta_len,
 					   last_meta - meta_start + 1));
@@ -312,7 +274,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 
 	/* zero out quorum blocks */
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		ret = write_raw_block(fd, SCOUTFS_QUORUM_BLKNO + i,
+		ret = write_raw_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i,
 				      SCOUTFS_BLOCK_SM_SHIFT, zeros);
 		if (ret < 0) {
 			fprintf(stderr, "error zeroing quorum block: %s (%d)\n",
@@ -321,31 +283,46 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 		}
 	}
 
-	/* write the super block */
+	/* write the super block to data dev and meta dev*/
 	super->hdr.seq = cpu_to_le64(1);
-	ret = write_block(fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+	ret = write_block(data_fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
 			  NULL, &super->hdr);
 	if (ret)
 		goto out;
 
-	if (fsync(fd)) {
+	if (fsync(data_fd)) {
 		ret = -errno;
 		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
-			path, strerror(errno), errno);
+			data_path, strerror(errno), errno);
+		goto out;
+	}
+
+	super->flags |= cpu_to_le64(SCOUTFS_FLAG_IS_META_BDEV);
+	ret = write_block(meta_fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			  NULL, &super->hdr);
+	if (ret)
+		goto out;
+
+	if (fsync(meta_fd)) {
+		ret = -errno;
+		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
+			meta_path, strerror(errno), errno);
 		goto out;
 	}
 
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  device path:          %s\n"
+	       "  meta device path:     %s\n"
+	       "  data device path:     %s\n"
 	       "  fsid:                 %llx\n"
 	       "  format hash:          %llx\n"
 	       "  uuid:                 %s\n"
 	       "  64KB metadata blocks: "SIZE_FMT"\n"
 	       "  4KB data blocks:      "SIZE_FMT"\n"
 	       "  quorum count:         %u\n",
-		path,
+		meta_path,
+		data_path,
 		le64_to_cpu(super->hdr.fsid),
 		le64_to_cpu(super->format_hash),
 		uuid_str,
@@ -374,15 +351,18 @@ static struct option long_ops[] = {
 static int mkfs_func(int argc, char *argv[])
 {
 	unsigned long long ull;
-	char *path = argv[1];
 	u8 quorum_count = 0;
-	u64 dev_blocks = 0;
+	u64 max_data_size = 0;
+	u64 max_meta_size = 0;
 	char *end = NULL;
+	char *meta_path;
+	char *data_path;
+	int meta_fd;
+	int data_fd;
 	int ret;
-	int fd;
 	int c;
 
-	while ((c = getopt_long(argc, argv, "Q:S:", long_ops, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "Q:D:M:", long_ops, NULL)) != -1) {
 		switch (c) {
 		case 'Q':
 			ull = strtoull(optarg, &end, 0);
@@ -394,10 +374,18 @@ static int mkfs_func(int argc, char *argv[])
 			}
 			quorum_count = ull;
 			break;
-		case 'S':
-			ret = parse_u64(optarg, &dev_blocks);
+		case 'D':
+			ret = parse_human(optarg, &max_data_size);
 			if (ret < 0) {
-				printf("scoutfs: invalid device blocks count '%s'\n",
+				printf("scoutfs: invalid data device size '%s'\n",
+					optarg);
+				return ret;
+			}
+			break;
+		case 'M':
+			ret = parse_human(optarg, &max_meta_size);
+			if (ret < 0) {
+				printf("scoutfs: invalid meta device size '%s'\n",
 					optarg);
 				return ret;
 			}
@@ -408,28 +396,39 @@ static int mkfs_func(int argc, char *argv[])
 		}
 	}
 
-	if (optind >= argc) {
-		printf("scoutfs: mkfs: a single path argument is required\n");
+	if (optind + 2 != argc) {
+		printf("scoutfs: mkfs: paths to metadata and data devices are required\n");
 		return -EINVAL;
 	}
 
-	path = argv[optind];
+	meta_path = argv[optind];
+	data_path = argv[optind + 1];
 
 	if (!quorum_count) {
 		printf("provide quorum count with --quorum_count|-Q option\n");
 		return -EINVAL;
 	}
 
-	fd = open(path, O_RDWR | O_EXCL);
-	if (fd < 0) {
+	meta_fd = open(meta_path, O_RDWR | O_EXCL);
+	if (meta_fd < 0) {
 		ret = -errno;
-		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			path, strerror(errno), errno);
+		fprintf(stderr, "failed to open metadata device '%s': %s (%d)\n",
+			meta_path, strerror(errno), errno);
 		return ret;
 	}
 
-	ret = write_new_fs(path, fd, quorum_count, dev_blocks);
-	close(fd);
+	data_fd = open(data_path, O_RDWR | O_EXCL);
+	if (data_fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "failed to open data device '%s': %s (%d)\n",
+			data_path, strerror(errno), errno);
+		return ret;
+	}
+
+	ret = write_new_fs(meta_path, data_path, meta_fd, data_fd,
+			   quorum_count, max_meta_size, max_data_size);
+	close(meta_fd);
+	close(data_fd);
 
 	return ret;
 }

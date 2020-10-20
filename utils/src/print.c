@@ -880,6 +880,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	print_block_header(&super->hdr, SCOUTFS_BLOCK_SM_SIZE);
 	printf("  format_hash %llx uuid %s\n",
 	       le64_to_cpu(super->format_hash), uuid_str);
+	printf("  flags: 0x%016llx\n", super->flags);
 
 	server_addr = alloc_addr_str(&super->server_addr);
 	if (!server_addr)
