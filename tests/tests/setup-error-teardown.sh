@@ -7,9 +7,9 @@
 
 t_require_commands sleep killall
 
-echo "== interrupt waiting mount with no options"
+echo "== interrupt waiting mount"
 t_umount_all
-mount -t scoutfs $T_B0 $T_M0 &
+mount -t scoutfs -o metadev_path=$T_MB0 $T_DB0 $T_M0 &
 pid="$!"
 sleep .1
 kill $pid

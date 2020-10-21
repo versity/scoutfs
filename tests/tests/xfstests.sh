@@ -35,7 +35,7 @@ t_quiet sync
 cat << EOF > local.config
 export FSTYP=scoutfs
 export MKFS_OPTIONS="-Q 1"
-export TEST_DEV=$T_B0
+export TEST_DEV=$T_DB0
 export TEST_DIR=$T_M0
 export SCRATCH_DEV=$T_EXDEV
 export SCRATCH_MNT="$T_TMPDIR/mnt.scratch"

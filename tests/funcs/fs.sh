@@ -106,7 +106,7 @@ t_mount()
 	test "$nr" -lt "$T_NR_MOUNTS" || \
 		t_fail "fs nr $nr invalid"
 
-	eval t_quiet mount -t scoutfs \$T_O$nr \$T_B$nr \$T_M$nr
+	eval t_quiet mount -t scoutfs \$T_O$nr \$T_DB$nr \$T_M$nr
 }
 
 t_umount()
@@ -116,7 +116,7 @@ t_umount()
 	test "$nr" -lt "$T_NR_MOUNTS" || \
 		t_fail "fs nr $nr invalid"
 
-	eval t_quiet umount \$T_B$i
+	eval t_quiet umount \$T_DB$i
 }
 
 #

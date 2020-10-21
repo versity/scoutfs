@@ -36,12 +36,12 @@ show_help()
 cat << EOF
 $(basename $0) options:
     -a        | Abort after the first test failure, leave fs mounted.
-    -d <file> | Specify the storage device path that contains the
+    -D <file> | Specify the filesystem's data device path that contains the
               | file system to be tested.  Will be clobbered by -m mkfs.
-    -D        | Dump accumulated ftrace buffer to the console on oops.
     -E <re>   | Exclude tests whose file name matches the regular expression.
               | Can be provided multiple times
     -e <file> | Specify an extra storage device for testing.  Will be clobbered.
+    -F        | Dump accumulated ftrace buffer to the console on oops.
     -I <re>   | Include tests whose file name matches the regular expression.
               | By default all tests are run.  If this is provided then
               | only tests matching will be run.  Can be provided multiple
@@ -49,12 +49,14 @@ $(basename $0) options:
     -i        | Force removing and inserting the built scoutfs.ko module.
     -K        | scouts-kmod-dev git repo. Used to build kernel module.
     -k        | Branch to checkout in scoutfs-kmod-dev repo.
+    -M <file> | Specify the filesystem's meta data device path that contains
+              | the file system to be tested.  Will be clobbered by -m mkfs.
     -m        | Run mkfs on the device before mounting and running
               | tests.  Implies unmounting existing mounts first.
     -n        | The number of devices and mounts to test.
-    -p        | Exit script after preparing mounts only, don't run tests.
     -P        | Output trace events with printk as they're generated.
-    -q <nr>   | Specify the quorum count needed to mount.  This is 
+    -p        | Exit script after preparing mounts only, don't run tests.
+    -q <nr>   | Specify the quorum count needed to mount.  This is
               | used when running mkfs and is needed by a few tests.
     -r <dir>  | Specify the directory in which to store results of
               | test runs.  The directory will be created if it doesn't
@@ -83,13 +85,10 @@ while true; do
 	-a)
 		T_ABORT="1"
 		;;
-	-d)
-		test -n "$2" || die "-d must have device file argument"
-		T_DEVICE="$2"
-		shift
-		;;
 	-D)
-		T_TRACE_DUMP="1"
+		test -n "$2" || die "-d must have device file argument"
+		T_DATA_DEVICE="$2"
+		shift
 		;;
 	-E)
 		test -n "$2" || die "-E must have test exclusion regex argument"
@@ -100,6 +99,9 @@ while true; do
 		test -n "$2" || die "-e must have extra device file argument"
 		T_EXDEV="$2"
 		shift
+		;;
+	-F)
+		T_TRACE_DUMP="1"
 		;;
 	-I)
 		test -n "$2" || die "-I must have test incusion regex argument"
@@ -119,6 +121,11 @@ while true; do
 		T_KMOD_BRANCH="$2"
 		shift
 		;;
+	-M)
+	        test -n "$2" || die "-z must have meta device file argument"
+	        T_META_DEVICE="$2"
+		shift
+		;;
 	-m)
 		T_MKFS="1"
 		;;
@@ -127,11 +134,11 @@ while true; do
 		T_NR_MOUNTS="$2"
 		shift
 		;;
-	-p)
-		T_PREPARE="1"
-		;;
 	-P)
 		T_TRACE_PRINTK="1"
+		;;
+	-p)
+		T_PREPARE="1"
 		;;
 	-q)
 		test -n "$2" || die "-q must have quorum count argument"
@@ -180,7 +187,7 @@ while true; do
 		show_help
 		exit 1
 		;;
-	--)	
+	--)
 		break
 		;;
 	-?*)
@@ -196,8 +203,10 @@ while true; do
 	shift
 done
 
-test -n "$T_DEVICE" || die "must specify -d fs device"
-test -e "$T_DEVICE" || die "fs device -d '$T_DEVICE' doesn't exist"
+test -n "$T_DATA_DEVICE" || die "must specify -D data device"
+test -e "$T_DATA_DEVICE" || die "data device -D '$T_DATA_DEVICE' doesn't exist"
+test -n "$T_META_DEVICE" || die "must specify -M meta device"
+test -e "$T_META_DEVICE" || die "meta device -M '$T_META_DEVICE' doesn't exist"
 test -n "$T_EXDEV" || die "must specify -e extra device"
 test -e "$T_EXDEV" || die "fs device -d '$T_EXDEV' doesn't exist"
 test -n "$T_KMOD_REPO" || die "must specify -K kmod repo dir"
@@ -218,7 +227,7 @@ test "$T_NR_MOUNTS" -ge 1 -a "$T_NR_MOUNTS" -le 8 || \
 	 die "-n nr mounts must be >= 1 and <= 8"
 
 # canonicalize paths
-for e in T_DEVICE T_EXDEV T_KMOD_REPO T_RESULTS T_UTILS_REPO T_XFSTESTS_REPO; do
+for e in T_META_DEVICE T_DATA_DEVICE T_EXDEV T_KMOD_REPO T_RESULTS T_UTILS_REPO T_XFSTESTS_REPO; do
 	eval $e=\"$(readlink -f "${!e}")\"
 done
 
@@ -311,8 +320,14 @@ unmount_all() {
 		cmd wait $p
 	done
 
-	# delete all temp devices
-	for dev in $(losetup --associated "$T_DEVICE" | cut -d : -f 1); do
+	# delete all temp meta devices
+	for dev in $(losetup --associated "$T_META_DEVICE" | cut -d : -f 1); do
+		if [ -e "$dev" ]; then
+			cmd losetup -d "$dev"
+		fi
+	done
+	# delete all temp data devices
+	for dev in $(losetup --associated "$T_DATA_DEVICE" | cut -d : -f 1); do
 		if [ -e "$dev" ]; then
 			cmd losetup -d "$dev"
 		fi
@@ -323,7 +338,7 @@ if [ -n "$T_UNMOUNT" ]; then
 fi
 
 if [ -n "$T_MKFS" ]; then
-	cmd scoutfs mkfs -Q "$T_QUORUM" "$T_DEVICE"
+	cmd scoutfs mkfs -Q "$T_QUORUM" "$T_META_DEVICE" "$T_DATA_DEVICE"
 fi
 
 if [ -n "$T_INSMOD" ]; then
@@ -354,19 +369,21 @@ fi
 # mount concurrently so that a quorum is present to elect the leader and
 # start a server.
 #
-msg "mounting $T_NR_MOUNTS mounts on $T_DEVICE"
+msg "mounting $T_NR_MOUNTS mounts on meta $T_META_DEVICE data $T_DATA_DEVICE"
 pids=""
 for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
-	opts="-o server_addr=127.0.0.1"
 
-	dev=$(losetup --find --show $T_DEVICE)
-	test -b "$dev" || die "failed to create temp device $dev"
+	meta_dev=$(losetup --find --show $T_META_DEVICE)
+	test -b "$meta_dev" || die "failed to create temp device $meta_dev"
+	data_dev=$(losetup --find --show $T_DATA_DEVICE)
+	test -b "$data_dev" || die "failed to create temp device $data_dev"
 
 	dir="/mnt/test.$i"
 	test -d "$dir" || cmd mkdir -p "$dir"
 
-	msg "mounting $dev on $dir"
-	cmd mount -t scoutfs $opts "$dev" "$dir" &
+	msg "mounting $meta_dev/$data_dev on $dir"
+	opts="-o server_addr=127.0.0.1,metadev_path=$meta_dev"
+	cmd mount -t scoutfs $opts "$data_dev" "$dir" &
 	p="$!"
 	pids="$pids $!"
 	log "background mount $i pid $p"
@@ -375,9 +392,13 @@ for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 	T_O[$i]="$opts"
 	T_OS+="$opts "
 
-	eval T_B$i=$dev
-	T_B[$i]=$dev
-	T_BS+="$dev "
+	eval T_MB$i=$meta_dev
+	T_MB[$i]=$meta_dev
+	T_MBS+="$meta_dev "
+
+	eval T_DB$i=$data_dev
+	T_DB[$i]=$data_dev
+	T_DBS+="$data_dev "
 
 	eval T_M$i=\"$dir\"
 	T_M[$i]=$dir
