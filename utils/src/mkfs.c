@@ -178,6 +178,7 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 	if (size < limit) {
 		fprintf(stderr, "%llu byte device too small for min %llu byte fs\n",
 			size, limit);
+		ret = -EINVAL;
 		goto out;
 	}
 
