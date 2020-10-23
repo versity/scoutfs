@@ -184,6 +184,11 @@ elected servers race to fence each other and can have the unlikely
 outcome of continually racing to fence each other resulting in a
 persistent loss of service.
 .TP
+.B "-S 4KB_blocks"
+Limit the device size used by the filesystem to the given size in units
+of 4KB blocks.  It must be larger than the mkfs minimum size and fit
+within the device.
+.TP
 .B "path"
 The path to the device whose contents will be unconditionally destroyed.
 .RE

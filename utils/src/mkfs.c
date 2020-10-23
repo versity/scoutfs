@@ -21,6 +21,7 @@
 #include "cmd.h"
 #include "util.h"
 #include "format.h"
+#include "parse.h"
 #include "crc.h"
 #include "rand.h"
 #include "dev.h"
@@ -132,7 +133,7 @@ static int write_alloc_root(struct scoutfs_super_block *super, int fd,
  *  - btree ring blocks with manifest and allocator btree blocks
  *  - segment with root inode items
  */
-static int write_new_fs(char *path, int fd, u8 quorum_count)
+static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 {
 	struct scoutfs_super_block *super;
 	struct scoutfs_inode inode;
@@ -172,6 +173,16 @@ static int write_new_fs(char *path, int fd, u8 quorum_count)
 			path, strerror(errno), errno);
 		goto out;
 	}
+
+	if (dev_blocks > 0 && size < (dev_blocks << SCOUTFS_BLOCK_SM_SHIFT)) {
+		fprintf(stderr, "device size limit %llu in 4KB blocks given with -S is greater than device byte size %llu\n",
+			dev_blocks, size);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (dev_blocks > 0 && size > (dev_blocks << SCOUTFS_BLOCK_SM_SHIFT))
+		size = dev_blocks << SCOUTFS_BLOCK_SM_SHIFT;
 
 	/* arbitrarily require a reasonably large device */
 	limit = 8ULL * (1024 * 1024 * 1024);
@@ -369,12 +380,13 @@ static int mkfs_func(int argc, char *argv[])
 	unsigned long long ull;
 	char *path = argv[1];
 	u8 quorum_count = 0;
+	u64 dev_blocks = 0;
 	char *end = NULL;
 	int ret;
 	int fd;
 	int c;
 
-	while ((c = getopt_long(argc, argv, "Q:", long_ops, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "Q:S:", long_ops, NULL)) != -1) {
 		switch (c) {
 		case 'Q':
 			ull = strtoull(optarg, &end, 0);
@@ -385,6 +397,14 @@ static int mkfs_func(int argc, char *argv[])
 				return -EINVAL;
 			}
 			quorum_count = ull;
+			break;
+		case 'S':
+			ret = parse_u64(optarg, &dev_blocks);
+			if (ret < 0) {
+				printf("scoutfs: invalid device blocks count '%s'\n",
+					optarg);
+				return ret;
+			}
 			break;
 		case '?':
 		default:
@@ -412,7 +432,7 @@ static int mkfs_func(int argc, char *argv[])
 		return ret;
 	}
 
-	ret = write_new_fs(path, fd, quorum_count);
+	ret = write_new_fs(path, fd, quorum_count, dev_blocks);
 	close(fd);
 
 	return ret;
