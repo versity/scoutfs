@@ -321,10 +321,6 @@ static int write_new_fs(char *path, int fd, u8 quorum_count, u64 dev_blocks)
 		}
 	}
 
-	/* fill out allocator fields now that we've written our blocks */
-	super->free_meta_blocks = cpu_to_le64(last_meta - next_meta + 1);
-	super->free_data_blocks = cpu_to_le64(last_data - first_data + 1);
-
 	/* write the super block */
 	super->hdr.seq = cpu_to_le64(1);
 	ret = write_block(fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
