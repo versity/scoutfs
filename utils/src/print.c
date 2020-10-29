@@ -304,6 +304,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      data_avail: "ALCROOT_F"\n"
 		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n"
+		       "      max_item_vers: %llu\n"
 		       "      rid: %016llx\n"
 		       "      nr: %llu\n",
 		       AL_HEAD_A(&lt->meta_avail),
@@ -316,6 +317,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       ALCROOT_A(&lt->data_avail),
 		       ALCROOT_A(&lt->data_freed),
 		       SRF_A(&lt->srch_file),
+		       le64_to_cpu(lt->max_item_vers),
 		       le64_to_cpu(lt->rid),
 		       le64_to_cpu(lt->nr));
 	}
