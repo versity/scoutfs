@@ -290,7 +290,7 @@ static int print_logs_item(struct scoutfs_key *key, void *val,
 static int print_log_trees_item(struct scoutfs_key *key, void *val,
 				unsigned val_len, void *arg)
 {
-	struct scoutfs_log_trees_val *ltv = val;
+	struct scoutfs_log_trees *lt = val;
 
 	printf("    rid %llu nr %llu\n",
 	       le64_to_cpu(key->sklt_rid), le64_to_cpu(key->sklt_nr));
@@ -303,17 +303,21 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      bloom_ref: blkno %llu seq %llu\n"
 		       "      data_avail: "ALCROOT_F"\n"
 		       "      data_freed: "ALCROOT_F"\n"
-		       "      srch_file: "SRF_FMT"\n",
-		       AL_HEAD_A(&ltv->meta_avail),
-		       AL_HEAD_A(&ltv->meta_freed),
-			ltv->item_root.height,
-			le64_to_cpu(ltv->item_root.ref.blkno),
-			le64_to_cpu(ltv->item_root.ref.seq),
-			le64_to_cpu(ltv->bloom_ref.blkno),
-			le64_to_cpu(ltv->bloom_ref.seq),
-		       ALCROOT_A(&ltv->data_avail),
-		       ALCROOT_A(&ltv->data_freed),
-		       SRF_A(&ltv->srch_file));
+		       "      srch_file: "SRF_FMT"\n"
+		       "      rid: %016llx\n"
+		       "      nr: %llu\n",
+		       AL_HEAD_A(&lt->meta_avail),
+		       AL_HEAD_A(&lt->meta_freed),
+			lt->item_root.height,
+			le64_to_cpu(lt->item_root.ref.blkno),
+			le64_to_cpu(lt->item_root.ref.seq),
+			le64_to_cpu(lt->bloom_ref.blkno),
+			le64_to_cpu(lt->bloom_ref.seq),
+		       ALCROOT_A(&lt->data_avail),
+		       ALCROOT_A(&lt->data_freed),
+		       SRF_A(&lt->srch_file),
+		       le64_to_cpu(lt->rid),
+		       le64_to_cpu(lt->nr));
 	}
 
 	return 0;
@@ -678,35 +682,35 @@ struct print_recursion_args {
 static int print_log_trees_roots(struct scoutfs_key *key, void *val,
 				unsigned val_len, void *arg)
 {
-	struct scoutfs_log_trees_val *ltv = val;
+	struct scoutfs_log_trees *lt = val;
 	struct print_recursion_args *pa = arg;
 	int ret = 0;
 	int err;
 
 	/* XXX doesn't print the bloom block */
 
-	err = print_alloc_list_block(pa->fd, "ltv_meta_avail",
-				     &ltv->meta_avail.ref);
+	err = print_alloc_list_block(pa->fd, "lt_meta_avail",
+				     &lt->meta_avail.ref);
 	if (err && !ret)
 		ret = err;
-	err = print_alloc_list_block(pa->fd, "ltv_meta_freed",
-				     &ltv->meta_freed.ref);
+	err = print_alloc_list_block(pa->fd, "lt_meta_freed",
+				     &lt->meta_freed.ref);
 	if (err && !ret)
 		ret = err;
 	err = print_btree(pa->fd, pa->super, "data_avail",
-			  &ltv->data_avail.root, print_alloc_item, NULL);
+			  &lt->data_avail.root, print_alloc_item, NULL);
 	if (err && !ret)
 		ret = err;
 	err = print_btree(pa->fd, pa->super, "data_freed",
-			  &ltv->data_freed.root, print_alloc_item, NULL);
+			  &lt->data_freed.root, print_alloc_item, NULL);
 	if (err && !ret)
 		ret = err;
-	err = print_srch_block(pa->fd, &ltv->srch_file.ref,
-			       ltv->srch_file.height - 1);
+	err = print_srch_block(pa->fd, &lt->srch_file.ref,
+			       lt->srch_file.height - 1);
 	if (err && !ret)
 		ret = err;
 
-	err = print_btree(pa->fd, pa->super, "", &ltv->item_root,
+	err = print_btree(pa->fd, pa->super, "", &lt->item_root,
 			  print_logs_item, NULL);
 	if (err && !ret)
 		ret = err;
