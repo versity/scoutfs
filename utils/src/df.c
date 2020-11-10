@@ -16,15 +16,16 @@
 #include "ioctl.h"
 #include "cmd.h"
 
-#define COLS 8
+#define ROWS 3
+#define COLS 7
+#define CHARS 20
 
 static int df_cmd(int argc, char **argv)
 {
 	struct scoutfs_ioctl_alloc_detail ad;
 	struct scoutfs_ioctl_alloc_detail_entry *ade = NULL;
 	struct scoutfs_ioctl_statfs_more sfm;
-	char *title[COLS];
-	u64 fields[COLS];
+	static char cells[ROWS][COLS][CHARS];
 	int wid[COLS];
 	u64 nr = 4096 / sizeof(*ade);
 	u64 meta_free = 0;
@@ -32,6 +33,8 @@ static int df_cmd(int argc, char **argv)
 	int ret;
 	int fd;
 	int i;
+	int r;
+	int c;
 
 	if (argc != 2) {
 		fprintf(stderr, "must specify path\n");
@@ -84,34 +87,43 @@ static int df_cmd(int argc, char **argv)
 			data_free += ade[i].blocks;
 	}
 
-	title[0] = "64K-Meta";
-	title[1] = "Used";
-	title[2] = "Avail";
-	title[3] = "Use%";
-	title[4] = "4K-Data";
-	title[5] = "Used";
-	title[6] = "Avail";
-	title[7] = "Use%";
+	snprintf(cells[0][1], CHARS, "Type");
+	snprintf(cells[0][2], CHARS, "Size");
+	snprintf(cells[0][3], CHARS, "Total");
+	snprintf(cells[0][4], CHARS, "Used");
+	snprintf(cells[0][5], CHARS, "Free");
+	snprintf(cells[0][6], CHARS, "Use%%");
 
-	fields[0] = sfm.total_meta_blocks;
-	fields[1] = sfm.total_meta_blocks - meta_free;
-	fields[2] = meta_free;
-	fields[3] = fields[1] * 100 / fields[0];
-	fields[4] = sfm.total_data_blocks;
-	fields[5] = sfm.total_data_blocks - data_free;
-	fields[6] = data_free;
-	fields[7] = fields[5] * 100 / fields[4];
+	snprintf(cells[1][1], CHARS, "MetaData");
+	snprintf(cells[1][2], CHARS, "64KB");
+	snprintf(cells[1][3], CHARS, "%llu", sfm.total_meta_blocks);
+	snprintf(cells[1][4], CHARS, "%llu", sfm.total_meta_blocks - meta_free);
+	snprintf(cells[1][5], CHARS, "%llu", meta_free);
+	snprintf(cells[1][6], CHARS, "%llu",
+		((sfm.total_meta_blocks - meta_free) * 100) /
+		sfm.total_meta_blocks);
 
-	for (i = 0; i < array_size(fields); i++)
-		wid[i] = max(snprintf(NULL, 0, "%s", title[i]),
-			     snprintf(NULL, 0, "%llu", fields[i]));
+	snprintf(cells[2][1], CHARS, "Data");
+	snprintf(cells[2][2], CHARS, "4KB");
+	snprintf(cells[2][3], CHARS, "%llu", sfm.total_data_blocks);
+	snprintf(cells[2][4], CHARS, "%llu", sfm.total_data_blocks - data_free);
+	snprintf(cells[2][5], CHARS, "%llu", data_free);
+	snprintf(cells[2][6], CHARS, "%llu",
+		((sfm.total_data_blocks - data_free) * 100) /
+		sfm.total_data_blocks);
 
-	for (i = 0; i < array_size(fields); i++)
-		printf("%*s  ", wid[i], title[i]);
-	printf("\n");
-	for (i = 0; i < array_size(fields); i++)
-		wid[i] = printf("%*llu  ", wid[i], fields[i]);
-	printf("\n");
+	for (r = 0; r < ROWS; r++) {
+		for (c = 0; c < COLS; c++) {
+			wid[c] = max(wid[c], strlen(cells[r][c]));
+		}
+	}
+
+	for (r = 0; r < ROWS; r++) {
+		for (c = 0; c < COLS; c++) {
+			printf("%*s  ", wid[c], cells[r][c]);
+		}
+		printf("\n");
+	}
 
 	ret = 0;
 out:
