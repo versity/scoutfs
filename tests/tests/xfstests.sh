@@ -18,16 +18,21 @@
 #   
 
 # make sure we have our config
-if [ -z "$T_XFSTESTS_REPO" -o -z "$T_XFSTESTS_BRANCH" ]; then
-	t_fail "xfstests requires -X repo and -x branch"
+if [ -z "$T_XFSTESTS_REPO" ]; then
+	t_fail "xfstests requires -X repo"
+fi
+if [ -z "$T_XFSTESTS_BRANCH" -a -z "T_SKIP_CHECKOUT" ]; then
+	t_fail "xfstests requires -x branch"
 fi
 
 t_quiet mkdir -p "$T_TMPDIR/mnt.scratch"
 
 t_quiet cd "$T_XFSTESTS_REPO"
-t_quiet git fetch
-# this remote use is bad, do better
-t_quiet git checkout -B "$T_XFSTESTS_BRANCH" --track "origin/$T_XFSTESTS_BRANCH"
+if [ -z "T_SKIP_CHECKOUT" ]; then
+	t_quiet git fetch
+	# this remote use is bad, do better
+	t_quiet git checkout -B "$T_XFSTESTS_BRANCH" --track "origin/$T_XFSTESTS_BRANCH"
+fi
 t_quiet make
 t_quiet sync
 # pwd stays in xfstests dir to build config and run
