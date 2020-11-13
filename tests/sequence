@@ -13,6 +13,7 @@ lock-pr-cw-conflict.sh
 lock-revoke-getcwd.sh
 createmany-parallel.sh
 createmany-large-names.sh
+createmany-rename-large-dir.sh
 stage-release-race-alloc.sh
 basic-posix-consistency.sh
 dirent-consistency.sh
