@@ -40,7 +40,8 @@ $(basename $0) options:
               | file system to be tested.  Will be clobbered by -m mkfs.
     -E <re>   | Exclude tests whose file name matches the regular expression.
               | Can be provided multiple times
-    -e <file> | Specify an extra storage device for testing.  Will be clobbered.
+    -e <file> | Specify an extra storage data device for testing.  Will be clobbered.
+    -f <file> | Specify an extra storage meta device for testing.  Will be clobbered.
     -F        | Dump accumulated ftrace buffer to the console on oops.
     -I <re>   | Include tests whose file name matches the regular expression.
               | By default all tests are run.  If this is provided then
@@ -97,7 +98,12 @@ while true; do
 		;;
 	-e)
 		test -n "$2" || die "-e must have extra device file argument"
-		T_EXDEV="$2"
+		T_EX_DATA_DEV="$2"
+		shift
+		;;
+	-f)
+		test -n "$2" || die "-e must have extra device file argument"
+		T_EX_META_DEV="$2"
 		shift
 		;;
 	-F)
@@ -207,8 +213,12 @@ test -n "$T_DATA_DEVICE" || die "must specify -D data device"
 test -e "$T_DATA_DEVICE" || die "data device -D '$T_DATA_DEVICE' doesn't exist"
 test -n "$T_META_DEVICE" || die "must specify -M meta device"
 test -e "$T_META_DEVICE" || die "meta device -M '$T_META_DEVICE' doesn't exist"
-test -n "$T_EXDEV" || die "must specify -e extra device"
-test -e "$T_EXDEV" || die "fs device -d '$T_EXDEV' doesn't exist"
+
+test -n "$T_EX_META_DEV" || die "must specify -f extra meta device"
+test -e "$T_EX_META_DEV" || die "extra meta device -f '$T_EX_META_DEV' doesn't exist"
+test -n "$T_EX_DATA_DEV" || die "must specify -e extra data device"
+test -e "$T_EX_DATA_DEV" || die "extra data device -e '$T_EX_DATA_DEV' doesn't exist"
+
 test -n "$T_KMOD_REPO" || die "must specify -K kmod repo dir"
 test -n "$T_KMOD_BRANCH" -a -z "T_SKIP_CHECKOUT" && \
         die "must specify -k kmod branch"
@@ -227,7 +237,7 @@ test "$T_NR_MOUNTS" -ge 1 -a "$T_NR_MOUNTS" -le 8 || \
 	 die "-n nr mounts must be >= 1 and <= 8"
 
 # canonicalize paths
-for e in T_META_DEVICE T_DATA_DEVICE T_EXDEV T_KMOD_REPO T_RESULTS T_UTILS_REPO T_XFSTESTS_REPO; do
+for e in T_META_DEVICE T_DATA_DEVICE T_EX_META_DEV T_EX_DATA_DEV T_KMOD_REPO T_RESULTS T_UTILS_REPO T_XFSTESTS_REPO; do
 	eval $e=\"$(readlink -f "${!e}")\"
 done
 
@@ -381,9 +391,10 @@ for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 	dir="/mnt/test.$i"
 	test -d "$dir" || cmd mkdir -p "$dir"
 
-	msg "mounting $meta_dev/$data_dev on $dir"
+	msg "mounting $meta_dev|$data_dev on $dir"
 	opts="-o server_addr=127.0.0.1,metadev_path=$meta_dev"
 	cmd mount -t scoutfs $opts "$data_dev" "$dir" &
+
 	p="$!"
 	pids="$pids $!"
 	log "background mount $i pid $p"
