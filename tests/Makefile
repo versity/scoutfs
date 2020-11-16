@@ -5,7 +5,8 @@ SHELL := /usr/bin/bash
 BIN := src/createmany			\
 	src/dumb_setxattr		\
 	src/handle_cat			\
-	src/bulk_create_paths
+	src/bulk_create_paths		\
+	src/find_xattrs
 
 DEPS := $(wildcard src/*.d)
 
