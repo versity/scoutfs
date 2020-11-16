@@ -154,8 +154,7 @@ static void create_dir(struct dir *dir, struct opts *opts,
 {
 	struct str_list *s;
 	char name[100];
-	char val[] = "v";
-	size_t vs = sizeof(val);
+	char val = 'v';
 	int rc;
 	int i;
 
@@ -179,23 +178,23 @@ static void create_dir(struct dir *dir, struct opts *opts,
 		rc = 0;
 		if (rc == 0 && opts->user_xattr) {
 			strcpy(name, "user.scoutfs_bcp");
-			rc = setxattr(s->str, name, val, vs, 0);
+			rc = setxattr(s->str, name, &val, 1, 0);
 		}
 		if (rc == 0 && opts->same_srch_xattr) {
 			strcpy(name, "scoutfs.srch.scoutfs_bcp");
-			rc = setxattr(s->str, name, val, vs, 0);
+			rc = setxattr(s->str, name, &val, 1, 0);
 		}
 		if (rc == 0 && opts->group_srch_xattr) {
 			snprintf(name, sizeof(name),
 				 "scoutfs.srch.scoutfs_bcp.group.%lu",
 				 stats->files / 10000);
-			rc = setxattr(s->str, name, val, vs, 0);
+			rc = setxattr(s->str, name, &val, 1, 0);
 		}
 		if (rc == 0 && opts->unique_srch_xattr) {
 			snprintf(name, sizeof(name),
 				 "scoutfs.srch.scoutfs_bcp.unique.%lu",
 				 stats->files);
-			rc = setxattr(s->str, name, val, vs, 0);
+			rc = setxattr(s->str, name, &val, 1, 0);
 		}
 
 		error_exit(rc, "setxattr %s %s failed"ERRF, s->str, name, ERRA);
