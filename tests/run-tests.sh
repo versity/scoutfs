@@ -220,16 +220,16 @@ test -n "$T_EX_DATA_DEV" || die "must specify -e extra data device"
 test -e "$T_EX_DATA_DEV" || die "extra data device -e '$T_EX_DATA_DEV' doesn't exist"
 
 test -n "$T_KMOD_REPO" || die "must specify -K kmod repo dir"
-test -n "$T_KMOD_BRANCH" -a -z "T_SKIP_CHECKOUT" && \
+test -z "$T_KMOD_BRANCH" -a -z "$T_SKIP_CHECKOUT" && \
         die "must specify -k kmod branch"
 test -n "$T_MKFS" -a -z "$T_QUORUM" && die "mkfs (-m) requires quorum (-q)"
 test -n "$T_RESULTS" || die "must specify -r results dir"
 test -n "$T_UTILS_REPO" || die "must specify -U utils repo dir"
-test -n "$T_UTILS_BRANCH" -a -z "T_SKIP_CHECKOUT" &&
+test -z "$T_UTILS_BRANCH" -a -z "$T_SKIP_CHECKOUT" &&
         die "must specify -u utils branch"
-test -n "$T_XFSTESTS_REPO" -a -z "$T_XFSTESTS_BRANCH" -a -z "T_SKIP_CHECKOUT" && \
+test -n "$T_XFSTESTS_REPO" -a -z "$T_XFSTESTS_BRANCH" -a -z "$T_SKIP_CHECKOUT" && \
 	die "-X xfstests repo requires -x xfstests branch"
-test -n "$T_XFSTESTS_BRANCH" -a -z "$T_XFSTESTS_REPO" -a -z "T_SKIP_CHECKOUT" && \
+test -n "$T_XFSTESTS_BRANCH" -a -z "$T_XFSTESTS_REPO" -a -z "$T_SKIP_CHECKOUT" && \
 	die "-X xfstests branch requires -x xfstests repo"
 
 test -n "$T_NR_MOUNTS" || die "must specify -n nr mounts"
@@ -296,7 +296,7 @@ if [ -n "$T_UTILS_REPO" ]; then
 fi
 
 # verify xfstests branch
-if [ -n "$T_XFSTESTS_REPO" ] && [ -z "T_SKIP_CHECKOUT" ]; then
+if [ -n "$T_XFSTESTS_REPO" ] && [ -z "$T_SKIP_CHECKOUT" ]; then
 	msg "verifying xfstests repo $T_XFSTESTS_REPO branch $T_XFSTESTS_BRANCH"
 	cmd cd "$T_XFSTESTS_REPO"
 	cmd git rev-parse --verify "$T_XFSTESTS_BRANCH"

@@ -21,14 +21,14 @@
 if [ -z "$T_XFSTESTS_REPO" ]; then
 	t_fail "xfstests requires -X repo"
 fi
-if [ -z "$T_XFSTESTS_BRANCH" -a -z "T_SKIP_CHECKOUT" ]; then
+if [ -z "$T_XFSTESTS_BRANCH" -a -z "$T_SKIP_CHECKOUT" ]; then
 	t_fail "xfstests requires -x branch"
 fi
 
 t_quiet mkdir -p "$T_TMPDIR/mnt.scratch"
 
 t_quiet cd "$T_XFSTESTS_REPO"
-if [ -z "T_SKIP_CHECKOUT" ]; then
+if [ -z "$T_SKIP_CHECKOUT" ]; then
 	t_quiet git fetch
 	# this remote use is bad, do better
 	t_quiet git checkout -B "$T_XFSTESTS_BRANCH" --track "origin/$T_XFSTESTS_BRANCH"
