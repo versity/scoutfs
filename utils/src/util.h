@@ -111,4 +111,6 @@ static inline int memcmp_lens(const void *a, int a_len,
 	return memcmp(a, b, len) ?: a_len - b_len;
 }
 
+int get_path(char *path, int flags);
+
 #endif
