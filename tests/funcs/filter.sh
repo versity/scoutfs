@@ -32,6 +32,7 @@ t_filter_dmesg()
 	re="$re| EXT4-fs (.*): get root inode failed"
 	re="$re| EXT4-fs (.*): mount failed"
 	re="$re| EXT4-fs (.*): no journal found"
+	re="$re| EXT4-fs (.*): VFS: Can't find ext4 filesystem"
 
 	# dropping caches is fine
 	re="$re| drop_caches: "
