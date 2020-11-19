@@ -56,5 +56,8 @@ t_filter_dmesg()
 	re="$re|scoutfs .*: all lock clients recovered"
 	re="$re|scoutfs .* error: client rid.*lock recovery timed out"
 
+	# some tests mount w/o options
+	re="$re|scoutfs .* error: Required mount option \"metadev_path\" not found"
+
 	egrep -v "($re)" 
 }
