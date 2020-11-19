@@ -17,7 +17,7 @@
 #include "cmd.h"
 
 #define ROWS 3
-#define COLS 7
+#define COLS 6
 #define CHARS 20
 
 static int df_cmd(int argc, char **argv)
@@ -26,7 +26,7 @@ static int df_cmd(int argc, char **argv)
 	struct scoutfs_ioctl_alloc_detail_entry *ade = NULL;
 	struct scoutfs_ioctl_statfs_more sfm;
 	static char cells[ROWS][COLS][CHARS];
-	int wid[COLS];
+	int wid[COLS] = {0};
 	u64 nr = 4096 / sizeof(*ade);
 	u64 meta_free = 0;
 	u64 data_free = 0;
@@ -87,28 +87,28 @@ static int df_cmd(int argc, char **argv)
 			data_free += ade[i].blocks;
 	}
 
-	snprintf(cells[0][1], CHARS, "Type");
-	snprintf(cells[0][2], CHARS, "Size");
-	snprintf(cells[0][3], CHARS, "Total");
-	snprintf(cells[0][4], CHARS, "Used");
-	snprintf(cells[0][5], CHARS, "Free");
-	snprintf(cells[0][6], CHARS, "Use%%");
+	snprintf(cells[0][0], CHARS, "Type");
+	snprintf(cells[0][1], CHARS, "Size");
+	snprintf(cells[0][2], CHARS, "Total");
+	snprintf(cells[0][3], CHARS, "Used");
+	snprintf(cells[0][4], CHARS, "Free");
+	snprintf(cells[0][5], CHARS, "Use%%");
 
-	snprintf(cells[1][1], CHARS, "MetaData");
-	snprintf(cells[1][2], CHARS, "64KB");
-	snprintf(cells[1][3], CHARS, "%llu", sfm.total_meta_blocks);
-	snprintf(cells[1][4], CHARS, "%llu", sfm.total_meta_blocks - meta_free);
-	snprintf(cells[1][5], CHARS, "%llu", meta_free);
-	snprintf(cells[1][6], CHARS, "%llu",
+	snprintf(cells[1][0], CHARS, "MetaData");
+	snprintf(cells[1][1], CHARS, "64KB");
+	snprintf(cells[1][2], CHARS, "%llu", sfm.total_meta_blocks);
+	snprintf(cells[1][3], CHARS, "%llu", sfm.total_meta_blocks - meta_free);
+	snprintf(cells[1][4], CHARS, "%llu", meta_free);
+	snprintf(cells[1][5], CHARS, "%llu",
 		((sfm.total_meta_blocks - meta_free) * 100) /
 		sfm.total_meta_blocks);
 
-	snprintf(cells[2][1], CHARS, "Data");
-	snprintf(cells[2][2], CHARS, "4KB");
-	snprintf(cells[2][3], CHARS, "%llu", sfm.total_data_blocks);
-	snprintf(cells[2][4], CHARS, "%llu", sfm.total_data_blocks - data_free);
-	snprintf(cells[2][5], CHARS, "%llu", data_free);
-	snprintf(cells[2][6], CHARS, "%llu",
+	snprintf(cells[2][0], CHARS, "Data");
+	snprintf(cells[2][1], CHARS, "4KB");
+	snprintf(cells[2][2], CHARS, "%llu", sfm.total_data_blocks);
+	snprintf(cells[2][3], CHARS, "%llu", sfm.total_data_blocks - data_free);
+	snprintf(cells[2][4], CHARS, "%llu", data_free);
+	snprintf(cells[2][5], CHARS, "%llu",
 		((sfm.total_data_blocks - data_free) * 100) /
 		sfm.total_data_blocks);
 
