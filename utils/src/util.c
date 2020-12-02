@@ -68,3 +68,31 @@ int get_path(char *path, int flags)
 
 	return ret;
 }
+
+int read_block(int fd, u64 blkno, int shift, void **ret_val)
+{
+	size_t size = 1ULL << shift;
+	void *buf;
+	int ret;
+
+	*ret_val = NULL;
+
+	buf = malloc(size);
+	if (!buf)
+		return -ENOMEM;
+
+	ret = pread(fd, buf, size, blkno << shift);
+	if (ret == -1) {
+		fprintf(stderr, "read blkno %llu returned %d: %s (%d)\n",
+			blkno, ret, strerror(errno), errno);
+		free(buf);
+		return -errno;
+	} else if (ret != size) {
+		fprintf(stderr, "incomplete pread\n");
+		free(buf);
+		return -EINVAL;
+	} else {
+		*ret_val = buf;
+		return 0;
+	}
+}

@@ -47,7 +47,7 @@ endif
 
 $(BIN): $(OBJ)
 	$(QU)  [BIN $@]
-	$(VE)gcc -o $@ $^ -luuid -lm -lcrypto
+	$(VE)gcc -o $@ $^ -luuid -lm -lcrypto -lblkid
 
 %.o %.d: %.c Makefile sparse.sh
 	$(QU)  [CC $<]
