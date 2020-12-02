@@ -7,19 +7,14 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
-#include <getopt.h>
+#include <argp.h>
 
 #include "sparse.h"
+#include "parse.h"
 #include "util.h"
 #include "format.h"
 #include "ioctl.h"
 #include "cmd.h"
-
-static struct option long_ops[] = {
-	{ "name", 1, NULL, 'n' },
-	{ "file", 1, NULL, 'f' },
-	{ NULL, 0, NULL, 0}
-};
 
 /*
  * There are significant constant costs to each search call, we
@@ -27,18 +22,21 @@ static struct option long_ops[] = {
  */
 #define BATCH_SIZE 1000000
 
-static int search_xattrs_cmd(int argc, char **argv)
+struct xattr_args {
+	char *name;
+	char *path;
+};
+
+static int do_search_xattrs(struct xattr_args *args)
 {
-	struct scoutfs_ioctl_search_xattrs sx;
-	char *path = NULL;
-	char *name = NULL;
+	struct scoutfs_ioctl_search_xattrs sx = {0};
 	u64 *inos = NULL;
 	int fd = -1;
 	int ret;
-	int c;
 	int i;
 
 	memset(&sx, 0, sizeof(sx));
+
 	inos = malloc(BATCH_SIZE * sizeof(inos[0]));
 	if (!inos) {
 		fprintf(stderr, "inos mem alloc failed\n");
@@ -46,56 +44,15 @@ static int search_xattrs_cmd(int argc, char **argv)
 		goto out;
 	}
 
-	while ((c = getopt_long(argc, argv, "f:n:", long_ops, NULL)) != -1) {
-		switch (c) {
-		case 'f':
-			path = strdup(optarg);
-			if (!path) {
-				fprintf(stderr, "path mem alloc failed\n");
-				ret = -ENOMEM;
-				goto out;
-			}
-			break;
-		case 'n':
-			name = strdup(optarg);
-			if (!name) {
-				fprintf(stderr, "name mem alloc failed\n");
-				ret = -ENOMEM;
-				goto out;
-			}
-			break;
-		case '?':
-		default:
-			ret = -EINVAL;
-			goto out;
-		}
-	}
-
-	if (path == NULL) {
-		fprintf(stderr, "must specify -f path to file\n");
-		ret = -EINVAL;
-		goto out;
-	}
-
-	if (name == NULL) {
-		fprintf(stderr, "must specify -n xattr name to search for\n");
-		ret = -EINVAL;
-		goto out;
-	}
-
-	fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			path, strerror(errno), errno);
-		goto out;
-	}
+	fd = get_path(args->path, O_RDONLY);
+	if (fd < 0)
+		return fd;
 
 	sx.next_ino = 0;
 	sx.last_ino = U64_MAX;
-	sx.name_ptr = (unsigned long)name;
+	sx.name_ptr = (unsigned long)args->name;
 	sx.inodes_ptr = (unsigned long)inos;
-	sx.name_bytes = strlen(name);
+	sx.name_bytes = strlen(args->name);
 	sx.nr_inodes = BATCH_SIZE;
 
 	do {
@@ -119,12 +76,59 @@ static int search_xattrs_cmd(int argc, char **argv)
 out:
 	if (fd >= 0)
 		close(fd);
-	free(path);
-	free(name);
 	free(inos);
 
 	return ret;
 };
+
+static int parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct xattr_args *args = state->input;
+
+	switch (key) {
+	case 'p':
+		args->path = strdup_or_error(state, arg);
+		break;
+	case ARGP_KEY_ARG:
+		if (args->name)
+			argp_error(state, "more than one name argument given");
+
+		args->name = strdup_or_error(state, arg);
+		break;
+	case ARGP_KEY_FINI:
+		if (!args->name) {
+			argp_error(state, "must provide xattr containing .srch. scoutfs tag");
+		}
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static struct argp_option options[] = {
+	{ "path", 'p', "PATH", 0, "Path to ScoutFS filesystem"},
+	{ NULL }
+};
+
+static int search_xattrs_cmd(int argc, char **argv)
+{
+	struct argp argp = {
+		options,
+		parse_opt,
+		"XATTR-NAME",
+		"Print inode numbers of inodes which may have given xattr"
+	};
+	struct xattr_args xattr_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&argp, argc, argv, 0, NULL, &xattr_args);
+	if (ret)
+		return ret;
+
+	return do_search_xattrs(&xattr_args);
+}
 
 static void __attribute__((constructor)) search_xattrs_ctor(void)
 {
