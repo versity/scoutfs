@@ -120,6 +120,7 @@ static int counters_cmd(int argc, char **argv)
 				goto out;
 			}
 			memset(&ctrs[nr], 0, (alloced - nr) * sizeof(*ctrs));
+			memset(&name_wid[nr], 0, (alloced - nr) * sizeof(*name_wid));
 		}
 
 		ctr = &ctrs[nr];
