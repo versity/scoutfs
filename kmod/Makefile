@@ -51,7 +51,7 @@ modules_install:
 
 dist: scoutfs-kmod.spec
 	git archive --format=tar --prefix scoutfs-kmod-$(RPM_VERSION)/ HEAD^{tree} > $(TARFILE)
-	@ tar rf $(TARFILE) --transform="s@\(.*\)@scoutfs-$(RPM_VERSION)/\1@" scoutfs-kmod.spec
+	@ tar rf $(TARFILE) --transform="s@\(.*\)@scoutfs-kmod-$(RPM_VERSION)/\1@" scoutfs-kmod.spec
 
 clean:
 	make $(SCOUTFS_ARGS) clean
