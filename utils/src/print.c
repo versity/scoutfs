@@ -12,8 +12,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <argp.h>
 
 #include "sparse.h"
+#include "parse.h"
 #include "util.h"
 #include "format.h"
 #include "bitmap.h"
@@ -24,25 +26,32 @@
 #include "srch.h"
 #include "leaf_item_hash.h"
 
-static void *read_block(int fd, u64 blkno, int shift)
+static int read_block(int fd, u64 blkno, int shift, void **ret_val)
 {
 	size_t size = 1ULL << shift;
-	ssize_t ret;
 	void *buf;
+	int ret;
+
+	*ret_val = NULL;
 
 	buf = malloc(size);
 	if (!buf)
-		return NULL;
+		return -ENOMEM;
 
 	ret = pread(fd, buf, size, blkno << shift);
-	if (ret != size) {
-		fprintf(stderr, "read blkno %llu returned %zd: %s (%d)\n",
+	if (ret == -1) {
+		fprintf(stderr, "read blkno %llu returned %d: %s (%d)\n",
 			blkno, ret, strerror(errno), errno);
 		free(buf);
-		buf = NULL;
+		return -errno;
+	} else if (ret != size) {
+		fprintf(stderr, "incomplete pread\n");
+		free(buf);
+		return -EINVAL;
+	} else {
+		*ret_val = buf;
+		return 0;
 	}
-
-	return buf;
 }
 
 static void print_block_header(struct scoutfs_block_header *hdr, int size)
@@ -465,9 +474,9 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 	int ret;
 	int i;
 
-	bt = read_block(fd, le64_to_cpu(ref->blkno), SCOUTFS_BLOCK_LG_SHIFT);
-	if (!bt)
-		return -ENOMEM;
+	ret = read_block(fd, le64_to_cpu(ref->blkno), SCOUTFS_BLOCK_LG_SHIFT, (void **)&bt);
+	if (ret)
+		return ret;
 
 	if (bt->level == level) {
 		printf("%s btree blkno %llu\n"
@@ -559,15 +568,16 @@ static int print_alloc_list_block(int fd, char *str,
 	u64 start;
 	u64 len;
 	int wid;
+	int ret;
 	int i;
 
 	blkno = le64_to_cpu(ref->blkno);
 	if (blkno == 0)
 		return 0;
 
-	lblk = read_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT);
-	if (!lblk)
-		return -ENOMEM;
+	ret = read_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, (void **)&lblk);
+	if (ret)
+		return ret;
 
 	printf("%s alloc_list_block blkno %llu\n", str, blkno);
 	print_block_header(&lblk->hdr, SCOUTFS_BLOCK_LG_SIZE);
@@ -617,11 +627,10 @@ static int print_srch_block(int fd, struct scoutfs_srch_ref *ref, int level)
 	if (blkno == 0)
 		return 0;
 
-	srp = read_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT);
-	if (!srp) {
-		ret = -ENOMEM;
+	ret = read_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, (void **)&srp);
+	if (ret)
 		goto out;
-	}
+
 	srb = (void *)srp;
 
 	printf("srch %sblock blkno %llu\n", level ? "parent " : "", blkno);
@@ -763,9 +772,9 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 	if (ref->blkno == 0)
 		return 0;
 
-	bt = read_block(fd, le64_to_cpu(ref->blkno), SCOUTFS_BLOCK_LG_SHIFT);
-	if (!bt)
-		return -ENOMEM;
+	ret = read_block(fd, le64_to_cpu(ref->blkno), SCOUTFS_BLOCK_LG_SHIFT, (void **)&bt);
+	if (ret)
+		return ret;
 
 	node = avl_first(&bt->item_root);
 	while (node) {
@@ -828,11 +837,9 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
 		blkno = SCOUTFS_QUORUM_BLKNO + i;
 		free(blk);
-		blk = read_block(fd, blkno, SCOUTFS_BLOCK_SM_SHIFT);
-		if (!blk) {
-			ret = -ENOMEM;
+		ret = read_block(fd, blkno, SCOUTFS_BLOCK_SM_SHIFT, (void **)&blk);
+		if (ret)
 			goto out;
-		}
 
 		if (blk->voter_rid != 0) {
 			printf("quorum block blkno %llu\n"
@@ -876,11 +883,15 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	uuid_unparse(super->uuid, uuid_str);
 
+	if (!(le64_to_cpu(super->flags) && SCOUTFS_FLAG_IS_META_BDEV))
+	    fprintf(stderr,
+		    "**** Printing metadata from a data device! Did you mean to do this? ****\n");
+
 	printf("super blkno %llu\n", blkno);
 	print_block_header(&super->hdr, SCOUTFS_BLOCK_SM_SIZE);
 	printf("  format_hash %llx uuid %s\n",
 	       le64_to_cpu(super->format_hash), uuid_str);
-	printf("  flags: 0x%016llx\n", super->flags);
+	printf("  flags: 0x%016llx\n", le64_to_cpu(super->flags));
 
 	server_addr = alloc_addr_str(&super->server_addr);
 	if (!server_addr)
@@ -943,6 +954,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	free(server_addr);
 }
 
+struct print_args {
+	char *meta_device;
+};
+
 static int print_volume(int fd)
 {
 	struct scoutfs_super_block *super = NULL;
@@ -952,9 +967,9 @@ static int print_volume(int fd)
 	int err;
 	int i;
 
-	super = read_block(fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT);
-	if (!super)
-		return -ENOMEM;
+	ret = read_block(fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT, (void **)&super);
+	if (ret)
+		return ret;
 
 	print_super_block(super, SCOUTFS_SUPER_BLKNO);
 
@@ -1034,23 +1049,16 @@ static int print_volume(int fd)
 	return ret;
 }
 
-static int print_cmd(int argc, char **argv)
+static int do_print(struct print_args *args)
 {
-	char *path;
 	int ret;
 	int fd;
 
-	if (argc != 2) {
-		printf("scoutfs print: a single path argument is required\n");
-		return -EINVAL;
-	}
-	path = argv[1];
-
-	fd = open(path, O_RDONLY);
+	fd = open(args->meta_device, O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			path, strerror(errno), errno);
+			args->meta_device, strerror(errno), errno);
 		return ret;
 	}
 
@@ -1058,6 +1066,47 @@ static int print_cmd(int argc, char **argv)
 	close(fd);
 	return ret;
 };
+
+static int parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct print_args *args = state->input;
+
+	switch (key) {
+	case ARGP_KEY_ARG:
+		if (!args->meta_device)
+			args->meta_device = strdup_or_error(state, arg);
+		else
+			argp_error(state, "more than one argument given");
+		break;
+	case ARGP_KEY_FINI:
+		if (!args->meta_device)
+			argp_error(state, "no metadata device argument given");
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static int print_cmd(int argc, char **argv)
+{
+	struct argp argp = {
+		NULL,
+		parse_opt,
+		"META-DEV",
+		"Print metadata structures"
+	};
+	struct print_args print_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&argp, argc, argv, 0, NULL, &print_args);
+	if (ret)
+		return ret;
+
+	return do_print(&print_args);
+}
+
 
 static void __attribute__((constructor)) print_ctor(void)
 {
