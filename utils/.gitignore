@@ -2,6 +2,8 @@
 *.d
 *.swp
 src/scoutfs
+src/format.h
+src/ioctl.h
 .sparse*
 .mock.build*
 cscope.*
