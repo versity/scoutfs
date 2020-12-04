@@ -48,8 +48,6 @@ $(basename $0) options:
               | only tests matching will be run.  Can be provided multiple
               | times
     -i        | Force removing and inserting the built scoutfs.ko module.
-    -K        | scouts-kmod-dev git repo. Used to build kernel module.
-    -k        | Branch to checkout in scoutfs-kmod-dev repo.
     -M <file> | Specify the filesystem's meta data device path that contains
               | the file system to be tested.  Will be clobbered by -m mkfs.
     -m        | Run mkfs on the device before mounting and running
@@ -64,8 +62,6 @@ $(basename $0) options:
               | exist.  Previous results will be deleted as each test runs.
     -s        | Skip git repo checkouts.
     -t        | Enabled trace events that match the given glob argument.
-    -U        | scouts-utils-dev git repo. Used to build kernel module.
-    -u        | Branch to checkout in scoutfs-utils-dev repo.
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
     -y        | xfstests ./check additional args
@@ -117,16 +113,6 @@ while true; do
 	-i)
 		T_INSMOD="1"
 		;;
-	-K)
-		test -n "$2" || die "-K must have kmod git repo dir argument"
-		T_KMOD_REPO="$2"
-		shift
-		;;
-	-k)
-		test -n "$2" || die "-k must have kmod git branch argument"
-		T_KMOD_BRANCH="$2"
-		shift
-		;;
 	-M)
 	        test -n "$2" || die "-z must have meta device file argument"
 	        T_META_DEVICE="$2"
@@ -162,16 +148,6 @@ while true; do
 	-t)
 		test -n "$2" || die "-t must have trace glob argument"
 		T_TRACE_GLOB="$2"
-		shift
-		;;
-	-U)
-		test -n "$2" || die "-U must have utils git repo dir argument"
-		T_UTILS_REPO="$2"
-		shift
-		;;
-	-u)
-		test -n "$2" || die "-u must have utils git branch argument"
-		T_UTILS_BRANCH="$2"
 		shift
 		;;
 	-X)
@@ -219,14 +195,8 @@ test -e "$T_EX_META_DEV" || die "extra meta device -f '$T_EX_META_DEV' doesn't e
 test -n "$T_EX_DATA_DEV" || die "must specify -e extra data device"
 test -e "$T_EX_DATA_DEV" || die "extra data device -e '$T_EX_DATA_DEV' doesn't exist"
 
-test -n "$T_KMOD_REPO" || die "must specify -K kmod repo dir"
-test -z "$T_KMOD_BRANCH" -a -z "$T_SKIP_CHECKOUT" && \
-        die "must specify -k kmod branch"
 test -n "$T_MKFS" -a -z "$T_QUORUM" && die "mkfs (-m) requires quorum (-q)"
 test -n "$T_RESULTS" || die "must specify -r results dir"
-test -n "$T_UTILS_REPO" || die "must specify -U utils repo dir"
-test -z "$T_UTILS_BRANCH" -a -z "$T_SKIP_CHECKOUT" &&
-        die "must specify -u utils branch"
 test -n "$T_XFSTESTS_REPO" -a -z "$T_XFSTESTS_BRANCH" -a -z "$T_SKIP_CHECKOUT" && \
 	die "-X xfstests repo requires -x xfstests branch"
 test -n "$T_XFSTESTS_BRANCH" -a -z "$T_XFSTESTS_REPO" -a -z "$T_SKIP_CHECKOUT" && \
@@ -236,8 +206,15 @@ test -n "$T_NR_MOUNTS" || die "must specify -n nr mounts"
 test "$T_NR_MOUNTS" -ge 1 -a "$T_NR_MOUNTS" -le 8 || \
 	 die "-n nr mounts must be >= 1 and <= 8"
 
+# top level paths
+T_KMOD=$(realpath "$(dirname $0)/../kmod")
+T_UTILS=$(realpath "$T_KMOD/../utils")
+
+test -d "$T_KMOD" || die "kmod/ repo dir $T_KMOD not directory"
+test -d "$T_UTILS" || die "utils/ repo dir $T_UTILS not directory"
+
 # canonicalize paths
-for e in T_META_DEVICE T_DATA_DEVICE T_EX_META_DEV T_EX_DATA_DEV T_KMOD_REPO T_RESULTS T_UTILS_REPO T_XFSTESTS_REPO; do
+for e in T_META_DEVICE T_DATA_DEVICE T_EX_META_DEV T_EX_DATA_DEV T_KMOD T_RESULTS T_UTILS T_XFSTESTS_REPO; do
 	eval $e=\"$(readlink -f "${!e}")\"
 done
 
@@ -257,43 +234,22 @@ test -e "$T_RESULTS" || mkdir -p "$T_RESULTS"
 test -d "$T_RESULTS" || \
 	 die "$T_RESULTS dir is not a directory"
 
-# checkout and build kernel module
-if [ -n "$T_KMOD_REPO" ]; then
-	msg "building kmod repo $T_KMOD_REPO branch $T_KMOD_BRANCH"
-	cmd cd "$T_KMOD_REPO"
+# build kernel module
+msg "building kmod/ dir $T_KMOD"
+cmd cd "$T_KMOD"
+cmd make
+cmd sync
+cmd cd -
 
-	if [ -n "$T_KMOD_BRANCH" ]; then
-	    cmd git fetch
-	    cmd git rev-parse --verify "origin/$T_KMOD_BRANCH"
-	    cmd git checkout -B "$T_KMOD_BRANCH" --track origin/$T_KMOD_BRANCH
-	    cmd git pull --rebase
-	fi
-	cmd make
-	cmd sync
-	cmd cd -
+# build utils
+msg "building utils/ dir $T_UTILS"
+cmd cd "$T_UTILS"
+cmd make
+cmd sync
+cmd cd -
 
-	kmod="$T_KMOD_REPO/src/scoutfs.ko"
-fi
-
-# checkout and build utils
-if [ -n "$T_UTILS_REPO" ]; then
-	msg "building utils repo $T_UTILS_REPO branch $T_UTILS_BRANCH"
-	cmd cd "$T_UTILS_REPO"
-
-	if [ -n "$T_UTILS_BRANCH" ]; then
-	    cmd git fetch
-	    cmd git rev-parse --verify "origin/$T_UTILS_BRANCH"
-	    cmd git checkout -B "$T_UTILS_BRANCH" --track origin/$T_UTILS_BRANCH
-	    cmd git pull --rebase
-	    # might need git clean to remove stale src/*.o after update
-	fi
-	cmd make
-	cmd sync
-	cmd cd -
-
-	# we can now run the built scoutfs binary, prefer over installed
-	PATH="$T_UTILS_REPO/src:$PATH"
-fi
+# we can now run the built scoutfs binary, prefer over installed
+PATH="$T_UTILS/src:$PATH"
 
 # verify xfstests branch
 if [ -n "$T_XFSTESTS_REPO" ] && [ -z "$T_SKIP_CHECKOUT" ]; then
@@ -355,7 +311,7 @@ if [ -n "$T_INSMOD" ]; then
 	msg "removing and reinserting scoutfs module"
 	test -e /sys/module/scoutfs && cmd rmmod scoutfs
 	cmd modprobe libcrc32c
-	cmd insmod "$T_KMOD_REPO/src/scoutfs.ko"
+	cmd insmod "$T_KMOD/src/scoutfs.ko"
 fi
 
 if [ -n "$T_TRACE_GLOB" ]; then

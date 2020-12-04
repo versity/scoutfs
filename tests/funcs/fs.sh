@@ -169,7 +169,7 @@ t_reinsert_remount_all()
 
 	t_quiet rmmod scoutfs || \
 		t_fail "rmmod scoutfs failed"
-	t_quiet insmod "$T_KMOD_REPO/src/scoutfs.ko" ||
+	t_quiet insmod "$T_KMOD/src/scoutfs.ko" ||
 		t_fail "insmod scoutfs failed"
 
 	t_quiet t_mount_all || t_fail "mounting all failed"
