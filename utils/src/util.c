@@ -11,6 +11,8 @@
 
 #include "util.h"
 
+#define ENV_PATH "SCOUTFS_MOUNT_PATH"
+
 static int open_path(char *path, int flags)
 {
 	wordexp_t exp_result;
@@ -51,7 +53,7 @@ int get_path(char *path, int flags)
 	if (path)
 		return open_path(path, flags);
 
-	env_path = getenv("SCOUTFS_PATH");
+	env_path = getenv(ENV_PATH);
 	if (env_path)
 		return open_path(path, flags);
 

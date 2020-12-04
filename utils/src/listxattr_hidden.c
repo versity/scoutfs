@@ -137,14 +137,15 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
+static struct argp argp = {
+	NULL,
+	parse_opt,
+	"FILE",
+	"Print the names of hidden xattrs on a file"
+};
+
 static int list_hidden_xattrs_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		NULL,
-		parse_opt,
-		"FILE",
-		"Print the names of hidden xattrs on a file"
-	};
 	struct list_hidden_xattr_args list_hidden_xattr_args = {NULL};
 	int ret;
 
@@ -158,7 +159,5 @@ static int list_hidden_xattrs_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) listxattr_hidden_ctor(void)
 {
-	cmd_register("list-hidden-xattrs", "<path>",
-		     "print the names of hidden xattrs on a file",
-		     list_hidden_xattrs_cmd);
+	cmd_register_argp("list-hidden-xattrs", &argp, GROUP_INFO, list_hidden_xattrs_cmd);
 }

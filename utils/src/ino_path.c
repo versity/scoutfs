@@ -113,14 +113,15 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
+static struct argp argp = {
+	options,
+	parse_opt,
+	"INODE-NUM",
+	"Print paths that refer to inode number"
+};
+
 static int ino_path_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		options,
-		parse_opt,
-		"INODE-NUM",
-		"Print paths that refer to inode number"
-	};
 	struct ino_args ino_args = {NULL};
 	int ret;
 
@@ -134,6 +135,5 @@ static int ino_path_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) ino_path_ctor(void)
 {
-	cmd_register("ino-path", "<ino> <path>",
-		     "print paths that refer to inode #", ino_path_cmd);
+	cmd_register_argp("ino-path", &argp, GROUP_SEARCH, ino_path_cmd);
 }

@@ -163,18 +163,19 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
-static int stage_cmd(int argc, char **argv)
-{
-	struct argp argp = {
+static struct argp stage_argp = {
 		options,
 		parse_stage_opts,
 		"ARCHIVE-FILE STAGE-FILE --data-version VERSION",
 		"Write archive file contents to an offline file"
 	};
+
+static int stage_cmd(int argc, char **argv)
+{
 	struct stage_args stage_args = {NULL};
 	int ret;
 
-	ret = argp_parse(&argp, argc, argv, 0, NULL, &stage_args);
+	ret = argp_parse(&stage_argp, argc, argv, 0, NULL, &stage_args);
 	if (ret)
 		return ret;
 
@@ -183,8 +184,7 @@ static int stage_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) stage_ctor(void)
 {
-	cmd_register("stage", "<archive file> <file> -V <version>",
-		     "write archive file contents to an offline file", stage_cmd);
+	cmd_register_argp("stage", &stage_argp, GROUP_AGENT, stage_cmd);
 }
 
 struct release_args {
@@ -277,18 +277,19 @@ static int parse_release_opts(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
+static struct argp release_argp = {
+	options,
+	parse_release_opts,
+	"FILE --data-version VERSION",
+	"Mark file region offline and free extents"
+};
+
 static int release_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		options,
-		parse_release_opts,
-		"FILE --data-version VERSION",
-		"Mark file region offline and free extents"
-	};
 	struct release_args release_args = {NULL};
 	int ret;
 
-	ret = argp_parse(&argp, argc, argv, 0, NULL, &release_args);
+	ret = argp_parse(&release_argp, argc, argv, 0, NULL, &release_args);
 	if (ret)
 		return ret;
 
@@ -297,6 +298,5 @@ static int release_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) release_ctor(void)
 {
-	cmd_register("release", "<path> <vers>",
-		     "mark file region offline and free extents", release_cmd);
+	cmd_register_argp("release", &release_argp, GROUP_AGENT, release_cmd);
 }

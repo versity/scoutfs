@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include <argp.h>
 
 #include "cmd.h"
 #include "util.h"

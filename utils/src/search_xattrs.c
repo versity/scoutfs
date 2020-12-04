@@ -112,14 +112,16 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
+static struct argp argp = {
+	options,
+	parse_opt,
+	"XATTR-NAME",
+	"Print inode numbers of inodes which may have given xattr"
+};
+
 static int search_xattrs_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		options,
-		parse_opt,
-		"XATTR-NAME",
-		"Print inode numbers of inodes which may have given xattr"
-	};
+
 	struct xattr_args xattr_args = {NULL};
 	int ret;
 
@@ -132,7 +134,5 @@ static int search_xattrs_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) search_xattrs_ctor(void)
 {
-	cmd_register("search-xattrs", "-n name -f <path>",
-		     "print inode numbers of inodes which may have given xattr",
-		     search_xattrs_cmd);
+	cmd_register_argp("search-xattrs", &argp, GROUP_INFO, search_xattrs_cmd);
 }

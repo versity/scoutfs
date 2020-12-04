@@ -1061,14 +1061,15 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
+static struct argp argp = {
+	NULL,
+	parse_opt,
+	"META-DEV",
+	"Print metadata structures"
+};
+
 static int print_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		NULL,
-		parse_opt,
-		"META-DEV",
-		"Print metadata structures"
-	};
 	struct print_args print_args = {NULL};
 	int ret;
 
@@ -1082,6 +1083,5 @@ static int print_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) print_ctor(void)
 {
-	cmd_register("print", "<device>", "print metadata structures",
-			print_cmd);
+	cmd_register_argp("print", &argp, GROUP_DEBUG, print_cmd);
 }

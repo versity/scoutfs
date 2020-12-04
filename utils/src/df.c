@@ -175,14 +175,15 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
+static struct argp argp = {
+	options,
+	parse_opt,
+	"",
+	"Show metadata and data block usage"
+};
+
 static int df_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		options,
-		parse_opt,
-		NULL,
-		"Show metadata and data block usage"
-	};
 	struct df_args df_args = {NULL};
 	int ret;
 
@@ -196,6 +197,5 @@ static int df_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) df_ctor(void)
 {
-	cmd_register("df", "<path>",
-		     "Show metadata and data block usage", df_cmd);
+	cmd_register_argp("df", &argp, GROUP_CORE, df_cmd);
 }

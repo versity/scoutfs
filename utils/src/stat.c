@@ -202,18 +202,19 @@ static struct argp_option stat_options[] = {
 	{ NULL }
 };
 
+static struct argp stat_argp = {
+	stat_options,
+	stat_parse_opt,
+	"FILE",
+	"Show ScoutFS extra inode information"
+};
+
 static int stat_more_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		stat_options,
-		stat_parse_opt,
-		"FILE",
-		"Show ScoutFS extra inode information"
-	};
 	struct stat_args stat_args = {NULL};
 	int ret;
 
-	ret = argp_parse(&argp, argc, argv, 0, NULL, &stat_args);
+	ret = argp_parse(&stat_argp, argc, argv, 0, NULL, &stat_args);
 	if (ret)
 		return ret;
 	stat_args.is_inode = true;
@@ -244,18 +245,20 @@ static int statfs_parse_opt(int key, char *arg, struct argp_state *state)
 
 	return 0;
 }
+
+static struct argp statfs_argp = {
+	statfs_options,
+	statfs_parse_opt,
+	"",
+	"Show ScoutFS file system information"
+};
+
 static int statfs_more_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		statfs_options,
-		statfs_parse_opt,
-		NULL,
-		"Show ScoutFS file system information"
-	};
 	struct stat_args stat_args = {NULL};
 	int ret;
 
-	ret = argp_parse(&argp, argc, argv, 0, NULL, &stat_args);
+	ret = argp_parse(&statfs_argp, argc, argv, 0, NULL, &stat_args);
 	if (ret)
 		return ret;
 	stat_args.is_inode = false;
@@ -265,12 +268,10 @@ static int statfs_more_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) stat_more_ctor(void)
 {
-	cmd_register("stat", "<path>",
-		     "show scoutfs inode information", stat_more_cmd);
+	cmd_register_argp("stat", &stat_argp, GROUP_INFO, stat_more_cmd);
 }
 
 static void __attribute__((constructor)) statfs_more_ctor(void)
 {
-	cmd_register("statfs", "<path>",
-		     "show scoutfs file system information", statfs_more_cmd);
+	cmd_register_argp("statfs", &statfs_argp, GROUP_INFO, statfs_more_cmd);
 }

@@ -120,14 +120,15 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
+static struct argp argp = {
+	options,
+	parse_opt,
+	"FILE",
+	"Set attributes on newly-created zero-length file"
+};
+
 static int setattr_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		options,
-		parse_opt,
-		"FILE",
-		"Set attributes on newly-created zero-length file"
-	};
 	struct setattr_args setattr_args = {NULL};
 	int ret;
 
@@ -140,7 +141,5 @@ static int setattr_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) setattr_more_ctor(void)
 {
-	cmd_register("setattr", "<path>",
-		     "set attributes on newly-created zero-length file",
-		     setattr_cmd);
+	cmd_register_argp("setattr", &argp, GROUP_AGENT, setattr_cmd);
 }

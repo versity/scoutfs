@@ -455,14 +455,15 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
+static struct argp argp = {
+	options,
+	parse_opt,
+	"META-DEVICE DATA-DEVICE",
+	"Initialize a new ScoutFS filesystem"
+};
+
 static int mkfs_cmd(int argc, char *argv[])
 {
-	struct argp argp = {
-		options,
-		parse_opt,
-		"META-DEVICE DATA-DEVICE",
-		"Initialize a new ScoutFS filesystem"
-	};
 	struct mkfs_args mkfs_args = {0};
 	int ret;
 
@@ -475,7 +476,7 @@ static int mkfs_cmd(int argc, char *argv[])
 
 static void __attribute__((constructor)) mkfs_ctor(void)
 {
-	cmd_register("mkfs", "<meta-device> <data-device>", "write a new file system", mkfs_cmd);
+	cmd_register_argp("mkfs", &argp, GROUP_CORE, mkfs_cmd);
 
 	/* for lack of some other place to put these.. */
 	build_assert(sizeof(uuid_t) == SCOUTFS_UUID_BYTES);

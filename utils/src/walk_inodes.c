@@ -187,13 +187,15 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
+static struct argp argp = {
+	options,
+	walk_inodes_parse_opt,
+	"<meta_seq|data_seq> FIRST-ENTRY LAST-ENTRY",
+	"Print range of indexed inodes"
+};
+
 static int walk_inodes_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		options,
-		walk_inodes_parse_opt,
-		"<meta_seq|data_seq> FIRST-ENTRY LAST-ENTRY"
-	};
 	struct walk_inodes_args walk_inodes_args = {NULL};
 	int ret;
 
@@ -207,6 +209,5 @@ static int walk_inodes_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) walk_inodes_ctor(void)
 {
-	cmd_register("walk-inodes", "<index> <first> <last>",
-		     "print range of indexed inodes", walk_inodes_cmd);
+	cmd_register_argp("walk-inodes", &argp, GROUP_SEARCH, walk_inodes_cmd);
 }

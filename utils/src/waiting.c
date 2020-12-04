@@ -131,18 +131,19 @@ static struct argp_option waiting_options[] = {
 	{ NULL }
 };
 
+static struct argp waiting_argp = {
+	waiting_options,
+	waiting_parse_opt,
+	"--inode INODE-NUM --block BLOCK-NUM",
+	"Print operations waiting for data blocks"
+};
+
 static int waiting_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		waiting_options,
-		waiting_parse_opt,
-		"--inode INODE-NUM --block BLOCK-NUM",
-		"Print operations waiting for data blocks"
-	};
 	struct waiting_args waiting_args = {NULL};
 	int ret;
 
-	ret = argp_parse(&argp, argc, argv, 0, NULL, &waiting_args);
+	ret = argp_parse(&waiting_argp, argc, argv, 0, NULL, &waiting_args);
 	if (ret)
 		return ret;
 
@@ -151,8 +152,7 @@ static int waiting_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) waiting_ctor(void)
 {
-	cmd_register("data-waiting", "--inode <inode> --blockno <blockno>",
-		     "print ops waiting for data blocks", waiting_cmd);
+	cmd_register_argp("data-waiting", &waiting_argp, GROUP_AGENT, waiting_cmd);
 }
 
 struct wait_err_args {
@@ -298,17 +298,10 @@ static struct argp wait_err_argp = {
 
 static int wait_err_cmd(int argc, char **argv)
 {
-	struct argp argp = {
-		wait_err_options,
-		wait_err_parse_opt,
-		"--inode INODE-NUM --block BLOCK-NUM --version VER-NUM "
-		"--offset OFF-NUM --count COUNT --op OP --err ERR",
-		"Return error from matching waiters"
-	};
 	struct wait_err_args wait_err_args = {NULL};
 	int ret;
 
-	ret = argp_parse(&argp, argc, argv, 0, NULL, &wait_err_args);
+	ret = argp_parse(&wait_err_argp, argc, argv, 0, NULL, &wait_err_args);
 	if (ret)
 		return ret;
 
@@ -318,7 +311,5 @@ static int wait_err_cmd(int argc, char **argv)
 
 static void __attribute__((constructor)) data_wait_err_ctor(void)
 {
-	cmd_register("data-wait-err", "<path> <ino> <vers> <offset> <count> <op> <err>",
-		     "return error from matching waiters",
-		     wait_err_cmd);
+	cmd_register_argp("data-wait-err", &wait_err_argp, GROUP_AGENT, wait_err_cmd);
 }

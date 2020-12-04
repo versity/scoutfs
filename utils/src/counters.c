@@ -303,14 +303,15 @@ static struct argp_option options[] = {
 	{ NULL }
 };
 
+static struct argp argp = {
+	options,
+	parse_opt,
+	"SYSFS-DIR",
+	"Show counters for a mounted volume"
+};
+
 static int counters_cmd(int argc, char *argv[])
 {
-	struct argp argp = {
-		options,
-		parse_opt,
-		"SYSFS-DIR",
-		"Show counters for a mounted volume"
-	};
 	struct counters_args counters_args = {NULL};
 	int ret;
 
@@ -324,7 +325,5 @@ static int counters_cmd(int argc, char *argv[])
 
 static void __attribute__((constructor)) counters_ctor(void)
 {
-	cmd_register("counters", "[-t] <sysfs dir>",
-		     "show [tabular] counters for a given mounted volume",
-		     counters_cmd);
+	cmd_register_argp("counters", &argp, GROUP_INFO, counters_cmd);
 }
