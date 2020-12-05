@@ -6,7 +6,7 @@ from the ground up to support large archival systems.
 Its key differentiating features are:
 
  - Integrated consistent indexing accelerates archival maintenance operations
- - Log-structured commits allow nodes to write concurrently without contention
+ - Commit logs allow nodes to write concurrently without contention
 
 It meets best of breed expectations:
 
@@ -87,14 +87,11 @@ of the block devices are the same on all the nodes.
 
    ```shell
    yum install kernel-devel
-   git clone git@github.com:versity/scoutfs-kmod-dev.git
-   make -C scoutfs-kmod-dev module 
+   git clone git@github.com:versity/scoutfs.git
+   make -C scoutfs
    modprobe libcrc32c
-   insmod scoutfs-kmod-dev/src/scoutfs.ko
-
-   git clone git@github.com:versity/scoutfs-utils-dev.git
-   make -C scoutfs-utils-dev
-   alias scoutfs=$PWD/scoutfs-utils-dev/src/scoutfs
+   insmod scoutfs/kmod/src/scoutfs.ko
+   alias scoutfs=$PWD/scoutfs/utils/src/scoutfs
    ```
 
 2. Make a New Filesystem (**destroys contents, no questions asked**)
