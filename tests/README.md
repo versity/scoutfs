@@ -7,33 +7,24 @@ the test mounts.
 
 ## Invoking Tests
 
-The basic test invocation has to specify the location of locally checked
-out git repos for scoutfs software that will be modified by the script,
-the number of mounts to test, whether to create a new fs and insert the
+The basic test invocation has to specify the devices for the fs the
+number of mounts to test, whether to create a new fs and insert the
 built module, and where to put the results.
 
     # bash ./run-tests.sh                       \
-        -d /dev/vda                             \
+        -M /dev/vda                             \
+        -D /dev/vdb                             \
         -i                                      \
-        -K $HOME/git/scoutfs-kmod-dev           \
-        -k master                               \
         -m                                      \
         -n 3                                    \
         -q 2                                    \
-        -r ./results                            \
-        -U $HOME/git/scoutfs-utils-dev          \
-        -u master
+        -r ./results
 
 All options can be seen by running with -h.
 
-The script will try to check out a newly pulled version of the specified
-branch in each specified local repository.  They should be clean and the
-script will try to fetch from origin and specifically check out local
-branches that track the branches on origin.
-
 This script is built to test multi-node systems on one host by using
-different mounts of the same device.  The script creates a fake block
-device in front of the main fs block device for each mount that will be
+different mounts of the same devices.  The script creates a fake block
+device in front of each fs block device for each mount that will be
 tested.  Currently it will create free loop devices and will mount on
 /mnt/test.[0-9].
 
@@ -45,9 +36,12 @@ run is found in the sequence file.
 ## xfstests
 
 The last test that is run checks out, builds, and runs xfstests.  It
-needs -X and -x options for the xfstests git repo and branch.  The test
+needs -X and -x options for the xfstests git repo and branch.  It also
+needs spare devices on which to make scratch scoutfs volumes.  The test
 verifies that the expected set of xfstests tests ran and passed.
 
+        -f /dev/vdc                             \
+        -e /dev/vdd                             \
         -X $HOME/git/scoutfs-xfstests           \
         -x scoutfs                              \
 
@@ -108,18 +102,21 @@ t\_ functions to mount all configured mount points.
 Tests have a number of exported environment variables that are commonly
 used during the test.
 
-| Variable      | Description          | Origin          | Example            |
-| ------------- | -------------------  | --------------- | ------------------ |
-| T\_B[0-9]     | per-mount blockdev   | created per run | /dev/loop0         |
-| T\_D[0-9]     | per-mount test dir   | made for test   | /mnt/test.[0-9]/t  |
-| T\_DEVICE     | main FS device       | -d              | /dev/sda           |
-| T\_EXDEV      | extra scratch dev    | -e              | /dev/sdb           |
-| T\_M[0-9]     | mount paths          | mounted per run | /mnt/test.[0-9]/   |
-| T\_NR\_MOUNTS | number of mounts     | -n              | 3                  |
-| T\_O[0-9]     | mount options        | created per run | -o server\_addr=   |
-| T\_QUORUM     | quorum count         | -q              | 2                  |
-| T\_TMP        | per-test tmp prefix  | made for test   | results/tmp/t/tmp  |
-| T\_TMPDIR     | per-test tmp dir dir | made for test   | results/tmp/t      |
+| Variable         | Description          | Origin          | Example           |
+| ---------------- | -------------------  | --------------- | ----------------- |
+| T\_MB[0-9]       | per-mount meta bdev  | created per run | /dev/loop0        |
+| T\_DB[0-9]       | per-mount data bdev  | created per run | /dev/loop1        |
+| T\_D[0-9]        | per-mount test dir   | made for test   | /mnt/test.[0-9]/t |
+| T\_META\_DEVICE  | main FS meta bdev    | -M              | /dev/vda          |
+| T\_DATA\_DEVICE  | main FS data bdev    | -D              | /dev/vdb          |
+| T\_EX\_META\_DEV | scratch meta bdev    | -f              | /dev/vdd          |
+| T\_EX\_DATA\_DEV | scratch meta bdev    | -e              | /dev/vdc          |
+| T\_M[0-9]        | mount paths          | mounted per run | /mnt/test.[0-9]/  |
+| T\_NR\_MOUNTS    | number of mounts     | -n              | 3                 |
+| T\_O[0-9]        | mount options        | created per run | -o server\_addr=  |
+| T\_QUORUM        | quorum count         | -q              | 2                 |
+| T\_TMP           | per-test tmp prefix  | made for test   | results/tmp/t/tmp |
+| T\_TMPDIR        | per-test tmp dir dir | made for test   | results/tmp/t     |
 
 There are also a number of variables that are set in response to options
 and are exported but their use is rare so they aren't included here.
