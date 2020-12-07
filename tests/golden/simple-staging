@@ -1,0 +1,23 @@
+== create/release/stage single block file
+== create/release/stage larger file
+== multiple release,drop_cache,stage cycles
+== release+stage shouldn't change stat, data seq or vers
+== stage does change meta_seq
+== can't use stage to extend online file
+stage returned -1, not 4096: error Invalid argument (22)
+scoutfs: stage failed: Input/output error (5)
+== wrapped region fails
+stage returned -1, not 4096: error Invalid argument (22)
+scoutfs: stage failed: Input/output error (5)
+== non-block aligned offset fails
+stage returned -1, not 4095: error Invalid argument (22)
+scoutfs: stage failed: Input/output error (5)
+== non-block aligned len within block fails
+stage returned -1, not 1024: error Invalid argument (22)
+scoutfs: stage failed: Input/output error (5)
+== partial final block that writes to i_size does work
+== zero length stage doesn't bring blocks online
+== stage of non-regular file fails
+ioctl failed on '/mnt/test/test/simple-staging/file-char': Inappropriate ioctl for device (25)
+stage returned -1, not 1: error Inappropriate ioctl for device (25)
+scoutfs: stage failed: Input/output error (5)

@@ -1,0 +1,11 @@
+== create file for xattr ping pong
+# file: /mnt/test/test/stale-btree-read/file
+user.xat="initial"
+
+== retry btree block read
+trigger btree_stale_read armed: 1
+# file: /mnt/test/test/stale-btree-read/file
+user.xat="btree"
+
+trigger btree_stale_read after: 0
+counter btree_stale_read diff 1

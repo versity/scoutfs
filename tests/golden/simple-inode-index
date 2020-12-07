@@ -1,0 +1,9 @@
+== dirs shouldn't appear in data_seq queries
+== two created files are present and come after each other
+found first
+found second
+== unlinked entries must not be present
+== dirty inodes can not be present
+== changing metadata must increase meta seq
+== changing contents must increase data seq
+== make sure dirtying doesn't livelock walk

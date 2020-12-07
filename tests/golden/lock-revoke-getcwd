@@ -1,0 +1,2 @@
+=== getcwd after lock revocation
+trigger statfs_lock_purge armed: 1
