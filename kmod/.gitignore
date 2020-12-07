@@ -1,0 +1,16 @@
+*.o
+*.ko
+*.mod.c
+*.cmd
+*~
+src/.tmp_versions/
+src/Module.symvers
+src/modules.order
+cscope.*
+*.spec
+*.sw[po]
+rpmbuild/
+rpms/
+
+scoutfs-*.git*/
+scoutfs-kmod-*.tar
