@@ -187,15 +187,13 @@ static void stop_server(struct server_info *server)
  * (lock_server) and which are not called directly by the server core
  * (async timeout work).
  */
-int scoutfs_server_hold_commit(struct super_block *sb)
+void scoutfs_server_hold_commit(struct super_block *sb)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	scoutfs_inc_counter(sb, server_commit_hold);
 
 	down_read(&server->commit_rwsem);
-
-	return 0;
 }
 
 /*
@@ -394,9 +392,7 @@ static int server_alloc_inodes(struct super_block *sb,
 
 	memcpy(&lecount, arg, arg_len);
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto out;
+	scoutfs_server_hold_commit(sb);
 
 	spin_lock(&sbi->next_ino_lock);
 	ino = le64_to_cpu(super->next_ino);
@@ -404,7 +400,7 @@ static int server_alloc_inodes(struct super_block *sb,
 	le64_add_cpu(&super->next_ino, nr);
 	spin_unlock(&sbi->next_ino_lock);
 
-	ret = scoutfs_server_apply_commit(sb, ret);
+	ret = scoutfs_server_apply_commit(sb, 0);
 	if (ret == 0) {
 		ial.ino = cpu_to_le64(ino);
 		ial.nr = cpu_to_le64(nr);
@@ -606,9 +602,7 @@ static int server_get_log_trees(struct super_block *sb,
 		goto out;
 	}
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto out;
+	scoutfs_server_hold_commit(sb);
 
 	mutex_lock(&server->logs_mutex);
 
@@ -717,11 +711,7 @@ static int server_commit_log_trees(struct super_block *sb,
 	/* don't modify the caller's log_trees */
 	memcpy(&lt, arg, sizeof(struct scoutfs_log_trees));
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret < 0) {
-		scoutfs_err(sb, "server error preparing commit: %d", ret);
-		goto out;
-	}
+	scoutfs_server_hold_commit(sb);
 
 	mutex_lock(&server->logs_mutex);
 
@@ -952,9 +942,7 @@ static int server_advance_seq(struct super_block *sb,
 		goto out;
 	}
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto out;
+	scoutfs_server_hold_commit(sb);
 
 	down_write(&server->seq_rwsem);
 
@@ -1151,9 +1139,7 @@ static int server_srch_get_compact(struct super_block *sb,
 		goto out;
 	}
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto out;
+	scoutfs_server_hold_commit(sb);
 
 	mutex_lock(&server->srch_mutex);
 	ret = scoutfs_srch_get_compact(sb, &server->alloc, &server->wri,
@@ -1215,9 +1201,7 @@ static int server_srch_commit_compact(struct super_block *sb,
 	}
 	sc = arg;
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto out;
+	scoutfs_server_hold_commit(sb);
 
 	mutex_lock(&server->srch_mutex);
 	ret = scoutfs_srch_commit_compact(sb, &server->alloc, &server->wri,
@@ -1347,9 +1331,7 @@ static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connecti
 
 	mutex_lock(&server->volopt_mutex);
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto unlock;
+	scoutfs_server_hold_commit(sb);
 
 	if (le64_to_cpu(volopt->set_bits) & SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT) {
 		opt = le64_to_cpu(volopt->data_alloc_zone_blocks);
@@ -1389,7 +1371,6 @@ apply:
 		super->volopt = server->volopt;
 	write_seqcount_end(&server->volopt_seqcount);
 
-unlock:
 	mutex_unlock(&server->volopt_mutex);
 out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
@@ -1419,9 +1400,7 @@ static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connec
 
 	mutex_lock(&server->volopt_mutex);
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto unlock;
+	scoutfs_server_hold_commit(sb);
 
 	for (i = 0, bit = 1, opt = first_valopt(&super->volopt); i < 64; i++, bit <<= 1, opt++) {
 		if (le64_to_cpu(volopt->set_bits) & bit) {
@@ -1439,7 +1418,6 @@ static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connec
 		super->volopt = server->volopt;
 	write_seqcount_end(&server->volopt_seqcount);
 
-unlock:
 	mutex_unlock(&server->volopt_mutex);
 out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
@@ -1652,9 +1630,7 @@ static int server_greeting(struct super_block *sb,
 	}
 
 	if (gr->server_term == 0) {
-		ret = scoutfs_server_hold_commit(sb);
-		if (ret < 0)
-			goto send_err;
+		scoutfs_server_hold_commit(sb);
 
 		ret = insert_mounted_client(sb, le64_to_cpu(gr->rid), le64_to_cpu(gr->flags),
 					    &conn->peername);
@@ -1727,9 +1703,7 @@ static int reclaim_rid(struct super_block *sb, u64 rid)
 {
 	int ret;
 
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret < 0)
-		return ret;
+	scoutfs_server_hold_commit(sb);
 
 	/* delete mounted client last, recovery looks for it */
 	ret = scoutfs_lock_server_farewell(sb, rid) ?:
