@@ -518,6 +518,7 @@ static int process_waiting_requests(struct super_block *sb,
 
 		nl.key = snode->key;
 		nl.new_mode = req->mode;
+		nl.write_seq = 0;
 
 		/* see if there's an existing compatible grant to replace */
 		gr = find_entry(snode, &snode->granted, req->rid);

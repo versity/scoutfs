@@ -2250,7 +2250,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct scoutfs_net_connection *conn = NULL;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
 	struct sockaddr_in sin;
-	u64 max_vers;
+	u64 max_seq;
 	int ret;
 
 	trace_scoutfs_server_work_enter(sb, 0, 0);
@@ -2314,12 +2314,12 @@ static void scoutfs_server_worker(struct work_struct *work)
 	    le64_to_cpu(server->meta_avail->total_len))
 		swap(server->meta_avail, server->meta_freed);
 
-	ret = scoutfs_forest_get_max_vers(sb, super, &max_vers);
+	ret = scoutfs_forest_get_max_seq(sb, super, &max_seq);
 	if (ret) {
-		scoutfs_err(sb, "server couldn't find max item vers: %d", ret);
+		scoutfs_err(sb, "server couldn't find max item seq: %d", ret);
 		goto shutdown;
 	}
-	scoutfs_server_set_seq_if_greater(sb, max_vers);
+	scoutfs_server_set_seq_if_greater(sb, max_seq);
 
 	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri) ?:
 	      start_recovery(sb);

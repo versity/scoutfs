@@ -37,9 +37,9 @@
  *
  * The log btrees are modified by multiple transactions over time so
  * there is no consistent ordering relationship between the items in
- * different btrees.  Each item in a log btree stores a version number
- * for the item.  Readers check log btrees for the most recent version
- * that it should use.
+ * different btrees.  Each item in a log btree stores a seq for the
+ * item.  Readers check log btrees for the most recent seq that it
+ * should use.
  *
  * The item cache reads items in bulk from stable btrees, and writes a
  * transaction's worth of dirty items into the item log btree.
@@ -249,7 +249,7 @@ static int forest_read_items(struct super_block *sb, struct scoutfs_key *key,
  * If we hit stale blocks and retry we can call the callback for
  * duplicate items.  This is harmless because the items are stable while
  * the caller holds their cluster lock and the caller has to filter out
- * item versions anyway.
+ * item seqs anyway.
  */
 int scoutfs_forest_read_items(struct super_block *sb,
 			      struct scoutfs_lock *lock,
@@ -426,29 +426,29 @@ out:
 
 /*
  * The caller is commiting items in the transaction and has found the
- * greatest item version amongst them.  We store it in the log_trees root
+ * greatest item seq amongst them.  We store it in the log_trees root
  * to send to the server.
  */
-void scoutfs_forest_set_max_vers(struct super_block *sb, u64 max_vers)
+void scoutfs_forest_set_max_seq(struct super_block *sb, u64 max_seq)
 {
 	DECLARE_FOREST_INFO(sb, finf);
 
-	finf->our_log.max_item_vers = cpu_to_le64(max_vers);
+	finf->our_log.max_item_seq = cpu_to_le64(max_seq);
 }
 
 /*
- * The server is calling during setup to find the greatest item version
+ * The server is calling during setup to find the greatest item seq
  * amongst all the log tree roots.  They have the authoritative current
  * super.
  *
- * Item versions are only used to compare items in log trees, not in the
- * main fs tree.  All we have to do is find the greatest version amongst
- * the log_trees so that new locks will have a write_version greater
- * than all the items in the log_trees.
+ * Item seqs are only used to compare items in log trees, not in the
+ * main fs tree.  All we have to do is find the greatest seq amongst the
+ * log_trees so that the core seq will have a greater seq than all the
+ * items in the log_trees.
  */
-int scoutfs_forest_get_max_vers(struct super_block *sb,
-				struct scoutfs_super_block *super,
-				u64 *vers)
+int scoutfs_forest_get_max_seq(struct super_block *sb,
+			       struct scoutfs_super_block *super,
+			       u64 *seq)
 {
 	struct scoutfs_log_trees *lt;
 	SCOUTFS_BTREE_ITEM_REF(iref);
@@ -456,7 +456,7 @@ int scoutfs_forest_get_max_vers(struct super_block *sb,
 	int ret;
 
 	scoutfs_key_init_log_trees(&ltk, 0, 0);
-	*vers = 0;
+	*seq = 0;
 
 	for (;; scoutfs_key_inc(&ltk)) {
 		ret = scoutfs_btree_next(sb, &super->logs_root, &ltk, &iref);
@@ -464,8 +464,7 @@ int scoutfs_forest_get_max_vers(struct super_block *sb,
 			if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
 				ltk = *iref.key;
 				lt = iref.val;
-				*vers = max(*vers,
-					    le64_to_cpu(lt->max_item_vers));
+				*seq = max(*seq, le64_to_cpu(lt->max_item_seq));
 			} else {
 				ret = -EIO;
 			}
@@ -534,7 +533,7 @@ void scoutfs_forest_init_btrees(struct super_block *sb,
 	memset(&finf->our_log, 0, sizeof(finf->our_log));
 	finf->our_log.item_root = lt->item_root;
 	finf->our_log.bloom_ref = lt->bloom_ref;
-	finf->our_log.max_item_vers = lt->max_item_vers;
+	finf->our_log.max_item_seq = lt->max_item_seq;
 	finf->our_log.rid = lt->rid;
 	finf->our_log.nr = lt->nr;
 	finf->srch_file = lt->srch_file;
@@ -564,7 +563,7 @@ void scoutfs_forest_get_btrees(struct super_block *sb,
 	lt->item_root = finf->our_log.item_root;
 	lt->bloom_ref = finf->our_log.bloom_ref;
 	lt->srch_file = finf->srch_file;
-	lt->max_item_vers = finf->our_log.max_item_vers;
+	lt->max_item_seq = finf->our_log.max_item_seq;
 
 	scoutfs_block_put(sb, finf->srch_bl);
 	finf->srch_bl = NULL;

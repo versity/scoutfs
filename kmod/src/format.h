@@ -449,13 +449,13 @@ struct scoutfs_log_trees {
 	struct scoutfs_srch_file srch_file;
 	__le64 data_alloc_zone_blocks;
 	__le64 data_alloc_zones[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
-	__le64 max_item_vers;
+	__le64 max_item_seq;
 	__le64 rid;
 	__le64 nr;
 };
 
 struct scoutfs_log_item_value {
-	__le64 vers;
+	__le64 seq;
 	__u8 flags;
 	__u8 __pad[7];
 	__u8 data[];
