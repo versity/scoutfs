@@ -71,6 +71,10 @@ int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
 int scoutfs_server_send_omap_response(struct super_block *sb, u64 rid, u64 id,
 				      struct scoutfs_open_ino_map *map, int err);
 
+u64 scoutfs_server_seq(struct super_block *sb);
+u64 scoutfs_server_next_seq(struct super_block *sb);
+void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq);
+
 struct sockaddr_in;
 struct scoutfs_quorum_elected_info;
 int scoutfs_server_start(struct super_block *sb, u64 term);

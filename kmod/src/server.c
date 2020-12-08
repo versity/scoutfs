@@ -65,6 +65,9 @@ struct server_info {
 	u64 term;
 	struct scoutfs_net_connection *conn;
 
+	/* synced with superblock seq on commits */
+	atomic64_t seq_atomic;
+
 	/* request processing coordinates shared commits */
 	struct rw_semaphore commit_rwsem;
 	struct llist_head commit_waiters;
@@ -248,6 +251,35 @@ static void get_roots(struct super_block *sb,
 	} while (read_seqcount_retry(&server->roots_seqcount, seq));
 }
 
+u64 scoutfs_server_seq(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+
+	return atomic64_read(&server->seq_atomic);
+}
+
+u64 scoutfs_server_next_seq(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+
+	return atomic64_inc_return(&server->seq_atomic);
+}
+
+void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	u64 expect;
+	u64 was;
+
+	expect = atomic64_read(&server->seq_atomic);
+	while (seq > expect) {
+	       was = atomic64_cmpxchg(&server->seq_atomic, expect, seq);
+	       if (was == expect)
+		       break;
+	       expect = was;
+	}
+}
+
 static void set_roots(struct server_info *server,
 		      struct scoutfs_btree_root *fs_root,
 		      struct scoutfs_btree_root *logs_root,
@@ -333,6 +365,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 		goto out;
 	}
 
+	super->seq = cpu_to_le64(atomic64_read(&server->seq_atomic));
 	super->server_meta_avail[server->other_ind ^ 1] = server->alloc.avail;
 	super->server_meta_freed[server->other_ind ^ 1] = server->alloc.freed;
 
@@ -2258,6 +2291,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	server->volopt = super->volopt;
 	write_seqcount_end(&server->volopt_seqcount);
 
+	atomic64_set(&server->seq_atomic, le64_to_cpu(super->seq));
 	set_roots(server, &super->fs_root, &super->logs_root,
 		  &super->srch_root);
 	scoutfs_block_writer_init(sb, &server->wri);
