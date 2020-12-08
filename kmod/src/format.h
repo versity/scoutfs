@@ -690,7 +690,6 @@ struct scoutfs_super_block {
 	__u8 uuid[SCOUTFS_UUID_BYTES];
 	__le64 seq;
 	__le64 next_ino;
-	__le64 next_trans_seq;
 	__le64 total_meta_blocks;	/* both static and dynamic */
 	__le64 first_meta_blkno;	/* first dynamically allocated */
 	__le64 last_meta_blkno;

@@ -983,8 +983,7 @@ static int server_advance_seq(struct super_block *sb,
 	if (ret < 0)
 		goto unlock;
 
-	seq = le64_to_cpu(super->next_trans_seq);
-	le64_add_cpu(&super->next_trans_seq, 1);
+	seq = scoutfs_server_next_seq(sb);
 
 	trace_scoutfs_trans_seq_advance(sb, rid, seq);
 
@@ -1058,7 +1057,7 @@ static int server_get_last_seq(struct super_block *sb,
 		last_seq = key.skts_trans_seq;
 
 	} else if (ret == -ENOENT) {
-		last_seq = super->next_trans_seq;
+		last_seq = cpu_to_le64(scoutfs_server_seq(sb));
 		ret = 0;
 	}
 
