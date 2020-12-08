@@ -13,7 +13,7 @@
 struct scoutfs_omap_lock;
 
 /*
- * A few fields (start, end, refresh_gen, write_version, granted_mode)
+ * A few fields (start, end, refresh_gen, write_seq, granted_mode)
  * are referenced by code outside lock.c.
  */
 struct scoutfs_lock {
@@ -23,7 +23,7 @@ struct scoutfs_lock {
 	struct rb_node node;
 	struct rb_node range_node;
 	u64 refresh_gen;
-	u64 write_version;
+	u64 write_seq;
 	u64 dirty_trans_seq;
 	struct list_head lru_head;
 	wait_queue_head_t waitq;

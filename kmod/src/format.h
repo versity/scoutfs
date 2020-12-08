@@ -943,7 +943,7 @@ struct scoutfs_net_roots {
 
 struct scoutfs_net_lock {
 	struct scoutfs_key key;
-	__le64 write_version;
+	__le64 write_seq;
 	__u8 old_mode;
 	__u8 new_mode;
 	__u8 __pad[6];

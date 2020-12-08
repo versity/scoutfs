@@ -1816,7 +1816,7 @@ int scoutfs_item_dirty(struct super_block *sb, struct scoutfs_key *key,
 		ret = -ENOENT;
 	} else {
 		mark_item_dirty(sb, cinf, pg, NULL, item);
-		item->liv.vers = cpu_to_le64(lock->write_version);
+		item->liv.vers = cpu_to_le64(lock->write_seq);
 		ret = 0;
 	}
 
@@ -1836,7 +1836,7 @@ static int item_create(struct super_block *sb, struct scoutfs_key *key,
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct scoutfs_log_item_value liv = {
-		.vers = cpu_to_le64(lock->write_version),
+		.vers = cpu_to_le64(lock->write_seq),
 	};
 	struct cached_item *found;
 	struct cached_item *item;
@@ -1911,7 +1911,7 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct scoutfs_log_item_value liv = {
-		.vers = cpu_to_le64(lock->write_version),
+		.vers = cpu_to_le64(lock->write_seq),
 	};
 	struct cached_item *item;
 	struct cached_item *found;
@@ -1978,7 +1978,7 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct scoutfs_log_item_value liv = {
-		.vers = cpu_to_le64(lock->write_version),
+		.vers = cpu_to_le64(lock->write_seq),
 	};
 	struct cached_item *item;
 	struct cached_page *pg;
@@ -2020,7 +2020,7 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 		erase_item(pg, item);
 	} else {
 		/* must emit deletion to clobber old persistent item */
-		item->liv.vers = cpu_to_le64(lock->write_version);
+		item->liv.vers = cpu_to_le64(lock->write_seq);
 		item->liv.flags |= SCOUTFS_LOG_ITEM_FLAG_DELETION;
 		item->deletion = 1;
 		pg->erased_bytes += item->val_len;

@@ -2319,8 +2319,9 @@ static void scoutfs_server_worker(struct work_struct *work)
 		scoutfs_err(sb, "server couldn't find max item vers: %d", ret);
 		goto shutdown;
 	}
+	scoutfs_server_set_seq_if_greater(sb, max_vers);
 
-	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri, max_vers) ?:
+	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri) ?:
 	      start_recovery(sb);
 	if (ret)
 		goto shutdown;

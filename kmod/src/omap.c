@@ -137,11 +137,10 @@ struct omap_request {
 /*
  * In each inode group cluster lock we store data to track the open ino
  * map which tracks all the inodes that the cluster lock covers.  When
- * the version shows that the map is stale we send a request to update
- * it.
+ * the seq shows that the map is stale we send a request to update it.
  */
 struct scoutfs_omap_lock_data {
-	u64 version;
+	u64 seq;
 	bool req_in_flight;
 	wait_queue_head_t waitq;
 	struct scoutfs_open_ino_map map;
@@ -833,8 +832,7 @@ static bool omap_req_in_flight(struct scoutfs_lock *lock, struct scoutfs_omap_lo
 /*
  * Make sure the map covered by the cluster lock is current.  The caller
  * holds the cluster lock so once we store lock_data on the cluster lock
- * it won't be freed and the write_version in the cluster lock won't
- * change.
+ * it won't be freed and the write_seq in the cluster lock won't change.
  *
  * The omap_spinlock protects the omap_data in the cluster lock.  We
  * have to drop it if we have to block to allocate lock_data, send a
@@ -861,7 +859,7 @@ static int get_current_lock_data(struct super_block *sb, struct scoutfs_lock *lo
 		}
 
 		if (lock->omap_data == NULL) {
-			ldata->version = lock->write_version - 1; /* ensure refresh */
+			ldata->seq = lock->write_seq - 1; /* ensure refresh */
 			init_waitqueue_head(&ldata->waitq);
 
 			lock->omap_data = ldata;
@@ -871,7 +869,7 @@ static int get_current_lock_data(struct super_block *sb, struct scoutfs_lock *lo
 		}
 	}
 
-	while (ldata->version != lock->write_version) {
+	while (ldata->seq != lock->write_seq) {
 		/* only one waiter sends a request at a time */
 		if (!ldata->req_in_flight) {
 			ldata->req_in_flight = true;
@@ -891,7 +889,7 @@ static int get_current_lock_data(struct super_block *sb, struct scoutfs_lock *lo
 		if (send_req) {
 			ldata->req_in_flight = false;
 			if (ret == 0)
-				ldata->version = lock->write_version;
+				ldata->seq = lock->write_seq;
 			wake_up(&ldata->waitq);
 			if (ret < 0)
 				goto out;

@@ -81,8 +81,6 @@ struct lock_server_info {
 
 	struct scoutfs_alloc *alloc;
 	struct scoutfs_block_writer *wri;
-
-	atomic64_t write_version;
 };
 
 #define DECLARE_LOCK_SERVER_INFO(sb, name) \
@@ -479,7 +477,7 @@ static int process_waiting_requests(struct super_block *sb,
 	struct client_lock_entry *req_tmp;
 	struct client_lock_entry *gr;
 	struct client_lock_entry *gr_tmp;
-	u64 wv;
+	u64 seq;
 	int ret;
 
 	BUG_ON(!mutex_is_locked(&snode->mutex));
@@ -532,8 +530,9 @@ static int process_waiting_requests(struct super_block *sb,
 
 		if (nl.new_mode == SCOUTFS_LOCK_WRITE ||
 		    nl.new_mode == SCOUTFS_LOCK_WRITE_ONLY) {
-			wv = atomic64_inc_return(&inf->write_version);
-			nl.write_version = cpu_to_le64(wv);
+			/* doesn't commit seq update, recovered with locks */
+			seq = scoutfs_server_next_seq(sb);
+			nl.write_seq = cpu_to_le64(seq);
 		}
 
 		ret = scoutfs_server_lock_response(sb, req->rid,
@@ -609,14 +608,6 @@ int scoutfs_lock_server_finished_recovery(struct super_block *sb)
 	return ret;
 }
 
-static void set_max_write_version(struct lock_server_info *inf, u64 new)
-{
-	u64 old;
-
-	while (new > (old = atomic64_read(&inf->write_version)) &&
-	       (atomic64_cmpxchg(&inf->write_version, old, new) != old));
-}
-
 /*
  * We sent a lock recover request to the client when we received its
  * greeting while in recovery.  Here we instantiate all the locks it
@@ -680,9 +671,9 @@ int scoutfs_lock_server_recover_response(struct super_block *sb, u64 rid,
 
 		put_server_lock(inf, snode);
 
-		/* make sure next write lock is greater than all recovered */
-		set_max_write_version(inf,
-				le64_to_cpu(nlr->locks[i].write_version));
+		/* make sure next core seq is greater than all lock write seq */
+		scoutfs_server_set_seq_if_greater(sb,
+				le64_to_cpu(nlr->locks[i].write_seq));
 	}
 
 	/* send request for next batch of keys */
@@ -800,7 +791,7 @@ static void lock_server_tseq_show(struct seq_file *m,
  */
 int scoutfs_lock_server_setup(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,
-			      struct scoutfs_block_writer *wri, u64 max_vers)
+			      struct scoutfs_block_writer *wri)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct lock_server_info *inf;
@@ -815,7 +806,6 @@ int scoutfs_lock_server_setup(struct super_block *sb,
 	scoutfs_tseq_tree_init(&inf->tseq_tree, lock_server_tseq_show);
 	inf->alloc = alloc;
 	inf->wri = wri;
-	atomic64_set(&inf->write_version, max_vers); /* inc_return gives +1 */
 
 	inf->tseq_dentry = scoutfs_tseq_create("server_locks", sbi->debug_root,
 					       &inf->tseq_tree);
