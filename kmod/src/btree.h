@@ -82,6 +82,12 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 			      struct scoutfs_btree_root *root,
 			      struct scoutfs_btree_item_list *lst);
 
+int scoutfs_btree_parent_range(struct super_block *sb,
+			       struct scoutfs_btree_root *root,
+			       struct scoutfs_key *key,
+			       struct scoutfs_key *start,
+			       struct scoutfs_key *end);
+
 void scoutfs_btree_put_iref(struct scoutfs_btree_item_ref *iref);
 
 #endif

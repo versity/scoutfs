@@ -83,6 +83,7 @@ enum btree_walk_flags {
 	 BTW_ALLOC	= (1 <<  3), /* allocate a new block for 0 ref, requires dirty */
 	 BTW_INSERT	= (1 <<  4), /* walking to insert, try splitting */
 	 BTW_DELETE	= (1 <<  5), /* walking to delete, try joining */
+	 BTW_PAR_RNG	= (1 <<  6), /* return range through final parent */
 };
 
 /* total length of the value payload */
@@ -1098,7 +1099,8 @@ static int btree_walk(struct super_block *sb,
 	unsigned int nr;
 	int ret;
 
-	if (WARN_ON_ONCE((flags & BTW_DIRTY) && (!alloc || !wri)))
+	if (WARN_ON_ONCE((flags & BTW_DIRTY) && (!alloc || !wri)) ||
+	    WARN_ON_ONCE((flags & BTW_PAR_RNG) && !kr))
 		return -EINVAL;
 
 	/* all ops come through walk and walk calls all reads */
@@ -1143,6 +1145,12 @@ restart:
 	while(level-- > 0) {
 
 		trace_scoutfs_btree_walk(sb, root, key, flags, level, ref);
+
+		/* par range set by ref to last parent block */
+		if (level < 2 && (flags & BTW_PAR_RNG)) {
+			ret = 0;
+			break;
+		}
 
 		ret = get_ref_block(sb, alloc, wri, flags, ref, &bl);
 		if (ret)
@@ -1740,5 +1748,31 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 	}
 
 out:
+	return ret;
+}
+
+/*
+ * Descend towards the leaf that would contain the key.  As we arrive at
+ * the last parent block, set start and end to the range of keys that
+ * could be found through traversal of that last parent.
+ *
+ * If the tree is too short for parent blocks then the max key range
+ * is returned.
+ */
+int scoutfs_btree_parent_range(struct super_block *sb,
+			       struct scoutfs_btree_root *root,
+			       struct scoutfs_key *key,
+			       struct scoutfs_key *start,
+			       struct scoutfs_key *end)
+{
+	struct btree_walk_key_range kr;
+	int ret;
+
+	ret = btree_walk(sb, NULL, NULL, root, BTW_PAR_RNG, key, 0, NULL, &kr);
+	if (ret == -ENOENT)
+		ret = 0;
+
+	*start = kr.start;
+	*end = kr.end;
 	return ret;
 }
