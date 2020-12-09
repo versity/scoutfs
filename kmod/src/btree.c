@@ -84,6 +84,8 @@ enum btree_walk_flags {
 	 BTW_INSERT	= (1 <<  4), /* walking to insert, try splitting */
 	 BTW_DELETE	= (1 <<  5), /* walking to delete, try joining */
 	 BTW_PAR_RNG	= (1 <<  6), /* return range through final parent */
+	 BTW_GET_PAR	= (1 <<  7), /* get reference to final parent */
+	 BTW_SET_PAR	= (1 <<  8), /* override reference to final parent */
 };
 
 /* total length of the value payload */
@@ -1083,7 +1085,8 @@ static int btree_walk(struct super_block *sb,
 		      int flags, struct scoutfs_key *key,
 		      unsigned int val_len,
 		      struct scoutfs_block **bl_ret,
-		      struct btree_walk_key_range *kr)
+		      struct btree_walk_key_range *kr,
+		      struct scoutfs_btree_root *par_root)
 {
 	struct scoutfs_block *par_bl = NULL;
 	struct scoutfs_block *bl = NULL;
@@ -1100,7 +1103,8 @@ static int btree_walk(struct super_block *sb,
 	int ret;
 
 	if (WARN_ON_ONCE((flags & BTW_DIRTY) && (!alloc || !wri)) ||
-	    WARN_ON_ONCE((flags & BTW_PAR_RNG) && !kr))
+	    WARN_ON_ONCE((flags & BTW_PAR_RNG) && !kr) ||
+	    WARN_ON_ONCE((flags & (BTW_GET_PAR|BTW_SET_PAR)) && !par_root))
 		return -EINVAL;
 
 	/* all ops come through walk and walk calls all reads */
@@ -1127,7 +1131,14 @@ restart:
 	ret = 0;
 
 	if (!root->height) {
-		if (!(flags & BTW_INSERT)) {
+		if (flags & BTW_GET_PAR) {
+			memset(par_root, 0, sizeof(*par_root));
+			*root = *par_root;
+			ret = 0;
+		} else if (flags & BTW_SET_PAR) {
+			*root = *par_root;
+			ret = 0;
+		} else if (!(flags & BTW_INSERT)) {
 			ret = -ENOENT;
 		} else {
 			ret = get_ref_block(sb, alloc, wri, BTW_ALLOC | BTW_DIRTY, &root->ref, &bl);
@@ -1148,6 +1159,29 @@ restart:
 
 		/* par range set by ref to last parent block */
 		if (level < 2 && (flags & BTW_PAR_RNG)) {
+			ret = 0;
+			break;
+		}
+
+		if (level < 2 && (flags & BTW_GET_PAR)) {
+			par_root->ref = *ref;
+			par_root->height = level + 1;
+			ret = 0;
+			break;
+		}
+
+		if (level < 2 && (flags & BTW_SET_PAR)) {
+			if (ref == &root->ref) {
+				/* single parent block is replaced, can shrink/grow */
+				*root = *par_root;
+			} else {
+				/* subtree replacing one of parents must match height */
+				if (par_root->height != level + 1) {
+					ret = -EINVAL;
+					break;
+				}
+				*ref = par_root->ref;
+			}
 			ret = 0;
 			break;
 		}
@@ -1300,7 +1334,7 @@ int scoutfs_btree_lookup(struct super_block *sb,
 	if (WARN_ON_ONCE(iref->key))
 		return -EINVAL;
 
-	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, NULL);
+	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1352,7 +1386,7 @@ int scoutfs_btree_insert(struct super_block *sb,
 		return -EINVAL;
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT, key,
-			 val_len, &bl, NULL);
+			 val_len, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1414,7 +1448,7 @@ int scoutfs_btree_update(struct super_block *sb,
 		return -EINVAL;
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT, key,
-			 val_len, &bl, NULL);
+			 val_len, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1456,7 +1490,7 @@ int scoutfs_btree_force(struct super_block *sb,
 		return -EINVAL;
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT, key,
-			 val_len, &bl, NULL);
+			 val_len, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1494,7 +1528,7 @@ int scoutfs_btree_delete(struct super_block *sb,
 	scoutfs_inc_counter(sb, btree_delete);
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DELETE | BTW_DIRTY, key,
-			 0, &bl, NULL);
+			 0, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1558,7 +1592,7 @@ static int btree_iter(struct super_block *sb,struct scoutfs_btree_root *root,
 
 	for (;;) {
 		ret = btree_walk(sb, NULL, NULL, root, flags, &walk_key,
-				 0, &bl, &kr);
+				 0, &bl, &kr, NULL);
 		if (ret < 0)
 			break;
 		bt = bl->data;
@@ -1631,7 +1665,8 @@ int scoutfs_btree_dirty(struct super_block *sb,
 
 	scoutfs_inc_counter(sb, btree_dirty);
 
-	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY, key, 0, &bl, NULL);
+	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY, key, 0, &bl,
+			 NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1667,7 +1702,7 @@ int scoutfs_btree_read_items(struct super_block *sb,
 	struct scoutfs_block *bl;
 	int ret;
 
-	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, &kr);
+	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, &kr, NULL);
 	if (ret < 0)
 		goto out;
 	bt = bl->data;
@@ -1722,7 +1757,7 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 
 	while (lst) {
 		ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT,
-				 &lst->key, lst->val_len, &bl, &kr);
+				 &lst->key, lst->val_len, &bl, &kr, NULL);
 		if (ret < 0)
 			goto out;
 		bt = bl->data;
@@ -1768,11 +1803,55 @@ int scoutfs_btree_parent_range(struct super_block *sb,
 	struct btree_walk_key_range kr;
 	int ret;
 
-	ret = btree_walk(sb, NULL, NULL, root, BTW_PAR_RNG, key, 0, NULL, &kr);
+	ret = btree_walk(sb, NULL, NULL, root, BTW_PAR_RNG, key, 0, NULL,
+			 &kr, NULL);
 	if (ret == -ENOENT)
 		ret = 0;
 
 	*start = kr.start;
 	*end = kr.end;
 	return ret;
+}
+
+/*
+ * Initialize the caller's root as a subtree whose ref points to the
+ * last parent found as we traverse towards the leaf containing the key.
+ * If the tree is too small to have multiple blocks at the final parent
+ * level then the caller's root will be initialized to equal full input
+ * root.  If the tree is empty then the par root will also be empty.
+ */
+int scoutfs_btree_get_parent(struct super_block *sb,
+			     struct scoutfs_btree_root *root,
+			     struct scoutfs_key *key,
+			     struct scoutfs_btree_root *par_root)
+{
+	return btree_walk(sb, NULL, NULL, root, BTW_GET_PAR, key, 0, NULL,
+			  NULL, par_root);
+}
+
+/*
+ * Dirty a path towards the leaf block containing the key.  As we reach
+ * the reference to the final parent block override it with the ref in
+ * the caller's block.  If the tree only has a single block at the final
+ * parent level, or a single leaf block, then the entire tree is
+ * replaced with the caller's root.
+ *
+ * This manages allocs and frees while dirtying blocks in the path to
+ * the ref, but it doesn't account for allocating the blocks that are
+ * referenced by the ref nor freeing blocks referenced by the old ref
+ * that's overwritten.  Keeping allocators in sync with the result of
+ * the ref override is the responsibility of the caller.
+ */
+int scoutfs_btree_set_parent(struct super_block *sb,
+			     struct scoutfs_alloc *alloc,
+			     struct scoutfs_block_writer *wri,
+			     struct scoutfs_btree_root *root,
+			     struct scoutfs_key *key,
+			     struct scoutfs_btree_root *par_root)
+{
+
+	trace_scoutfs_btree_set_parent(sb, root, key, par_root);
+
+	return btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_SET_PAR,
+			  key, 0, NULL, NULL, par_root);
 }

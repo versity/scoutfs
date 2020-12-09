@@ -1644,6 +1644,42 @@ TRACE_EVENT(scoutfs_btree_walk,
 		  __entry->level, __entry->ref_blkno, __entry->ref_seq)
 );
 
+TRACE_EVENT(scoutfs_btree_set_parent,
+	TP_PROTO(struct super_block *sb,
+		 struct scoutfs_btree_root *root, struct scoutfs_key *key,
+		 struct scoutfs_btree_root *par_root),
+
+	TP_ARGS(sb, root, key, par_root),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, root_blkno)
+		__field(__u64, root_seq)
+		__field(__u8, root_height)
+		sk_trace_define(key)
+		__field(__u64, par_root_blkno)
+		__field(__u64, par_root_seq)
+		__field(__u8, par_root_height)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->root_blkno = le64_to_cpu(root->ref.blkno);
+		__entry->root_seq = le64_to_cpu(root->ref.seq);
+		__entry->root_height = root->height;
+		sk_trace_assign(key, key);
+		__entry->par_root_blkno = le64_to_cpu(par_root->ref.blkno);
+		__entry->par_root_seq = le64_to_cpu(par_root->ref.seq);
+		__entry->par_root_height = par_root->height;
+	),
+
+	TP_printk(SCSBF" root blkno %llu seq %llu height %u, key "SK_FMT", par_root blkno %llu seq %llu height %u",
+		  SCSB_TRACE_ARGS, __entry->root_blkno, __entry->root_seq,
+		  __entry->root_height, sk_trace_args(key),
+		  __entry->par_root_blkno, __entry->par_root_seq,
+		  __entry->par_root_height)
+);
+
 TRACE_EVENT(scoutfs_online_offline_blocks,
 	TP_PROTO(struct inode *inode, s64 on_delta, s64 off_delta,
 		 u64 on_now, u64 off_now),
