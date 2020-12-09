@@ -86,6 +86,7 @@ enum btree_walk_flags {
 	 BTW_PAR_RNG	= (1 <<  6), /* return range through final parent */
 	 BTW_GET_PAR	= (1 <<  7), /* get reference to final parent */
 	 BTW_SET_PAR	= (1 <<  8), /* override reference to final parent */
+	 BTW_SUBTREE	= (1 <<  9), /* root is parent subtree, return -ERANGE if split/join */
 };
 
 /* total length of the value payload */
@@ -1206,6 +1207,17 @@ restart:
 					   le64_to_cpu(bt->hdr.seq), bt->level,
 					   level);
 			ret = -EIO;
+			break;
+		}
+
+		/*
+		 * join/split won't check subtree parent root, let
+		 * caller know when it needs to be split/join.
+		 */
+		if ((flags & BTW_SUBTREE) && level == 1 &&
+		    (!total_above_join_low_water(bt) ||
+		     !mid_free_item_room(bt, sizeof(struct scoutfs_block_ref)))) {
+			ret = -ERANGE;
 			break;
 		}
 
