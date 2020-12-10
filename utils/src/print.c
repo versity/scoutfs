@@ -658,7 +658,6 @@ out:
 struct print_recursion_args {
 	struct scoutfs_super_block *super;
 	int fd;
-	u8 __pad[4];
 };
 
 /* same as fs item but with a small header in the value */

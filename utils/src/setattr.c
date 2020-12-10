@@ -24,7 +24,6 @@ struct setattr_args {
 	u64 data_version;
 	u64 i_size;
 	bool offline;
-	char __pad[7];
 };
 
 static int do_setattr(struct setattr_args *args)

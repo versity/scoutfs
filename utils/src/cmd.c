@@ -13,7 +13,6 @@ static struct argp_command {
 	char *name;
 	struct argp *argp;
 	int group;
-	char __pad[4];
 	int (*func)(int argc, char **argv);
 } argp_cmds[100], *next_argp_cmd = argp_cmds;
 

@@ -107,7 +107,6 @@ struct mkfs_args {
 	unsigned long long max_meta_size;
 	unsigned long long max_data_size;
 	bool force;
-	char __pad[7];
 };
 
 /*

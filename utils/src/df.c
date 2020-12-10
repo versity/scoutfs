@@ -26,7 +26,6 @@
 struct df_args {
 	char *path;
 	bool human_readable;
-	u8 __pad[7];
 };
 
 static int do_df(struct df_args *args)

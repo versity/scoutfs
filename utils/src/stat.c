@@ -107,7 +107,6 @@ struct stat_args {
 	char *path;
 	char *single_field;
 	bool is_inode;
-	u8 __pad[7];
 };
 
 static int do_stat(struct stat_args *args)

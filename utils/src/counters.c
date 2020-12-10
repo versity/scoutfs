@@ -43,7 +43,6 @@ static int cmp_counter_names(const void *A, const void *B)
 struct counters_args {
 	char *sysfs_path;
 	bool tabular;
-	char __pad[7];
 };
 
 static int do_counters(struct counters_args *args)
