@@ -210,8 +210,8 @@ static int print_logs_item(struct scoutfs_key *key, void *val,
 	/* only items in leaf blocks have values */
 	if (val) {
 		liv = val;
-		printf("    log_item_value: vers %llu flags %x\n",
-		       le64_to_cpu(liv->vers), liv->flags);
+		printf("    log_item_value: seq %llu flags %x\n",
+		       le64_to_cpu(liv->seq), liv->flags);
 
 		/* deletion items don't have values */
 		if (!(liv->flags & SCOUTFS_LOG_ITEM_FLAG_DELETION)) {
@@ -289,7 +289,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      data_avail: "ALCROOT_F"\n"
 		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n"
-		       "      max_item_vers: %llu\n"
+		       "      max_item_seq: %llu\n"
 		       "      rid: %016llx\n"
 		       "      nr: %llu\n"
 		       "      data_alloc_zone_blocks: %llu\n"
@@ -304,7 +304,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       ALCROOT_A(&lt->data_avail),
 		       ALCROOT_A(&lt->data_freed),
 		       SRF_A(&lt->srch_file),
-		       le64_to_cpu(lt->max_item_vers),
+		       le64_to_cpu(lt->max_item_seq),
 		       le64_to_cpu(lt->rid),
 		       le64_to_cpu(lt->nr),
 		       le64_to_cpu(lt->data_alloc_zone_blocks));
@@ -878,7 +878,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("  flags: 0x%016llx\n", le64_to_cpu(super->flags));
 
 	/* XXX these are all in a crazy order */
-	printf("  next_ino %llu next_trans_seq %llu\n"
+	printf("  next_ino %llu seq %llu\n"
 	       "  total_meta_blocks %llu first_meta_blkno %llu last_meta_blkno %llu\n"
 	       "  total_data_blocks %llu first_data_blkno %llu last_data_blkno %llu\n"
 	       "  meta_alloc[0]: "ALCROOT_F"\n"
@@ -893,7 +893,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  trans_seqs root: height %u blkno %llu seq %llu\n"
 	       "  fs_root btree root: height %u blkno %llu seq %llu\n",
 		le64_to_cpu(super->next_ino),
-		le64_to_cpu(super->next_trans_seq),
+		le64_to_cpu(super->seq),
 		le64_to_cpu(super->total_meta_blocks),
 		le64_to_cpu(super->first_meta_blkno),
 		le64_to_cpu(super->last_meta_blkno),
