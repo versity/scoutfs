@@ -1022,6 +1022,43 @@ static int remove_trans_seq(struct super_block *sb, u64 rid)
 }
 
 /*
+ * Give the caller the last seq before outstanding client commits.  All
+ * seqs up to and including this are stable, new client transactions can
+ * only have greater seqs.
+ */
+static int get_stable_trans_seq(struct super_block *sb, u64 *last_seq_ret)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	u64 last_seq = 0;
+	int ret;
+
+	down_read(&server->seq_rwsem);
+
+	init_trans_seq_key(&key, 0, 0);
+	ret = scoutfs_btree_next(sb, &super->trans_seqs, &key, &iref);
+	if (ret == 0) {
+		last_seq = le64_to_cpu(iref.key->skts_trans_seq) - 1;
+		scoutfs_btree_put_iref(&iref);
+
+	} else if (ret == -ENOENT) {
+		last_seq = scoutfs_server_seq(sb) - 1;
+		ret = 0;
+	}
+
+	up_read(&server->seq_rwsem);
+
+	if (ret < 0)
+		last_seq = 0;
+
+	*last_seq_ret = last_seq;
+	return ret;
+}
+
+/*
  * Give the calling client the last valid trans_seq that it can return
  * in results from the indices of trans seqs to inodes.  These indices
  * promise to only advance so we can't return results past those that
@@ -1033,13 +1070,9 @@ static int server_get_last_seq(struct super_block *sb,
 			       struct scoutfs_net_connection *conn,
 			       u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
-	SCOUTFS_BTREE_ITEM_REF(iref);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_key key;
-	__le64 last_seq = 0;
+	u64 last_seq = 0;
+	__le64 leseq;
 	int ret;
 
 	if (arg_len != 0) {
@@ -1047,27 +1080,12 @@ static int server_get_last_seq(struct super_block *sb,
 		goto out;
 	}
 
-	down_read(&server->seq_rwsem);
-
-	init_trans_seq_key(&key, 0, 0);
-	ret = scoutfs_btree_next(sb, &super->trans_seqs, &key, &iref);
-	if (ret == 0) {
-		key = *iref.key;
-		scoutfs_btree_put_iref(&iref);
-		last_seq = key.skts_trans_seq;
-
-	} else if (ret == -ENOENT) {
-		last_seq = cpu_to_le64(scoutfs_server_seq(sb));
-		ret = 0;
-	}
-
-	le64_add_cpu(&last_seq, -1ULL);
-	trace_scoutfs_trans_seq_last(sb, rid, le64_to_cpu(last_seq));
-
-	up_read(&server->seq_rwsem);
+	ret = get_stable_trans_seq(sb, &last_seq);
 out:
+	trace_scoutfs_trans_seq_last(sb, rid, last_seq);
+	leseq = cpu_to_le64(last_seq);
 	return scoutfs_net_response(sb, conn, cmd, id, ret,
-				    &last_seq, sizeof(last_seq));
+				    &leseq, sizeof(leseq));
 }
 
 static int server_lock(struct super_block *sb,
