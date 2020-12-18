@@ -292,6 +292,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      max_item_seq: %llu\n"
 		       "      rid: %016llx\n"
 		       "      nr: %llu\n"
+		       "      flags: %llx\n"
 		       "      data_alloc_zone_blocks: %llu\n"
 		       "      data_alloc_zones: ",
 		       AL_HEAD_A(&lt->meta_avail),
@@ -307,6 +308,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       le64_to_cpu(lt->max_item_seq),
 		       le64_to_cpu(lt->rid),
 		       le64_to_cpu(lt->nr),
+		       le64_to_cpu(lt->flags),
 		       le64_to_cpu(lt->data_alloc_zone_blocks));
 
 		for (i = 0; i < SCOUTFS_DATA_ALLOC_ZONE_LE64S; i++) {
@@ -379,6 +381,72 @@ static int print_mounted_client_entry(struct scoutfs_key *key, void *val,
 
 	printf("    rid %016llx ipv4_addr %s flags 0x%x\n",
 	       le64_to_cpu(key->skmc_rid), inet_ntoa(in), mcv->flags);
+
+	return 0;
+}
+
+static int print_log_merge_item(struct scoutfs_key *key, void *val,
+				      unsigned val_len, void *arg)
+{
+	struct scoutfs_log_merge_status *stat;
+	struct scoutfs_log_merge_range *rng;
+	struct scoutfs_log_merge_request *req;
+	struct scoutfs_log_merge_complete *comp;
+	struct scoutfs_log_merge_freeing *fr;
+
+	switch (key->sk_zone) {
+	case SCOUTFS_LOG_MERGE_STATUS_ZONE:
+		stat = val;
+		printf("    status: next_range_key "SK_FMT" nr_req %llu nr_comp %llu"
+		       " last_seq %llu seq %llu\n",
+		       SK_ARG(&stat->next_range_key),
+		       le64_to_cpu(stat->nr_requests),
+		       le64_to_cpu(stat->nr_complete),
+		       le64_to_cpu(stat->last_seq),
+		       le64_to_cpu(stat->seq));
+		break;
+	case SCOUTFS_LOG_MERGE_RANGE_ZONE:
+		rng = val;
+		printf("    range: start "SK_FMT" end "SK_FMT"\n",
+		       SK_ARG(&rng->start),
+		       SK_ARG(&rng->end));
+		break;
+	case SCOUTFS_LOG_MERGE_REQUEST_ZONE:
+		req = val;
+		printf("    request: logs_root "BTROOT_F" logs_root "BTROOT_F" start "SK_FMT
+		       " end "SK_FMT" last_seq %llu rid %016llx seq %llu flags 0x%llx\n",
+		       BTROOT_A(&req->logs_root),
+		       BTROOT_A(&req->root),
+		       SK_ARG(&req->start),
+		       SK_ARG(&req->end),
+		       le64_to_cpu(req->last_seq),
+		       le64_to_cpu(req->rid),
+		       le64_to_cpu(req->seq),
+		       le64_to_cpu(req->flags));
+		break;
+	case SCOUTFS_LOG_MERGE_COMPLETE_ZONE:
+		comp = val;
+		printf("    complete: root "BTROOT_F" start "SK_FMT" end "SK_FMT
+		       " remain "SK_FMT" rid %016llx seq %llu flags %llx\n",
+		       BTROOT_A(&comp->root),
+		       SK_ARG(&comp->start),
+		       SK_ARG(&comp->end),
+		       SK_ARG(&comp->remain),
+		       le64_to_cpu(comp->rid),
+		       le64_to_cpu(comp->seq),
+		       le64_to_cpu(comp->flags));
+		break;
+	case SCOUTFS_LOG_MERGE_FREEING_ZONE:
+		fr = val;
+		printf("    freeing: root "BTROOT_F" key "SK_FMT" seq %llu\n",
+		       BTROOT_A(&fr->root),
+		       SK_ARG(&fr->key),
+		       le64_to_cpu(fr->seq));
+		break;
+	default:
+		printf("    (unknown log merge key zone %u)\n", key->sk_zone);
+		break;
+	}
 
 	return 0;
 }
@@ -894,6 +962,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  server_meta_freed[1]: "AL_HEAD_F"\n"
 	       "  fs_root: "BTR_FMT"\n"
 	       "  logs_root: "BTR_FMT"\n"
+	       "  log_merge: "BTR_FMT"\n"
 	       "  trans_seqs: "BTR_FMT"\n"
 	       "  mounted_clients: "BTR_FMT"\n"
 	       "  srch_root: "BTR_FMT"\n",
@@ -914,6 +983,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		AL_HEAD_A(&super->server_meta_freed[1]),
 		BTR_ARG(&super->fs_root),
 		BTR_ARG(&super->logs_root),
+		BTR_ARG(&super->log_merge),
 		BTR_ARG(&super->trans_seqs),
 		BTR_ARG(&super->mounted_clients),
 		BTR_ARG(&super->srch_root));
@@ -968,6 +1038,11 @@ static int print_volume(int fd)
 
 	err = print_btree(fd, super, "trans_seqs", &super->trans_seqs,
 			  print_trans_seqs_entry, NULL);
+	if (err && !ret)
+		ret = err;
+
+	err = print_btree(fd, super, "log_merge", &super->log_merge,
+			  print_log_merge_item, NULL);
 	if (err && !ret)
 		ret = err;
 
