@@ -56,6 +56,16 @@
 	(1ULL * 1024 * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
 /*
+ * Log merge meta allocations are only used for one request and will
+ * never use more than the dirty limit.
+ */
+#define SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT	(64ULL * 1024 * 1024)
+/* a few extra blocks for alloc blocks */
+#define SCOUTFS_SERVER_MERGE_FILL_TARGET	\
+	((SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT >> SCOUTFS_BLOCK_LG_SHIFT) + 4)
+#define SCOUTFS_SERVER_MERGE_FILL_LO		SCOUTFS_SERVER_MERGE_FILL_TARGET
+
+/*
  * Each of the server meta_alloc roots will try to keep a minimum amount
  * of free blocks.  The server will swap roots when its current avail
  * falls below the threshold while the freed root is still above it.  It
