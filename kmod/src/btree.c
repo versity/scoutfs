@@ -1868,6 +1868,30 @@ int scoutfs_btree_set_parent(struct super_block *sb,
 			  key, 0, NULL, NULL, par_root);
 }
 
+/*
+ * Descend to the leaf, making sure that all the blocks conform to the
+ * balance constraints.  Blocks below the low threshold will be joined.
+ * This is called to split blocks that were too large for insertions,
+ * but those insertions were in a distant context and we don't bother
+ * communicating the val_len back here.  We just try to insert a max
+ * value.
+ *
+ * This always dirties all the way to the leaf.  It could be made more
+ * efficient with more btree walk flags to walk and check for blocks
+ * that need balancing, and then walks that don't dirty unless they need
+ * to join/split.
+ */
+int scoutfs_btree_rebalance(struct super_block *sb,
+			    struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri,
+			    struct scoutfs_btree_root *root,
+			    struct scoutfs_key *key)
+{
+	return btree_walk(sb, alloc, wri, root,
+			  BTW_DIRTY | BTW_INSERT | BTW_DELETE,
+			  key, SCOUTFS_BTREE_MAX_VAL_LEN, NULL, NULL, NULL);
+}
+
 struct merge_pos {
 	struct rb_node node;
 	struct scoutfs_btree_root *root;

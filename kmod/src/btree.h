@@ -97,6 +97,11 @@ int scoutfs_btree_set_parent(struct super_block *sb,
 			     struct scoutfs_btree_root *root,
 			     struct scoutfs_key *key,
 			     struct scoutfs_btree_root *par_root);
+int scoutfs_btree_rebalance(struct super_block *sb,
+			    struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri,
+			    struct scoutfs_btree_root *root,
+			    struct scoutfs_key *key);
 
 /* merge input is a list of roots */
 struct scoutfs_btree_root_head {
