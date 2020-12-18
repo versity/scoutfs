@@ -23,6 +23,14 @@ struct scoutfs_inode_info {
 	u32 flags;
 
 	/*
+	 * Protects per-inode extent items, most particularly readers
+	 * who want to serialize writers without holding i_mutex. (only
+	 * used in data.c, it's the only place that understands file
+	 * extent items)
+	 */
+	struct rw_semaphore extent_sem;
+
+	/*
 	 * The in-memory item info caches the current index item values
 	 * so that we can decide to update them with comparisons instead
 	 * of by maintaining state that tracks the inode differing from

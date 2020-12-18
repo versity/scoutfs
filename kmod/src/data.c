@@ -93,6 +93,16 @@ static void ext_from_item(struct scoutfs_extent *ext,
 	ext->flags = dv->flags;
 }
 
+static void data_ext_op_warn(struct inode *inode)
+{
+	struct scoutfs_inode_info *si;
+
+	if (inode) {
+		si = SCOUTFS_I(inode);
+		WARN_ON_ONCE(!rwsem_is_locked(&si->extent_sem));
+	}
+}
+
 static int data_ext_next(struct super_block *sb, void *arg, u64 start, u64 len,
 			 struct scoutfs_extent *ext)
 {
@@ -101,6 +111,8 @@ static int data_ext_next(struct super_block *sb, void *arg, u64 start, u64 len,
 	struct scoutfs_key key;
 	struct scoutfs_key last;
 	int ret;
+
+	data_ext_op_warn(args->inode);
 
 	item_from_extent(&last, &dv, args->ino, U64_MAX, 1, 0, 0);
 	item_from_extent(&key, &dv, args->ino, start, len, 0, 0);
@@ -139,6 +151,8 @@ static int data_ext_insert(struct super_block *sb, void *arg, u64 start,
 	struct scoutfs_key key;
 	int ret;
 
+	data_ext_op_warn(args->inode);
+
 	item_from_extent(&key, &dv, args->ino, start, len, map, flags);
 	ret = scoutfs_item_create(sb, &key, &dv, sizeof(dv), args->lock);
 	if (ret == 0 && args->inode)
@@ -153,6 +167,8 @@ static int data_ext_remove(struct super_block *sb, void *arg, u64 start,
 	struct scoutfs_data_extent_val dv;
 	struct scoutfs_key key;
 	int ret;
+
+	data_ext_op_warn(args->inode);
 
 	item_from_extent(&key, &dv, args->ino, start, len, map, flags);
 	ret = scoutfs_item_delete(sb, &key, args->lock);
@@ -276,6 +292,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 				struct scoutfs_lock *lock)
 {
 	struct scoutfs_item_count cnt = SIC_TRUNC_EXTENT(inode);
+	struct scoutfs_inode_info *si = NULL;
 	LIST_HEAD(ind_locks);
 	s64 ret = 0;
 
@@ -289,6 +306,11 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 
 	if (WARN_ON_ONCE(last < iblock))
 		return -EINVAL;
+
+	if (inode) {
+		si = SCOUTFS_I(inode);
+		down_write(&si->extent_sem);
+	}
 
 	while (iblock <= last) {
 		if (inode)
@@ -320,6 +342,9 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		iblock = ret;
 		ret = 0;
 	}
+
+	if (si)
+		up_write(&si->extent_sem);
 
 	return ret;
 }
@@ -534,6 +559,38 @@ out:
 }
 
 /*
+ * Typically extent item users are serialized by i_mutex.  But page
+ * readers only hold the page lock and need to be protected from writers
+ * in other pages which can be manipulating neighbouring extents as
+ * they split and merge.
+ */
+static int scoutfs_get_block_read(struct inode *inode, sector_t iblock,
+				  struct buffer_head *bh, int create)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	int ret;
+
+	down_read(&si->extent_sem);
+	ret = scoutfs_get_block(inode, iblock, bh, create);
+	up_read(&si->extent_sem);
+
+	return ret;
+}
+
+static int scoutfs_get_block_write(struct inode *inode, sector_t iblock,
+				   struct buffer_head *bh, int create)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	int ret;
+
+	down_write(&si->extent_sem);
+	ret = scoutfs_get_block(inode, iblock, bh, create);
+	up_write(&si->extent_sem);
+
+	return ret;
+}
+
+/*
  * This is almost never used.  We can't block on a cluster lock while
  * holding the page lock because lock invalidation gets the page lock
  * while blocking locks.  If a non blocking lock attempt fails we unlock
@@ -598,7 +655,7 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 			return ret;
 	}
 
-	ret = mpage_readpage(page, scoutfs_get_block);
+	ret = mpage_readpage(page, scoutfs_get_block_read);
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
@@ -646,7 +703,7 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 		}
 	}
 
-	ret = mpage_readpages(mapping, pages, nr_pages, scoutfs_get_block);
+	ret = mpage_readpages(mapping, pages, nr_pages, scoutfs_get_block_read);
 out:
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	BUG_ON(!list_empty(pages));
@@ -655,13 +712,13 @@ out:
 
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
 {
-	return block_write_full_page(page, scoutfs_get_block, wbc);
+	return block_write_full_page(page, scoutfs_get_block_write, wbc);
 }
 
 static int scoutfs_writepages(struct address_space *mapping,
 			      struct writeback_control *wbc)
 {
-	return mpage_writepages(mapping, wbc, scoutfs_get_block);
+	return mpage_writepages(mapping, wbc, scoutfs_get_block_write);
 }
 
 /* fsdata allocated in write_begin and freed in write_end */
@@ -715,7 +772,7 @@ static int scoutfs_write_begin(struct file *file,
 	ret = scoutfs_dirty_inode_item(inode, wbd->lock);
 	if (ret == 0)
 		ret = block_write_begin(mapping, pos, len, flags, pagep,
-					scoutfs_get_block);
+					scoutfs_get_block_write);
 	if (ret)
 		scoutfs_release_trans(sb);
 out:
@@ -903,6 +960,7 @@ static s64 fallocate_extents(struct super_block *sb, struct inode *inode,
 long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 {
 	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_lock *lock = NULL;
@@ -913,6 +971,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	s64 ret;
 
 	mutex_lock(&inode->i_mutex);
+	down_write(&si->extent_sem);
 
 	/* XXX support more flags */
         if (mode & ~(FALLOC_FL_KEEP_SIZE)) {
@@ -978,6 +1037,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 
 out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	up_write(&si->extent_sem);
 	mutex_unlock(&inode->i_mutex);
 
 	trace_scoutfs_data_fallocate(sb, ino, mode, offset, len, ret);
@@ -998,6 +1058,7 @@ int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 				     struct scoutfs_lock *lock)
 
 {
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct data_ext_args args = {
 		.ino = scoutfs_ino(inode),
@@ -1028,8 +1089,10 @@ int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 	if (ret < 0)
 		goto unlock;
 
+	down_write(&si->extent_sem);
 	ret = scoutfs_ext_insert(sb, &data_ext_ops, &args,
 				 0, count, 0, SEF_OFFLINE);
+	up_write(&si->extent_sem);
 	if (ret < 0)
 		goto unlock;
 
@@ -1075,6 +1138,7 @@ static int fill_extent(struct fiemap_extent_info *fieinfo,
 int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 			u64 start, u64 len)
 {
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_lock *lock = NULL;
@@ -1095,8 +1159,8 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (ret)
 		goto out;
 
-	/* XXX overkill? */
 	mutex_lock(&inode->i_mutex);
+	down_read(&si->extent_sem);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
 	if (ret)
@@ -1148,6 +1212,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		ret = fill_extent(fieinfo, &cur, last_flags);
 unlock:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+	up_read(&si->extent_sem);
 	mutex_unlock(&inode->i_mutex);
 
 out:
@@ -1227,8 +1292,9 @@ static struct scoutfs_data_wait *dw_next(struct scoutfs_data_wait *dw)
  * Check if we should wait by looking for extents whose flags match.
  * Returns 0 if no extents were found or any error encountered.
  *
- * The caller must have locked the extents before calling, both across
- * mounts and within this mount.
+ * The caller must have acquired a cluster lock that covers the extent
+ * items.  We acquire the extent_sem to protect our read from writers in
+ * other tasks.
  *
  * Returns 1 if any file extents in the caller's region matched.  If the
  * wait struct is provided then it is initialized to be woken when the
@@ -1240,6 +1306,7 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 			    u8 sef, u8 op, struct scoutfs_data_wait *dw,
 			    struct scoutfs_lock *lock)
 {
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	const u64 ino = scoutfs_ino(inode);
 	struct data_ext_args args = {
@@ -1271,6 +1338,8 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 			goto out;
 		}
 	}
+
+	down_read(&si->extent_sem);
 
 	iblock = pos >> SCOUTFS_BLOCK_SM_SHIFT;
 	last_block = (pos + len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
@@ -1307,6 +1376,8 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 
 		iblock = ext.start + ext.len;
 	}
+
+	up_read(&si->extent_sem);
 
 out:
 	trace_scoutfs_data_wait_check(sb, ino, pos, len, sef, op, &ext, ret);
