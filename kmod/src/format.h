@@ -452,7 +452,10 @@ struct scoutfs_log_trees {
 	__le64 max_item_seq;
 	__le64 rid;
 	__le64 nr;
+	__le64 flags;
 };
+
+#define SCOUTFS_LOG_TREES_FINALIZED	(1ULL << 0)
 
 struct scoutfs_log_item_value {
 	__le64 seq;
@@ -491,6 +494,78 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_FOREST_BLOOM_FUNC_BITS		(SCOUTFS_BLOCK_LG_SHIFT + 3)
 
 /*
+ * A private server btree item which records the status of a log merge
+ * operation that is in progress.
+ */
+struct scoutfs_log_merge_status {
+	struct scoutfs_key next_range_key;
+	__le64 nr_requests;
+	__le64 nr_complete;
+	__le64 last_seq;
+	__le64 seq;
+};
+
+/*
+ * A request is sent to the client and stored in a server btree item to
+ * record resources that would be reclaimed if the client failed.  It
+ * has all the inputs needed for the client to perform its portion of a
+ * merge.
+ */
+struct scoutfs_log_merge_request {
+	struct scoutfs_alloc_list_head meta_avail;
+	struct scoutfs_alloc_list_head meta_freed;
+	struct scoutfs_btree_root logs_root;
+	struct scoutfs_btree_root root;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	__le64 last_seq;
+	__le64 rid;
+	__le64 seq;
+	__le64 flags;
+};
+
+/* request root is subtree of fs root at parent, restricted merging modifications */
+#define SCOUTFS_LOG_MERGE_REQUEST_SUBTREE	(1ULL << 0)
+
+/*
+ * The output of a client's merge of log btree items into a subtree
+ * rooted at a parent in the fs_root.  The client sends it to the
+ * server, who stores it in a btree item for later splicing/rebalancing.
+ */
+struct scoutfs_log_merge_complete {
+	struct scoutfs_alloc_list_head meta_avail;
+	struct scoutfs_alloc_list_head meta_freed;
+	struct scoutfs_btree_root root;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	struct scoutfs_key remain;
+	__le64 rid;
+	__le64 seq;
+	__le64 flags;
+};
+
+/* merge failed, ignore completion and reclaim stored request */
+#define SCOUTFS_LOG_MERGE_COMP_ERROR	(1ULL << 0)
+/* merge didn't complete range, restart from remain */
+#define SCOUTFS_LOG_MERGE_COMP_REMAIN	(1ULL << 1)
+
+/*
+ * Range items record the ranges of the fs keyspace that still need to
+ * be merged.  They're added as a merge starts, removed as requests are
+ * sent and added back if the request didn't consume its entire range.
+ */
+struct scoutfs_log_merge_range {
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+};
+
+struct scoutfs_log_merge_freeing {
+	struct scoutfs_btree_root root;
+	struct scoutfs_key key;
+	__le64 seq;
+};
+
+/*
  * Keys are first sorted by major key zones.
  */
 #define SCOUTFS_INODE_INDEX_ZONE		1
@@ -504,6 +579,12 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_SRCH_ZONE			9
 #define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		10
 #define SCOUTFS_FREE_EXTENT_ORDER_ZONE		11
+/* Items only stored in log merge server btrees */
+#define SCOUTFS_LOG_MERGE_STATUS_ZONE		12
+#define SCOUTFS_LOG_MERGE_RANGE_ZONE		13
+#define SCOUTFS_LOG_MERGE_REQUEST_ZONE		14
+#define SCOUTFS_LOG_MERGE_COMPLETE_ZONE		15
+#define SCOUTFS_LOG_MERGE_FREEING_ZONE		16
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -703,6 +784,7 @@ struct scoutfs_super_block {
 	struct scoutfs_alloc_list_head server_meta_freed[2];
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
+	struct scoutfs_btree_root log_merge;
 	struct scoutfs_btree_root trans_seqs;
 	struct scoutfs_btree_root mounted_clients;
 	struct scoutfs_btree_root srch_root;
@@ -895,6 +977,8 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_LOCK_RECOVER,
 	SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
 	SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
+	SCOUTFS_NET_CMD_GET_LOG_MERGE,
+	SCOUTFS_NET_CMD_COMMIT_LOG_MERGE,
 	SCOUTFS_NET_CMD_OPEN_INO_MAP,
 	SCOUTFS_NET_CMD_GET_VOLOPT,
 	SCOUTFS_NET_CMD_SET_VOLOPT,
