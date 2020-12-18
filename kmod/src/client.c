@@ -217,6 +217,26 @@ int scoutfs_client_srch_commit_compact(struct super_block *sb,
 					res, sizeof(*res), NULL, 0);
 }
 
+int scoutfs_client_get_log_merge(struct super_block *sb,
+				 struct scoutfs_log_merge_request *req)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn,
+					SCOUTFS_NET_CMD_GET_LOG_MERGE,
+					NULL, 0, req, sizeof(*req));
+}
+
+int scoutfs_client_commit_log_merge(struct super_block *sb,
+				    struct scoutfs_log_merge_complete *comp)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn,
+					SCOUTFS_NET_CMD_COMMIT_LOG_MERGE,
+					comp, sizeof(*comp), NULL, 0);
+}
+
 int scoutfs_client_send_omap_response(struct super_block *sb, u64 id,
 				      struct scoutfs_open_ino_map *map)
 {
