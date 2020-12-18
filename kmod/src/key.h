@@ -108,6 +108,16 @@ static inline void scoutfs_key_set_ones(struct scoutfs_key *key)
 	memset(key->__pad, 0, sizeof(key->__pad));
 }
 
+static inline bool scoutfs_key_is_ones(struct scoutfs_key *key)
+{
+	return key->sk_zone == U8_MAX &&
+	       key->_sk_first == cpu_to_le64(U64_MAX) &&
+	       key->sk_type == U8_MAX &&
+	       key->_sk_second == cpu_to_le64(U64_MAX) &&
+	       key->_sk_third == cpu_to_le64(U64_MAX) &&
+	       key->_sk_fourth == U8_MAX;
+}
+
 /*
  * Return a -1/0/1 comparison of keys.
  *
