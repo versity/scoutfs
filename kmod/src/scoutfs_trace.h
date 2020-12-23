@@ -1760,6 +1760,48 @@ TRACE_EVENT(scoutfs_btree_merge_items,
 		  sk_trace_args(f_key), __entry->f_val_len, __entry->is_del)
 );
 
+DECLARE_EVENT_CLASS(scoutfs_btree_free_blocks,
+	TP_PROTO(struct super_block *sb, struct scoutfs_btree_root *root,
+		 u64 blkno),
+
+	TP_ARGS(sb, root, blkno),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, root_blkno)
+		__field(__u64, root_seq)
+		__field(__u8, root_height)
+		__field(__u64, blkno)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->root_blkno = le64_to_cpu(root->ref.blkno);
+		__entry->root_seq = le64_to_cpu(root->ref.seq);
+		__entry->root_height = root->height;
+		__entry->blkno = blkno;
+	),
+
+	TP_printk(SCSBF" root blkno %llu seq %llu height %u, free blkno %llu",
+		  SCSB_TRACE_ARGS, __entry->root_blkno, __entry->root_seq,
+		  __entry->root_height, __entry->blkno)
+);
+DEFINE_EVENT(scoutfs_btree_free_blocks, scoutfs_btree_free_blocks_single,
+	TP_PROTO(struct super_block *sb, struct scoutfs_btree_root *root,
+		 u64 blkno),
+	TP_ARGS(sb, root, blkno)
+);
+DEFINE_EVENT(scoutfs_btree_free_blocks, scoutfs_btree_free_blocks_leaf,
+	TP_PROTO(struct super_block *sb, struct scoutfs_btree_root *root,
+		 u64 blkno),
+	TP_ARGS(sb, root, blkno)
+);
+DEFINE_EVENT(scoutfs_btree_free_blocks, scoutfs_btree_free_blocks_parent,
+	TP_PROTO(struct super_block *sb, struct scoutfs_btree_root *root,
+		 u64 blkno),
+	TP_ARGS(sb, root, blkno)
+);
+
 TRACE_EVENT(scoutfs_online_offline_blocks,
 	TP_PROTO(struct inode *inode, s64 on_delta, s64 off_delta,
 		 u64 on_now, u64 off_now),

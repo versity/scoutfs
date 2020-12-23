@@ -128,6 +128,12 @@ int scoutfs_btree_merge(struct super_block *sb,
 			scoutfs_btree_merge_is_del_t merge_is_del, bool subtree,
 			int drop_val, int dirty_limit, int alloc_low);
 
+int scoutfs_btree_free_blocks(struct super_block *sb,
+			      struct scoutfs_alloc *alloc,
+			      struct scoutfs_block_writer *wri,
+			      struct scoutfs_key *key,
+			      struct scoutfs_btree_root *root, int alloc_low);
+
 void scoutfs_btree_put_iref(struct scoutfs_btree_item_ref *iref);
 
 #endif

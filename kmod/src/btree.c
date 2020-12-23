@@ -2173,3 +2173,166 @@ out:
 
 	return ret;
 }
+
+/*
+ * Free all the blocks referenced by a btree.  The btree is only read,
+ * this does not update the blocks as it frees.  The caller ensures that
+ * these btrees aren't been modified.
+ *
+ * The caller's key tracks which blocks have been freed.  It must be
+ * initialized to zeros before the first call to start freeing blocks.
+ * Once a block is freed the key is updated such that the freed block
+ * will not be read again.
+ *
+ * Returns 0 when progress has been made successfully, which includes
+ * partial progress.  The key is set to all ones once we've freed all
+ * the blocks.
+ *
+ * This works by descending to the last parent block and freeing all its
+ * leaf blocks without reading them.  As it descends it remembers the
+ * number of parent blocks which were traversed through their final
+ * child ref.  If we free all the leaf blocks then all these parent
+ * blocks are no longer needed and can be freed.  The caller's key is
+ * updated to past the subtree that we just freed and we retry the
+ * descent from the root through the next set of parents to the next set
+ * of leaf blocks to free.
+ */
+int scoutfs_btree_free_blocks(struct super_block *sb,
+			      struct scoutfs_alloc *alloc,
+			      struct scoutfs_block_writer *wri,
+			      struct scoutfs_key *key,
+			      struct scoutfs_btree_root *root, int alloc_low)
+{
+	u64 blknos[SCOUTFS_BTREE_MAX_HEIGHT];
+	struct scoutfs_block *bl = NULL;
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_block_ref ref;
+	struct scoutfs_avl_node *node;
+	struct scoutfs_avl_node *next;
+	struct scoutfs_key par_next;
+	int nr_par;
+	int level;
+	int ret;
+	int i;
+
+	if (WARN_ON_ONCE(root->height > ARRAY_SIZE(blknos)))
+		return -EIO; /* XXX corruption */
+
+	if (root->height == 0) {
+		scoutfs_key_set_ones(key);
+		return 0;
+	}
+
+	if (scoutfs_key_is_ones(key))
+		return 0;
+
+	/* just free a single leaf block */
+	if (root->height == 1) {
+		ret = scoutfs_free_meta(sb, alloc, wri,
+					le64_to_cpu(root->ref.blkno));
+		if (ret == 0) {
+			trace_scoutfs_btree_free_blocks_single(sb, root,
+						le64_to_cpu(root->ref.blkno));
+			scoutfs_key_set_ones(key);
+		}
+		goto out;
+	}
+
+	for (;;) {
+		/* start the walk at the root block */
+		level = root->height - 1;
+		ref = root->ref;
+		scoutfs_key_set_ones(&par_next);
+		nr_par = 0;
+
+		/* read blocks until we read the last parent */
+		for (;;) {
+			scoutfs_block_put(sb, bl);
+			bl = NULL;
+			ret = get_ref_block(sb, alloc, wri, 0, &ref, &bl);
+			if (ret < 0)
+				goto out;
+			bt = bl->data;
+
+			node = scoutfs_avl_search(&bt->item_root, cmp_key_item,
+						  key, NULL, NULL, &next, NULL);
+			if (node == NULL)
+				node = next;
+
+			/* should never descend into parent with no more refs */
+			if (WARN_ON_ONCE(node == NULL)) {
+				ret = -EIO;
+				goto out;
+			}
+
+			/* we'll free refs in the last parent */
+			if (level == 1)
+				break;
+
+			item = node_item(node);
+			next = scoutfs_avl_next(&bt->item_root, node);
+			if (next) {
+				/* didn't take last ref, still need parents */
+				nr_par = 0;
+				par_next = *item_key(item);
+				scoutfs_key_inc(&par_next);
+			} else {
+				/* final ref, could free after all leaves */
+				blknos[nr_par++] = le64_to_cpu(bt->hdr.blkno);
+			}
+
+			memcpy(&ref, item_val(bt, item), sizeof(ref));
+			level--;
+		}
+
+		/* free all leaf block refs in last parent */
+		while (node) {
+
+			/* make sure we can always free parents after leaves */
+			if (scoutfs_alloc_meta_low(sb, alloc,
+						   alloc_low + nr_par + 1)) {
+				ret = 0;
+				goto out;
+			}
+
+			item = node_item(node);
+			memcpy(&ref, item_val(bt, item), sizeof(ref));
+
+			trace_scoutfs_btree_free_blocks_leaf(sb, root,
+							le64_to_cpu(ref.blkno));
+			ret = scoutfs_free_meta(sb, alloc, wri,
+						le64_to_cpu(ref.blkno));
+			if (ret < 0)
+				goto out;
+
+			node = scoutfs_avl_next(&bt->item_root, node);
+			if (node) {
+				/* done with keys in child we just freed */
+				*key = *item_key(item);
+				scoutfs_key_inc(key);
+			}
+		}
+
+		/* now that leaves are freed, free any empty parents */
+		for (i = 0; i < nr_par; i++) {
+			trace_scoutfs_btree_free_blocks_parent(sb, root,
+							       blknos[i]);
+			ret = scoutfs_free_meta(sb, alloc, wri, blknos[i]);
+			BUG_ON(ret); /* checked meta low, freed should fit */
+		}
+
+		/* restart walk past the subtree we just freed */
+		*key = par_next;
+
+		/* but done if we just freed all parents down right spine */
+		if (scoutfs_key_is_ones(&par_next)) {
+			ret = 0;
+			goto out;
+		}
+	}
+
+out:
+	scoutfs_block_put(sb, bl);
+	return ret;
+}
