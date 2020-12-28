@@ -118,6 +118,11 @@ static unsigned int join_low_watermark(void)
 	return (SCOUTFS_BLOCK_LG_SIZE - sizeof(struct scoutfs_btree_block)) / 4;
 }
 
+static bool total_above_join_low_water(struct scoutfs_btree_block *bt)
+{
+	return le16_to_cpu(bt->total_item_bytes) >= join_low_watermark();
+}
+
 /*
  * return the integer percentages of total space the block could have
  * consumed by items that is currently consumed.
@@ -814,7 +819,7 @@ static int try_join(struct super_block *sb,
 	int to_move;
 	int ret;
 
-	if (le16_to_cpu(bt->total_item_bytes) >= join_low_watermark())
+	if (total_above_join_low_water(bt))
 		return 0;
 
 	scoutfs_inc_counter(sb, btree_join);
