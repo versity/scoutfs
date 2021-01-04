@@ -53,9 +53,8 @@ struct data_info {
 	struct mutex mutex;
 	struct scoutfs_alloc *alloc;
 	struct scoutfs_block_writer *wri;
-	struct scoutfs_alloc_root data_avail;
 	struct scoutfs_alloc_root data_freed;
-	struct scoutfs_extent cached_ext;
+	struct scoutfs_data_alloc dalloc;
 };
 
 #define DECLARE_DATA_INFO(sb, name) \
@@ -432,8 +431,7 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		count = 1;
 
 	ret = scoutfs_alloc_data(sb, datinf->alloc, datinf->wri,
-				 &datinf->data_avail, &datinf->cached_ext,
-				 count, &blkno, &count);
+				 &datinf->dalloc, count, &blkno, &count);
 	if (ret < 0)
 		goto out;
 
@@ -916,9 +914,8 @@ static s64 fallocate_extents(struct super_block *sb, struct inode *inode,
 		mutex_lock(&datinf->mutex);
 
 		ret = scoutfs_alloc_data(sb, datinf->alloc, datinf->wri,
-					 &datinf->data_avail,
-					 &datinf->cached_ext,
-					 count, &blkno, &count);
+					 &datinf->dalloc, count,
+					 &blkno, &count);
 		if (ret == 0) {
 			ret = scoutfs_ext_set(sb, &data_ext_ops, &args, iblock,
 					      count, blkno,
@@ -926,7 +923,7 @@ static s64 fallocate_extents(struct super_block *sb, struct inode *inode,
 			if (ret < 0) {
 				err = scoutfs_free_data(sb, datinf->alloc,
 							datinf->wri,
-							&datinf->data_avail,
+							&datinf->data_freed,
 							blkno, count);
 				BUG_ON(err); /* inconsistent */
 			}
@@ -1532,7 +1529,7 @@ void scoutfs_data_init_btrees(struct super_block *sb,
 
 	datinf->alloc = alloc;
 	datinf->wri = wri;
-	datinf->data_avail = lt->data_avail;
+	scoutfs_dalloc_init(&datinf->dalloc, &lt->data_avail);
 	datinf->data_freed = lt->data_freed;
 
 	mutex_unlock(&datinf->mutex);
@@ -1545,7 +1542,7 @@ void scoutfs_data_get_btrees(struct super_block *sb,
 
 	mutex_lock(&datinf->mutex);
 
-	lt->data_avail = datinf->data_avail;
+	scoutfs_dalloc_get_root(&datinf->dalloc, &lt->data_avail);
 	lt->data_freed = datinf->data_freed;
 
 	mutex_unlock(&datinf->mutex);
@@ -1561,31 +1558,20 @@ int scoutfs_data_prepare_commit(struct super_block *sb)
 	int ret;
 
 	mutex_lock(&datinf->mutex);
-	if (datinf->cached_ext.len) {
-		ret = scoutfs_free_data(sb, datinf->alloc, datinf->wri,
-					&datinf->data_avail,
-					datinf->cached_ext.start,
-					datinf->cached_ext.len);
-		if (ret == 0)
-			memset(&datinf->cached_ext, 0,
-			       sizeof(datinf->cached_ext));
-	} else {
-		ret = 0;
-	}
+	ret = scoutfs_dalloc_return_cached(sb, datinf->alloc, datinf->wri,
+					   &datinf->dalloc);
 	mutex_unlock(&datinf->mutex);
 
 	return ret;
 }
 
-/*
- * This isn't serializing with allocators so it can be a bit racey.
- */
 u64 scoutfs_data_alloc_free_bytes(struct super_block *sb)
 {
 	DECLARE_DATA_INFO(sb, datinf);
 
-	return le64_to_cpu(datinf->data_avail.total_len) <<
-			SCOUTFS_BLOCK_SM_SHIFT;
+	return scoutfs_dalloc_total_len(&datinf->dalloc) <<
+		SCOUTFS_BLOCK_SM_SHIFT;
+
 }
 
 int scoutfs_data_setup(struct super_block *sb)

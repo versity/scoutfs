@@ -80,6 +80,18 @@ struct scoutfs_alloc {
 	struct scoutfs_alloc_list_head freed;
 };
 
+/*
+ * A run-time data allocator.  We have a cached extent in memory that is
+ * a lot cheaper to work with than the extent items, and we have a
+ * consistent record of the total_len that can be sampled outside of the
+ * usual heavy serialization of the extent modifications.
+ */
+struct scoutfs_data_alloc {
+	struct scoutfs_alloc_root root;
+	struct scoutfs_extent cached;
+	atomic64_t total_len;
+};
+
 void scoutfs_alloc_init(struct scoutfs_alloc *alloc,
 			struct scoutfs_alloc_list_head *avail,
 			struct scoutfs_alloc_list_head *freed);
@@ -92,10 +104,18 @@ int scoutfs_alloc_meta(struct super_block *sb, struct scoutfs_alloc *alloc,
 int scoutfs_free_meta(struct super_block *sb, struct scoutfs_alloc *alloc,
 		      struct scoutfs_block_writer *wri, u64 blkno);
 
+void scoutfs_dalloc_init(struct scoutfs_data_alloc *dalloc,
+			 struct scoutfs_alloc_root *data_avail);
+void scoutfs_dalloc_get_root(struct scoutfs_data_alloc *dalloc,
+			     struct scoutfs_alloc_root *data_avail);
+u64 scoutfs_dalloc_total_len(struct scoutfs_data_alloc *dalloc);
+int scoutfs_dalloc_return_cached(struct super_block *sb,
+				 struct scoutfs_alloc *alloc,
+				 struct scoutfs_block_writer *wri,
+				 struct scoutfs_data_alloc *dalloc);
 int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
-		       struct scoutfs_alloc_root *root,
-		       struct scoutfs_extent *cached, u64 count,
+		       struct scoutfs_data_alloc *dalloc, u64 count,
 		       u64 *blkno_ret, u64 *count_ret);
 int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		      struct scoutfs_block_writer *wri,
