@@ -274,8 +274,8 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_ioctl_release args;
 	struct scoutfs_lock *lock = NULL;
-	loff_t start;
-	loff_t end_inc;
+	u64 sblock;
+	u64 eblock;
 	u64 online;
 	u64 offline;
 	u64 isize;
@@ -286,9 +286,11 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 	trace_scoutfs_ioc_release(sb, scoutfs_ino(inode), &args);
 
-	if (args.count == 0)
+	if (args.length == 0)
 		return 0;
-	if ((args.block + args.count) < args.block)
+	if (((args.offset + args.length) < args.offset) ||
+	    (args.offset & SCOUTFS_BLOCK_SM_MASK) ||
+	    (args.length & SCOUTFS_BLOCK_SM_MASK))
 		return -EINVAL;
 
 
@@ -321,23 +323,24 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	inode_dio_wait(inode);
 
 	/* drop all clean and dirty cached blocks in the range */
-	start = args.block << SCOUTFS_BLOCK_SM_SHIFT;
-	end_inc = ((args.block + args.count) << SCOUTFS_BLOCK_SM_SHIFT) - 1;
-	truncate_inode_pages_range(&inode->i_data, start, end_inc);
+	truncate_inode_pages_range(&inode->i_data, args.offset,
+				   args.offset + args.length - 1);
 
+	sblock = args.offset >> SCOUTFS_BLOCK_SM_SHIFT;
+	eblock = (args.offset + args.length - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
 	ret = scoutfs_data_truncate_items(sb, inode, scoutfs_ino(inode),
-					  args.block,
-					  args.block + args.count - 1, true,
+					  sblock,
+					  eblock, true,
 					  lock);
 	if (ret == 0) {
 		scoutfs_inode_get_onoff(inode, &online, &offline);
 		isize = i_size_read(inode);
 		if (online == 0 && isize) {
-			start = (isize + SCOUTFS_BLOCK_SM_SIZE - 1)
+			sblock = (isize + SCOUTFS_BLOCK_SM_SIZE - 1)
 					>> SCOUTFS_BLOCK_SM_SHIFT;
 			ret = scoutfs_data_truncate_items(sb, inode,
 							  scoutfs_ino(inode),
-							  start, U64_MAX,
+							  sblock, U64_MAX,
 							  false, lock);
 		}
 	}
@@ -459,23 +462,24 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 
 	trace_scoutfs_ioc_stage(sb, scoutfs_ino(inode), &args);
 
-	end_size = args.offset + args.count;
+	end_size = args.offset + args.length;
 
 	/* verify arg constraints that aren't dependent on file */
-	if (args.count < 0 || (end_size < args.offset) ||
-	    args.offset & SCOUTFS_BLOCK_SM_MASK)
+	if (args.length < 0 || (end_size < args.offset) ||
+	    args.offset & SCOUTFS_BLOCK_SM_MASK) {
 		return -EINVAL;
+	}
 
-	if (args.count == 0)
+	if (args.length == 0)
 		return 0;
 
 	/* the iocb is really only used for the file pointer :P */
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = args.offset;
-	kiocb.ki_left = args.count;
-	kiocb.ki_nbytes = args.count;
+	kiocb.ki_left = args.length;
+	kiocb.ki_nbytes = args.length;
 	iov.iov_base = (void __user *)(unsigned long)args.buf_ptr;
-	iov.iov_len = args.count;
+	iov.iov_len = args.length;
 
 	ret = mnt_want_write_file(file);
 	if (ret)
@@ -514,11 +518,11 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	written = 0;
 	do {
 		ret = generic_file_buffered_write(&kiocb, &iov, 1, pos, &pos,
-						  args.count, written);
+						  args.length, written);
 		BUG_ON(ret == -EIOCBQUEUED);
 		if (ret > 0)
 			written += ret;
-	} while (ret > 0 && written < args.count);
+	} while (ret > 0 && written < args.length);
 
 	si->staging = false;
 	current->backing_dev_info = NULL;

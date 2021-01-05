@@ -76,7 +76,7 @@ static int do_stage(struct stage_args *args)
 		ioctl_args.data_version = args->data_version;
 		ioctl_args.buf_ptr = (unsigned long)buf;
 		ioctl_args.offset = args->offset;
-		ioctl_args.count = bytes;
+		ioctl_args.length = bytes;
 
 		args->length -= bytes;
 		args->offset += bytes;
@@ -211,8 +211,8 @@ static int do_release(struct release_args *args)
 	assert(args->offset % SCOUTFS_BLOCK_SM_SIZE == 0);
 	assert(args->length % SCOUTFS_BLOCK_SM_SIZE == 0);
 
-	ioctl_args.block = args->offset / SCOUTFS_BLOCK_SM_SIZE;
-	ioctl_args.count = args->length / SCOUTFS_BLOCK_SM_SIZE;
+	ioctl_args.offset = args->offset;
+	ioctl_args.length = args->length;
 	ioctl_args.data_version = args->data_version;
 
 	ret = ioctl(fd, SCOUTFS_IOC_RELEASE, &ioctl_args);

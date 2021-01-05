@@ -176,8 +176,8 @@ struct scoutfs_ioctl_ino_path_result {
  * an offline record is left behind to trigger demand staging if the
  * file is read.
  *
- * The starting block offset and number of blocks to release are in
- * units 4KB blocks.
+ * The starting file offset and number of bytes to release must be in
+ * multiples of 4KB.
  *
  * The specified range can extend past i_size and can straddle sparse
  * regions or blocks that are already offline.  The only change it makes
@@ -193,8 +193,8 @@ struct scoutfs_ioctl_ino_path_result {
  * presentation of the data in the file.
  */
 struct scoutfs_ioctl_release {
-	__u64 block;
-	__u64 count;
+	__u64 offset;
+	__u64 length;
 	__u64 data_version;
 };
 
@@ -205,7 +205,7 @@ struct scoutfs_ioctl_stage {
 	__u64 data_version;
 	__u64 buf_ptr;
 	__u64 offset;
-	__s32 count;
+	__s32 length;
 	__u32 _pad;
 };
 
