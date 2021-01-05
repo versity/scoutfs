@@ -30,7 +30,7 @@ echo "== create files and sync"
 dd if=/dev/zero of="$DIR/truncate" bs=4096 count=1 status=none
 dd if=/dev/zero of="$DIR/stage" bs=4096 count=1 status=none
 vers=$(scoutfs stat -s data_version "$DIR/stage")
-scoutfs release "$DIR/stage" $vers 0 1
+scoutfs release "$DIR/stage" -V $vers -o 0 -l 4K
 dd if=/dev/zero of="$DIR/release" bs=4096 count=1 status=none
 touch "$DIR/write_end"
 mkdir "$DIR"/{mknod_dir,link_dir,unlink_dir,symlink_dir,rename_dir}
@@ -41,9 +41,9 @@ sync; sync
 echo "== modify files" 
 truncate -s 0 "$DIR/truncate"
 vers=$(scoutfs stat -s data_version "$DIR/stage")
-scoutfs stage "$DIR/stage" $vers 0 4096 /dev/zero
+scoutfs stage /dev/zero "$DIR/stage" -V $vers -o 0 -l 4096
 vers=$(scoutfs stat -s data_version "$DIR/release")
-scoutfs release "$DIR/release" $vers 0 1
+scoutfs release "$DIR/release" -V $vers -o 0 -l 4K
 dd if=/dev/zero of="$DIR/write_end" bs=4096 count=1 status=none conv=notrunc
 touch $DIR/mknod_dir/mknod_file
 touch $DIR/link_dir/link_targ

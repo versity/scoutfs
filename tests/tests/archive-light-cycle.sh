@@ -161,9 +161,9 @@ for n in $(t_fs_nrs); do
 			echo "bash $gen $blocks $n $p $f > $path" >> $create
 			echo "cmp $path <(bash $gen $blocks $n $p $f)" >> $verify
 			echo "vers=\$(scoutfs stat -s data_version $path)" >> $release
-			echo "scoutfs release $path \$vers 0 $blocks" >> $release
+			echo "scoutfs release $path -V \$vers -o 0 -l $bytes" >> $release
 			echo "vers=\$(scoutfs stat -s data_version $path)" >> $stage
-			echo "scoutfs stage $path \$vers 0 $bytes <(bash $gen $blocks $n $p $f)" >> $stage
+			echo "scoutfs stage <(bash $gen $blocks $n $p $f) $path -V \$vers -o 0 -l $bytes " >> $stage
 			echo "rm -f $path" >> $unlink
 
 			echo "x=\$(scoutfs stat -s online_blocks $path)" >> $online

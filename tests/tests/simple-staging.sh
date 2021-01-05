@@ -29,14 +29,14 @@ create_file() {
 release_vers() {
 	local file="$1"
 	local vers="$2"
-	local block="$3"
-	local count="$4"
+	local offset="$3"
+	local length="$4"
 
 	if [ "$vers" == "stat" ]; then
 		vers=$(scoutfs stat -s data_version "$file")
 	fi
 
-	scoutfs release "$file" "$vers" "$block" "$count"
+	scoutfs release "$file" -V "$vers" -o "$offset" -l "$length"
 }
 
 # if vers is "stat" then we ask stat_more for the data_version
@@ -44,14 +44,14 @@ stage_vers() {
 	local file="$1"
 	local vers="$2"
 	local offset="$3"
-	local count="$4"
+	local length="$4"
 	local contents="$5"
 
 	if [ "$vers" == "stat" ]; then
 		vers=$(scoutfs stat -s data_version "$file")
 	fi
 
-	scoutfs stage "$file" "$vers" "$offset" "$count" "$contents"
+	scoutfs stage "$contents" "$file" -V "$vers" -o "$offset" -l "$length"
 }
 
 FILE="$T_D0/file"
@@ -60,7 +60,7 @@ CHAR="$FILE-char"
 echo "== create/release/stage single block file"
 create_file "$FILE" 4096
 cp "$FILE"  "$T_TMP"
-release_vers "$FILE" stat 0 1
+release_vers "$FILE" stat 0 4K
 # make sure there only offline extents
 fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
 stage_vers "$FILE" stat 0 4096 "$T_TMP"
@@ -70,7 +70,7 @@ rm -f "$FILE"
 echo "== create/release/stage larger file"
 create_file "$FILE" $((4096 * 4096))
 cp "$FILE"  "$T_TMP"
-release_vers "$FILE" stat 0 4096
+release_vers "$FILE" stat 0 16M
 # make sure there only offline extents
 fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
 stage_vers "$FILE" stat 0 $((4096 * 4096)) "$T_TMP"
@@ -83,7 +83,7 @@ cp "$FILE"  "$T_TMP"
 nr=1
 while [ "$nr" -lt 10 ]; do
 	echo "attempt $nr" >> $seqres.full 2>&1
-	release_vers "$FILE" stat 0 1024
+	release_vers "$FILE" stat 0 4096K
 	sync
 	echo 3 > /proc/sys/vm/drop_caches
 	stage_vers "$FILE" stat 0 $((4096 * 1024)) "$T_TMP"
@@ -100,7 +100,7 @@ sync
 stat "$FILE" > "$T_TMP.before"
 scoutfs stat -s data_seq "$FILE" >> "$T_TMP.before"
 scoutfs stat -s data_version "$FILE" >> "$T_TMP.before"
-release_vers "$FILE" stat 0 1
+release_vers "$FILE" stat 0 4K
 stage_vers "$FILE" stat 0 4096 "$T_TMP"
 stat "$FILE" > "$T_TMP.after"
 scoutfs stat -s data_seq "$FILE" >> "$T_TMP.after"
@@ -110,7 +110,7 @@ rm -f "$FILE"
 
 echo "== stage does change meta_seq"
 create_file "$FILE" 4096
-release_vers "$FILE" stat 0 1
+release_vers "$FILE" stat 0 4K
 sync
 before=$(scoutfs stat -s meta_seq "$FILE")
 stage_vers "$FILE" stat 0 4096 "$T_TMP"
@@ -121,7 +121,7 @@ rm -f "$FILE"
 # XXX this now waits, demand staging should be own test
 #echo "== can't write to offline"
 #create_file "$FILE" 4096
-#release_vers "$FILE" stat 0 1
+#release_vers "$FILE" stat 0 4K
 ## make sure there only offline extents
 #fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
 #dd if=/dev/zero of="$FILE" conv=notrunc bs=4096 count=1  2>&1 | t_filter_fs
@@ -144,13 +144,13 @@ rm -f "$FILE"
 
 echo "== wrapped region fails"
 create_file "$FILE" 4096
-stage_vers "$FILE" stat 0xFFFFFFFFFFFFFFFF 4096 /dev/zero
+stage_vers "$FILE" stat 0xFFFFFFFFFFFFF000 4096 /dev/zero
 rm -f "$FILE"
 
 echo "== non-block aligned offset fails"
 create_file "$FILE" 4096
 cp "$FILE"  "$T_TMP"
-release_vers "$FILE" stat 0 1
+release_vers "$FILE" stat 0 4K
 stage_vers "$FILE" stat 1 4095 "$T_TMP"
 fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
 rm -f "$FILE"
@@ -158,7 +158,7 @@ rm -f "$FILE"
 echo "== non-block aligned len within block fails"
 create_file "$FILE" 4096
 cp "$FILE"  "$T_TMP"
-release_vers "$FILE" stat 0 1
+release_vers "$FILE" stat 0 4K
 stage_vers "$FILE" stat 0 1024 "$T_TMP"
 fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
 rm -f "$FILE"
@@ -166,14 +166,14 @@ rm -f "$FILE"
 echo "== partial final block that writes to i_size does work"
 create_file "$FILE" 2048
 cp "$FILE"  "$T_TMP"
-release_vers "$FILE" stat 0 1
+release_vers "$FILE" stat 0 4K
 stage_vers "$FILE" stat 0 2048 "$T_TMP"
 cmp "$FILE" "$T_TMP"
 rm -f "$FILE"
 
 echo "== zero length stage doesn't bring blocks online"
 create_file "$FILE" $((4096 * 100))
-release_vers "$FILE" stat 0 100
+release_vers "$FILE" stat 0 400K
 stage_vers "$FILE" stat 4096 0 /dev/zero
 fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
 rm -f "$FILE"
@@ -188,7 +188,7 @@ rm -f "$FILE"
 #create_file "$FILE" 4096
 #cp "$FILE"  "$T_TMP"
 #sync
-#release_vers "$FILE" stat 0 1
+#release_vers "$FILE" stat 0 4K
 #md5sum "$FILE" 2>&1 | t_filter_fs
 #stage_vers "$FILE" stat 0 4096 "$T_TMP"
 #cmp "$FILE" "$T_TMP"

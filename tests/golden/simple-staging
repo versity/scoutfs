@@ -4,8 +4,8 @@
 == release+stage shouldn't change stat, data seq or vers
 == stage does change meta_seq
 == can't use stage to extend online file
-stage returned -1, not 4096: error Invalid argument (22)
-scoutfs: stage failed: Input/output error (5)
+stage: must provide file version with --data-version
+Try `stage --help' or `stage --usage' for more information.
 == wrapped region fails
 stage returned -1, not 4096: error Invalid argument (22)
 scoutfs: stage failed: Input/output error (5)
@@ -18,6 +18,6 @@ scoutfs: stage failed: Input/output error (5)
 == partial final block that writes to i_size does work
 == zero length stage doesn't bring blocks online
 == stage of non-regular file fails
-ioctl failed on '/mnt/test/test/simple-staging/file-char': Inappropriate ioctl for device (25)
-stage returned -1, not 1: error Inappropriate ioctl for device (25)
-scoutfs: stage failed: Input/output error (5)
+ioctl failed: Inappropriate ioctl for device (25)
+stage: must provide file version with --data-version
+Try `stage --help' or `stage --usage' for more information.

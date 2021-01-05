@@ -29,7 +29,7 @@ release_file() {
         local path="$1"
         local vers=$(scoutfs stat -s data_version "$path")
 
-        scoutfs release "$path" "$vers" 0 $FILE_BLOCKS
+        scoutfs release "$path" -V "$vers" -o 0 -l $FILE_BYTES
 }
 
 stage_file() {
@@ -38,8 +38,8 @@ stage_file() {
         local off=0
 
 	for a in $(seq 1 $NR_FRAGS); do
-		scoutfs stage "$path" "$vers" $off $FRAG_BYTES \
-			<(gen $FRAG_BLOCKS $a $a $a)
+		scoutfs stage <(gen $FRAG_BLOCKS $a $a $a) "$path" -V "$vers" \
+			-o $off -l $FRAG_BYTES
 		((off+=$FRAG_BYTES))
 	done
 }

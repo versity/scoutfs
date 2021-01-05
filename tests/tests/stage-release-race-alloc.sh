@@ -15,7 +15,7 @@ release_file() {
 	local vers=$(scoutfs stat -s data_version "$path")
 
 	echo "releasing $path" >> "$T_TMP.log"
-	scoutfs release "$path" "$vers" 0 $BLOCKS
+	scoutfs release "$path" -V "$vers" -o 0 -l $BYTES
 	echo "released $path" >> "$T_TMP.log"
 }
 
@@ -24,8 +24,8 @@ stage_file() {
 	local vers=$(scoutfs stat -s data_version "$path")
 
 	echo "staging $path" >> "$T_TMP.log"
-	scoutfs stage "$path" "$vers" 0 $BYTES \
-		"$DIR/good/$(basename $path)"
+	scoutfs stage "$DIR/good/$(basename $path)" "$path" -V "$vers" -o 0 -l $BYTES
+
 	echo "staged $path" >> "$T_TMP.log"
 }
 

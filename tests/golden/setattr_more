@@ -1,9 +1,9 @@
 == 0 data_version arg fails
-setattr_more ioctl failed on '/mnt/test/test/setattr_more/file': Invalid argument (22)
-scoutfs: setattr failed: Invalid argument (22)
+setattr: data version must not be 0
+Try `setattr --help' or `setattr --usage' for more information.
 == args must specify size and offline
-setattr_more ioctl failed on '/mnt/test/test/setattr_more/file': Invalid argument (22)
-scoutfs: setattr failed: Invalid argument (22)
+setattr: must provide size if using --offline option
+Try `setattr --help' or `setattr --usage' for more information.
 == only works on regular files
 failed to open '/mnt/test/test/setattr_more/dir': Is a directory (21)
 scoutfs: setattr failed: Is a directory (21)
