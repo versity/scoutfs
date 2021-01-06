@@ -12,6 +12,7 @@
  */
 #include <linux/kernel.h>
 #include <linux/fs.h>
+#include <linux/file.h>
 #include <linux/uaccess.h>
 #include <linux/compiler.h>
 #include <linux/uio.h>
@@ -937,6 +938,54 @@ static long scoutfs_ioc_alloc_detail(struct file *file, unsigned long arg)
 	       args.copied;
 }
 
+static long scoutfs_ioc_move_blocks(struct file *file, unsigned long arg)
+{
+	struct inode *to = file_inode(file);
+	struct super_block *sb = to->i_sb;
+	struct scoutfs_ioctl_move_blocks __user *umb = (void __user *)arg;
+	struct scoutfs_ioctl_move_blocks mb;
+	struct file *from_file;
+	struct inode *from;
+	int ret;
+
+	if (copy_from_user(&mb, umb, sizeof(mb)))
+		return -EFAULT;
+
+	if (mb.len == 0)
+		return 0;
+
+	if (mb.from_off + mb.len < mb.from_off ||
+	    mb.to_off + mb.len < mb.to_off)
+		return -EOVERFLOW;
+
+	from_file = fget(mb.from_fd);
+	if (!from_file)
+		return -EBADF;
+	from = file_inode(from_file);
+
+	if (from == to) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (from->i_sb != sb) {
+		ret = -EXDEV;
+		goto out;
+	}
+
+	ret = mnt_want_write_file(file);
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_data_move_blocks(from, mb.from_off, mb.len,
+				       to, mb.to_off);
+	mnt_drop_write_file(file);
+out:
+	fput(from_file);
+
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -964,6 +1013,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_data_wait_err(file, arg);
 	case SCOUTFS_IOC_ALLOC_DETAIL:
 		return scoutfs_ioc_alloc_detail(file, arg);
+	case SCOUTFS_IOC_MOVE_BLOCKS:
+		return scoutfs_ioc_move_blocks(file, arg);
 	}
 
 	return -ENOTTY;
