@@ -395,9 +395,6 @@ struct scoutfs_ioctl_data_wait_err {
 				       struct scoutfs_ioctl_data_wait_err)
 
 
-#define SCOUTFS_IOC_ALLOC_DETAIL _IOR(SCOUTFS_IOCTL_MAGIC, 12, \
-				     struct scoutfs_ioctl_alloc_detail)
-
 struct scoutfs_ioctl_alloc_detail {
 	__u64 entries_ptr;
 	__u64 entries_nr;
@@ -412,5 +409,8 @@ struct scoutfs_ioctl_alloc_detail_entry {
 	__u8 __bit_pad:6;
 	__u8 __pad[6];
 };
+
+#define SCOUTFS_IOC_ALLOC_DETAIL _IOR(SCOUTFS_IOCTL_MAGIC, 12, \
+				      struct scoutfs_ioctl_alloc_detail)
 
 #endif
