@@ -21,5 +21,5 @@ t_require_mounts() {
 	local req="$1"
 
 	test "$T_NR_MOUNTS" -ge "$req" || \
-		t_fail "$req mounts required, only have $T_NR_MOUNTS"
+		t_skip "$req mounts required, only have $T_NR_MOUNTS"
 }
