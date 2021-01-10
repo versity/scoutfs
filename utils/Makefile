@@ -18,7 +18,7 @@ HASH_FILES := $(FMTIOC_DIST)
 endif
 SCOUTFS_FORMAT_HASH := $(shell cat $(HASH_FILES) | md5sum | cut -b1-16)
 
-CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g -msse4.2 \
+CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g \
 	-Wpadded \
 	-fno-strict-aliasing \
 	-DSCOUTFS_FORMAT_HASH=0x$(SCOUTFS_FORMAT_HASH)LLU
@@ -47,7 +47,7 @@ endif
 
 $(BIN): $(OBJ)
 	$(QU)  [BIN $@]
-	$(VE)gcc -o $@ $^ -luuid -lm -lcrypto
+	$(VE)gcc -o $@ $^ -luuid -lm -lcrypto -lz
 
 %.o %.d: %.c Makefile sparse.sh
 	$(QU)  [CC $<]

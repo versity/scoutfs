@@ -1,26 +1,12 @@
+#include <zlib.h>
+
 #include "crc.h"
 #include "util.h"
 #include "format.h"
 
 u32 crc32c(u32 crc, const void *data, unsigned int len)
 {
-	while (len >= 8) {
-		crc = __builtin_ia32_crc32di(crc, *(u64 *)data);
-		len -= 8;
-		data += 8;
-	}
-	if (len & 4) {
-		crc = __builtin_ia32_crc32si(crc, *(u32 *)data);
-		data += 4;
-	}
-	if (len & 2) {
-		crc = __builtin_ia32_crc32hi(crc, *(u16 *)data);
-		data += 2;
-	}
-	if (len & 1)
-		crc = __builtin_ia32_crc32qi(crc, *(u8 *)data);
-
-	return crc;
+	return crc32(crc, data, len);
 }
 
 /* A simple hack to get reasonably solid 64bit hash values */
