@@ -859,6 +859,10 @@ out:
 	return ret;
 }
 
+#define BTR_FMT "blkno %llu seq %016llx height %u"
+#define BTR_ARG(rt) \
+	le64_to_cpu((rt)->ref.blkno), le64_to_cpu((rt)->ref.seq), (rt)->height
+
 static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 {
 	char uuid_str[37];
@@ -888,10 +892,11 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  server_meta_avail[1]: "AL_HEAD_F"\n"
 	       "  server_meta_freed[0]: "AL_HEAD_F"\n"
 	       "  server_meta_freed[1]: "AL_HEAD_F"\n"
-	       "  mounted_clients root: height %u blkno %llu seq %llu\n"
-	       "  srch_root root: height %u blkno %llu seq %llu\n"
-	       "  trans_seqs root: height %u blkno %llu seq %llu\n"
-	       "  fs_root btree root: height %u blkno %llu seq %llu\n",
+	       "  fs_root: "BTR_FMT"\n"
+	       "  logs_root: "BTR_FMT"\n"
+	       "  trans_seqs: "BTR_FMT"\n"
+	       "  mounted_clients: "BTR_FMT"\n"
+	       "  srch_root: "BTR_FMT"\n",
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->seq),
 		le64_to_cpu(super->total_meta_blocks),
@@ -907,18 +912,11 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		AL_HEAD_A(&super->server_meta_avail[1]),
 		AL_HEAD_A(&super->server_meta_freed[0]),
 		AL_HEAD_A(&super->server_meta_freed[1]),
-		super->mounted_clients.height,
-		le64_to_cpu(super->mounted_clients.ref.blkno),
-		le64_to_cpu(super->mounted_clients.ref.seq),
-		super->srch_root.height,
-		le64_to_cpu(super->srch_root.ref.blkno),
-		le64_to_cpu(super->srch_root.ref.seq),
-		super->trans_seqs.height,
-		le64_to_cpu(super->trans_seqs.ref.blkno),
-		le64_to_cpu(super->trans_seqs.ref.seq),
-		super->fs_root.height,
-		le64_to_cpu(super->fs_root.ref.blkno),
-		le64_to_cpu(super->fs_root.ref.seq));
+		BTR_ARG(&super->fs_root),
+		BTR_ARG(&super->logs_root),
+		BTR_ARG(&super->trans_seqs),
+		BTR_ARG(&super->mounted_clients),
+		BTR_ARG(&super->srch_root));
 
 	printf("  volume options:\n"
 	       "    set_bits: %016llx\n",
