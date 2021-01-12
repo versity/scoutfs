@@ -657,6 +657,60 @@ out:
 	return ret;
 }
 
+void scoutfs_dalloc_init(struct scoutfs_data_alloc *dalloc,
+			 struct scoutfs_alloc_root *data_avail)
+{
+	dalloc->root = *data_avail;
+	memset(&dalloc->cached, 0, sizeof(dalloc->cached));
+	atomic64_set(&dalloc->total_len, le64_to_cpu(dalloc->root.total_len));
+}
+
+void scoutfs_dalloc_get_root(struct scoutfs_data_alloc *dalloc,
+			     struct scoutfs_alloc_root *data_avail)
+{
+	*data_avail = dalloc->root;
+}
+
+static void dalloc_update_total_len(struct scoutfs_data_alloc *dalloc)
+{
+	atomic64_set(&dalloc->total_len, le64_to_cpu(dalloc->root.total_len) +
+		     dalloc->cached.len);
+}
+
+u64 scoutfs_dalloc_total_len(struct scoutfs_data_alloc *dalloc)
+{
+	return atomic64_read(&dalloc->total_len);
+}
+
+/*
+ * Return the current in-memory cached free extent to extent items in
+ * the avail root.  This should be locked by the caller just like
+ * _alloc_data and _free_data.
+ */
+int scoutfs_dalloc_return_cached(struct super_block *sb,
+				 struct scoutfs_alloc *alloc,
+				 struct scoutfs_block_writer *wri,
+				 struct scoutfs_data_alloc *dalloc)
+{
+	struct alloc_ext_args args = {
+		.alloc = alloc,
+		.wri = wri,
+		.root = &dalloc->root,
+		.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE,
+	};
+	int ret = 0;
+
+	if (dalloc->cached.len) {
+		ret = scoutfs_ext_insert(sb, &alloc_ext_ops, &args,
+					 dalloc->cached.start,
+					 dalloc->cached.len, 0, 0);
+		if (ret == 0)
+			memset(&dalloc->cached, 0, sizeof(dalloc->cached));
+	}
+
+	return ret;
+}
+
 /*
  * Allocate a data extent.  An extent that's smaller than the requested
  * size can be returned.
@@ -671,14 +725,13 @@ out:
  */
 int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
-		       struct scoutfs_alloc_root *root,
-		       struct scoutfs_extent *cached, u64 count,
+		       struct scoutfs_data_alloc *dalloc, u64 count,
 		       u64 *blkno_ret, u64 *count_ret)
 {
 	struct alloc_ext_args args = {
 		.alloc = alloc,
 		.wri = wri,
-		.root = root,
+		.root = &dalloc->root,
 		.type = SCOUTFS_FREE_EXTENT_LEN_TYPE,
 	};
 	struct scoutfs_extent ext;
@@ -699,20 +752,21 @@ int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 	}
 
 	/* smaller allocations come from a cached extent */
-	if (cached->len == 0) {
+	if (dalloc->cached.len == 0) {
 		ret = scoutfs_ext_alloc(sb, &alloc_ext_ops, &args, 0, 0,
-					SCOUTFS_ALLOC_DATA_LG_THRESH, cached);
+					SCOUTFS_ALLOC_DATA_LG_THRESH,
+					&dalloc->cached);
 		if (ret < 0)
 			goto out;
 	}
 
-	len = min(count, cached->len);
+	len = min(count, dalloc->cached.len);
 
-	*blkno_ret = cached->start;
+	*blkno_ret = dalloc->cached.start;
 	*count_ret = len;
 
-	cached->start += len;
-	cached->len -= len;
+	dalloc->cached.start += len;
+	dalloc->cached.len -= len;
 	ret = 0;
 out:
 	if (ret < 0) {
@@ -720,6 +774,8 @@ out:
 			ret = -ENOSPC;
 		*blkno_ret = 0;
 		*count_ret = 0;
+	} else {
+		dalloc_update_total_len(dalloc);
 	}
 
 	scoutfs_inc_counter(sb, alloc_alloc_data);
