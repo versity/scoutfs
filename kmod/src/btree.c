@@ -913,13 +913,15 @@ static bool bad_avl_node_off(__le16 node_off, int nr)
  *  - call after leaf modification
  *  - padding is zero
  */
-static void verify_btree_block(struct super_block *sb,
+__attribute__((unused))
+static void verify_btree_block(struct super_block *sb, char *str,
 			       struct scoutfs_btree_block *bt, int level,
-			       struct scoutfs_key *start,
+			       bool last_ref, struct scoutfs_key *start,
 			       struct scoutfs_key *end)
 {
 	__le16 *buckets = leaf_item_hash_buckets(bt);
 	struct scoutfs_btree_item *item;
+	struct scoutfs_avl_node *node;
 	char *reason = NULL;
 	int first_val = 0;
 	int hashed = 0;
@@ -981,6 +983,12 @@ static void verify_btree_block(struct super_block *sb,
 			goto out;
 		}
 
+		if (level > 0 && le16_to_cpu(item->val_len) !=
+				 sizeof(struct scoutfs_block_ref)) {
+			reason = "parent item val not sizeof ref";
+			goto out;
+		}
+
 		if (le16_to_cpu(item->val_len) > SCOUTFS_BTREE_MAX_VAL_LEN) {
 			reason = "bad item val len";
 			goto out;
@@ -998,6 +1006,15 @@ static void verify_btree_block(struct super_block *sb,
 		if (item->val_len != 0) {
 			first_val = min_t(int, first_val,
 					  le16_to_cpu(item->val_off));
+		}
+	}
+
+	if (last_ref && level > 0 &&
+	    (node = scoutfs_avl_last(&bt->item_root)) != NULL) {
+		item = node_item(node);
+		if (scoutfs_key_compare(&item->key, end) != 0) {
+			reason = "final ref item key not range end";
+			goto out;
 		}
 	}
 
@@ -1033,17 +1050,18 @@ out:
 	if (!reason)
 		return;
 
-	printk("found btree block inconsistency: %s\n", reason);
-	printk("start "SK_FMT" end "SK_FMT"\n", SK_ARG(start), SK_ARG(end));
+	printk("verifying btree %s: %s\n", str, reason);
+	printk("args: level %u last_ref %u start "SK_FMT" end "SK_FMT"\n",
+		level, last_ref, SK_ARG(start), SK_ARG(end));
 	printk("calced: i %u tot %u hashed %u fv %u\n",
 	       i, tot, hashed, first_val);
 
-	printk("hdr: crc %x magic %x fsid %llx seq %llx blkno %llu\n", 
+	printk("bt hdr: crc %x magic %x fsid %llx seq %llx blkno %llu\n", 
 		le32_to_cpu(bt->hdr.crc), le32_to_cpu(bt->hdr.magic),
 		le64_to_cpu(bt->hdr.fsid), le64_to_cpu(bt->hdr.seq),
 		le64_to_cpu(bt->hdr.blkno));
 	printk("item_root: node %u\n", le16_to_cpu(bt->item_root.node));
-	printk("nr %u tib %u mfl %u lvl %u\n",
+	printk("bt: nr %u tib %u mfl %u lvl %u\n",
 		le16_to_cpu(bt->nr_items), le16_to_cpu(bt->total_item_bytes),
 		le16_to_cpu(bt->mid_free_len), bt->level);
 
@@ -1058,6 +1076,92 @@ out:
 	}
 
 	BUG();
+}
+
+/*
+ * Walk from the root to the leaf, verifying the blocks traversed.
+ */
+__attribute__((unused))
+static void verify_btree_walk(struct super_block *sb, char *str,
+			      struct scoutfs_btree_root *root,
+			      struct scoutfs_key *key)
+{
+	struct scoutfs_avl_node *next_node;
+	struct scoutfs_avl_node *node;
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_item *prev;
+	struct scoutfs_block *bl = NULL;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_block_ref ref;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	bool last_ref;
+	int level;
+	int ret;
+
+	if (root->height == 0 && root->ref.blkno != 0) {
+		WARN_ONCE(1, "invalid btree root height %u blkno %llu seq %016llx\n",
+			root->height, le64_to_cpu(root->ref.blkno),
+			le64_to_cpu(root->ref.seq));
+		return;
+	}
+
+	if (root->height == 0)
+		return;
+
+	scoutfs_key_set_zeros(&start);
+	scoutfs_key_set_ones(&end);
+	level = root->height;
+	ref = root->ref;
+	/* first parent last ref isn't all ones in subtrees */
+	last_ref = false;
+
+	while(level-- > 0) {
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+		ret = get_ref_block(sb, NULL, NULL, 0, &ref, &bl);
+		if (ret) {
+			printk("verifying  btree %s: read error %d\n",
+			       str, ret);
+			break;
+		}
+		bt = bl->data;
+
+		verify_btree_block(sb, str, bt, level, last_ref, &start, &end);
+
+		if (level == 0)
+			break;
+
+		node = scoutfs_avl_search(&bt->item_root, cmp_key_item, key,
+					  NULL, NULL, &next_node, NULL);
+		item = node_item(node ?: next_node);
+
+		if (item == NULL) {
+			printk("verifying btree %s: no ref item\n", str);
+			printk("root: height %u blkno %llu seq %016llx\n",
+			       root->height, le64_to_cpu(root->ref.blkno),
+			       le64_to_cpu(root->ref.seq));
+			printk("walk level %u start "SK_FMT" end "SK_FMT"\n",
+				level, SK_ARG(&start), SK_ARG(&end));
+
+			printk("block: level %u blkno %llu seq %016llx\n",
+			       bt->level, le64_to_cpu(bt->hdr.blkno),
+			       le64_to_cpu(bt->hdr.seq));
+			printk("key: "SK_FMT"\n", SK_ARG(key));
+			BUG();
+		}
+
+		if ((prev = prev_item(bt, item))) {
+			start = *item_key(prev);
+			scoutfs_key_inc(&start);
+		}
+		end = *item_key(item);
+
+		memcpy(&ref, item_val(bt, item), sizeof(ref));
+		last_ref = !next_item(bt, item);
+	}
+
+	scoutfs_block_put(sb, bl);
 }
 
 struct btree_walk_key_range {
@@ -1196,9 +1300,6 @@ restart:
 		if (ret)
 			break;
 		bt = bl->data;
-
-		if (0 && kr)
-			verify_btree_block(sb, bt, level, &kr->start, &kr->end);
 
 		/* XXX more aggressive block verification, before ref updates? */
 		if (bt->level != level) {
