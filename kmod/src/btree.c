@@ -521,6 +521,7 @@ static void create_item(struct scoutfs_btree_block *bt,
 
 	item->val_off = insert_value(bt, ptr_off(bt, item), val, val_len);
 	item->val_len = cpu_to_le16(val_len);
+	memset(item->__pad, 0, sizeof(item->__pad));
 
 	le16_add_cpu(&bt->total_item_bytes, item_bytes(item));
 }
