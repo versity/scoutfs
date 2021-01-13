@@ -1141,10 +1141,10 @@ static int server_greeting(struct super_block *sb,
 		goto send_err;
 	}
 
-	if (gr->format_hash != super->format_hash) {
+	if (gr->version != super->version) {
 		scoutfs_warn(sb, "client sent format 0x%llx, server has 0x%llx",
-			     le64_to_cpu(gr->format_hash),
-			     le64_to_cpu(super->format_hash));
+			     le64_to_cpu(gr->version),
+			     le64_to_cpu(super->version));
 		ret = -EINVAL;
 		goto send_err;
 	}
@@ -1173,7 +1173,7 @@ send_err:
 	err = ret;
 
 	greet.fsid = super->hdr.fsid;
-	greet.format_hash = super->format_hash;
+	greet.version = super->version;
 	greet.server_term = cpu_to_le64(server->term);
 	greet.unmount_barrier = umb;
 	greet.rid = gr->rid;

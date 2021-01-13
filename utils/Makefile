@@ -1,22 +1,10 @@
 #
-# The userspace utils and kernel module share definitions of physical
-# structures and ioctls.  If we're in the repo we include the kmod
-# headers directly, and hash them directly to calculate the format hash.
-#
 # If we're creating a standalone tarball for distribution we copy the
 # headers out of the kmod dir into the tarball.  And then when we're
 # building in that tarball we use the headers in src/ directly.
 #
 FMTIOC_H := format.h ioctl.h
-FMTIOC_DIST := $(addprefix src/,$(FMTIOC_H))
 FMTIOC_KMOD := $(addprefix ../kmod/src/,$(FMTIOC_H))
-
-ifneq ($(wildcard $(firstword $(FMTIOC_KMOD))),)
-HASH_FILES := $(FMTIOC_KMOD)
-else
-HASH_FILES := $(FMTIOC_DIST)
-endif
-SCOUTFS_FORMAT_HASH := $(shell cat $(HASH_FILES) | md5sum | cut -b1-16)
 
 CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g -msse4.2 \
 	-fno-strict-aliasing \

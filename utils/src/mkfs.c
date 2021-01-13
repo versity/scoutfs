@@ -205,7 +205,7 @@ static int do_mkfs(struct mkfs_args *args)
 	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
 	super->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_SUPER);
 	super->hdr.seq = cpu_to_le64(1);
-	super->format_hash = cpu_to_le64(SCOUTFS_FORMAT_HASH);
+	super->version = cpu_to_le64(SCOUTFS_INTEROP_VERSION);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->next_trans_seq = cpu_to_le64(1);
@@ -352,7 +352,7 @@ static int do_mkfs(struct mkfs_args *args)
 	       "  meta device path:     %s\n"
 	       "  data device path:     %s\n"
 	       "  fsid:                 %llx\n"
-	       "  format hash:          %llx\n"
+	       "  version:              %llx\n"
 	       "  uuid:                 %s\n"
 	       "  64KB metadata blocks: "SIZE_FMT"\n"
 	       "  4KB data blocks:      "SIZE_FMT"\n"
@@ -360,7 +360,7 @@ static int do_mkfs(struct mkfs_args *args)
 		args->meta_device,
 	        args->data_device,
 		le64_to_cpu(super->hdr.fsid),
-		le64_to_cpu(super->format_hash),
+		le64_to_cpu(super->version),
 		uuid_str,
 		SIZE_ARGS(le64_to_cpu(super->total_meta_blocks),
 			  SCOUTFS_BLOCK_LG_SIZE),

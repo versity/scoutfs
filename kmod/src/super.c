@@ -352,10 +352,10 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 	}
 
 
-	if (super->format_hash != cpu_to_le64(SCOUTFS_FORMAT_HASH)) {
-		scoutfs_err(sb, "super block has invalid format hash 0x%llx, expected 0x%llx",
-			    le64_to_cpu(super->format_hash),
-			    SCOUTFS_FORMAT_HASH);
+	if (super->version != cpu_to_le64(SCOUTFS_INTEROP_VERSION)) {
+		scoutfs_err(sb, "super block has invalid version %llu, expected %llu",
+			    le64_to_cpu(super->version),
+			    SCOUTFS_INTEROP_VERSION);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -682,6 +682,10 @@ static int __init scoutfs_module_init(void)
 		".section	.note.git_describe,\"a\"\n"
 		".string	\""SCOUTFS_GIT_DESCRIBE"\\n\"\n"
 		".previous\n");
+	__asm__ __volatile__ (
+		".section	.note.scoutfs_interop_version,\"a\"\n"
+		".string	\""SCOUTFS_INTEROP_VERSION_STR"\\n\"\n"
+		".previous\n");
 
 	scoutfs_init_counters();
 
@@ -714,3 +718,4 @@ module_exit(scoutfs_module_exit)
 MODULE_AUTHOR("Zach Brown <zab@versity.com>");
 MODULE_LICENSE("GPL");
 MODULE_INFO(git_describe, SCOUTFS_GIT_DESCRIBE);
+MODULE_INFO(scoutfs_interop_version, SCOUTFS_INTEROP_VERSION_STR);

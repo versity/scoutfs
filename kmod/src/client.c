@@ -282,10 +282,10 @@ static int client_greeting(struct super_block *sb,
 		goto out;
 	}
 
-	if (gr->format_hash != super->format_hash) {
+	if (gr->version != super->version) {
 		scoutfs_warn(sb, "server sent format 0x%llx, client has 0x%llx",
-			     le64_to_cpu(gr->format_hash),
-			     le64_to_cpu(super->format_hash));
+			     le64_to_cpu(gr->version),
+			     le64_to_cpu(super->version));
 		ret = -EINVAL;
 		goto out;
 	}
@@ -394,7 +394,7 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 
 	/* send a greeting to verify endpoints of each connection */
 	greet.fsid = super->hdr.fsid;
-	greet.format_hash = super->format_hash;
+	greet.version = super->version;
 	greet.server_term = cpu_to_le64(client->server_term);
 	greet.unmount_barrier = cpu_to_le64(client->greeting_umb);
 	greet.rid = cpu_to_le64(sbi->rid);

@@ -31,15 +31,9 @@ functionality hasn't been implemented.  It's appropriate for early
 adopters and interested developers, not for production use.
 
 In that vein, expect significant incompatible changes to both the format
-of network messages and persistent structures.  To avoid mistakes the
-implementation currently calculates a hash of the format and ioctl
-header files in the source tree.  The kernel module will refuse to mount
-a volume created by userspace utilities with a mismatched hash, and it
-will refuse to connect to a remote node with a mismatched hash.  This
-means having to unmount, mkfs, and remount everything across many
-functional changes.  Once the format is nailed down we'll wire up
-forward and back compat machinery and remove this temporary safety
-measure. 
+of network messages and persistent structures. Since the format hash-checking
+has now been removed in preparation for release, if there is any doubt, mkfs
+is strongly recommended.
 
 The current kernel module is developed against the RHEL/CentOS 7.x
 kernel to minimize the friction of developing and testing with partners'
