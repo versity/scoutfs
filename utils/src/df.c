@@ -7,20 +7,28 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
-#include <getopt.h>
 #include <assert.h>
+#include <stdbool.h>
+#include <argp.h>
 
 #include "sparse.h"
+#include "parse.h"
 #include "util.h"
 #include "format.h"
 #include "ioctl.h"
 #include "cmd.h"
+#include "dev.h"
 
 #define ROWS 3
 #define COLS 6
 #define CHARS 20
 
-static int df_cmd(int argc, char **argv)
+struct df_args {
+	char *path;
+	bool human_readable;
+};
+
+static int do_df(struct df_args *args)
 {
 	struct scoutfs_ioctl_alloc_detail ad;
 	struct scoutfs_ioctl_alloc_detail_entry *ade = NULL;
@@ -36,18 +44,9 @@ static int df_cmd(int argc, char **argv)
 	int r;
 	int c;
 
-	if (argc != 2) {
-		fprintf(stderr, "must specify path\n");
-		return -EINVAL;
-	}
-
-	fd = open(argv[1], O_RDONLY);
-	if (fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[1], strerror(errno), errno);
-		return ret;
-	}
+	fd = get_path(args->path, O_RDONLY);
+	if (fd < 0)
+		return fd;
 
 	sfm.valid_bytes = sizeof(struct scoutfs_ioctl_statfs_more);
 	ret = ioctl(fd, SCOUTFS_IOC_STATFS_MORE, &sfm);
@@ -96,18 +95,38 @@ static int df_cmd(int argc, char **argv)
 
 	snprintf(cells[1][0], CHARS, "MetaData");
 	snprintf(cells[1][1], CHARS, "64KB");
-	snprintf(cells[1][2], CHARS, "%llu", sfm.total_meta_blocks);
-	snprintf(cells[1][3], CHARS, "%llu", sfm.total_meta_blocks - meta_free);
-	snprintf(cells[1][4], CHARS, "%llu", meta_free);
+	if (args->human_readable) {
+		snprintf(cells[1][2], CHARS, BASE_SIZE_FMT,
+			 BASE_SIZE_ARGS(sfm.total_meta_blocks * SCOUTFS_BLOCK_LG_SIZE));
+		snprintf(cells[1][3], CHARS, BASE_SIZE_FMT,
+			 BASE_SIZE_ARGS((sfm.total_meta_blocks - meta_free)
+					* SCOUTFS_BLOCK_LG_SIZE));
+		snprintf(cells[1][4], CHARS, BASE_SIZE_FMT,
+			 BASE_SIZE_ARGS(meta_free * SCOUTFS_BLOCK_LG_SIZE));
+	} else {
+		snprintf(cells[1][2], CHARS, "%llu", sfm.total_meta_blocks);
+		snprintf(cells[1][3], CHARS, "%llu", sfm.total_meta_blocks - meta_free);
+		snprintf(cells[1][4], CHARS, "%llu", meta_free);
+	}
 	snprintf(cells[1][5], CHARS, "%llu",
 		((sfm.total_meta_blocks - meta_free) * 100) /
 		sfm.total_meta_blocks);
 
 	snprintf(cells[2][0], CHARS, "Data");
 	snprintf(cells[2][1], CHARS, "4KB");
-	snprintf(cells[2][2], CHARS, "%llu", sfm.total_data_blocks);
-	snprintf(cells[2][3], CHARS, "%llu", sfm.total_data_blocks - data_free);
-	snprintf(cells[2][4], CHARS, "%llu", data_free);
+	if (args->human_readable) {
+		snprintf(cells[2][2], CHARS, BASE_SIZE_FMT,
+			 BASE_SIZE_ARGS(sfm.total_data_blocks * SCOUTFS_BLOCK_SM_SIZE));
+		snprintf(cells[2][3], CHARS, BASE_SIZE_FMT,
+			 BASE_SIZE_ARGS((sfm.total_data_blocks - data_free)
+					* SCOUTFS_BLOCK_SM_SIZE));
+		snprintf(cells[2][4], CHARS, BASE_SIZE_FMT,
+			 BASE_SIZE_ARGS(data_free * SCOUTFS_BLOCK_SM_SIZE));
+	} else {
+		snprintf(cells[2][2], CHARS, "%llu", sfm.total_data_blocks);
+		snprintf(cells[2][3], CHARS, "%llu", sfm.total_data_blocks - data_free);
+		snprintf(cells[2][4], CHARS, "%llu", data_free);
+	}
 	snprintf(cells[2][5], CHARS, "%llu",
 		((sfm.total_data_blocks - data_free) * 100) /
 		sfm.total_data_blocks);
@@ -131,8 +150,51 @@ out:
 	return ret;
 }
 
+static int parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct df_args *args = state->input;
+
+	switch (key) {
+	case 'p':
+		args->path = strdup_or_error(state, arg);
+		break;
+	case 'h':
+		args->human_readable = true;
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static struct argp_option options[] = {
+	{ "path", 'p', "PATH", 0, "Path to ScoutFS filesystem"},
+	{ "human-readable", 'h', NULL, 0, "Print sizes in human readable format (e.g., 1KB 234MB 2GB)"},
+	{ NULL }
+};
+
+static struct argp argp = {
+	options,
+	parse_opt,
+	"",
+	"Show metadata and data block usage"
+};
+
+static int df_cmd(int argc, char **argv)
+{
+	struct df_args df_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&argp, argc, argv, 0, NULL, &df_args);
+	if (ret)
+		return ret;
+
+	return do_df(&df_args);
+
+}
+
 static void __attribute__((constructor)) df_ctor(void)
 {
-	cmd_register("df", "<path>",
-		     "show metadata and data block usage", df_cmd);
+	cmd_register_argp("df", &argp, GROUP_CORE, df_cmd);
 }

@@ -8,8 +8,10 @@
 #include <errno.h>
 #include <string.h>
 #include <limits.h>
+#include <argp.h>
 
 #include "sparse.h"
+#include "parse.h"
 #include "util.h"
 #include "format.h"
 #include "ioctl.h"
@@ -66,7 +68,14 @@ static int parse_walk_entry(struct scoutfs_ioctl_walk_inodes_entry *ent,
 	return 0;
 }
 
-static int walk_inodes_cmd(int argc, char **argv)
+struct walk_inodes_args {
+	char *path;
+	char *index;
+	char *first_entry;
+	char *last_entry;
+};
+
+static int do_walk_inodes(struct walk_inodes_args *args)
 {
 	struct scoutfs_ioctl_walk_inodes_entry ents[128];
 	struct scoutfs_ioctl_walk_inodes walk;
@@ -75,44 +84,35 @@ static int walk_inodes_cmd(int argc, char **argv)
 	int fd;
 	int i;
 
-	if (argc != 5) {
-		fprintf(stderr, "must specify seq and path\n");
-		return -EINVAL;
-	}
-
-	if (!strcasecmp(argv[1], "meta_seq"))
+	if (!strcasecmp(args->index, "meta_seq"))
 		walk.index = SCOUTFS_IOC_WALK_INODES_META_SEQ;
-	else if (!strcasecmp(argv[1], "data_seq"))
+	else if (!strcasecmp(args->index, "data_seq"))
 		walk.index = SCOUTFS_IOC_WALK_INODES_DATA_SEQ;
 	else {
 		fprintf(stderr, "unknown index '%s', try 'meta_seq' or "
-				"'data_seq'\n", argv[1]);
+				"'data_seq'\n", args->index);
 		return -EINVAL;
 	}
 
-	ret = parse_walk_entry(&walk.first, argv[2]);
+	ret = parse_walk_entry(&walk.first, args->first_entry);
 	if (ret) {
 		fprintf(stderr, "invalid first position '%s', try '1.2.3' or "
-			"'-1'\n", argv[2]);
+			"'-1'\n", args->first_entry);
 		return -EINVAL;
 
 	}
 
-	ret = parse_walk_entry(&walk.last, argv[3]);
+	ret = parse_walk_entry(&walk.last, args->last_entry);
 	if (ret) {
 		fprintf(stderr, "invalid last position '%s', try '1.2.3' or "
-			"'-1'\n", argv[3]);
+			"'-1'\n", args->last_entry);
 		return -EINVAL;
 
 	}
 
-	fd = open(argv[4], O_RDONLY);
-	if (fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			argv[4], strerror(errno), errno);
-		return ret;
-	}
+	fd = get_path(args->path, O_RDONLY);
+	if (fd < 0)
+		return fd;
 
 	walk.entries_ptr = (unsigned long)ents;
 	walk.nr_entries = array_size(ents);
@@ -149,8 +149,65 @@ static int walk_inodes_cmd(int argc, char **argv)
 	return ret;
 };
 
+static int walk_inodes_parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct walk_inodes_args *args = state->input;
+
+	switch (key) {
+	case 'p':
+		args->path = strdup_or_error(state, arg);
+		break;
+	case ARGP_KEY_ARG:
+		if (!args->index)
+			args->index = strdup_or_error(state, arg);
+		else if (!args->first_entry)
+			args->first_entry = strdup_or_error(state, arg);
+		else if (!args->last_entry)
+			args->last_entry = strdup_or_error(state, arg);
+		else
+			argp_error(state, "more than three arguments given");
+		break;
+	case ARGP_KEY_FINI:
+		if (!args->index)
+			argp_error(state, "no index given");
+		if (!args->first_entry)
+			argp_error(state, "no first entry given");
+		if (!args->last_entry)
+			argp_error(state, "no last entry given");
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static struct argp_option options[] = {
+	{ "path", 'p', "PATH", 0, "Path to ScoutFS filesystem"},
+	{ NULL }
+};
+
+static struct argp argp = {
+	options,
+	walk_inodes_parse_opt,
+	"<meta_seq|data_seq> FIRST-ENTRY LAST-ENTRY",
+	"Print range of indexed inodes"
+};
+
+static int walk_inodes_cmd(int argc, char **argv)
+{
+	struct walk_inodes_args walk_inodes_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&argp, argc, argv, 0, NULL, &walk_inodes_args);
+	if (ret)
+		return ret;
+
+	return do_walk_inodes(&walk_inodes_args);
+}
+
+
 static void __attribute__((constructor)) walk_inodes_ctor(void)
 {
-	cmd_register("walk-inodes", "<index> <first> <last> <path>",
-		     "print range of indexed inodes", walk_inodes_cmd);
+	cmd_register_argp("walk-inodes", &argp, GROUP_SEARCH, walk_inodes_cmd);
 }

@@ -7,55 +7,30 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
-#include <getopt.h>
 #include <ctype.h>
+#include <argp.h>
 
 #include "sparse.h"
+#include "parse.h"
 #include "util.h"
 #include "format.h"
 #include "ioctl.h"
 #include "cmd.h"
 
-static struct option long_ops[] = {
-	{ "file", 1, NULL, 'f' },
-	{ NULL, 0, NULL, 0}
+struct list_hidden_xattr_args {
+	char *filename;
 };
 
-static int listxattr_hidden_cmd(int argc, char **argv)
+static int do_list_hidden_xattrs(struct list_hidden_xattr_args *args)
 {
 	struct scoutfs_ioctl_listxattr_hidden lxh;
-	char *path = NULL;
 	char *buf = NULL;
 	char *name;
 	int fd = -1;
 	int bytes;
 	int len;
 	int ret;
-	int c;
 	int i;
-
-	while ((c = getopt_long(argc, argv, "f:", long_ops, NULL)) != -1) {
-		switch (c) {
-		case 'f':
-			path = strdup(optarg);
-			if (!path) {
-				fprintf(stderr, "path mem alloc failed\n");
-				ret = -ENOMEM;
-				goto out;
-			}
-			break;
-		case '?':
-		default:
-			ret = -EINVAL;
-			goto out;
-		}
-	}
-
-	if (path == NULL) {
-		fprintf(stderr, "must specify -f path to file\n");
-		ret = -EINVAL;
-		goto out;
-	}
 
 	memset(&lxh, 0, sizeof(lxh));
 	lxh.id_pos = 0;
@@ -69,11 +44,11 @@ static int listxattr_hidden_cmd(int argc, char **argv)
 	}
 	lxh.buf_ptr = (unsigned long)buf;
 
-	fd = open(path, O_RDONLY);
+	fd = open(args->filename, O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			path, strerror(errno), errno);
+			args->filename, strerror(errno), errno);
 		goto out;
 	}
 
@@ -139,9 +114,50 @@ out:
 	return ret;
 };
 
+static int parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct list_hidden_xattr_args *args = state->input;
+
+	switch (key) {
+	case ARGP_KEY_ARG:
+		if (args->filename)
+			argp_error(state, "more than one filename argument given");
+
+		args->filename = strdup_or_error(state, arg);
+		break;
+	case ARGP_KEY_FINI:
+		if (!args->filename) {
+			argp_error(state, "must specify filename");
+		}
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static struct argp argp = {
+	NULL,
+	parse_opt,
+	"FILE",
+	"Print the names of hidden xattrs on a file"
+};
+
+static int list_hidden_xattrs_cmd(int argc, char **argv)
+{
+	struct list_hidden_xattr_args list_hidden_xattr_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&argp, argc, argv, 0, NULL, &list_hidden_xattr_args);
+	if (ret)
+		return ret;
+
+	return do_list_hidden_xattrs(&list_hidden_xattr_args);
+}
+
+
 static void __attribute__((constructor)) listxattr_hidden_ctor(void)
 {
-	cmd_register("listxattr-hidden", "-f <path>",
-		     "print the names of hidden xattrs on the file",
-		     listxattr_hidden_cmd);
+	cmd_register_argp("list-hidden-xattrs", &argp, GROUP_INFO, list_hidden_xattrs_cmd);
 }

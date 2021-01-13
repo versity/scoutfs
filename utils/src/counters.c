@@ -12,7 +12,10 @@
 #include <dirent.h>
 #include <sys/ioctl.h>
 #include <stdbool.h>
+#include <argp.h>
 
+#include "sparse.h"
+#include "parse.h"
 #include "util.h"
 #include "cmd.h"
 
@@ -37,7 +40,12 @@ static int cmp_counter_names(const void *A, const void *B)
 	return strcmp(a->name, b->name);
 }
 
-static int counters_cmd(int argc, char **argv)
+struct counters_args {
+	char *sysfs_path;
+	bool tabular;
+};
+
+static int do_counters(struct counters_args *args)
 {
 	unsigned int *name_wid = NULL;
 	unsigned int *val_wid = NULL;
@@ -50,9 +58,7 @@ static int counters_cmd(int argc, char **argv)
 	unsigned int rows = 0;
 	unsigned int cols = 0;
 	unsigned int nr = 0;
-	char *dir_arg = NULL;
 	struct dirent *dent;
-	bool table = false;
 	struct winsize ws;
 	DIR *dirp = NULL;
 	int dir_fd = -1;
@@ -64,28 +70,16 @@ static int counters_cmd(int argc, char **argv)
 	int r;
 	int c;
 
-	for (i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-t") == 0)
-			table = true;
-		else
-			dir_arg = argv[i];
-	}
-
 	ret = ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
 	if (ret < 0)
 		ret = ioctl(STDIN_FILENO, TIOCGWINSZ, &ws);
 	if (ret < 0)
-		table = false;
+		args->tabular = false;
 
-	if (dir_arg == NULL) {
-		printf("scoutfs counter-table: need mount sysfs dir (i.e. /sys/fs/scoutfs/$fr)\n");
-		return -EINVAL;
-	}
-
-	ret = snprintf(path, PATH_MAX, "%s/counters", dir_arg);
+	ret = snprintf(path, PATH_MAX, "%s/counters", args->sysfs_path);
 	if (ret < 1 || ret >= PATH_MAX) {
 		ret = -EINVAL;
-		fprintf(stderr, "invalid counter dir path '%s'\n", dir_arg);
+		fprintf(stderr, "invalid counter dir path '%s'\n", args->sysfs_path);
 		goto out;
 	}
 
@@ -120,6 +114,7 @@ static int counters_cmd(int argc, char **argv)
 				goto out;
 			}
 			memset(&ctrs[nr], 0, (alloced - nr) * sizeof(*ctrs));
+			memset(&name_wid[nr], 0, (alloced - nr) * sizeof(*name_wid));
 		}
 
 		ctr = &ctrs[nr];
@@ -191,7 +186,7 @@ static int counters_cmd(int argc, char **argv)
 	 * one column of counters and use the max field widths from the
 	 * initial counter reads.
 	 */
-	if (table) {
+	if (args->tabular) {
 		min_rows = 1;
 		cols = ws.ws_col / (name_wid[0] + 1 + val_wid[0] + 2);
 		max_rows = nr / cols;
@@ -276,9 +271,58 @@ out:
 	return ret;
 };
 
+static int parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct counters_args *args = state->input;
+
+	switch (key) {
+	case 't':
+		args->tabular = true;
+		break;
+	case ARGP_KEY_ARG:
+		if (!args->sysfs_path)
+			args->sysfs_path = strdup_or_error(state, arg);
+		else
+			argp_error(state, "more than one argument given");
+		break;
+	case ARGP_KEY_FINI:
+		if (!args->sysfs_path)
+			argp_error(state, "no sysfs path argument given");
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+
+static struct argp_option options[] = {
+	{ "table", 't', NULL, 0, "Output in table format" },
+	{ NULL }
+};
+
+static struct argp argp = {
+	options,
+	parse_opt,
+	"SYSFS-DIR",
+	"Show counters for a mounted volume"
+};
+
+static int counters_cmd(int argc, char *argv[])
+{
+	struct counters_args counters_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&argp, argc, argv, 0, NULL, &counters_args);
+	if (ret)
+		return ret;
+
+	return do_counters(&counters_args);
+}
+
+
 static void __attribute__((constructor)) counters_ctor(void)
 {
-	cmd_register("counters", "[-t] <sysfs dir>",
-		     "show [tablular] counters for a given mounted volume",
-		     counters_cmd);
+	cmd_register_argp("counters", &argp, GROUP_INFO, counters_cmd);
 }

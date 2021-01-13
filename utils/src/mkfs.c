@@ -11,12 +11,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <assert.h>
-#include <getopt.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <inttypes.h>
+#include <argp.h>
 
 #include "sparse.h"
 #include "cmd.h"
@@ -30,6 +30,7 @@
 #include "bitops.h"
 #include "btree.h"
 #include "leaf_item_hash.h"
+#include "blkid.h"
 
 static int write_raw_block(int fd, u64 blkno, int shift, void *blk)
 {
@@ -99,6 +100,15 @@ static int write_alloc_root(struct scoutfs_super_block *super, int fd,
 	return write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
 }
 
+struct mkfs_args {
+	unsigned long long quorum_count;
+	char *meta_device;
+	char *data_device;
+	unsigned long long max_meta_size;
+	unsigned long long max_data_size;
+	bool force;
+};
+
 /*
  * Make a new file system by writing:
  *  - super blocks
@@ -108,19 +118,18 @@ static int write_alloc_root(struct scoutfs_super_block *super, int fd,
  * Superblock is written to both metadata and data devices, everything else is
  * written only to the metadata device.
  */
-static int write_new_fs(char *meta_path, char *data_path,
-			int meta_fd, int data_fd,
-			u8 quorum_count,
-			u64 max_meta_size, u64 max_data_size)
+static int do_mkfs(struct mkfs_args *args)
 {
-	struct scoutfs_super_block *super;
+	struct scoutfs_super_block *super = NULL;
 	struct scoutfs_inode inode;
 	struct scoutfs_alloc_list_block *lblk;
-	struct scoutfs_btree_block *bt;
+	struct scoutfs_btree_block *bt = NULL;
 	struct scoutfs_key key;
 	struct timeval tv;
+	int meta_fd = -1;
+	int data_fd = -1;
 	char uuid_str[37];
-	void *zeros;
+	void *zeros = NULL;
 	u64 blkno;
 	u64 meta_size;
 	u64 data_size;
@@ -135,6 +144,33 @@ static int write_new_fs(char *meta_path, char *data_path,
 
 	gettimeofday(&tv, NULL);
 
+	meta_fd = open(args->meta_device, O_RDWR | O_EXCL);
+	if (meta_fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "failed to open '%s': %s (%d)\n",
+			args->meta_device, strerror(errno), errno);
+		goto out;
+	}
+	if (!args->force) {
+		ret = check_bdev(meta_fd, args->meta_device, "meta");
+		if (ret)
+			return ret;
+	}
+
+	data_fd = open(args->data_device, O_RDWR | O_EXCL);
+	if (data_fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "failed to open '%s': %s (%d)\n",
+			args->data_device, strerror(errno), errno);
+		goto out;
+	}
+	if (!args->force) {
+		ret = check_bdev(data_fd, args->data_device, "data");
+		if (ret)
+			return ret;
+	}
+
+
 	super = calloc(1, SCOUTFS_BLOCK_SM_SIZE);
 	bt = calloc(1, SCOUTFS_BLOCK_LG_SIZE);
 	zeros = calloc(1, SCOUTFS_BLOCK_SM_SIZE);
@@ -145,13 +181,13 @@ static int write_new_fs(char *meta_path, char *data_path,
 		goto out;
 	}
 
-	ret = device_size(meta_path, meta_fd, 2ULL * (1024 * 1024 * 1024),
-			  max_meta_size, "meta", &meta_size);
+	ret = device_size(args->meta_device, meta_fd, 2ULL * (1024 * 1024 * 1024),
+			  args->max_meta_size, "meta", &meta_size);
 	if (ret)
 		goto out;
 
-	ret = device_size(data_path, data_fd, 8ULL * (1024 * 1024 * 1024),
-			  max_data_size, "data", &data_size);
+	ret = device_size(args->data_device, data_fd, 8ULL * (1024 * 1024 * 1024),
+			  args->max_data_size, "data", &data_size);
 	if (ret)
 		goto out;
 
@@ -179,7 +215,7 @@ static int write_new_fs(char *meta_path, char *data_path,
 	super->total_data_blocks = cpu_to_le64(last_data - first_data + 1);
 	super->first_data_blkno = cpu_to_le64(first_data);
 	super->last_data_blkno = cpu_to_le64(last_data);
-	super->quorum_count = quorum_count;
+	super->quorum_count = args->quorum_count;
 
 	/* fs root starts with root inode and its index items */
 	blkno = next_meta++;
@@ -293,7 +329,7 @@ static int write_new_fs(char *meta_path, char *data_path,
 	if (fsync(data_fd)) {
 		ret = -errno;
 		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
-			data_path, strerror(errno), errno);
+			args->data_device, strerror(errno), errno);
 		goto out;
 	}
 
@@ -306,7 +342,7 @@ static int write_new_fs(char *meta_path, char *data_path,
 	if (fsync(meta_fd)) {
 		ret = -errno;
 		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
-			meta_path, strerror(errno), errno);
+			args->meta_device, strerror(errno), errno);
 		goto out;
 	}
 
@@ -321,8 +357,8 @@ static int write_new_fs(char *meta_path, char *data_path,
 	       "  64KB metadata blocks: "SIZE_FMT"\n"
 	       "  4KB data blocks:      "SIZE_FMT"\n"
 	       "  quorum count:         %u\n",
-		meta_path,
-		data_path,
+		args->meta_device,
+	        args->data_device,
 		le64_to_cpu(super->hdr.fsid),
 		le64_to_cpu(super->format_hash),
 		uuid_str,
@@ -340,102 +376,106 @@ out:
 		free(bt);
 	if (zeros)
 		free(zeros);
+	if (meta_fd != -1)
+		close(meta_fd);
+	if (data_fd != -1)
+		close(data_fd);
 	return ret;
 }
 
-static struct option long_ops[] = {
-	{ "quorum_count", 1, NULL, 'Q' },
-	{ NULL, 0, NULL, 0}
+static int parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct mkfs_args *args = state->input;
+	int ret;
+
+	switch (key) {
+	case 'Q':
+		ret = parse_u64(arg, &args->quorum_count);
+		if (ret)
+			return ret;
+		break;
+	case 'f':
+		args->force = true;
+		break;
+	case 'm': /* max-meta-size */
+	{
+		u64 prev_val;
+		ret = parse_human(arg, &args->max_meta_size);
+		if (ret)
+			return ret;
+		prev_val = args->max_meta_size;
+		args->max_meta_size = round_down(args->max_meta_size, SCOUTFS_BLOCK_LG_SIZE);
+		if (args->max_meta_size != prev_val)
+			fprintf(stderr, "Meta dev size %llu rounded down to %llu bytes\n",
+				prev_val, args->max_meta_size);
+		break;
+	}
+	case 'd': /* max-data-size */
+	{
+		u64 prev_val;
+		ret = parse_human(arg, &args->max_data_size);
+		if (ret)
+			return ret;
+		prev_val = args->max_data_size;
+		args->max_data_size = round_down(args->max_data_size, SCOUTFS_BLOCK_SM_SIZE);
+		if (args->max_data_size != prev_val)
+			fprintf(stderr, "Data dev size %llu rounded down to %llu bytes\n",
+				prev_val, args->max_data_size);
+		break;
+	}
+	case ARGP_KEY_ARG:
+		if (!args->meta_device)
+			args->meta_device = strdup_or_error(state, arg);
+		else if (!args->data_device)
+			args->data_device = strdup_or_error(state, arg);
+		else
+			argp_error(state, "more than two arguments given");
+		break;
+	case ARGP_KEY_FINI:
+		if (!args->quorum_count)
+			argp_error(state, "must provide nonzero quorum count with --quorum-count|-Q option");
+		if (!args->meta_device)
+			argp_error(state, "no metadata device argument given");
+		if (!args->data_device)
+			argp_error(state, "no data device argument given");
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static struct argp_option options[] = {
+	{ "quorum-count", 'Q', "NUM", 0, "Number of voters required to use the filesystem [Required]"},
+	{ "force", 'f', NULL, 0, "Overwrite existing data on block devices"},
+	{ "max-meta-size", 'm', "SIZE", 0, "Use a size less than the base metadata device size (bytes or KMGTP units)"},
+	{ "max-data-size", 'd', "SIZE", 0, "Use a size less than the base data device size (bytes or KMGTP units)"},
+	{ NULL }
 };
 
-static int mkfs_func(int argc, char *argv[])
+static struct argp argp = {
+	options,
+	parse_opt,
+	"META-DEVICE DATA-DEVICE",
+	"Initialize a new ScoutFS filesystem"
+};
+
+static int mkfs_cmd(int argc, char *argv[])
 {
-	unsigned long long ull;
-	u8 quorum_count = 0;
-	u64 max_data_size = 0;
-	u64 max_meta_size = 0;
-	char *end = NULL;
-	char *meta_path;
-	char *data_path;
-	int meta_fd;
-	int data_fd;
+	struct mkfs_args mkfs_args = {0};
 	int ret;
-	int c;
 
-	while ((c = getopt_long(argc, argv, "Q:D:M:", long_ops, NULL)) != -1) {
-		switch (c) {
-		case 'Q':
-			ull = strtoull(optarg, &end, 0);
-			if (*end != '\0' || ull == 0 ||
-			    ull > SCOUTFS_QUORUM_MAX_COUNT) {
-				printf("scoutfs: invalid quorum count '%s'\n",
-					optarg);
-				return -EINVAL;
-			}
-			quorum_count = ull;
-			break;
-		case 'D':
-			ret = parse_human(optarg, &max_data_size);
-			if (ret < 0) {
-				printf("scoutfs: invalid data device size '%s'\n",
-					optarg);
-				return ret;
-			}
-			break;
-		case 'M':
-			ret = parse_human(optarg, &max_meta_size);
-			if (ret < 0) {
-				printf("scoutfs: invalid meta device size '%s'\n",
-					optarg);
-				return ret;
-			}
-			break;
-		case '?':
-		default:
-			return -EINVAL;
-		}
-	}
-
-	if (optind + 2 != argc) {
-		printf("scoutfs: mkfs: paths to metadata and data devices are required\n");
-		return -EINVAL;
-	}
-
-	meta_path = argv[optind];
-	data_path = argv[optind + 1];
-
-	if (!quorum_count) {
-		printf("provide quorum count with --quorum_count|-Q option\n");
-		return -EINVAL;
-	}
-
-	meta_fd = open(meta_path, O_RDWR | O_EXCL);
-	if (meta_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open metadata device '%s': %s (%d)\n",
-			meta_path, strerror(errno), errno);
+	ret = argp_parse(&argp, argc, argv, 0, NULL, &mkfs_args);
+	if (ret)
 		return ret;
-	}
 
-	data_fd = open(data_path, O_RDWR | O_EXCL);
-	if (data_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open data device '%s': %s (%d)\n",
-			data_path, strerror(errno), errno);
-		return ret;
-	}
-
-	ret = write_new_fs(meta_path, data_path, meta_fd, data_fd,
-			   quorum_count, max_meta_size, max_data_size);
-	close(meta_fd);
-	close(data_fd);
-
-	return ret;
+	return do_mkfs(&mkfs_args);
 }
 
 static void __attribute__((constructor)) mkfs_ctor(void)
 {
-	cmd_register("mkfs", "<path>", "write a new file system", mkfs_func);
+	cmd_register_argp("mkfs", &argp, GROUP_CORE, mkfs_cmd);
 
 	/* for lack of some other place to put these.. */
 	build_assert(sizeof(uuid_t) == SCOUTFS_UUID_BYTES);

@@ -16,6 +16,7 @@ BuildRequires:  git
 BuildRequires:  gzip
 BuildRequires:  libuuid-devel
 BuildRequires:  openssl-devel
+BuildRequires:  libblkid-devel
 
 #Requires:	kmod-scoutfs = %{version}
 

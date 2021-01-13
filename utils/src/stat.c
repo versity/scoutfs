@@ -7,10 +7,12 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
-#include <getopt.h>
 #include <assert.h>
+#include <argp.h>
+#include <stdbool.h>
 
 #include "sparse.h"
+#include "parse.h"
 #include "util.h"
 #include "format.h"
 #include "ioctl.h"
@@ -101,12 +103,13 @@ static void print_fs_field(void *st, size_t off)
 
 typedef void (*print_field_t)(void *st, size_t off);
 
-static struct option long_ops[] = {
-	{ "single_field", 1, NULL, 's' },
-	{ NULL, 0, NULL, 0}
+struct stat_args {
+	char *path;
+	char *single_field;
+	bool is_inode;
 };
 
-static int do_stat(int argc, char **argv, int is_inode)
+static int do_stat(struct stat_args *args)
 {
 	union {
 		struct scoutfs_ioctl_stat_more stm;
@@ -115,17 +118,13 @@ static int do_stat(int argc, char **argv, int is_inode)
 	struct stat_more_field *single = NULL;
 	struct stat_more_field *fields;
 	struct stat_more_field *fi;
-	char *single_name = NULL;
 	print_field_t pr = NULL;
-	char *path;
 	int cmd;
 	int ret;
 	int fd;
-	int i;
-	int c;
 
 	memset(&st, 0, sizeof(st));
-	if (is_inode) {
+	if (args->is_inode) {
 		cmd = SCOUTFS_IOC_STAT_MORE;
 		fields = inode_fields;
 		st.stm.valid_bytes = sizeof(struct scoutfs_ioctl_stat_more);
@@ -137,89 +136,141 @@ static int do_stat(int argc, char **argv, int is_inode)
 		pr = print_fs_field;
 	}
 
-	while ((c = getopt_long(argc, argv, "s:", long_ops, NULL)) != -1) {
-		switch (c) {
-		case 's':
-			single_name = strdup(optarg);
-			assert(single_name);
-			break;
-		case '?':
-		default:
-			return -EINVAL;
-		}
-	}
-
-	if (single_name) {
+	if (args->single_field) {
 		for_each_field(fi, fields) {
-			if (strcmp(fi->name, single_name) == 0) {
+			if (strcmp(fi->name, args->single_field) == 0) {
 				single = fi;
 				break;
 			}
 		}
 		if (!single) {
-			fprintf(stderr, "unknown field: '%s'\n", single_name);
+			fprintf(stderr, "unknown field: '%s'\n", args->single_field);
 			return -EINVAL;
 		}
 	}
 
-	if (optind >= argc) {
-		fprintf(stderr, "must specify at least one path argument\n");
-		return -EINVAL;
-	}
+	fd = get_path(args->path, O_RDONLY);
+	if (fd < 0)
+		return fd;
 
-	for (i = optind; i < argc; i++) {
-		path = argv[i];
-
-		fd = open(path, O_RDONLY);
-		if (fd < 0) {
-			ret = -errno;
-			fprintf(stderr, "failed to open '%s': %s (%d)\n",
-				path, strerror(errno), errno);
-			continue;
-		}
-
-		ret = ioctl(fd, cmd, &st);
-		if (ret < 0) {
-			ret = -errno;
-			fprintf(stderr, "ioctl failed on '%s': "
-				"%s (%d)\n", path, strerror(errno), errno);
-
-		} else if (single) {
-			pr(&st, single->offset);
+	ret = ioctl(fd, cmd, &st);
+	if (ret < 0) {
+		ret = -errno;
+		fprintf(stderr, "ioctl failed: %s (%d)\n", strerror(errno), errno);
+	} else if (single) {
+		pr(&st, single->offset);
+		printf("\n");
+	} else {
+		for_each_field(fi, fields) {
+			printf("%-17s ", fi->name);
+			pr(&st, fi->offset);
 			printf("\n");
-		} else {
-			printf("%-17s %s\n", "path", path);
-			for_each_field(fi, fields) {
-				printf("%-17s ", fi->name);
-				pr(&st, fi->offset);
-				printf("\n");
-			}
 		}
-
-		close(fd);
 	}
 
 	return 0;
 }
 
+static int stat_parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct stat_args *args = state->input;
+
+	switch (key) {
+	case 's':
+		args->single_field = strdup_or_error(state, arg);
+		break;
+	case ARGP_KEY_ARG:
+		if (!args->path)
+			args->path = strdup_or_error(state, arg);
+		else
+			argp_error(state, "more than one argument");
+		break;
+	case ARGP_KEY_FINI:
+		if (!args->path)
+			argp_error(state, "missing operand");
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static struct argp_option stat_options[] = {
+	{ "single-field", 's', "FIELD-NAME", 0, "Specify single field to print" },
+	{ NULL }
+};
+
+static struct argp stat_argp = {
+	stat_options,
+	stat_parse_opt,
+	"FILE",
+	"Show ScoutFS extra inode information"
+};
+
 static int stat_more_cmd(int argc, char **argv)
 {
-	return do_stat(argc, argv, 1);
+	struct stat_args stat_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&stat_argp, argc, argv, 0, NULL, &stat_args);
+	if (ret)
+		return ret;
+	stat_args.is_inode = true;
+
+	return do_stat(&stat_args);
 }
+
+static struct argp_option statfs_options[] = {
+	{ "path", 'p', "PATH", 0, "Path to ScoutFS filesystem"},
+	{ "single-field", 's', "FIELD-NAME", 0, "Specify single field to print" },
+	{ NULL }
+};
+
+static int statfs_parse_opt(int key, char *arg, struct argp_state *state)
+{
+	struct stat_args *args = state->input;
+
+	switch (key) {
+	case 'p':
+		args->path = strdup_or_error(state, arg);
+		break;
+	case 's':
+		args->single_field = strdup_or_error(state, arg);
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static struct argp statfs_argp = {
+	statfs_options,
+	statfs_parse_opt,
+	"",
+	"Show ScoutFS file system information"
+};
 
 static int statfs_more_cmd(int argc, char **argv)
 {
-	return do_stat(argc, argv, 0);
+	struct stat_args stat_args = {NULL};
+	int ret;
+
+	ret = argp_parse(&statfs_argp, argc, argv, 0, NULL, &stat_args);
+	if (ret)
+		return ret;
+	stat_args.is_inode = false;
+
+	return do_stat(&stat_args);
 }
 
 static void __attribute__((constructor)) stat_more_ctor(void)
 {
-	cmd_register("stat", "<path>",
-		     "show scoutfs inode information", stat_more_cmd);
+	cmd_register_argp("stat", &stat_argp, GROUP_INFO, stat_more_cmd);
 }
 
 static void __attribute__((constructor)) statfs_more_ctor(void)
 {
-	cmd_register("statfs", "<path>",
-		     "show scoutfs file system information", statfs_more_cmd);
+	cmd_register_argp("statfs", &statfs_argp, GROUP_INFO, statfs_more_cmd);
 }

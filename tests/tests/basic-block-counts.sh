@@ -9,14 +9,14 @@ t_require_commands scoutfs dd truncate touch mkdir rm rmdir
 release_vers() {
 	local file="$1"
 	local vers="$2"
-	local block="$3"
-	local count="$4"
+	local offset="$3"
+	local length="$4"
 
 	if [ "$vers" == "stat" ]; then
 		vers=$(scoutfs stat -s data_version "$file")
 	fi
 
-	scoutfs release "$file" "$vers" "$block" "$count"
+	scoutfs release "$file" -V "$vers" -o "$offset" -l "$length"
 }
 
 # if vers is "stat" then we ask stat_more for the data_version
@@ -24,14 +24,14 @@ stage_vers() {
 	local file="$1"
 	local vers="$2"
 	local offset="$3"
-	local count="$4"
+	local length="$4"
 	local contents="$5"
 
 	if [ "$vers" == "stat" ]; then
 		vers=$(scoutfs stat -s data_version "$file")
 	fi
 
-	scoutfs stage "$file" "$vers" "$offset" "$count" "$contents"
+	scoutfs stage "$contents" "$file" -V "$vers" -o "$offset" -l "$length"
 }
 
 echo_blocks()
@@ -57,15 +57,15 @@ dd if=/dev/zero of="$FILE" bs=4K count=1 conv=notrunc oflag=append status=none
 echo_blocks "$FILE"
 
 echo "== release"
-release_vers "$FILE" stat 0 2
+release_vers "$FILE" stat 0 8K
 echo_blocks "$FILE"
 
 echo "== duplicate release"
-release_vers "$FILE" stat 0 2
+release_vers "$FILE" stat 0 8K
 echo_blocks "$FILE"
 
 echo "== duplicate release past i_size"
-release_vers "$FILE" stat 0 16
+release_vers "$FILE" stat 0 64K
 echo_blocks "$FILE"
 
 echo "== stage"

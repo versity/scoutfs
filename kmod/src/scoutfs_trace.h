@@ -530,22 +530,22 @@ TRACE_EVENT(scoutfs_ioc_release,
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, ino)
-		__field(__u64, block)
-		__field(__u64, count)
+		__field(__u64, offset)
+		__field(__u64, length)
 		__field(__u64, vers)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->ino = ino;
-		__entry->block = args->block;
-		__entry->count = args->count;
+		__entry->offset = args->offset;
+		__entry->length = args->length;
 		__entry->vers = args->data_version;
 	),
 
-	TP_printk(SCSBF" ino %llu block %llu count %llu vers %llu",
-		  SCSB_TRACE_ARGS, __entry->ino, __entry->block,
-		  __entry->count, __entry->vers)
+	TP_printk(SCSBF" ino %llu offset %llu length %llu vers %llu",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->offset,
+		  __entry->length, __entry->vers)
 );
 
 DEFINE_EVENT(scoutfs_ino_ret_class, scoutfs_ioc_release_ret,
@@ -564,7 +564,7 @@ TRACE_EVENT(scoutfs_ioc_stage,
 		__field(__u64, ino)
 		__field(__u64, vers)
 		__field(__u64, offset)
-		__field(__s32, count)
+		__field(__s32, length)
 	),
 
 	TP_fast_assign(
@@ -572,12 +572,12 @@ TRACE_EVENT(scoutfs_ioc_stage,
 		__entry->ino = ino;
 		__entry->vers = args->data_version;
 		__entry->offset = args->offset;
-		__entry->count = args->count;
+		__entry->length = args->length;
 	),
 
-	TP_printk(SCSBF" ino %llu vers %llu offset %llu count %d",
+	TP_printk(SCSBF" ino %llu vers %llu offset %llu length %d",
 		  SCSB_TRACE_ARGS, __entry->ino, __entry->vers,
-		  __entry->offset, __entry->count)
+		  __entry->offset, __entry->length)
 );
 
 TRACE_EVENT(scoutfs_ioc_data_wait_err,

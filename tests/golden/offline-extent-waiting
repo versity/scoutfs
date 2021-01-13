@@ -1,6 +1,6 @@
 == create files
 == waiter shows up in ioctl
-offline wating should be empty:
+offline waiting should be empty:
 0
 offline waiting should now have one known entry:
 == multiple waiters on same block listed once
@@ -8,7 +8,7 @@ offline waiting still has one known entry:
 == different blocks show up
 offline waiting now has two known entries:
 == staging wakes everyone
-offline wating should be empty again:
+offline waiting should be empty again:
 0
 == interruption does no harm
 offline waiting should now have one known entry:

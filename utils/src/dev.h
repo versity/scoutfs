@@ -1,7 +1,7 @@
 #ifndef _DEV_H_
 #define _DEV_H_
 
-#define BASE_SIZE_FMT "%.2f %s"
+#define BASE_SIZE_FMT "%.2f%s"
 #define BASE_SIZE_ARGS(sz) size_flt(sz, 1), size_str(sz, 1)
 
 #define SIZE_FMT "%llu (%.2f %s)"

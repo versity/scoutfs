@@ -14,7 +14,7 @@ query_index() {
 	local first="${2:-0}"
 	local last="${3:--1}"
 
-	scoutfs walk-inodes $which $first $last "$T_M0"
+	scoutfs walk-inodes -p "$T_M0" -- $which $first $last
 }
 
 # print the major in the index for the ino if it's found
@@ -22,7 +22,7 @@ ino_major() {
 	local which="$1"
 	local ino="$2"
 
-	scoutfs walk-inodes $which 0 -1 "$T_M0" | \
+	scoutfs walk-inodes -p "$T_M0" -- $which 0 -1 | \
 		awk '($4 == "'$ino'") {print $2}'
 }
 

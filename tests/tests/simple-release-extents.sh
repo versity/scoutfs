@@ -23,14 +23,14 @@ create_file() {
 release_vers() {
 	local file="$1"
 	local vers="$2"
-	local block="$3"
-	local count="$4"
+	local offset="$3"
+	local length="$4"
 
 	if [ "$vers" == "stat" ]; then
 		vers=$(scoutfs stat -s data_version "$file")
 	fi
 
-	scoutfs release "$file" "$vers" "$block" "$count"
+	scoutfs release "$file" -V "$vers" -o "$offset" -l "$length"
 }
 
 FILE="$T_D0/file"
@@ -38,41 +38,41 @@ CHAR="$FILE-char"
 
 echo "== simple whole file multi-block releasing"
 create_file "$FILE" 65536
-release_vers "$FILE" stat 0 16
+release_vers "$FILE" stat 0 64K
 rm "$FILE"
 
 echo "== release last block that straddles i_size"
 create_file "$FILE" 6144
-release_vers "$FILE" stat 1 1
+release_vers "$FILE" stat 4K 4K
 rm "$FILE"
 
 echo "== release entire file past i_size"
 create_file "$FILE" 8192
-release_vers "$FILE" stat 0 100
+release_vers "$FILE" stat 0 400K
 # not deleting for the following little tests
 
 echo "== releasing offline extents is fine"
-release_vers "$FILE" stat 0 100
+release_vers "$FILE" stat 0 400K
 
 echo "== 0 count is fine"
 release_vers "$FILE" stat 0 0
 
 echo "== release past i_size is fine"
-release_vers "$FILE" stat 100 1
+release_vers "$FILE" stat 400K 4K
 
 echo "== wrapped blocks fails"
 release_vers "$FILE" stat $vers 0x8000000000000000 0x8000000000000000
 
 echo "== releasing non-file fails"
 mknod "$CHAR" c 1 3
-release_vers "$CHAR" stat 0 1 2>&1 | t_filter_fs
+release_vers "$CHAR" stat 0 4K 2>&1 | t_filter_fs
 rm "$CHAR"
 
 echo "== releasing a non-scoutfs file fails"
-release_vers "/dev/null" stat 0 1
+release_vers "/dev/null" stat 0 4K
 
 echo "== releasing bad version fails"
-release_vers "$FILE" 0 0 1
+release_vers "$FILE" 0 0 4K
 
 rm "$FILE"
 
@@ -108,9 +108,9 @@ for c in $(seq 0 4); do
 	start=$(fiemap_file "$FILE" | \
 		awk '($1 == "0:"){print substr($4, 0, length($4)- 2)}')
 
-	release_vers "$FILE" stat $a 1
-	release_vers "$FILE" stat $b 1
-	release_vers "$FILE" stat $c 1
+	release_vers "$FILE" stat $(($a * 4))K 4K
+	release_vers "$FILE" stat $(($b * 4))K 4K
+	release_vers "$FILE" stat $(($c * 4))K 4K
 
 	echo -n "$a $b $c:"
 

@@ -28,8 +28,8 @@ t_ident()
 	local fsid
 	local rid
 
-	fsid=$(scoutfs statfs -s fsid "$mnt")
-	rid=$(scoutfs statfs -s rid "$mnt")
+	fsid=$(scoutfs statfs -s fsid -p "$mnt")
+	rid=$(scoutfs statfs -s rid -p "$mnt")
 
 	echo "f.${fsid:0:6}.r.${rid:0:6}"
 }

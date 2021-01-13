@@ -8,16 +8,16 @@
 release ioctl failed: Invalid argument (22)
 scoutfs: release failed: Invalid argument (22)
 == releasing non-file fails
-ioctl failed on '/mnt/test/test/simple-release-extents/file-char': Inappropriate ioctl for device (25)
-release ioctl failed: Inappropriate ioctl for device (25)
-scoutfs: release failed: Inappropriate ioctl for device (25)
+ioctl failed: Inappropriate ioctl for device (25)
+release: must provide file version --data-version
+Try `release --help' or `release --usage' for more information.
 == releasing a non-scoutfs file fails
-ioctl failed on '/dev/null': Inappropriate ioctl for device (25)
-release ioctl failed: Inappropriate ioctl for device (25)
-scoutfs: release failed: Inappropriate ioctl for device (25)
+ioctl failed: Inappropriate ioctl for device (25)
+release: must provide file version --data-version
+Try `release --help' or `release --usage' for more information.
 == releasing bad version fails
-release ioctl failed: Stale file handle (116)
-scoutfs: release failed: Stale file handle (116)
+release: must provide file version --data-version
+Try `release --help' or `release --usage' for more information.
 == verify small release merging
 0 0 0:  (0 0 1)  (1 101 4)
 0 0 1:  (0 0 2)  (2 102 3)
