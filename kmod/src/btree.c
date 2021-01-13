@@ -928,7 +928,6 @@ static void verify_btree_block(struct super_block *sb, char *str,
 	int end_off;
 	int tot = 0;
 	int i = 0;
-	int j = 0;
 	int nr;
 
 	if (bt->level != level) {
@@ -967,8 +966,9 @@ static void verify_btree_block(struct super_block *sb, char *str,
 			goto out;
 		}
 
-		for (j = 0; j < sizeof(item->__pad); j++) {
-			WARN_ON_ONCE(item->__pad[j] != 0);
+		if (memchr_inv(item->__pad, '\0', sizeof(item->__pad))) {
+			reason = "item struct __pad isn't zero";
+			goto out;
 		}
 
 		if (scoutfs_key_compare(&item->key, start) < 0 ||
@@ -994,14 +994,18 @@ static void verify_btree_block(struct super_block *sb, char *str,
 			goto out;
 		}
 
+		if (le16_to_cpu(item->val_off) % SCOUTFS_BTREE_VALUE_ALIGN) {
+			reason = "item value not aligned";
+			goto out;
+		}
+
 		if (((int)le16_to_cpu(item->val_off) +
 		     le16_to_cpu(item->val_len)) > end_off) {
 			reason = "item value outside valid";
 			goto out;
 		}
 
-		tot += sizeof(struct scoutfs_btree_item) +
-		       le16_to_cpu(item->val_len);
+		tot += item_len_bytes(le16_to_cpu(item->val_len));
 
 		if (item->val_len != 0) {
 			first_val = min_t(int, first_val,
