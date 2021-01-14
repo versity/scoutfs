@@ -345,7 +345,8 @@ static struct cached_page *alloc_pg(struct super_block *sb, gfp_t gfp)
 	page = alloc_page(GFP_NOFS | gfp);
 	if (!page || !pg) {
 		kfree(pg);
-		__free_page(page);
+		if (page)
+			__free_page(page);
 		return NULL;
 	}
 
