@@ -304,7 +304,7 @@ if [ -n "$T_UNMOUNT" ]; then
 fi
 
 if [ -n "$T_MKFS" ]; then
-	cmd scoutfs mkfs -Q "$T_QUORUM" "$T_META_DEVICE" "$T_DATA_DEVICE"
+	cmd scoutfs mkfs -Q "$T_QUORUM" "$T_META_DEVICE" "$T_DATA_DEVICE" -f
 fi
 
 if [ -n "$T_INSMOD" ]; then

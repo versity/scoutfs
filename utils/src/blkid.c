@@ -71,7 +71,7 @@ static int check_bdev_scoutfs(int fd, char *devname, char *usage)
 	if (ret)
 		return ret;
 
-	if (le32_to_cpu(super->hdr.magic) == SCOUTFS_SUPER_MAGIC) {
+	if (le32_to_cpu(super->hdr.magic) == SCOUTFS_BLOCK_MAGIC_SUPER) {
 		fprintf(stderr, "%s: appears to contain an existing "
 			"ScoutFS superblock\n", devname);
 		ret = -EINVAL;
