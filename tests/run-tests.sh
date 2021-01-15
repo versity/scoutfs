@@ -523,9 +523,10 @@ if [ -n "$T_TRACE_GLOB" ]; then
 	cat /sys/kernel/debug/tracing/trace > "$T_RESULTS/traces"
 fi
 
-if [ "$skipped" == 0 -a "$failed" == 0 ]; then
+status=1
+if [ "$failed" == 0 ]; then
 	msg "all tests passed"
-	exit 0
+	status=0
 fi
 
 if [ "$skipped" != 0 ]; then
@@ -534,4 +535,4 @@ fi
 if [ "$failed" != 0 ]; then
 	msg "$failed tests failed, check fail.log"
 fi
-exit 1
+exit $status
