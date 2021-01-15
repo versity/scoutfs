@@ -149,7 +149,8 @@ struct cached_item {
 
 static int item_val_bytes(int val_len)
 {
-	return round_up(offsetof(struct cached_item, val[val_len]), CACHED_ITEM_ALIGN);
+	return round_up(offsetof(struct cached_item, val[val_len]),
+			CACHED_ITEM_ALIGN);
 }
 
 /*
@@ -421,8 +422,7 @@ static struct cached_item *alloc_item(struct cached_page *pg,
 static void erase_item(struct cached_page *pg, struct cached_item *item)
 {
 	rbtree_erase(&item->node, &pg->item_root);
-	pg->erased_bytes += round_up(item_val_bytes(item->val_len),
-				     CACHED_ITEM_ALIGN);
+	pg->erased_bytes += item_val_bytes(item->val_len);
 }
 
 static void lru_add(struct super_block *sb, struct item_cache_info *cinf,
@@ -853,8 +853,7 @@ static void compact_page_items(struct super_block *sb,
 
 	for (from = first_item(&pg->item_root); from; from = next_item(from)) {
 		to = page_address(empty->page) + page_off;
-		page_off += round_up(item_val_bytes(from->val_len),
-				     CACHED_ITEM_ALIGN);
+		page_off += item_val_bytes(from->val_len);
 
 		/* copy the entire item, struct members and all */
 		memcpy(to, from, item_val_bytes(from->val_len));
@@ -1960,7 +1959,8 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 		if (val_len)
 			memcpy(found->val, val, val_len);
 		if (val_len < found->val_len)
-			pg->erased_bytes += found->val_len - val_len;
+			pg->erased_bytes += item_val_bytes(found->val_len) -
+					    item_val_bytes(val_len);
 		found->val_len = val_len;
 		found->liv.seq = liv.seq;
 		mark_item_dirty(sb, cinf, pg, NULL, found);
@@ -2039,7 +2039,8 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 		item->liv.seq = liv.seq;
 		item->liv.flags |= SCOUTFS_LOG_ITEM_FLAG_DELETION;
 		item->deletion = 1;
-		pg->erased_bytes += item->val_len;
+		pg->erased_bytes += item_val_bytes(item->val_len) -
+				    item_val_bytes(0);
 		item->val_len = 0;
 		mark_item_dirty(sb, cinf, pg, NULL, item);
 	}
