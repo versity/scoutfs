@@ -1,0 +1,33 @@
+== build test files
+== wrapped offsets should fail
+ioctl failed on '/mnt/test/test/move-blocks/to': Value too large for defined data type (75)
+scoutfs: move-blocks failed: Value too large for defined data type (75)
+ioctl failed on '/mnt/test/test/move-blocks/to': Value too large for defined data type (75)
+scoutfs: move-blocks failed: Value too large for defined data type (75)
+== specifying same file fails
+ioctl failed on '/mnt/test/test/move-blocks/hardlink': Invalid argument (22)
+scoutfs: move-blocks failed: Invalid argument (22)
+== specifying files in other file systems fails
+ioctl failed on '/mnt/test/test/move-blocks/to': Invalid cross-device link (18)
+scoutfs: move-blocks failed: Invalid cross-device link (18)
+== offsets must be multiples of 4KB
+ioctl failed on '/mnt/test/test/move-blocks/to': Invalid argument (22)
+scoutfs: move-blocks failed: Invalid argument (22)
+ioctl failed on '/mnt/test/test/move-blocks/to': Invalid argument (22)
+scoutfs: move-blocks failed: Invalid argument (22)
+ioctl failed on '/mnt/test/test/move-blocks/to': Invalid argument (22)
+scoutfs: move-blocks failed: Invalid argument (22)
+== can't move onto existing extent
+ioctl failed on '/mnt/test/test/move-blocks/to': Invalid argument (22)
+scoutfs: move-blocks failed: Invalid argument (22)
+== can't move between files with offline extents
+ioctl failed on '/mnt/test/test/move-blocks/to': No data available (61)
+scoutfs: move-blocks failed: No data available (61)
+ioctl failed on '/mnt/test/test/move-blocks/to': No data available (61)
+scoutfs: move-blocks failed: No data available (61)
+== basic moves work
+== moving final partial block sets partial i_size
+123
+== moving updates inode fields
+== moving blocks backwards works
+== combine many files into one

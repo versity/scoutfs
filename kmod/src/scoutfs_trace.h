@@ -169,6 +169,40 @@ TRACE_EVENT(scoutfs_data_fallocate,
 		__entry->len, __entry->ret)
 );
 
+TRACE_EVENT(scoutfs_data_move_blocks,
+	TP_PROTO(struct super_block *sb, u64 from_ino, u64 from_start, u64 len,
+		 u64 map, u8 flags, u64 to_ino, u64 to_start),
+
+	TP_ARGS(sb, from_ino, from_start, len, map, flags, to_ino, to_start),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, from_ino)
+		__field(__u64, from_start)
+		__field(__u64, len)
+		__field(__u64, map)
+		__field(__u8, flags)
+		__field(__u64, to_ino)
+		__field(__u64, to_start)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->from_ino = from_ino;
+		__entry->from_start = from_start;
+		__entry->len = len;
+		__entry->map = map;
+		__entry->flags = flags;
+		__entry->to_ino = to_ino;
+		__entry->to_start = to_start;
+	),
+
+	TP_printk(SCSBF" from_ino %llu from_start %llu len %llu map %llu flags 0x%x to_ino %llu to_start %llu\n",
+		SCSB_TRACE_ARGS, __entry->from_ino, __entry->from_start,
+		__entry->len, __entry->map, __entry->flags, __entry->to_ino,
+		__entry->to_start)
+);
+
 TRACE_EVENT(scoutfs_data_fiemap,
 	TP_PROTO(struct super_block *sb, __u64 start, __u64 len, int ret),
 

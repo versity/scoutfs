@@ -39,6 +39,7 @@
 #include "msg.h"
 #include "count.h"
 #include "ext.h"
+#include "util.h"
 
 /*
  * We want to amortize work done after dirtying the shared transaction
@@ -1100,6 +1101,241 @@ unlock:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	ret = 0;
 out:
+	return ret;
+}
+
+/*
+ * We're using truncate_inode_pages_range to maintain consistency
+ * between the page cache and extents that just changed.  We have to
+ * call with full aligned page offsets or it thinks that it should leave
+ * behind a zeroed partial page.
+ */
+static void truncate_inode_pages_extent(struct inode *inode, u64 start, u64 len)
+{
+	truncate_inode_pages_range(&inode->i_data,
+				start << SCOUTFS_BLOCK_SM_SHIFT,
+				((start + len) << SCOUTFS_BLOCK_SM_SHIFT) - 1);
+}
+
+/*
+ * Move extents from one file to another.  The behaviour is more fully
+ * explained above the move_blocks ioctl argument structure definition.
+ *
+ * The caller has processed the ioctl args and performed the most basic
+ * inode checks, but we perform more detailed inode checks once we have
+ * the inode lock and refreshed inodes.  Our job is to safely lock the
+ * two files and move the extents.
+ */
+#define MOVE_DATA_EXTENTS_PER_HOLD 16
+int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
+			     u64 byte_len, struct inode *to, u64 to_off)
+{
+	struct scoutfs_inode_info *from_si = SCOUTFS_I(from);
+	struct scoutfs_inode_info *to_si = SCOUTFS_I(to);
+	struct super_block *sb = from->i_sb;
+	struct scoutfs_lock *from_lock = NULL;
+	struct scoutfs_lock *to_lock = NULL;
+	struct data_ext_args from_args;
+	struct data_ext_args to_args;
+	struct scoutfs_extent ext;
+	LIST_HEAD(locks);
+	bool done = false;
+	loff_t from_size;
+	loff_t to_size;
+	u64 from_offline;
+	u64 to_offline;
+	u64 from_start;
+	u64 to_start;
+	u64 from_iblock;
+	u64 to_iblock;
+	u64 count;
+	u64 junk;
+	u64 seq;
+	u64 map;
+	u64 len;
+	int ret;
+	int err;
+	int i;
+
+	lock_two_nondirectories(from, to);
+
+	ret = scoutfs_lock_inodes(sb, SCOUTFS_LOCK_WRITE,
+				  SCOUTFS_LKF_REFRESH_INODE, from, &from_lock,
+				  to, &to_lock, NULL, NULL, NULL, NULL);
+	if (ret)
+		goto out;
+
+	if ((from_off & SCOUTFS_BLOCK_SM_MASK) ||
+	    (to_off & SCOUTFS_BLOCK_SM_MASK) ||
+	    ((byte_len & SCOUTFS_BLOCK_SM_MASK) &&
+	     (from_off + byte_len != i_size_read(from)))) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	from_iblock = from_off >> SCOUTFS_BLOCK_SM_SHIFT;
+	count = (byte_len + SCOUTFS_BLOCK_SM_MASK) >> SCOUTFS_BLOCK_SM_SHIFT;
+	to_iblock = to_off >> SCOUTFS_BLOCK_SM_SHIFT;
+
+	if (S_ISDIR(from->i_mode) || S_ISDIR(to->i_mode)) {
+		ret = -EISDIR;
+		goto out;
+	}
+
+	if (!S_ISREG(from->i_mode) || !S_ISREG(to->i_mode)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = inode_permission(from, MAY_WRITE) ?:
+	      inode_permission(to, MAY_WRITE);
+	if (ret < 0)
+		goto out;
+
+	/* can't stage once data_version changes */
+	scoutfs_inode_get_onoff(from, &junk, &from_offline);
+	scoutfs_inode_get_onoff(to, &junk, &to_offline);
+	if (from_offline || to_offline) {
+		ret = -ENODATA;
+		goto out;
+	}
+
+	from_args = (struct data_ext_args) {
+		.ino = scoutfs_ino(from),
+		.inode = from,
+		.lock = from_lock,
+	};
+
+	to_args = (struct data_ext_args) {
+		.ino = scoutfs_ino(to),
+		.inode = to,
+		.lock = to_lock,
+	};
+
+	inode_dio_wait(from);
+	inode_dio_wait(to);
+
+	ret = filemap_write_and_wait_range(&from->i_data, from_off,
+				   from_off + byte_len - 1);
+	if (ret < 0)
+		goto out;
+
+	for (;;) {
+		ret = scoutfs_inode_index_start(sb, &seq) ?:
+		      scoutfs_inode_index_prepare(sb, &locks, from, true) ?:
+		      scoutfs_inode_index_prepare(sb, &locks, to, true) ?:
+		      scoutfs_inode_index_try_lock_hold(sb, &locks, seq,
+							SIC_EXACT(1, 1));
+		if (ret > 0)
+			continue;
+		if (ret < 0)
+			goto out;
+
+		ret = scoutfs_dirty_inode_item(from, from_lock) ?:
+		      scoutfs_dirty_inode_item(to, to_lock);
+		if (ret < 0)
+			goto out;
+
+		down_write_two(&from_si->extent_sem, &to_si->extent_sem);
+
+		/* arbitrarily limit the number of extents per trans hold */
+		for (i = 0; i < MOVE_DATA_EXTENTS_PER_HOLD; i++) {
+			/* find the next extent to move */
+			ret = scoutfs_ext_next(sb, &data_ext_ops, &from_args,
+					       from_iblock, 1, &ext);
+			if (ret < 0) {
+				if (ret == -ENOENT) {
+					done = true;
+					ret = 0;
+				}
+				break;
+			}
+
+			/* only move extents within count and i_size */
+			if (ext.start >= from_iblock + count ||
+			    ext.start >= i_size_read(from)) {
+				done = true;
+				ret = 0;
+				break;
+			}
+
+			from_start = max(ext.start, from_iblock);
+			map = ext.map + (from_start - ext.start);
+			len = min3(from_iblock + count,
+				   round_up((u64)i_size_read(from),
+					    SCOUTFS_BLOCK_SM_SIZE),
+				   ext.start + ext.len) - from_start;
+
+			to_start = to_iblock + (from_start - from_iblock);
+
+			/* insert the new, fails if it overlaps */
+			ret = scoutfs_ext_insert(sb, &data_ext_ops, &to_args,
+						 to_start, len,
+						 map, ext.flags);
+			if (ret < 0)
+				break;
+
+			/* remove the old, possibly splitting */
+			ret = scoutfs_ext_set(sb, &data_ext_ops, &from_args,
+					      from_start, len, 0, 0);
+			if (ret < 0) {
+				/* remove inserted new on err */
+				err = scoutfs_ext_remove(sb, &data_ext_ops,
+							 &to_args, to_start,
+							 len);
+				BUG_ON(err); /* XXX inconsistent */
+				break;
+			}
+
+			trace_scoutfs_data_move_blocks(sb, scoutfs_ino(from),
+						       from_start, len, map,
+						       ext.flags,
+						       scoutfs_ino(to),
+						       to_start);
+
+			/* moved extent might extend i_size */
+			to_size = (to_start + len) << SCOUTFS_BLOCK_SM_SHIFT;
+			if (to_size > i_size_read(to)) {
+				/* while maintaining final partial */
+				from_size = (from_start + len) <<
+						SCOUTFS_BLOCK_SM_SHIFT;
+				if (from_size > i_size_read(from))
+					to_size -= from_size -
+							i_size_read(from);
+				i_size_write(to, to_size);
+			}
+		}
+
+
+		up_write(&from_si->extent_sem);
+		up_write(&to_si->extent_sem);
+
+		from->i_ctime = from->i_mtime =
+			to->i_ctime = to->i_mtime = CURRENT_TIME;
+		scoutfs_inode_inc_data_version(from);
+		scoutfs_inode_inc_data_version(to);
+		scoutfs_inode_set_data_seq(from);
+		scoutfs_inode_set_data_seq(to);
+
+		scoutfs_update_inode_item(from, from_lock, &locks);
+		scoutfs_update_inode_item(to, to_lock, &locks);
+		scoutfs_release_trans(sb);
+		scoutfs_inode_index_unlock(sb, &locks);
+
+		if (ret < 0 || done)
+			break;
+	}
+
+	/* remove any cached pages from old extents */
+	truncate_inode_pages_extent(from, from_iblock, count);
+	truncate_inode_pages_extent(to, to_iblock, count);
+
+out:
+	scoutfs_unlock(sb, from_lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_unlock(sb, to_lock, SCOUTFS_LOCK_WRITE);
+
+	unlock_two_nondirectories(from, to);
+
 	return ret;
 }
 

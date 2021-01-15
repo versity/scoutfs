@@ -395,9 +395,6 @@ struct scoutfs_ioctl_data_wait_err {
 				       struct scoutfs_ioctl_data_wait_err)
 
 
-#define SCOUTFS_IOC_ALLOC_DETAIL _IOR(SCOUTFS_IOCTL_MAGIC, 12, \
-				     struct scoutfs_ioctl_alloc_detail)
-
 struct scoutfs_ioctl_alloc_detail {
 	__u64 entries_ptr;
 	__u64 entries_nr;
@@ -412,5 +409,59 @@ struct scoutfs_ioctl_alloc_detail_entry {
 	__u8 __bit_pad:6;
 	__u8 __pad[6];
 };
+
+#define SCOUTFS_IOC_ALLOC_DETAIL _IOR(SCOUTFS_IOCTL_MAGIC, 12, \
+				      struct scoutfs_ioctl_alloc_detail)
+
+/*
+ * Move extents from one regular file to another at a different offset,
+ * on the same file system.
+ *
+ * from_fd specifies the source file and the ioctl is called on the
+ * destination file.  Both files must have write access.  from_off
+ * specifies the byte offset in the source, to_off is the byte offset in
+ * the destination, and len is the number of bytes in the region to
+ * move.   All of the offsets and lengths must be in multiples of 4KB,
+ * except in the case where the from_off + len ends at the i_size of the
+ * source file.
+ *
+ * This interface only moves extents which are block granular, it does
+ * not perform RMW of sub-block byte extents and it does not overwrite
+ * existing extents in the destination.  It will split extents in the
+ * source.
+ *
+ * Only extents within i_size on the source are moved.  The destination
+ * i_size will be updated if extents are moved beyond its current
+ * i_size.  The i_size update will maintain final partial blocks in the
+ * source.
+ *
+ * It will return an error if either of the files have offline extents.
+ * It will return 0 when all of the extents in the source region have
+ * been moved to the destination.  Moving extents updates the ctime,
+ * mtime, meta_seq, data_seq, and data_version fields of both the source
+ * and destination inodes.  If an error is returned then partial
+ * progress may have been made and inode fields may have been updated.
+ *
+ * Errors specific to this interface include:
+ *
+ * EINVAL: from_off, len, or to_off aren't a multiple of 4KB; the source
+ *	   and destination files are the same inode; either the source or
+ *	   destination is not a regular file; the destination file has
+ *	   an existing overlapping extent.
+ * EOVERFLOW: either from_off + len or to_off + len exceeded 64bits.
+ * EBADF: from_fd isn't a valid open file descriptor.
+ * EXDEV: the source and destination files are in different filesystems.
+ * EISDIR: either the source or destination is a directory.
+ * ENODATA: either the source or destination file have offline extents.
+ */
+struct scoutfs_ioctl_move_blocks {
+	__u64 from_fd;
+	__u64 from_off;
+	__u64 len;
+	__u64 to_off;
+};
+
+#define SCOUTFS_IOC_MOVE_BLOCKS _IOR(SCOUTFS_IOCTL_MAGIC, 13, \
+				     struct scoutfs_ioctl_move_blocks)
 
 #endif
