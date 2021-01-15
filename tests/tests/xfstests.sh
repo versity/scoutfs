@@ -19,10 +19,10 @@
 
 # make sure we have our config
 if [ -z "$T_XFSTESTS_REPO" ]; then
-	t_fail "xfstests requires -X repo"
+	t_skip "xfstests requires -X repo"
 fi
 if [ -z "$T_XFSTESTS_BRANCH" -a -z "$T_SKIP_CHECKOUT" ]; then
-	t_fail "xfstests requires -x branch"
+	t_skip "xfstests requires -x branch"
 fi
 
 t_quiet mkdir -p "$T_TMPDIR/mnt.scratch"
