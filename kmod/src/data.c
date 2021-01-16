@@ -751,6 +751,7 @@ static int scoutfs_write_begin(struct file *file,
 		goto out;
 	}
 
+retry:
 	do {
 		ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 		      scoutfs_inode_index_prepare(sb, &wbd->ind_locks, inode,
@@ -765,17 +766,22 @@ static int scoutfs_write_begin(struct file *file,
 	flags |= AOP_FLAG_NOFS;
 
 	/* generic write_end updates i_size and calls dirty_inode */
-	ret = scoutfs_dirty_inode_item(inode, wbd->lock);
-	if (ret == 0)
-		ret = block_write_begin(mapping, pos, len, flags, pagep,
-					scoutfs_get_block_write);
-	if (ret)
+	ret = scoutfs_dirty_inode_item(inode, wbd->lock) ?:
+	      block_write_begin(mapping, pos, len, flags, pagep,
+				scoutfs_get_block_write);
+	if (ret < 0) {
 		scoutfs_release_trans(sb);
-out:
-	if (ret) {
 		scoutfs_inode_index_unlock(sb, &wbd->ind_locks);
-		kfree(wbd);
+		if (ret == -ENOBUFS) {
+			/* Retry with a new transaction. */
+			scoutfs_inc_counter(sb, data_write_begin_enobufs_retry);
+			goto retry;
+		}
 	}
+
+out:
+	if (ret < 0)
+		kfree(wbd);
         return ret;
 }
 
@@ -1021,6 +1027,12 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 			scoutfs_update_inode_item(inode, lock, &ind_locks);
 		scoutfs_release_trans(sb);
 		scoutfs_inode_index_unlock(sb, &ind_locks);
+
+		/* txn couldn't meet the request. Let's try with a new txn */
+		if (ret == -ENOBUFS) {
+			scoutfs_inc_counter(sb, data_fallocate_enobufs_retry);
+			continue;
+		}
 
 		if (ret <= 0)
 			goto out;
