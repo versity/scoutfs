@@ -58,6 +58,8 @@
 	EXPAND_COUNTER(corrupt_symlink_inode_size)		\
 	EXPAND_COUNTER(corrupt_symlink_missing_item)		\
 	EXPAND_COUNTER(corrupt_symlink_not_null_term)		\
+	EXPAND_COUNTER(data_fallocate_enobufs_retry)		\
+	EXPAND_COUNTER(data_write_begin_enobufs_retry)		\
 	EXPAND_COUNTER(dentry_revalidate_error)			\
 	EXPAND_COUNTER(dentry_revalidate_invalid)		\
 	EXPAND_COUNTER(dentry_revalidate_locked)		\

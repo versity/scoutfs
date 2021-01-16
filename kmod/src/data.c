@@ -748,9 +748,10 @@ static int scoutfs_write_begin(struct file *file,
 	wbd->lock = scoutfs_per_task_get(&si->pt_data_lock);
 	if (WARN_ON_ONCE(!wbd->lock)) {
 		ret = -EINVAL;
-		goto out;
+		goto err_free;
 	}
 
+retry:
 	do {
 		ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 		      scoutfs_inode_index_prepare(sb, &wbd->ind_locks, inode,
@@ -759,23 +760,37 @@ static int scoutfs_write_begin(struct file *file,
 							ind_seq);
 	} while (ret > 0);
 	if (ret < 0)
-		goto out;
+		goto err_ino;
 
 	/* can't re-enter fs, have trans */
 	flags |= AOP_FLAG_NOFS;
 
 	/* generic write_end updates i_size and calls dirty_inode */
 	ret = scoutfs_dirty_inode_item(inode, wbd->lock);
-	if (ret == 0)
-		ret = block_write_begin(mapping, pos, len, flags, pagep,
-					scoutfs_get_block_write);
 	if (ret)
+		goto err_trans;
+
+	ret = block_write_begin(mapping, pos, len, flags, pagep,
+					scoutfs_get_block_write);
+	if (ret == 0) {
+		goto out;
+	} else if (ret == -ENOBUFS) {
+		/* Retry with a new transaction. */
 		scoutfs_release_trans(sb);
-out:
-	if (ret) {
 		scoutfs_inode_index_unlock(sb, &wbd->ind_locks);
-		kfree(wbd);
+
+		scoutfs_inc_counter(sb, data_write_begin_enobufs_retry);
+		goto retry;
 	}
+	/* Some other error occurred, clean up and get out */
+
+err_trans:
+	scoutfs_release_trans(sb);
+err_ino:
+	scoutfs_inode_index_unlock(sb, &wbd->ind_locks);
+err_free:
+	kfree(wbd);
+out:
         return ret;
 }
 
@@ -1021,6 +1036,12 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 			scoutfs_update_inode_item(inode, lock, &ind_locks);
 		scoutfs_release_trans(sb);
 		scoutfs_inode_index_unlock(sb, &ind_locks);
+
+		/* txn couldn't meet the request. Let's try with a new txn */
+		if (ret == -ENOBUFS) {
+			scoutfs_inc_counter(sb, data_fallocate_enobufs_retry);
+			continue;
+		}
 
 		if (ret <= 0)
 			goto out;

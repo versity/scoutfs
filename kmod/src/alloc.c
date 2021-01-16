@@ -770,8 +770,13 @@ int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 	ret = 0;
 out:
 	if (ret < 0) {
+		/*
+		 * Special retval meaning there wasn't space to alloc from
+		 * this txn. Doesn't mean filesystem is completely full.
+		 * Maybe upper layers want to try again.
+		 */
 		if (ret == -ENOENT)
-			ret = -ENOSPC;
+			ret = -ENOBUFS;
 		*blkno_ret = 0;
 		*count_ret = 0;
 	} else {
