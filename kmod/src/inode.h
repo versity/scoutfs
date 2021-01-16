@@ -4,7 +4,6 @@
 #include "key.h"
 #include "lock.h"
 #include "per_task.h"
-#include "count.h"
 #include "format.h"
 #include "data.h"
 
@@ -83,11 +82,9 @@ int scoutfs_inode_index_prepare_ino(struct super_block *sb,
 				    struct list_head *list, u64 ino,
 				    umode_t mode);
 int scoutfs_inode_index_try_lock_hold(struct super_block *sb,
-				      struct list_head *list, u64 seq,
-				      const struct scoutfs_item_count cnt);
+				      struct list_head *list, u64 seq);
 int scoutfs_inode_index_lock_hold(struct inode *inode, struct list_head *list,
-				  bool set_data_seq,
-				  const struct scoutfs_item_count cnt);
+				  bool set_data_seq);
 void scoutfs_inode_index_unlock(struct super_block *sb, struct list_head *list);
 
 int scoutfs_dirty_inode_item(struct inode *inode, struct scoutfs_lock *lock);

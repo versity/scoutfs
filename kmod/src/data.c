@@ -37,7 +37,6 @@
 #include "lock.h"
 #include "file.h"
 #include "msg.h"
-#include "count.h"
 #include "ext.h"
 #include "util.h"
 
@@ -291,7 +290,6 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 				u64 ino, u64 iblock, u64 last, bool offline,
 				struct scoutfs_lock *lock)
 {
-	struct scoutfs_item_count cnt = SIC_TRUNC_EXTENT(inode);
 	struct scoutfs_inode_info *si = NULL;
 	LIST_HEAD(ind_locks);
 	s64 ret = 0;
@@ -315,9 +313,9 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 	while (iblock <= last) {
 		if (inode)
 			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks,
-							    true, cnt);
+							    true);
 		else
-			ret = scoutfs_hold_trans(sb, cnt);
+			ret = scoutfs_hold_trans(sb);
 		if (ret)
 			break;
 
@@ -758,8 +756,7 @@ static int scoutfs_write_begin(struct file *file,
 		      scoutfs_inode_index_prepare(sb, &wbd->ind_locks, inode,
 						  true) ?:
 		      scoutfs_inode_index_try_lock_hold(sb, &wbd->ind_locks,
-							ind_seq,
-							SIC_WRITE_BEGIN());
+							ind_seq);
 	} while (ret > 0);
 	if (ret < 0)
 		goto out;
@@ -1007,8 +1004,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 
 	while(iblock <= last) {
 
-		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false,
-						    SIC_FALLOCATE_ONE());
+		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false);
 		if (ret)
 			goto out;
 
@@ -1078,8 +1074,7 @@ int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 	}
 
 	/* we're updating meta_seq with offline block count */
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false,
-					    SIC_SETATTR_MORE());
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false);
 	if (ret < 0)
 		goto out;
 
@@ -1224,8 +1219,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		ret = scoutfs_inode_index_start(sb, &seq) ?:
 		      scoutfs_inode_index_prepare(sb, &locks, from, true) ?:
 		      scoutfs_inode_index_prepare(sb, &locks, to, true) ?:
-		      scoutfs_inode_index_try_lock_hold(sb, &locks, seq,
-							SIC_EXACT(1, 1));
+		      scoutfs_inode_index_try_lock_hold(sb, &locks, seq);
 		if (ret > 0)
 			continue;
 		if (ret < 0)
