@@ -1339,7 +1339,10 @@ static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
 		/* split needs multiple items, sparse may not have enough */
 		if (!left)
 			return -ENOMEM;
+
 		compact_page_items(sb, pg, left);
+		found = item_rbtree_walk(&pg->item_root, key, NULL, &par,
+					 &pnode);
 	}
 
 	item = alloc_item(pg, key, liv, val, val_len);
@@ -2364,9 +2367,9 @@ retry:
 			/* inv was entirely inside page, done after bisect */
 			write_trylock_will_succeed(&right->rwlock);
 			rbtree_insert(&right->node, par, pnode, &cinf->pg_root);
+			lru_accessed(sb, cinf, right);
 			write_unlock(&right->rwlock);
 			write_unlock(&pg->rwlock);
-			lru_accessed(sb, cinf, right);
 			right = NULL;
 			break;
 		}
@@ -2396,7 +2399,6 @@ static int item_lru_shrink(struct shrinker *shrink,
 	struct active_reader *active;
 	struct cached_page *tmp;
 	struct cached_page *pg;
-	LIST_HEAD(list);
 	int nr;
 
 	if (sc->nr_to_scan == 0)
@@ -2433,9 +2435,10 @@ static int item_lru_shrink(struct shrinker *shrink,
 
 		__lru_remove(sb, cinf, pg);
 		rbtree_erase(&pg->node, &cinf->pg_root);
-		list_move_tail(&pg->lru_head, &list);
 		invalidate_pcpu_page(pg);
 		write_unlock(&pg->rwlock);
+
+		put_pg(sb, pg);
 
 		if (--nr == 0)
 			break;
@@ -2443,11 +2446,6 @@ static int item_lru_shrink(struct shrinker *shrink,
 
 	write_unlock(&cinf->rwlock);
 	spin_unlock(&cinf->lru_lock);
-
-	list_for_each_entry_safe(pg, tmp, &list, lru_head) {
-		list_del_init(&pg->lru_head);
-		put_pg(sb, pg);
-	}
 out:
 	return min_t(unsigned long, cinf->lru_pages, INT_MAX);
 }
