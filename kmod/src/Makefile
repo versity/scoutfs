@@ -1,7 +1,6 @@
 obj-$(CONFIG_SCOUTFS_FS) := scoutfs.o
 
-CFLAGS_super.o = -DSCOUTFS_GIT_DESCRIBE=\"$(SCOUTFS_GIT_DESCRIBE)\" \
-		 -DSCOUTFS_FORMAT_HASH=0x$(SCOUTFS_FORMAT_HASH)LLU
+CFLAGS_super.o = -DSCOUTFS_GIT_DESCRIBE=\"$(SCOUTFS_GIT_DESCRIBE)\"
 
 CFLAGS_scoutfs_trace.o = -I$(src) # define_trace.h double include
 

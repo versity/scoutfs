@@ -1,6 +1,9 @@
 #ifndef _SCOUTFS_FORMAT_H_
 #define _SCOUTFS_FORMAT_H_
 
+#define SCOUTFS_INTEROP_VERSION		0ULL
+#define SCOUTFS_INTEROP_VERSION_STR	__stringify(0)
+
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */
 
@@ -596,7 +599,7 @@ struct scoutfs_quorum_block {
 struct scoutfs_super_block {
 	struct scoutfs_block_header hdr;
 	__le64 id;
-	__le64 format_hash;
+	__le64 version;
 	__le64 flags;
 	__u8 uuid[SCOUTFS_UUID_BYTES];
 	__le64 next_ino;
@@ -759,7 +762,7 @@ enum scoutfs_dentry_type {
  */
 struct scoutfs_net_greeting {
 	__le64 fsid;
-	__le64 format_hash;
+	__le64 version;
 	__le64 server_term;
 	__le64 unmount_barrier;
 	__le64 rid;

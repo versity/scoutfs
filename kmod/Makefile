@@ -16,11 +16,7 @@ SCOUTFS_GIT_DESCRIBE := \
 	$(shell git describe --all --abbrev=6 --long 2>/dev/null || \
 		echo no-git)
 
-SCOUTFS_FORMAT_HASH := \
-	$(shell cat src/format.h src/ioctl.h | md5sum | cut -b1-16)
-
 SCOUTFS_ARGS := SCOUTFS_GIT_DESCRIBE=$(SCOUTFS_GIT_DESCRIBE) \
-		SCOUTFS_FORMAT_HASH=$(SCOUTFS_FORMAT_HASH) \
 		CONFIG_SCOUTFS_FS=m -C $(SK_KSRC) M=$(CURDIR)/src \
 		EXTRA_CFLAGS="-Werror"
 
