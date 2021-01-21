@@ -1097,6 +1097,20 @@ static int cancel_srch_compact(struct super_block *sb, u64 rid)
 }
 
 /*
+ * Farewell processing is async to the request processing work.  Shutdown
+ * waits for request processing to finish and then tears down the connection.
+ * We don't want to queue farewell processing once we start shutting down
+ * so that we don't have farewell processing racing with the connecting
+ * being shutdown.  If a mount's farewell message is dropped by a server
+ * it will be processed by the next server.
+ */
+static void queue_farewell_work(struct server_info *server)
+{
+	if (!server->shutting_down)
+		queue_work(server->wq, &server->farewell_work);
+}
+
+/*
  * Process an incoming greeting request in the server from the client.
  * We try to send responses to failed greetings so that the sender can
  * log some detail before shutting down.  A failure to send a greeting
@@ -1400,8 +1414,8 @@ out:
 
 	if (ret < 0)
 		stop_server(server);
-	else if (more_reqs && !server->shutting_down)
-		queue_work(server->wq, &server->farewell_work);
+	else if (more_reqs)
+		queue_farewell_work(server);
 }
 
 static void free_farewell_requests(struct super_block *sb, u64 rid)
@@ -1455,7 +1469,7 @@ static int server_farewell(struct super_block *sb,
 	list_add_tail(&fw->entry, &server->farewell_requests);
 	mutex_unlock(&server->farewell_mutex);
 
-	queue_work(server->wq, &server->farewell_work);
+	queue_farewell_work(server);
 
 	/* response will be sent later */
 	return 0;
@@ -1618,11 +1632,16 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 shutdown:
 	scoutfs_info(sb, "server shutting down at "SIN_FMT, SIN_ARG(&sin));
-	/* wait for request processing */
+
+	/* wait for farewell to finish sending messages */
+	flush_work(&server->farewell_work);
+
+	/* wait for requests to finish, no more requests */
 	scoutfs_net_shutdown(sb, conn);
-	/* wait for commit queued by request processing */
-	flush_work(&server->commit_work);
 	server->conn = NULL;
+
+	/* wait for extra queues by requests, won't find waiters */
+	flush_work(&server->commit_work);
 
 	scoutfs_lock_server_destroy(sb);
 
@@ -1696,8 +1715,9 @@ void scoutfs_server_stop(struct super_block *sb)
 	DECLARE_SERVER_INFO(sb, server);
 
 	stop_server(server);
-	/* XXX not sure both are needed */
+
 	cancel_work_sync(&server->work);
+	cancel_work_sync(&server->farewell_work);
 	cancel_work_sync(&server->commit_work);
 }
 
@@ -1752,11 +1772,12 @@ void scoutfs_server_destroy(struct super_block *sb)
 
 		/* wait for server work to wait for everything to shut down */
 		cancel_work_sync(&server->work);
+		/* farewell work triggers commits */
+		cancel_work_sync(&server->farewell_work);
 		/* recv work/compaction could have left commit_work queued */
 		cancel_work_sync(&server->commit_work);
 
 		/* pending farewell requests are another server's problem */
-		cancel_work_sync(&server->farewell_work);
 		free_farewell_requests(sb, 0);
 
 		trace_scoutfs_server_workqueue_destroy(sb, 0, 0);
