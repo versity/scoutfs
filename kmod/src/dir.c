@@ -655,7 +655,6 @@ static int del_entry_items(struct super_block *sb, u64 dir_ino, u64 hash,
  */
 static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 				      umode_t mode, dev_t rdev,
-				      const struct scoutfs_item_count cnt,
 				      struct scoutfs_lock **dir_lock,
 				      struct scoutfs_lock **inode_lock,
 				      struct list_head *ind_locks)
@@ -694,7 +693,7 @@ retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, ind_locks, dir, true) ?:
 	      scoutfs_inode_index_prepare_ino(sb, ind_locks, ino, mode) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, ind_locks, ind_seq, cnt);
+	      scoutfs_inode_index_try_lock_hold(sb, ind_locks, ind_seq);
 	if (ret > 0)
 		goto retry;
 	if (ret)
@@ -741,7 +740,6 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 
 	hash = dirent_name_hash(dentry->d_name.name, dentry->d_name.len);
 	inode = lock_hold_create(dir, dentry, mode, rdev,
-				 SIC_MKNOD(dentry->d_name.len),
 				 &dir_lock, &inode_lock, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
@@ -836,8 +834,7 @@ retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, dir, false) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, inode, false) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq,
-						SIC_LINK(dentry->d_name.len));
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
 	if (ret > 0)
 		goto retry;
 	if (ret)
@@ -918,8 +915,7 @@ retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, dir, false) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, inode, false) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq,
-						SIC_UNLINK(dentry->d_name.len));
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
 	if (ret > 0)
 		goto retry;
 	if (ret)
@@ -1154,7 +1150,6 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 		return ret;
 
 	inode = lock_hold_create(dir, dentry, S_IFLNK|S_IRWXUGO, 0,
-				 SIC_SYMLINK(dentry->d_name.len, name_len),
 				 &dir_lock, &inode_lock, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
@@ -1586,9 +1581,7 @@ retry:
 	       scoutfs_inode_index_prepare(sb, &ind_locks, new_dir, false)) ?:
 	      (new_inode == NULL ? 0 :
 	       scoutfs_inode_index_prepare(sb, &ind_locks, new_inode, false)) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq,
-					    SIC_RENAME(old_dentry->d_name.len,
-						       new_dentry->d_name.len));
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
 	if (ret > 0)
 		goto retry;
 	if (ret)

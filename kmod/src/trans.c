@@ -60,8 +60,6 @@
  */
 struct trans_info {
 	spinlock_t lock;
-	unsigned reserved_items;
-	unsigned reserved_vals;
 	unsigned holders;
 	bool writing;
 
@@ -318,12 +316,11 @@ void scoutfs_trans_restart_sync_deadline(struct super_block *sb)
  * Including nested holds avoids having to deal with writing out partial
  * transactions while a caller still holds the transaction.
  */
+
 #define SCOUTFS_RESERVATION_MAGIC 0xd57cd13b
 struct scoutfs_reservation {
 	unsigned magic;
 	unsigned holders;
-	struct scoutfs_item_count reserved;
-	struct scoutfs_item_count actual;
 };
 
 /*
@@ -340,22 +337,16 @@ struct scoutfs_reservation {
  * delaying or prematurely forcing commits.
  */
 static bool acquired_hold(struct super_block *sb,
-			  struct scoutfs_reservation *rsv,
-			  const struct scoutfs_item_count *cnt)
+			  struct scoutfs_reservation *rsv)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	DECLARE_TRANS_INFO(sb, tri);
 	bool acquired = false;
-	unsigned items;
-	unsigned vals;
 
 	spin_lock(&tri->lock);
 
-	trace_scoutfs_trans_acquired_hold(sb, cnt, rsv, rsv->holders,
-					  &rsv->reserved, &rsv->actual,
-					  tri->holders, tri->writing,
-					  tri->reserved_items,
-					  tri->reserved_vals);
+	trace_scoutfs_trans_acquired_hold(sb, rsv, rsv->holders,
+					  tri->holders, tri->writing);
 
 	/* use a caller's existing reservation */
 	if (rsv->holders)
@@ -364,10 +355,6 @@ static bool acquired_hold(struct super_block *sb,
 	/* wait until the writing thread is finished */
 	if (tri->writing)
 		goto out;
-
-	/* see if we can reserve space for our item count */
-	items = tri->reserved_items + cnt->items;
-	vals = tri->reserved_vals + cnt->vals;
 
 	/*
 	 * In theory each dirty item page could be straddling two full
@@ -405,12 +392,6 @@ static bool acquired_hold(struct super_block *sb,
 		goto out;
 	}
 
-	tri->reserved_items = items;
-	tri->reserved_vals = vals;
-
-	rsv->reserved.items = cnt->items;
-	rsv->reserved.vals = cnt->vals;
-
 hold:
 	rsv->holders++;
 	tri->holders++;
@@ -423,19 +404,11 @@ out:
 	return acquired;
 }
 
-int scoutfs_hold_trans(struct super_block *sb,
-		       const struct scoutfs_item_count cnt)
+int scoutfs_hold_trans(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_reservation *rsv;
 	int ret;
-
-	/*
-	 * Caller shouldn't provide garbage counts, nor counts that
-	 * can't fit in segments by themselves.
-	 */
-	if (WARN_ON_ONCE(cnt.items <= 0 || cnt.vals < 0))
-		return -EINVAL;
 
 	if (current == sbi->trans_task)
 		return 0;
@@ -453,7 +426,7 @@ int scoutfs_hold_trans(struct super_block *sb,
 	BUG_ON(rsv->magic != SCOUTFS_RESERVATION_MAGIC);
 
 	ret = wait_event_interruptible(sbi->trans_hold_wq,
-				       acquired_hold(sb, rsv, &cnt));
+				       acquired_hold(sb, rsv));
 	if (ret && rsv->holders == 0) {
 		current->journal_info = NULL;
 		kfree(rsv);
@@ -471,38 +444,6 @@ bool scoutfs_trans_held(void)
 	struct scoutfs_reservation *rsv = current->journal_info;
 
 	return rsv && rsv->magic == SCOUTFS_RESERVATION_MAGIC;
-}
-
-/*
- * Record a transaction holder's individual contribution to the dirty
- * items in the current transaction.  We're making sure that the
- * reservation matches the possible item manipulations while they hold
- * the reservation.
- *
- * It is possible and legitimate for an individual contribution to be
- * negative if they delete dirty items.  The item cache makes sure that
- * the total dirty item count doesn't fall below zero.
- */
-void scoutfs_trans_track_item(struct super_block *sb, signed items,
-			      signed vals)
-{
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_reservation *rsv = current->journal_info;
-
-	if (current == sbi->trans_task)
-		return;
-
-	BUG_ON(!rsv || rsv->magic != SCOUTFS_RESERVATION_MAGIC);
-
-	rsv->actual.items += items;
-	rsv->actual.vals += vals;
-
-	trace_scoutfs_trans_track_item(sb, items, vals, rsv->actual.items,
-				       rsv->actual.vals, rsv->reserved.items,
-				       rsv->reserved.vals);
-
-	WARN_ON_ONCE(rsv->actual.items > rsv->reserved.items);
-	WARN_ON_ONCE(rsv->actual.vals > rsv->reserved.vals);
 }
 
 /*
@@ -526,16 +467,12 @@ void scoutfs_release_trans(struct super_block *sb)
 
 	spin_lock(&tri->lock);
 
-	trace_scoutfs_release_trans(sb, rsv, rsv->holders, &rsv->reserved,
-				    &rsv->actual, tri->holders, tri->writing,
-				    tri->reserved_items, tri->reserved_vals);
+	trace_scoutfs_release_trans(sb, rsv, rsv->holders, tri->holders, tri->writing);
 
 	BUG_ON(rsv->holders <= 0);
 	BUG_ON(tri->holders <= 0);
 
 	if (--rsv->holders == 0) {
-		tri->reserved_items -= rsv->reserved.items;
-		tri->reserved_vals -= rsv->reserved.vals;
 		current->journal_info = NULL;
 		kfree(rsv);
 		wake = true;

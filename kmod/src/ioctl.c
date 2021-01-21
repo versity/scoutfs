@@ -674,8 +674,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 
 	/* setting only so we don't see 0 data seq with nonzero data_version */
 	set_data_seq = sm.data_version != 0 ? true : false;
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, set_data_seq,
-					    SIC_SETATTR_MORE());
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, set_data_seq);
 	if (ret)
 		goto unlock;
 

@@ -31,7 +31,6 @@
 #include "lock.h"
 #include "super.h"
 #include "ioctl.h"
-#include "count.h"
 #include "export.h"
 #include "dir.h"
 #include "server.h"
@@ -426,133 +425,59 @@ TRACE_EVENT(scoutfs_trans_write_func,
 
 TRACE_EVENT(scoutfs_release_trans,
 	TP_PROTO(struct super_block *sb, void *rsv, unsigned int rsv_holders,
-		 struct scoutfs_item_count *res,
-		 struct scoutfs_item_count *act, unsigned int tri_holders,
-		 unsigned int tri_writing, unsigned int tri_items,
-		 unsigned int tri_vals),
+		 unsigned int tri_holders,
+		 unsigned int tri_writing),
 
-	TP_ARGS(sb, rsv, rsv_holders, res, act, tri_holders, tri_writing,
-		tri_items, tri_vals),
+	TP_ARGS(sb, rsv, rsv_holders, tri_holders, tri_writing),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(void *, rsv)
 		__field(unsigned int, rsv_holders)
-		__field(int, res_items)
-		__field(int, res_vals)
-		__field(int, act_items)
-		__field(int, act_vals)
 		__field(unsigned int, tri_holders)
 		__field(unsigned int, tri_writing)
-		__field(unsigned int, tri_items)
-		__field(unsigned int, tri_vals)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->rsv = rsv;
 		__entry->rsv_holders = rsv_holders;
-		__entry->res_items = res->items;
-		__entry->res_vals = res->vals;
-		__entry->act_items = act->items;
-		__entry->act_vals = act->vals;
 		__entry->tri_holders = tri_holders;
 		__entry->tri_writing = tri_writing;
-		__entry->tri_items = tri_items;
-		__entry->tri_vals = tri_vals;
 	),
 
-	TP_printk(SCSBF" rsv %p holders %u reserved %u.%u actual "
-		  "%d.%d, trans holders %u writing %u reserved "
-		  "%u.%u", SCSB_TRACE_ARGS, __entry->rsv, __entry->rsv_holders,
-		  __entry->res_items, __entry->res_vals, __entry->act_items,
-		  __entry->act_vals, __entry->tri_holders, __entry->tri_writing,
-		  __entry->tri_items, __entry->tri_vals)
+	TP_printk(SCSBF" rsv %p holders %u trans holders %u writing %u",
+		  SCSB_TRACE_ARGS, __entry->rsv, __entry->rsv_holders,
+		  __entry->tri_holders, __entry->tri_writing)
 );
 
 TRACE_EVENT(scoutfs_trans_acquired_hold,
-	TP_PROTO(struct super_block *sb, const struct scoutfs_item_count *cnt,
+	TP_PROTO(struct super_block *sb,
 		 void *rsv, unsigned int rsv_holders,
-		 struct scoutfs_item_count *res,
-		 struct scoutfs_item_count *act, unsigned int tri_holders,
-		 unsigned int tri_writing, unsigned int tri_items,
-		 unsigned int tri_vals),
+		 unsigned int tri_holders,
+		 unsigned int tri_writing),
 
-	TP_ARGS(sb, cnt, rsv, rsv_holders, res, act, tri_holders, tri_writing,
-		tri_items, tri_vals),
+	TP_ARGS(sb, rsv, rsv_holders, tri_holders, tri_writing),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
-		__field(int, cnt_items)
-		__field(int, cnt_vals)
 		__field(void *, rsv)
 		__field(unsigned int, rsv_holders)
-		__field(int, res_items)
-		__field(int, res_vals)
-		__field(int, act_items)
-		__field(int, act_vals)
 		__field(unsigned int, tri_holders)
 		__field(unsigned int, tri_writing)
-		__field(unsigned int, tri_items)
-		__field(unsigned int, tri_vals)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
-		__entry->cnt_items = cnt->items;
-		__entry->cnt_vals = cnt->vals;
 		__entry->rsv = rsv;
 		__entry->rsv_holders = rsv_holders;
-		__entry->res_items = res->items;
-		__entry->res_vals = res->vals;
-		__entry->act_items = act->items;
-		__entry->act_vals = act->vals;
 		__entry->tri_holders = tri_holders;
 		__entry->tri_writing = tri_writing;
-		__entry->tri_items = tri_items;
-		__entry->tri_vals = tri_vals;
 	),
 
-	TP_printk(SCSBF" cnt %u.%u, rsv %p holders %u reserved %u.%u "
-		  "actual %d.%d, trans holders %u writing %u reserved "
-		  "%u.%u", SCSB_TRACE_ARGS, __entry->cnt_items,
-		  __entry->cnt_vals, __entry->rsv, __entry->rsv_holders,
-		  __entry->res_items, __entry->res_vals, __entry->act_items,
-		  __entry->act_vals, __entry->tri_holders, __entry->tri_writing,
-		  __entry->tri_items, __entry->tri_vals)
-);
-
-TRACE_EVENT(scoutfs_trans_track_item,
-	TP_PROTO(struct super_block *sb, int delta_items, int delta_vals,
-		 int act_items, int act_vals, int res_items, int res_vals),
-
-	TP_ARGS(sb, delta_items, delta_vals, act_items, act_vals, res_items,
-		res_vals),
-
-	TP_STRUCT__entry(
-		SCSB_TRACE_FIELDS
-		__field(int, delta_items)
-		__field(int, delta_vals)
-		__field(int, act_items)
-		__field(int, act_vals)
-		__field(int, res_items)
-		__field(int, res_vals)
-	),
-
-	TP_fast_assign(
-		SCSB_TRACE_ASSIGN(sb);
-		__entry->delta_items = delta_items;
-		__entry->delta_vals = delta_vals;
-		__entry->act_items = act_items;
-		__entry->act_vals = act_vals;
-		__entry->res_items = res_items;
-		__entry->res_vals = res_vals;
-	),
-
-	TP_printk(SCSBF" delta_items %d delta_vals %d act_items %d act_vals %d res_items %d res_vals %d",
-		  SCSB_TRACE_ARGS, __entry->delta_items, __entry->delta_vals,
-		  __entry->act_items, __entry->act_vals, __entry->res_items,
-		  __entry->res_vals)
+	TP_printk(SCSBF" rsv %p holders %u trans holders %u writing %u",
+		  SCSB_TRACE_ARGS, __entry->rsv, __entry->rsv_holders,
+		  __entry->tri_holders, __entry->tri_writing)
 );
 
 TRACE_EVENT(scoutfs_ioc_release,
