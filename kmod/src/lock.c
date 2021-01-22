@@ -770,16 +770,6 @@ static void lock_invalidate_worker(struct work_struct *work)
 	list_for_each_entry_safe(lock, tmp, &linfo->inv_list, inv_head) {
 		nl = &lock->inv_nl;
 
-		/* skip if grace hasn't elapsed, record earliest */
-		deadline = lock->grace_deadline;
-		if (ktime_before(now, deadline)) {
-			delay = min(delay,
-				    nsecs_to_jiffies(ktime_to_ns(
-						ktime_sub(deadline, now))));
-			scoutfs_inc_counter(linfo->sb, lock_grace_wait);
-			continue;
-		}
-
 		/* wait for reordered grant to finish */
 		if (lock->mode != nl->old_mode)
 			continue;
@@ -788,6 +778,15 @@ static void lock_invalidate_worker(struct work_struct *work)
 		if (!lock_counts_match(nl->new_mode, lock->users))
 			continue;
 
+		/* skip if grace hasn't elapsed, record earliest */
+		deadline = lock->grace_deadline;
+		if (!linfo->shutdown && ktime_before(now, deadline)) {
+			delay = min(delay,
+				    nsecs_to_jiffies(ktime_to_ns(
+						ktime_sub(deadline, now))));
+			scoutfs_inc_counter(linfo->sb, lock_grace_wait);
+			continue;
+		}
 		/* set the new mode, no incompatible users during inval */
 		lock->mode = nl->new_mode;
 
