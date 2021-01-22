@@ -62,6 +62,7 @@ $(basename $0) options:
               | exist.  Previous results will be deleted as each test runs.
     -s        | Skip git repo checkouts.
     -t        | Enabled trace events that match the given glob argument.
+              | Multiple options enable multiple globbed events.
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
     -y        | xfstests ./check additional args
@@ -76,6 +77,9 @@ done
 # set some T_ defaults
 T_TRACE_DUMP="0"
 T_TRACE_PRINTK="0"
+
+# array declarations to be able to use array ops
+declare -a T_TRACE_GLOB
 
 while true; do
 	case $1 in
@@ -147,7 +151,7 @@ while true; do
 		;;
 	-t)
 		test -n "$2" || die "-t must have trace glob argument"
-		T_TRACE_GLOB="$2"
+		T_TRACE_GLOB+=("$2")
 		shift
 		;;
 	-X)
@@ -314,12 +318,17 @@ if [ -n "$T_INSMOD" ]; then
 	cmd insmod "$T_KMOD/src/scoutfs.ko"
 fi
 
-if [ -n "$T_TRACE_GLOB" ]; then
-	msg "enabling trace events"
+nr_globs=${#T_TRACE_GLOB[@]}
+if [ $nr_globs -gt 0 ]; then
 	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
-	for g in $T_TRACE_GLOB; do
+
+	for g in "${T_TRACE_GLOB[@]}"; do
 		for e in /sys/kernel/debug/tracing/events/scoutfs/$g/enable; do
-			echo 1 > $e
+			if test -w "$e"; then
+				echo 1 > "$e"
+			else
+				die "-t glob '$g' matched no scoutfs events"
+			fi
 		done
 	done
 
@@ -329,6 +338,9 @@ if [ -n "$T_TRACE_GLOB" ]; then
 	cmd cat /sys/kernel/debug/tracing/set_event
 	cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
 		    /proc/sys/kernel/ftrace_dump_on_oops
+
+	nr_events=$(cat /sys/kernel/debug/tracing/set_event | wc -l)
+	msg "enabled $nr_events trace events from $nr_globs -t globs"
 fi
 
 #
