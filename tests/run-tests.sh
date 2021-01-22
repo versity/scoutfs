@@ -533,7 +533,6 @@ done
 
 msg "all tests run: $passed passed, $skipped skipped, $failed failed"
 
-unmount_all
 
 if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
 	msg "saving traces and disabling tracing"
@@ -544,13 +543,14 @@ fi
 
 if [ "$skipped" == 0 -a "$failed" == 0 ]; then
 	msg "all tests passed"
+	unmount_all
 	exit 0
 fi
 
 if [ "$skipped" != 0 ]; then
-	msg "$skipped tests skipped, check skip.log"
+	msg "$skipped tests skipped, check skip.log, still mounted"
 fi
 if [ "$failed" != 0 ]; then
-	msg "$failed tests failed, check fail.log"
+	msg "$failed tests failed, check fail.log, still mounted"
 fi
 exit 1
