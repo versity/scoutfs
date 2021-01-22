@@ -53,7 +53,7 @@ $(basename $0) options:
     -m        | Run mkfs on the device before mounting and running
               | tests.  Implies unmounting existing mounts first.
     -n        | The number of devices and mounts to test.
-    -P        | Output trace events with printk as they're generated.
+    -P        | Enable trace_printk.
     -p        | Exit script after preparing mounts only, don't run tests.
     -q <nr>   | Specify the quorum count needed to mount.  This is
               | used when running mkfs and is needed by a few tests.
@@ -332,16 +332,22 @@ if [ $nr_globs -gt 0 ]; then
 		done
 	done
 
-	echo "$T_TRACE_DUMP" > /proc/sys/kernel/ftrace_dump_on_oops
-	echo "$T_TRACE_PRINTK" > /sys/kernel/debug/tracing/options/trace_printk
-
-	cmd cat /sys/kernel/debug/tracing/set_event
-	cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
-		    /proc/sys/kernel/ftrace_dump_on_oops
-
 	nr_events=$(cat /sys/kernel/debug/tracing/set_event | wc -l)
 	msg "enabled $nr_events trace events from $nr_globs -t globs"
 fi
+
+if [ -n "$T_TRACE_PRINTK" ]; then
+	echo "$T_TRACE_PRINTK" > /sys/kernel/debug/tracing/options/trace_printk
+fi
+
+if [ -n "$T_TRACE_DUMP" ]; then
+	echo "$T_TRACE_DUMP" > /proc/sys/kernel/ftrace_dump_on_oops
+fi
+
+# always describe tracing in the logs
+cmd cat /sys/kernel/debug/tracing/set_event
+cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
+	    /proc/sys/kernel/ftrace_dump_on_oops
 
 #
 # mount concurrently so that a quorum is present to elect the leader and
@@ -529,9 +535,10 @@ msg "all tests run: $passed passed, $skipped skipped, $failed failed"
 
 unmount_all
 
-if [ -n "$T_TRACE_GLOB" ]; then
+if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
 	msg "saving traces and disabling tracing"
 	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
+	echo 0 > /sys/kernel/debug/tracing/options/trace_printk
 	cat /sys/kernel/debug/tracing/trace > "$T_RESULTS/traces"
 fi
 
