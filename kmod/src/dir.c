@@ -463,7 +463,18 @@ out:
 	else
 		inode = scoutfs_iget(sb, ino);
 
-	return d_splice_alias(inode, dentry);
+	/*
+	 * We can't splice dir aliases into the dcache.  dir entries
+	 * might have changed on other nodes so our dcache could still
+	 * contain them, rather than having been moved in rename.  For
+	 * dirs, we use d_materialize_unique to remove any existing
+	 * aliases which must be stale.  Our inode numbers aren't reused
+	 * so inodes pointed to by entries can't change types.
+	 */
+	if (!IS_ERR_OR_NULL(inode) && S_ISDIR(inode->i_mode))
+		return d_materialise_unique(dentry, inode);
+	else
+		return d_splice_alias(inode, dentry);
 }
 
 /*
