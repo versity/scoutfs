@@ -50,7 +50,7 @@ for m in 0 1; do
 done
 wait
 CONF="$((SECONDS - START))"
-echo "conf: $IND" >> $T_TMP.log
+echo "conf: $CONF" >> $T_TMP.log
 
 if [ "$CONF" -gt "$((IND * 5))" ]; then
 	t_fail "conflicting $CONF secs is more than 5x independent $IND secs"
