@@ -65,7 +65,7 @@
  * relative to that lock state we resend.
  */
 
-#define GRACE_PERIOD_KT	ms_to_ktime(2)
+#define GRACE_PERIOD_KT	ms_to_ktime(10)
 
 /*
  * allocated per-super, freed on unmount.
