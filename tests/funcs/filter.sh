@@ -59,5 +59,8 @@ t_filter_dmesg()
 	# some tests mount w/o options
 	re="$re|scoutfs .* error: Required mount option \"metadev_path\" not found"
 
+	# in debugging kernels we can slow things down a bit
+	re="$re|hrtimer: interrupt took .*"
+
 	egrep -v "($re)" 
 }
