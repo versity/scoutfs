@@ -452,7 +452,7 @@ for t in $tests; do
 
 	# get stats from previous pass
 	last="$T_RESULTS/last-passed-test-stats"
-	stats=$(grep -s "^$test_name" "$last" | cut -d " " -f 2-)
+	stats=$(grep -s "^$test_name " "$last" | cut -d " " -f 2-)
 	test -n "$stats" && stats="last: $stats"
 
 	printf "  %-30s $stats" "$test_name"
@@ -515,7 +515,7 @@ for t in $tests; do
 		echo "  passed: $stats"
 		((passed++))
 		# save stats for passed test
-		grep -s -v "^$test_name" "$last" > "$last.tmp"
+		grep -s -v "^$test_name " "$last" > "$last.tmp"
 		echo "$test_name $stats" >> "$last.tmp"
 		mv -f "$last.tmp" "$last"
 	elif [ "$sts" == "$T_SKIP_STATUS" ]; then
