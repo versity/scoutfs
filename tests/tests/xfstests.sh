@@ -83,7 +83,7 @@ generic/375	# utils output change?  update branch?
 EOF
 
 t_restore_output
-echo "(showing output of xfstests)"
+echo "  (showing output of xfstests)"
 
 args="-E local.exclude ${T_XFSTESTS_ARGS:--g quick}"
 ./check $args
