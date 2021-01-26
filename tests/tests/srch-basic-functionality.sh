@@ -38,6 +38,7 @@ diff_srch_find scoutfs.srch.test
 
 echo "== remove xattr with files"
 rm -f "$T_D0/"{create,update}
+t_sync_deleted
 diff_srch_find scoutfs.srch.test
 
 echo "== create entries in current log"
@@ -53,6 +54,7 @@ diff_srch_find scoutfs.srch.scoutfs_bcp
 
 echo "== remove files"
 rm -rf "$DIR"
+t_sync_deleted
 diff_srch_find scoutfs.srch.scoutfs_bcp
 
 echo "== create entries that exceed one log"
@@ -69,6 +71,7 @@ done
 
 echo "== remove files"
 rm -rf "$DIR"
+t_sync_deleted
 diff_srch_find scoutfs.srch.scoutfs_bcp
 
 echo "== create entries for exceed search entry limit"
@@ -83,6 +86,7 @@ diff_srch_find scoutfs.srch.scoutfs_bcp
 
 echo "== entirely remove third batch"
 rm -rf "$DIR"
+t_sync_deleted
 diff_srch_find scoutfs.srch.scoutfs_bcp
 
 t_pass

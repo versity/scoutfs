@@ -39,6 +39,21 @@ void scoutfs_forest_get_btrees(struct super_block *sb,
 			       struct scoutfs_log_trees *lt);
 
 int scoutfs_forest_setup(struct super_block *sb);
+void scoutfs_forest_shutdown(struct super_block *sb);
 void scoutfs_forest_destroy(struct super_block *sb);
+
+void scoutfs_forest_oino_inc(struct super_block *sb, u64 ino);
+void scoutfs_forest_oino_dec(struct super_block *sb, u64 ino);
+void scoutfs_forest_oino_new_orphan(struct super_block *sb);
+struct scoutfs_block *scoutfs_forest_oino_alloc(struct super_block *sb,
+						struct scoutfs_alloc *alloc,
+						struct scoutfs_block_writer *wri,
+						u64 trans_seq);
+int scoutfs_forest_oino_newtrans_alloc(struct super_block *sb, u64 trans_seq);
+int scoutfs_forest_oino_update(struct super_block *sb);
+bool scoutfs_forest_oino_deletable(struct super_block *sb,
+				   __le64 le_ino,
+				   u64 orphan_seq,
+				   struct scoutfs_bloom_block *bb);
 
 #endif

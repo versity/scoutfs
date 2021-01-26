@@ -113,7 +113,8 @@ int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat);
 int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
 
-int scoutfs_scan_orphans(struct super_block *sb);
+int scoutfs_delete_orphans(struct super_block *sb,
+			 struct scoutfs_bloom_block *bb, unsigned int max);
 
 void scoutfs_inode_queue_writeback(struct inode *inode);
 int scoutfs_inode_walk_writeback(struct super_block *sb, bool write);

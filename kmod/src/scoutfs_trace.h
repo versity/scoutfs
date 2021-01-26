@@ -1009,20 +1009,23 @@ TRACE_EVENT(scoutfs_delete_inode,
 		  __entry->mode, __entry->size)
 );
 
-TRACE_EVENT(scoutfs_scan_orphans,
-	TP_PROTO(struct super_block *sb),
+TRACE_EVENT(scoutfs_delete_orphans,
+	TP_PROTO(struct super_block *sb, struct scoutfs_bloom_block *bb,
+		 unsigned int max),
 
-	TP_ARGS(sb),
+	TP_ARGS(sb, bb, max),
 
 	TP_STRUCT__entry(
 		__field(dev_t, dev)
+		__field(__u32, max)
 	),
 
 	TP_fast_assign(
 		__entry->dev = sb->s_dev;
+		__entry->max = max;
 	),
 
-	TP_printk("dev %d,%d", MAJOR(__entry->dev), MINOR(__entry->dev))
+	TP_printk("dev %d,%d max %d", MAJOR(__entry->dev), MINOR(__entry->dev), __entry->max)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_key_class,

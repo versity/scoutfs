@@ -77,6 +77,11 @@
 	EXPAND_COUNTER(forest_bloom_fail)			\
 	EXPAND_COUNTER(forest_bloom_pass)			\
 	EXPAND_COUNTER(forest_bloom_stale)			\
+	EXPAND_COUNTER(forest_oino_bloom_stale)			\
+	EXPAND_COUNTER(forest_oino_delete_work)			\
+	EXPAND_COUNTER(forest_oino_seq_hit)			\
+	EXPAND_COUNTER(forest_oino_bloom_hit)			\
+	EXPAND_COUNTER(forest_oino_bloom_miss)			\
 	EXPAND_COUNTER(forest_read_items)			\
 	EXPAND_COUNTER(forest_roots_next_hint)			\
 	EXPAND_COUNTER(forest_set_bloom_bits)			\

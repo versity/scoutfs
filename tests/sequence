@@ -23,6 +23,7 @@ dirent-consistency.sh
 lock-ex-race-processes.sh
 lock-conflicting-batch-commit.sh
 cross-mount-data-free.sh
+cross-mount-inode-del.sh
 persistent-item-vers.sh
 setup-error-teardown.sh
 mount-unmount-race.sh

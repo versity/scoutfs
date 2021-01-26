@@ -10,11 +10,28 @@
 t_sync_seq_index()
 {
 	local m
-	
+
 	for m in $T_MS; do
 		t_quiet touch $m
 	done
 	t_quiet sync
+}
+
+#
+# Ensure async inode deletion has run and completed.
+#
+t_sync_deleted()
+{
+	local nr="$1"
+
+	while true
+	do
+	    t_sync_seq_index
+	    sleep .5
+	    if [ "$(cat $(t_sysfs_path $nr)/forest/orphan_list_present_hint)" == "0" ]; then
+		break
+	    fi
+	done
 }
 
 #

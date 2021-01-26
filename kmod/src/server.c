@@ -380,6 +380,88 @@ static int alloc_move_empty(struct super_block *sb,
 				  dst, src, le64_to_cpu(src->total_len));
 }
 
+static void init_trans_seq_key(struct scoutfs_key *key, u64 seq, u64 rid)
+{
+	*key = (struct scoutfs_key) {
+		.sk_zone = SCOUTFS_TRANS_SEQ_ZONE,
+		.skts_trans_seq = cpu_to_le64(seq),
+		.skts_rid = cpu_to_le64(rid),
+	};
+}
+
+static int get_last_seq(struct super_block *sb, __le64 *last_seq)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	__le64 tmp_last_seq;
+	int err;
+
+	down_read(&server->seq_rwsem);
+
+	init_trans_seq_key(&key, 0, 0);
+	err = scoutfs_btree_next(sb, &super->trans_seqs, &key, &iref);
+	if (err == 0) {
+		key = *iref.key;
+		scoutfs_btree_put_iref(&iref);
+		tmp_last_seq = key.skts_trans_seq;
+
+	} else if (err == -ENOENT) {
+		tmp_last_seq = super->next_trans_seq;
+	} else {
+		return err;
+	}
+
+	le64_add_cpu(&tmp_last_seq, -1ULL);
+
+	up_read(&server->seq_rwsem);
+
+	*last_seq = tmp_last_seq;
+
+	return 0;
+}
+
+/*
+ * Alloc open inode (oino) bloom filter block for a new client, to ensure
+ * a block is present even before the client commits a transaction.
+ */
+static int oino_newroot_alloc(struct super_block *sb,
+				   struct scoutfs_btree_ref *oino_bloom_ref)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_block *new_bl = NULL;
+	struct scoutfs_bloom_block *bb;
+	__le64 last_seq;
+	int ret;
+
+	ret = get_last_seq(sb, &last_seq);
+	if (ret < 0)
+		goto out;
+
+	new_bl = scoutfs_forest_oino_alloc(sb,
+				       &server->alloc,
+				       &server->wri,
+				       le64_to_cpu(last_seq));
+	if (IS_ERR(new_bl)) {
+		ret = PTR_ERR(new_bl);
+		goto out;
+	}
+
+	bb = new_bl->data;
+
+	bb->last_seq = last_seq;
+
+	oino_bloom_ref->blkno = bb->hdr.blkno;
+	oino_bloom_ref->seq = bb->hdr.seq;
+
+	scoutfs_block_put(sb, new_bl);
+
+out:
+	return ret;
+}
+
 /*
  * Give the client roots to all the trees that they'll use to build
  * their transaction.
@@ -439,6 +521,8 @@ static int server_get_log_trees(struct super_block *sb,
 		memset(&lt, 0, sizeof(lt));
 		lt.rid = key.sklt_rid;
 		lt.nr = key.sklt_nr;
+
+		oino_newroot_alloc(sb, &lt.oino_bloom_ref);
 	}
 
 	/* return freed to server for emptying, refill avail  */
@@ -627,6 +711,14 @@ static int reclaim_log_trees(struct super_block *sb, u64 rid)
 					&lt.meta_avail) ?:
 	      alloc_move_empty(sb, &super->data_alloc, &lt.data_avail) ?:
 	      alloc_move_empty(sb, &super->data_alloc, &lt.data_freed);
+
+	if (lt.oino_bloom_ref.blkno && !ret) {
+		ret = scoutfs_free_meta(sb, &server->alloc, &server->wri,
+					le64_to_cpu(lt.oino_bloom_ref.blkno));
+		BUG_ON(ret);
+		lt.oino_bloom_ref.blkno = 0;
+	}
+
 	mutex_unlock(&server->alloc_mutex);
 
 	err = scoutfs_btree_update(sb, &server->alloc, &server->wri,
@@ -637,15 +729,6 @@ out:
 	mutex_unlock(&server->logs_mutex);
 
 	return ret;
-}
-
-static void init_trans_seq_key(struct scoutfs_key *key, u64 seq, u64 rid)
-{
-	*key = (struct scoutfs_key) {
-		.sk_zone = SCOUTFS_TRANS_SEQ_ZONE,
-		.skts_trans_seq = cpu_to_le64(seq),
-		.skts_rid = cpu_to_le64(rid),
-	};
 }
 
 /*
@@ -788,12 +871,6 @@ static int server_get_last_seq(struct super_block *sb,
 			       struct scoutfs_net_connection *conn,
 			       u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_key key;
 	__le64 last_seq = 0;
 	int ret;
 
@@ -802,24 +879,7 @@ static int server_get_last_seq(struct super_block *sb,
 		goto out;
 	}
 
-	down_read(&server->seq_rwsem);
-
-	init_trans_seq_key(&key, 0, 0);
-	ret = scoutfs_btree_next(sb, &super->trans_seqs, &key, &iref);
-	if (ret == 0) {
-		key = *iref.key;
-		scoutfs_btree_put_iref(&iref);
-		last_seq = key.skts_trans_seq;
-
-	} else if (ret == -ENOENT) {
-		last_seq = super->next_trans_seq;
-		ret = 0;
-	}
-
-	le64_add_cpu(&last_seq, -1ULL);
-	trace_scoutfs_trans_seq_last(sb, rid, le64_to_cpu(last_seq));
-
-	up_read(&server->seq_rwsem);
+	ret = get_last_seq(sb, &last_seq);
 out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret,
 				    &last_seq, sizeof(last_seq));

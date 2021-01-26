@@ -48,7 +48,7 @@ echo "== unlinked entries must not be present"
 touch "$DIR/victim"
 ino=$(stat -c "%i" "$DIR/victim")
 rm -f "$DIR/victim"
-t_sync_seq_index
+t_sync_deleted
 query_index data_seq | awk '($4 == "'$ino'") {print "found victim"}'
 
 echo "== dirty inodes can not be present"

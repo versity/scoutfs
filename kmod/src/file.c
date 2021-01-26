@@ -26,6 +26,7 @@
 #include "lock.h"
 #include "file.h"
 #include "inode.h"
+#include "forest.h"
 #include "per_task.h"
 
 /* TODO: Direct I/O, AIO */
@@ -196,4 +197,18 @@ loff_t scoutfs_file_llseek(struct file *file, loff_t offset, int whence)
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 
 	return ret ? ret : offset;
+}
+
+int scoutfs_open(struct inode *inode, struct file *file)
+{
+	scoutfs_forest_oino_inc(inode->i_sb, scoutfs_ino(inode));
+
+	return 0;
+}
+
+int scoutfs_release(struct inode *inode, struct file *file)
+{
+	scoutfs_forest_oino_dec(inode->i_sb, scoutfs_ino(inode));
+
+	return 0;
 }
