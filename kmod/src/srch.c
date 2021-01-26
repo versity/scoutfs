@@ -1198,14 +1198,10 @@ int scoutfs_srch_get_compact(struct super_block *sb,
 
 	for (;;scoutfs_key_inc(&key)) {
 		ret = scoutfs_btree_next(sb, root, &key, &iref);
-		if (ret == -ENOENT) {
-			ret = 0;
-			sc->nr = 0;
-			goto out;
-		}
-
 		if (ret == 0) {
-			if (iref.val_len == sizeof(struct scoutfs_srch_file)) {
+			if (iref.key->sk_type != type) {
+				ret = -ENOENT;
+			} else if (iref.val_len == sizeof(sfl)) {
 				key = *iref.key;
 				memcpy(&sfl, iref.val, iref.val_len);
 			} else {
@@ -1213,23 +1209,24 @@ int scoutfs_srch_get_compact(struct super_block *sb,
 			}
 			scoutfs_btree_put_iref(&iref);
 		}
-		if (ret < 0)
+		if (ret < 0) {
+			/* see if we ran out of log files or files entirely */
+			if (ret == -ENOENT) {
+				sc->nr = 0;
+				if (type == SCOUTFS_SRCH_LOG_TYPE) {
+					type = SCOUTFS_SRCH_BLOCKS_TYPE;
+					init_srch_key(&key, type, 0, 0);
+					continue;
+				} else {
+					ret = 0;
+				}
+			}
 			goto out;
+		}
 
 		/* skip any files already being compacted */
 		if (scoutfs_spbm_test(&busy, le64_to_cpu(sfl.ref.blkno)))
 			continue;
-
-		/* see if we ran out of log files or files entirely */
-		if (key.sk_type != type) {
-			sc->nr = 0;
-			if (key.sk_type == SCOUTFS_SRCH_BLOCKS_TYPE) {
-				type = SCOUTFS_SRCH_BLOCKS_TYPE;
-			} else {
-				ret = 0;
-				goto out;
-			}
-		}
 
 		/* reset if we iterated into the next size category */
 		if (type == SCOUTFS_SRCH_BLOCKS_TYPE) {

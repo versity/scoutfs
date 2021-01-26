@@ -1938,31 +1938,27 @@ DEFINE_EVENT(scoutfs_clock_sync_class, scoutfs_recv_clock_sync,
 );
 
 TRACE_EVENT(scoutfs_trans_seq_advance,
-	TP_PROTO(struct super_block *sb, u64 rid, u64 prev_seq,
-		 u64 next_seq),
+	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
 
-	TP_ARGS(sb, rid, prev_seq, next_seq),
+	TP_ARGS(sb, rid, trans_seq),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, s_rid)
-		__field(__u64, prev_seq)
-		__field(__u64, next_seq)
+		__field(__u64, trans_seq)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->s_rid = rid;
-		__entry->prev_seq = prev_seq;
-		__entry->next_seq = next_seq;
+		__entry->trans_seq = trans_seq;
 	),
 
-	TP_printk(SCSBF" rid %016llx prev_seq %llu next_seq %llu",
-		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->prev_seq,
-		  __entry->next_seq)
+	TP_printk(SCSBF" rid %016llx trans_seq %llu\n",
+		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
 );
 
-TRACE_EVENT(scoutfs_trans_seq_farewell,
+TRACE_EVENT(scoutfs_trans_seq_remove,
 	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
 
 	TP_ARGS(sb, rid, trans_seq),
@@ -2419,6 +2415,53 @@ TRACE_EVENT(scoutfs_alloc_move,
 	TP_printk(SCSBF" total %llu moved %llu ret %d",
 		  SCSB_TRACE_ARGS, __entry->total, __entry->moved,
 		  __entry->ret)
+);
+
+TRACE_EVENT(scoutfs_item_read_page,
+	TP_PROTO(struct super_block *sb, struct scoutfs_key *key,
+		 struct scoutfs_key *pg_start, struct scoutfs_key *pg_end),
+	TP_ARGS(sb, key, pg_start, pg_end),
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		sk_trace_define(key)
+		sk_trace_define(pg_start)
+		sk_trace_define(pg_end)
+	),
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		sk_trace_assign(key, key);
+		sk_trace_assign(pg_start, pg_start);
+		sk_trace_assign(pg_end, pg_end);
+	),
+	TP_printk(SCSBF" key "SK_FMT" pg_start "SK_FMT" pg_end "SK_FMT,
+		  SCSB_TRACE_ARGS, sk_trace_args(key), sk_trace_args(pg_start),
+		  sk_trace_args(pg_end))
+);
+
+TRACE_EVENT(scoutfs_item_invalidate_page,
+	TP_PROTO(struct super_block *sb, struct scoutfs_key *start,
+		 struct scoutfs_key *end, struct scoutfs_key *pg_start,
+		 struct scoutfs_key *pg_end, int pgi),
+	TP_ARGS(sb, start, end, pg_start, pg_end, pgi),
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		sk_trace_define(start)
+		sk_trace_define(end)
+		sk_trace_define(pg_start)
+		sk_trace_define(pg_end)
+		__field(int, pgi)
+	),
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		sk_trace_assign(start, start);
+		sk_trace_assign(end, end);
+		sk_trace_assign(pg_start, pg_start);
+		sk_trace_assign(pg_end, pg_end);
+		__entry->pgi = pgi;
+	),
+	TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" pg_start "SK_FMT" pg_end "SK_FMT" pgi %d",
+		  SCSB_TRACE_ARGS, sk_trace_args(start), sk_trace_args(end),
+		  sk_trace_args(pg_start), sk_trace_args(pg_end), __entry->pgi)
 );
 
 #endif /* _TRACE_SCOUTFS_H */

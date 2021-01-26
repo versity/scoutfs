@@ -53,7 +53,7 @@ $(basename $0) options:
     -m        | Run mkfs on the device before mounting and running
               | tests.  Implies unmounting existing mounts first.
     -n        | The number of devices and mounts to test.
-    -P        | Output trace events with printk as they're generated.
+    -P        | Enable trace_printk.
     -p        | Exit script after preparing mounts only, don't run tests.
     -q <nr>   | Specify the quorum count needed to mount.  This is
               | used when running mkfs and is needed by a few tests.
@@ -62,6 +62,7 @@ $(basename $0) options:
               | exist.  Previous results will be deleted as each test runs.
     -s        | Skip git repo checkouts.
     -t        | Enabled trace events that match the given glob argument.
+              | Multiple options enable multiple globbed events.
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
     -y        | xfstests ./check additional args
@@ -76,6 +77,9 @@ done
 # set some T_ defaults
 T_TRACE_DUMP="0"
 T_TRACE_PRINTK="0"
+
+# array declarations to be able to use array ops
+declare -a T_TRACE_GLOB
 
 while true; do
 	case $1 in
@@ -147,7 +151,7 @@ while true; do
 		;;
 	-t)
 		test -n "$2" || die "-t must have trace glob argument"
-		T_TRACE_GLOB="$2"
+		T_TRACE_GLOB+=("$2")
 		shift
 		;;
 	-X)
@@ -314,22 +318,36 @@ if [ -n "$T_INSMOD" ]; then
 	cmd insmod "$T_KMOD/src/scoutfs.ko"
 fi
 
-if [ -n "$T_TRACE_GLOB" ]; then
-	msg "enabling trace events"
+nr_globs=${#T_TRACE_GLOB[@]}
+if [ $nr_globs -gt 0 ]; then
 	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
-	for g in $T_TRACE_GLOB; do
+
+	for g in "${T_TRACE_GLOB[@]}"; do
 		for e in /sys/kernel/debug/tracing/events/scoutfs/$g/enable; do
-			echo 1 > $e
+			if test -w "$e"; then
+				echo 1 > "$e"
+			else
+				die "-t glob '$g' matched no scoutfs events"
+			fi
 		done
 	done
 
-	echo "$T_TRACE_DUMP" > /proc/sys/kernel/ftrace_dump_on_oops
-	echo "$T_TRACE_PRINTK" > /sys/kernel/debug/tracing/options/trace_printk
-
-	cmd cat /sys/kernel/debug/tracing/set_event
-	cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
-		    /proc/sys/kernel/ftrace_dump_on_oops
+	nr_events=$(cat /sys/kernel/debug/tracing/set_event | wc -l)
+	msg "enabled $nr_events trace events from $nr_globs -t globs"
 fi
+
+if [ -n "$T_TRACE_PRINTK" ]; then
+	echo "$T_TRACE_PRINTK" > /sys/kernel/debug/tracing/options/trace_printk
+fi
+
+if [ -n "$T_TRACE_DUMP" ]; then
+	echo "$T_TRACE_DUMP" > /proc/sys/kernel/ftrace_dump_on_oops
+fi
+
+# always describe tracing in the logs
+cmd cat /sys/kernel/debug/tracing/set_event
+cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
+	    /proc/sys/kernel/ftrace_dump_on_oops
 
 #
 # mount concurrently so that a quorum is present to elect the leader and
@@ -434,7 +452,7 @@ for t in $tests; do
 
 	# get stats from previous pass
 	last="$T_RESULTS/last-passed-test-stats"
-	stats=$(grep -s "^$test_name" "$last" | cut -d " " -f 2-)
+	stats=$(grep -s "^$test_name " "$last" | cut -d " " -f 2-)
 	test -n "$stats" && stats="last: $stats"
 
 	printf "  %-30s $stats" "$test_name"
@@ -497,7 +515,7 @@ for t in $tests; do
 		echo "  passed: $stats"
 		((passed++))
 		# save stats for passed test
-		grep -s -v "^$test_name" "$last" > "$last.tmp"
+		grep -s -v "^$test_name " "$last" > "$last.tmp"
 		echo "$test_name $stats" >> "$last.tmp"
 		mv -f "$last.tmp" "$last"
 	elif [ "$sts" == "$T_SKIP_STATUS" ]; then
@@ -515,23 +533,24 @@ done
 
 msg "all tests run: $passed passed, $skipped skipped, $failed failed"
 
-unmount_all
 
-if [ -n "$T_TRACE_GLOB" ]; then
+if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
 	msg "saving traces and disabling tracing"
 	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
+	echo 0 > /sys/kernel/debug/tracing/options/trace_printk
 	cat /sys/kernel/debug/tracing/trace > "$T_RESULTS/traces"
 fi
 
 if [ "$skipped" == 0 -a "$failed" == 0 ]; then
 	msg "all tests passed"
+	unmount_all
 	exit 0
 fi
 
 if [ "$skipped" != 0 ]; then
-	msg "$skipped tests skipped, check skip.log"
+	msg "$skipped tests skipped, check skip.log, still mounted"
 fi
 if [ "$failed" != 0 ]; then
-	msg "$failed tests failed, check fail.log"
+	msg "$failed tests failed, check fail.log, still mounted"
 fi
 exit 1

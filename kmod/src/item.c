@@ -1494,6 +1494,8 @@ retry:
 			rbtree_erase(&rd->node, &root);
 			rbtree_insert(&rd->node, par, pnode, &cinf->pg_root);
 			lru_accessed(sb, cinf, rd);
+			trace_scoutfs_item_read_page(sb, key, &rd->start,
+						     &rd->end);
 			continue;
 		}
 
@@ -2345,6 +2347,8 @@ retry:
 		write_lock(&pg->rwlock);
 
 		pgi = trim_page_intersection(sb, cinf, pg, right, start, end);
+		trace_scoutfs_item_invalidate_page(sb, start, end,
+						   &pg->start, &pg->end, pgi);
 		BUG_ON(pgi == PGI_DISJOINT); /* walk wouldn't ret disjoint */
 
 		if (pgi == PGI_INSIDE) {

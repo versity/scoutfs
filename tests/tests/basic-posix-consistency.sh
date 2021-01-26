@@ -160,8 +160,8 @@ for i in $(seq 1 1); do
 		mkdir -p $(dirname $lnk)
 		ln "$T_D0/file" $lnk
 
-		scoutfs ino-path $ino "$T_M0" > "$T_TMP.0"
-		scoutfs ino-path $ino "$T_M1" > "$T_TMP.1"
+		scoutfs ino-path -p "$T_M0" $ino > "$T_TMP.0"
+		scoutfs ino-path -p "$T_M1" $ino > "$T_TMP.1"
 		diff -u "$T_TMP.0" "$T_TMP.1"
 	done
 done
