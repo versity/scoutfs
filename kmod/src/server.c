@@ -649,79 +649,10 @@ static void init_trans_seq_key(struct scoutfs_key *key, u64 seq, u64 rid)
 }
 
 /*
- * Give the client the next sequence number for their transaction.  They
- * provide their previous transaction sequence number that they've
- * committed.
- *
- * We track the sequence numbers of transactions that clients have open.
- * This limits the transaction sequence numbers that can be returned in
- * the index of inodes by meta and data transaction numbers.  We
- * communicate the largest possible sequence number to clients via an
- * rpc.
- *
- * The transaction sequence tracking is stored in a btree so it is
- * shared across servers.  Final entries are removed when processing a
- * client's farewell or when it's removed.
+ * Remove all trans_seq items owned by the client rid, the caller holds
+ * the seq_rwsem.
  */
-static int server_advance_seq(struct super_block *sb,
-			      struct scoutfs_net_connection *conn,
-			      u8 cmd, u64 id, void *arg, u16 arg_len)
-{
-	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
-	__le64 their_seq;
-	__le64 next_seq;
-	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_key key;
-	int ret;
-
-	if (arg_len != sizeof(__le64)) {
-		ret = -EINVAL;
-		goto out;
-	}
-	memcpy(&their_seq, arg, sizeof(their_seq));
-
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto out;
-
-	down_write(&server->seq_rwsem);
-
-	if (their_seq != 0) {
-		init_trans_seq_key(&key, le64_to_cpu(their_seq), rid);
-		ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
-					   &super->trans_seqs, &key);
-		if (ret < 0 && ret != -ENOENT)
-			goto unlock;
-	}
-
-	next_seq = super->next_trans_seq;
-	le64_add_cpu(&super->next_trans_seq, 1);
-
-	trace_scoutfs_trans_seq_advance(sb, rid, le64_to_cpu(their_seq),
-					le64_to_cpu(next_seq));
-
-	init_trans_seq_key(&key, le64_to_cpu(next_seq), rid);
-	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
-				   &super->trans_seqs, &key, NULL, 0);
-unlock:
-	up_write(&server->seq_rwsem);
-	ret = scoutfs_server_apply_commit(sb, ret);
-
-out:
-	return scoutfs_net_response(sb, conn, cmd, id, ret,
-				    &next_seq, sizeof(next_seq));
-}
-
-/*
- * Remove any transaction sequences owned by the client.  They must have
- * committed any final transaction by the time they get here via sending
- * their farewell message.  This can be called multiple times as the
- * client's farewell is retransmitted so it's OK to not find any
- * entries.  This is called with the server commit rwsem held.
- */
-static int remove_trans_seq(struct super_block *sb, u64 rid)
+static int remove_trans_seq_locked(struct super_block *sb, u64 rid)
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
@@ -729,8 +660,6 @@ static int remove_trans_seq(struct super_block *sb, u64 rid)
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
 	int ret = 0;
-
-	down_write(&server->seq_rwsem);
 
 	init_trans_seq_key(&key, 0, 0);
 
@@ -746,17 +675,102 @@ static int remove_trans_seq(struct super_block *sb, u64 rid)
 		scoutfs_btree_put_iref(&iref);
 
 		if (le64_to_cpu(key.skts_rid) == rid) {
-			trace_scoutfs_trans_seq_farewell(sb, rid,
+			trace_scoutfs_trans_seq_remove(sb, rid,
 					le64_to_cpu(key.skts_trans_seq));
 			ret = scoutfs_btree_delete(sb, &server->alloc,
 						   &server->wri,
 						   &super->trans_seqs, &key);
-			break;
+			if (ret < 0)
+				break;
 		}
 
 		scoutfs_key_inc(&key);
 	}
 
+	return ret;
+}
+
+/*
+ * Give the client the next sequence number for the transaction that
+ * they're opening.
+ *
+ * We track the sequence numbers of transactions that clients have open.
+ * This limits the transaction sequence numbers that can be returned in
+ * the index of inodes by meta and data transaction numbers.  We
+ * communicate the largest possible sequence number to clients via an
+ * rpc.
+ *
+ * The transaction sequence tracking is stored in a btree so it is
+ * shared across servers.  Final entries are removed when processing a
+ * client's farewell or when it's removed.  We can be processent a
+ * resent request that was committed by a previous server before the
+ * reply was lost.  At this point the client has no transactions open
+ * and may or may not have just finished one.  To keep it simple we
+ * always remove any previous seq items, if there are any, and then
+ * insert a new item for the client at the next greatest seq.
+ */
+static int server_advance_seq(struct super_block *sb,
+			      struct scoutfs_net_connection *conn,
+			      u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	u64 rid = scoutfs_net_client_rid(conn);
+	struct scoutfs_key key;
+	__le64 leseq = 0;
+	u64 seq;
+	int ret;
+
+	if (arg_len != 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = scoutfs_server_hold_commit(sb);
+	if (ret)
+		goto out;
+
+	down_write(&server->seq_rwsem);
+
+	ret = remove_trans_seq_locked(sb, rid);
+	if (ret < 0)
+		goto unlock;
+
+	seq = le64_to_cpu(super->next_trans_seq);
+	le64_add_cpu(&super->next_trans_seq, 1);
+
+	trace_scoutfs_trans_seq_advance(sb, rid, seq);
+
+	init_trans_seq_key(&key, seq, rid);
+	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
+				   &super->trans_seqs, &key, NULL, 0);
+	if (ret == 0)
+		leseq = cpu_to_le64(seq);
+unlock:
+	up_write(&server->seq_rwsem);
+	ret = scoutfs_server_apply_commit(sb, ret);
+
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret,
+				    &leseq, sizeof(leseq));
+}
+
+/*
+ * Remove any transaction sequences owned by the client who's sent a
+ * farewell They must have committed any final transaction by the time
+ * they get here via sending their farewell message.  This can be called
+ * multiple times as the client's farewell is retransmitted so it's OK
+ * to not find any entries.  This is called with the server commit rwsem
+ * held.
+ */
+static int remove_trans_seq(struct super_block *sb, u64 rid)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	int ret = 0;
+
+	down_write(&server->seq_rwsem);
+	ret = remove_trans_seq_locked(sb, rid);
 	up_write(&server->seq_rwsem);
 
 	return ret;
