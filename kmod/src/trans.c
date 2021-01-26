@@ -216,12 +216,14 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	      (s = "data prepare", scoutfs_data_prepare_commit(sb))  ?:
 	      (s = "alloc prepare", scoutfs_alloc_prepare_commit(sb,
 						&tri->alloc, &tri->wri))  ?:
+	      (s = "forest oino update", scoutfs_forest_oino_update(sb)) ?:
 	      (s = "meta write", scoutfs_block_writer_write(sb, &tri->wri))  ?:
 	      (s = "data wait", scoutfs_inode_walk_writeback(sb, false)) ?:
 	      (s = "commit log trees", commit_btrees(sb)) ?:
 	      scoutfs_item_write_done(sb) ?:
 	      (s = "advance seq", scoutfs_client_advance_seq(sb, &trans_seq)) ?:
-	      (s = "get log trees", scoutfs_trans_get_log_trees(sb));
+	      (s = "get log trees", scoutfs_trans_get_log_trees(sb)) ?:
+	      (s = "alloc oino bloom", scoutfs_forest_oino_newtrans_alloc(sb));
 out:
 	if (ret < 0)
 		scoutfs_err(sb, "critical transaction commit failure: %s, %d",

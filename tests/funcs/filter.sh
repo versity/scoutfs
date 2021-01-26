@@ -19,6 +19,9 @@ t_filter_dmesg()
 	# the kernel can just be noisy
 	re=" used greatest stack depth: "
 
+	# more noise from nf_conntrack
+	re="$re|nf_conntrack: "
+
 	# mkfs/mount checks partition tables
 	re="$re|unknown partition table"
 
@@ -47,7 +50,7 @@ t_filter_dmesg()
 	re="$re|scoutfs.*server shutting down"
 	re="$re|scoutfs.*server stopped"
 
-	# xfstests records test execution in desg
+	# xfstests records test execution in dmesg
 	re="$re| run fstests "
 
 	# tests that drop unmount io triggers fencing

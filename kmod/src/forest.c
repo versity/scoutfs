@@ -14,6 +14,7 @@
 #include <linux/slab.h>
 #include <linux/mutex.h>
 #include <linux/random.h>
+#include <linux/atomic.h>
 
 #include "super.h"
 #include "format.h"
@@ -27,6 +28,7 @@
 #include "srch.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
+#include "inode.h"
 
 /*
  * scoutfs items are stored in a forest of btrees.  Each mount writes
@@ -52,6 +54,8 @@
  */
 
 struct forest_info {
+	struct super_block *sb;
+
 	struct mutex mutex;
 	struct scoutfs_alloc *alloc;
 	struct scoutfs_block_writer *wri;
@@ -60,10 +64,23 @@ struct forest_info {
 	struct mutex srch_mutex;
 	struct scoutfs_srch_file srch_file;
 	struct scoutfs_block *srch_bl;
+
+	atomic_t *oino_counted_bloom;
+	struct scoutfs_block *oino_bl;
+	struct delayed_work oino_work;
+
+	struct scoutfs_sysfs_attrs ssa;
+	bool orphan_list_present_hint;
+
+	bool shutdown;
 };
+
+#define OINO_WORK_DELAY_MS 1000
 
 #define DECLARE_FOREST_INFO(sb, name) \
 	struct forest_info *name = SCOUTFS_SB(sb)->forest_info
+#define DECLARE_FOREST_INFO_KOBJ(kobj, name) \
+	DECLARE_FOREST_INFO(SCOUTFS_SYSFS_ATTRS_SB(kobj), name)
 
 struct forest_refs {
 	struct scoutfs_block_ref fs_ref;
@@ -541,13 +558,16 @@ void scoutfs_forest_init_btrees(struct super_block *sb,
 	memset(&finf->our_log, 0, sizeof(finf->our_log));
 	finf->our_log.item_root = lt->item_root;
 	finf->our_log.bloom_ref = lt->bloom_ref;
+	finf->our_log.oino_bloom_ref = lt->oino_bloom_ref;
 	finf->our_log.max_item_vers = lt->max_item_vers;
 	finf->our_log.rid = lt->rid;
 	finf->our_log.nr = lt->nr;
 	finf->srch_file = lt->srch_file;
 
-	WARN_ON_ONCE(finf->srch_bl); /* commiting should have put the block */
+	WARN_ON_ONCE(finf->srch_bl); /* committing should have put these blocks */
 	finf->srch_bl = NULL;
+	WARN_ON_ONCE(finf->oino_bl);
+	finf->oino_bl = NULL;
 
 	trace_scoutfs_forest_init_our_log(sb, le64_to_cpu(lt->rid),
 					  le64_to_cpu(lt->nr),
@@ -570,6 +590,7 @@ void scoutfs_forest_get_btrees(struct super_block *sb,
 
 	lt->item_root = finf->our_log.item_root;
 	lt->bloom_ref = finf->our_log.bloom_ref;
+	lt->oino_bloom_ref = finf->our_log.oino_bloom_ref;
 	lt->srch_file = finf->srch_file;
 	lt->max_item_vers = finf->our_log.max_item_vers;
 
@@ -579,6 +600,22 @@ void scoutfs_forest_get_btrees(struct super_block *sb,
 	trace_scoutfs_forest_prepare_commit(sb, &lt->item_root.ref,
 					    &lt->bloom_ref);
 }
+
+void scoutfs_oino_delete_work(struct work_struct * work);
+
+static ssize_t orphan_list_present_hint_show(struct kobject *kobj,
+			      struct kobj_attribute *attr, char *buf)
+{
+	DECLARE_FOREST_INFO_KOBJ(kobj, finf);
+
+	return snprintf(buf, PAGE_SIZE, "%u", finf->orphan_list_present_hint);
+}
+SCOUTFS_ATTR_RO(orphan_list_present_hint);
+
+static struct attribute *forest_attrs[] = {
+	SCOUTFS_ATTR_PTR(orphan_list_present_hint),
+	NULL,
+};
 
 int scoutfs_forest_setup(struct super_block *sb)
 {
@@ -593,10 +630,26 @@ int scoutfs_forest_setup(struct super_block *sb)
 	}
 
 	/* the finf fields will be setup as we open a transaction */
+	finf->sb = sb;
 	mutex_init(&finf->mutex);
 	mutex_init(&finf->srch_mutex);
 
+	finf->oino_counted_bloom = __vmalloc(sizeof(atomic_t) * SCOUTFS_FOREST_BLOOM_BITS,
+					     GFP_NOFS | __GFP_ZERO, PAGE_KERNEL);
+	if (!finf->oino_counted_bloom) {
+		kfree(finf);
+		return -ENOMEM;
+	}
+
+	INIT_DELAYED_WORK(&finf->oino_work, scoutfs_oino_delete_work);
+	scoutfs_sysfs_init_attrs(sb, &finf->ssa);
+
 	sbi->forest_info = finf;
+	ret = scoutfs_sysfs_create_attrs(sb, &finf->ssa, forest_attrs,
+					 "forest");
+	if (ret < 0)
+		goto out;
+
 	ret = 0;
 out:
 	if (ret)
@@ -605,14 +658,278 @@ out:
 	return 0;
 }
 
+void scoutfs_forest_shutdown(struct super_block *sb)
+{
+	struct forest_info *finf = SCOUTFS_SB(sb)->forest_info;
+
+	if (finf) {
+		finf->shutdown = true;
+		cancel_delayed_work_sync(&finf->oino_work);
+	}
+}
+
 void scoutfs_forest_destroy(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct forest_info *finf = SCOUTFS_SB(sb)->forest_info;
 
 	if (finf) {
+		scoutfs_sysfs_destroy_attrs(sb, &finf->ssa);
 		scoutfs_block_put(sb, finf->srch_bl);
+		scoutfs_block_put(sb, finf->oino_bl);
+		vfree(finf->oino_counted_bloom);
 		kfree(finf);
 		sbi->forest_info = NULL;
+	}
+}
+
+/*
+ * Track current open inodes in a counted bloom filter. Save a much smaller
+ * classic BF of open inodes in each transaction, allowing orphan processing to
+ * know when an orphan inode is no longer open on any node.
+ *
+ * Let's call this code: open inode tracking (OINO)
+ */
+
+void scoutfs_forest_oino_inc(struct super_block *sb, u64 ino)
+{
+	__le64 le_ino = cpu_to_le64(ino);
+	DECLARE_FOREST_INFO(sb, finf);
+	u64 hash;
+	int val;
+	int i;
+
+	hash = scoutfs_hash64(&le_ino, sizeof(le_ino));
+	for (i = 0; i < SCOUTFS_FOREST_BLOOM_NRS; i++) {
+		u32 idx = (u32)hash % SCOUTFS_FOREST_BLOOM_BITS;
+		val = atomic_inc_return(&finf->oino_counted_bloom[idx]);
+		WARN_ON_ONCE(val < 0);
+
+		hash >>= SCOUTFS_FOREST_BLOOM_FUNC_BITS;
+	}
+}
+
+void scoutfs_forest_oino_dec(struct super_block *sb, u64 ino)
+{
+	__le64 le_ino = cpu_to_le64(ino);
+	DECLARE_FOREST_INFO(sb, finf);
+	u64 hash;
+	int val;
+	int i;
+
+	hash = scoutfs_hash64(&le_ino, sizeof(le_ino));
+	for (i = 0; i < SCOUTFS_FOREST_BLOOM_NRS; i++) {
+		u32 idx = (u32)hash % SCOUTFS_FOREST_BLOOM_BITS;
+		val = atomic_dec_return(&finf->oino_counted_bloom[idx]);
+		WARN_ON_ONCE(val < 0);
+
+		hash >>= SCOUTFS_FOREST_BLOOM_FUNC_BITS;
+	}
+}
+
+/*
+ * Notify us when a file is orphaned, for debug/test purposes
+ */
+void scoutfs_forest_oino_new_orphan(struct super_block *sb)
+{
+	DECLARE_FOREST_INFO(sb, finf);
+
+	finf->orphan_list_present_hint = true;
+}
+
+/*
+ * At the start of the transaction, alloc and mark dirty a meta block in
+ * anticipation of updating the OINO BF at the end of the transaction.
+ */
+int scoutfs_forest_oino_newtrans_alloc(struct super_block *sb)
+{
+	struct scoutfs_block *new_bl = NULL;
+	struct scoutfs_block_ref *ref;
+	DECLARE_FOREST_INFO(sb, finf);
+	int ret;
+
+	WARN_ON_ONCE(finf->oino_bl);
+
+	ref = &finf->our_log.oino_bloom_ref;
+
+	/* free previous oino block, if any */
+	if (ref->blkno) {
+		ret = scoutfs_free_meta(sb, finf->alloc, finf->wri,
+					le64_to_cpu(ref->blkno));
+		BUG_ON(ret);
+		memset(ref, 0, sizeof(struct scoutfs_block_ref));
+	}
+
+	ret = scoutfs_block_dirty_ref(sb, finf->alloc, finf->wri, ref, SCOUTFS_BLOCK_MAGIC_BLOOM,
+				      &new_bl, 0, NULL);
+	if (ret < 0)
+		goto out;
+
+	finf->oino_bl = new_bl;
+
+out:
+	return ret;
+}
+
+int scoutfs_forest_oino_update(struct super_block *sb)
+{
+	struct scoutfs_bloom_block *bb;
+	DECLARE_FOREST_INFO(sb, finf);
+	u64 last_seq;
+	int ret;
+	int i;
+
+	if (!finf->oino_bl)
+		return 0;
+
+	bb = finf->oino_bl->data;
+
+	ret = scoutfs_client_get_last_seq(sb, &last_seq);
+	if (ret)
+		return ret;
+
+	bb->last_seq = cpu_to_le64(last_seq);
+
+	/* Turn the counted BF into a classic BF */
+	for (i = 0; i < SCOUTFS_FOREST_BLOOM_BITS; i++) {
+		if (atomic_read(&finf->oino_counted_bloom[i]))
+			set_bit_le(i, bb->bits);
+	}
+	scoutfs_block_put(sb, finf->oino_bl);
+	finf->oino_bl = NULL;
+
+	if (!finf->shutdown)
+		schedule_delayed_work(&finf->oino_work, msecs_to_jiffies(OINO_WORK_DELAY_MS));
+
+	return 0;
+}
+
+#define ORPHAN_DELETE_BATCH_LIMIT 4096
+
+void scoutfs_oino_delete_work(struct work_struct *work)
+{
+	struct forest_info *finf = container_of(work, struct forest_info,
+						oino_work.work);
+	struct super_block *sb = finf->sb;
+	struct scoutfs_net_roots roots;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_log_trees lt = {{{ 0 }}};
+	struct scoutfs_bloom_block *bb;
+	struct scoutfs_bloom_block *tmp_bb = NULL;
+	struct scoutfs_block *bl;
+	struct scoutfs_key ltk;
+	int ret = 0;
+
+	scoutfs_inc_counter(sb, forest_oino_delete_work);
+
+	tmp_bb = __vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_ZERO, PAGE_KERNEL);
+	if (!tmp_bb) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	tmp_bb->last_seq = cpu_to_le64(U64_MAX);
+
+	ret = scoutfs_client_get_roots(sb, &roots);
+	if (ret)
+		goto out;
+
+	scoutfs_key_init_log_trees(&ltk, 0, 0);
+	for (;; scoutfs_key_inc(&ltk)) {
+		ret = scoutfs_btree_next(sb, &roots.logs_root, &ltk, &iref);
+		if (ret == 0) {
+			if (iref.val_len == sizeof(lt)) {
+				ltk = *iref.key;
+				memcpy(&lt, iref.val, sizeof(lt));
+			} else {
+				ret = -EIO;
+			}
+			scoutfs_btree_put_iref(&iref);
+		}
+		if (ret < 0) {
+			if (ret == -ENOENT)
+				break;
+			goto out; /* including stale */
+		}
+
+		if (lt.oino_bloom_ref.blkno == 0)
+			continue;
+
+		bl = read_bloom_ref(sb, &lt.oino_bloom_ref);
+		if (IS_ERR(bl)) {
+			ret = PTR_ERR(bl);
+			goto out;
+		}
+		bb = bl->data;
+
+		/* Use oldest block's seq */
+		tmp_bb->last_seq = cpu_to_le64(
+			min(le64_to_cpu(bb->last_seq),
+			    le64_to_cpu(tmp_bb->last_seq)));
+
+		bitmap_or((unsigned long *) &tmp_bb->bits,
+			  (const unsigned long *) &tmp_bb->bits,
+			  (const unsigned long *) &bb->bits,
+			  SCOUTFS_FOREST_BLOOM_BITS);
+
+		scoutfs_block_put(sb, bl);
+	}
+
+	if (tmp_bb) {
+		ret = scoutfs_delete_orphans(sb, tmp_bb, ORPHAN_DELETE_BATCH_LIMIT);
+		if (!finf->shutdown) {
+			if (ret > 0) {
+				/* Deleted some. May be more. Try again immediately. */
+				schedule_delayed_work(&finf->oino_work, 0);
+			} else if (ret == -ENOENT) {
+				/* Race OK here -- it's just a hint for observability/testing */
+				finf->orphan_list_present_hint = false;
+			}
+		}
+		ret = 0;
+	}
+
+out:
+	vfree(tmp_bb);
+	if (ret == -ESTALE && !finf->shutdown) {
+		scoutfs_inc_counter(sb, forest_oino_bloom_stale);
+		schedule_delayed_work(&finf->oino_work, msecs_to_jiffies(OINO_WORK_DELAY_MS));
+	} else {
+		WARN_ON_ONCE(ret);
+	}
+}
+
+/*
+ * Use merged bloom filter to detect if an inode is likely open on another node.
+ */
+bool scoutfs_forest_oino_deletable(struct super_block *sb,
+				   __le64 le_ino,
+				   u64 orphan_seq,
+				   struct scoutfs_bloom_block *bb)
+{
+	u64 hash;
+	int i;
+
+	/* ino not deletable until orphan seq older than merged bloom's seq */
+	if (orphan_seq > le64_to_cpu(bb->last_seq)) {
+		scoutfs_inc_counter(sb, forest_oino_seq_hit);
+		return false;
+	}
+
+	/* ino not deletable until bloom says it's closed everywhere */
+	hash = scoutfs_hash64(&le_ino, sizeof(le_ino));
+	for (i = 0; i < SCOUTFS_FOREST_BLOOM_NRS; i++) {
+		u32 idx = (u32)hash % SCOUTFS_FOREST_BLOOM_BITS;
+		if (!test_bit_le(idx, bb->bits))
+			break;
+
+		hash >>= SCOUTFS_FOREST_BLOOM_FUNC_BITS;
+	}
+
+	if (i == SCOUTFS_FOREST_BLOOM_NRS) {
+		scoutfs_inc_counter(sb, forest_oino_bloom_hit);
+		return false;
+	} else {
+		scoutfs_inc_counter(sb, forest_oino_bloom_miss);
+		return true;
 	}
 }

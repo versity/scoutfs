@@ -982,20 +982,23 @@ TRACE_EVENT(scoutfs_delete_inode,
 		  __entry->mode, __entry->size)
 );
 
-TRACE_EVENT(scoutfs_scan_orphans,
-	TP_PROTO(struct super_block *sb),
+TRACE_EVENT(scoutfs_delete_orphans,
+	TP_PROTO(struct super_block *sb, struct scoutfs_bloom_block *bb,
+		 unsigned int max),
 
-	TP_ARGS(sb),
+	TP_ARGS(sb, bb, max),
 
 	TP_STRUCT__entry(
 		__field(dev_t, dev)
+		__field(__u32, max)
 	),
 
 	TP_fast_assign(
 		__entry->dev = sb->s_dev;
+		__entry->max = max;
 	),
 
-	TP_printk("dev %d,%d", MAJOR(__entry->dev), MINOR(__entry->dev))
+	TP_printk("dev %d,%d max %d", MAJOR(__entry->dev), MINOR(__entry->dev), __entry->max)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_key_class,
@@ -1877,24 +1880,22 @@ TRACE_EVENT(scoutfs_trans_seq_remove,
 );
 
 TRACE_EVENT(scoutfs_trans_seq_last,
-	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
+	TP_PROTO(struct super_block *sb, u64 trans_seq),
 
-	TP_ARGS(sb, rid, trans_seq),
+	TP_ARGS(sb, trans_seq),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
-		__field(__u64, s_rid)
 		__field(__u64, trans_seq)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
-		__entry->s_rid = rid;
 		__entry->trans_seq = trans_seq;
 	),
 
-	TP_printk(SCSBF" rid %016llx trans_seq %llu",
-		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
+	TP_printk(SCSBF" trans_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->trans_seq)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_forest_bloom_class,

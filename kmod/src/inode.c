@@ -33,6 +33,7 @@
 #include "item.h"
 #include "client.h"
 #include "cmp.h"
+#include "forest.h"
 
 /*
  * XXX
@@ -1528,8 +1529,7 @@ out:
 /*
  * iput_final has already written out the dirty pages to the inode
  * before we get here.  We're left with a clean inode that we have to
- * tear down.  If there are no more links to the inode then we also
- * remove all its persistent structures.
+ * tear down.
  */
 void scoutfs_evict_inode(struct inode *inode)
 {
@@ -1541,8 +1541,6 @@ void scoutfs_evict_inode(struct inode *inode)
 
 	truncate_inode_pages_final(&inode->i_data);
 
-	if (inode->i_nlink == 0)
-		delete_inode_items(inode->i_sb, scoutfs_ino(inode));
 clear:
 	clear_inode(inode);
 }
@@ -1559,46 +1557,50 @@ int scoutfs_drop_inode(struct inode *inode)
 /*
  * Find orphan items and process each one.
  *
- * Runtime of this will be bounded by the number of orphans, which could
- * theoretically be very large. If that becomes a problem we might want to push
- * this work off to a thread.
- *
  * This only scans orphans for this node.  This will need to be covered by
  * the rest of node zone cleanup.
+ *
+ * Returns -ENOENT if no orphans exist, 0 if they exist but none are yet deletable,
+ * 1 if it actually deleted some, or other -ret if badness.
  */
-int scoutfs_scan_orphans(struct super_block *sb)
+int scoutfs_delete_orphans(struct super_block *sb,
+			 struct scoutfs_bloom_block *bb, unsigned int limit)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_lock *lock = sbi->rid_lock;
 	struct scoutfs_key key;
 	struct scoutfs_key last;
+	unsigned int deleted = 0;
+	unsigned int scanned;
+	__le64 last_seq;
 	int err = 0;
-	int ret;
+	int ret = 0;
 
-	trace_scoutfs_scan_orphans(sb);
+	trace_scoutfs_delete_orphans(sb, bb, limit);
 
 	init_orphan_key(&key, sbi->rid, 0);
 	init_orphan_key(&last, sbi->rid, ~0ULL);
 
-	while (1) {
-		ret = scoutfs_item_next(sb, &key, &last, NULL, 0, lock);
+	for (scanned = 0; scanned < limit; scanned++, scoutfs_key_inc(&key)) {
+		ret = scoutfs_item_next(sb, &key, &last, &last_seq, sizeof(last_seq), lock);
 		if (ret == -ENOENT) /* No more orphan items */
 			break;
 		if (ret < 0)
 			goto out;
 
+		if (!scoutfs_forest_oino_deletable(sb, key.sko_ino, le64_to_cpu(last_seq), bb))
+			continue;
+
 		ret = delete_inode_items(sb, le64_to_cpu(key.sko_ino));
 		if (ret && ret != -ENOENT && !err)
 			err = ret;
-
-		if (le64_to_cpu(key.sko_ino) == U64_MAX) {
-			ret = -ENOENT;
-			break;
-		}
-		le64_add_cpu(&key.sko_ino, 1);
+		deleted++;
 	}
 
-	ret = 0;
+	if (deleted)
+		ret = 1;
+	else if (scanned)
+		ret = 0;
 out:
 	return err ? err : ret;
 }
@@ -1609,14 +1611,22 @@ int scoutfs_orphan_inode(struct inode *inode)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_lock *lock = sbi->rid_lock;
 	struct scoutfs_key key;
+	__le64 trans_seq;
 	int ret;
 
 	trace_scoutfs_orphan_inode(sb, inode);
 
 	init_orphan_key(&key, sbi->rid, scoutfs_ino(inode));
 
-	ret = scoutfs_item_create(sb, &key, NULL, 0, lock);
+	trans_seq = cpu_to_le64(sbi->trans_seq);
 
+	ret = scoutfs_item_create(sb, &key, &trans_seq, sizeof(trans_seq), lock);
+	if (ret)
+		goto out;
+
+	scoutfs_forest_oino_new_orphan(sb);
+
+out:
 	return ret;
 }
 

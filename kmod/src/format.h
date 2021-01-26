@@ -440,6 +440,7 @@ struct scoutfs_log_trees {
 	struct scoutfs_alloc_list_head meta_freed;
 	struct scoutfs_btree_root item_root;
 	struct scoutfs_block_ref bloom_ref;
+	struct scoutfs_block_ref oino_bloom_ref;
 	struct scoutfs_alloc_root data_avail;
 	struct scoutfs_alloc_root data_freed;
 	struct scoutfs_srch_file srch_file;
@@ -466,6 +467,7 @@ struct scoutfs_log_item_value {
 
 struct scoutfs_bloom_block {
 	struct scoutfs_block_header hdr;
+	__le64 last_seq;
 	__le64 total_set;
 	__le64 bits[0];
 };

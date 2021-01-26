@@ -31,6 +31,7 @@
 #include "lock.h"
 #include "hash.h"
 #include "counters.h"
+#include "forest.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -1755,6 +1756,8 @@ out_unlock:
 /* we only need this to set the iterate flag for kabi :/ */
 static int scoutfs_dir_open(struct inode *inode, struct file *file)
 {
+	scoutfs_forest_oino_inc(inode->i_sb, scoutfs_ino(inode));
+
         file->f_mode |= FMODE_KABI_ITERATE;
         return 0;
 }
@@ -1766,6 +1769,7 @@ const struct file_operations scoutfs_dir_fops = {
 	.open		= scoutfs_dir_open,
 #endif
 	.unlocked_ioctl	= scoutfs_ioctl,
+	.release	= scoutfs_release,
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= generic_file_llseek,
 };

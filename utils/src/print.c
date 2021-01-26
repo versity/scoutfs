@@ -282,6 +282,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      meta_freed: "AL_HEAD_F"\n"
 		       "      item_root: height %u blkno %llu seq %llu\n"
 		       "      bloom_ref: blkno %llu seq %llu\n"
+		       "      oino_bloom_ref: blkno %llu seq %llu\n"
 		       "      data_avail: "ALCROOT_F"\n"
 		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n"
@@ -295,6 +296,8 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 			le64_to_cpu(lt->item_root.ref.seq),
 			le64_to_cpu(lt->bloom_ref.blkno),
 			le64_to_cpu(lt->bloom_ref.seq),
+			le64_to_cpu(lt->oino_bloom_ref.blkno),
+			le64_to_cpu(lt->oino_bloom_ref.seq),
 		       ALCROOT_A(&lt->data_avail),
 		       ALCROOT_A(&lt->data_freed),
 		       SRF_A(&lt->srch_file),

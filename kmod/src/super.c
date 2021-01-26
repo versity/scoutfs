@@ -245,6 +245,7 @@ static void scoutfs_put_super(struct super_block *sb)
 
 	sbi->shutdown = true;
 
+	scoutfs_forest_shutdown(sb);
 	scoutfs_data_destroy(sb);
 	scoutfs_srch_destroy(sb);
 
@@ -620,7 +621,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 
 	scoutfs_trans_restart_sync_deadline(sb);
-//	scoutfs_scan_orphans(sb);
+
 	ret = 0;
 out:
 	/* on error, generic_shutdown_super calls put_super if s_root */

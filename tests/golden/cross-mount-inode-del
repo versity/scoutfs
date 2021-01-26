@@ -1,0 +1,5 @@
+== open a file and delete it cross-mount
+orphan list present 1
+hellothere
+orphan list present 1
+orphan list present 0
