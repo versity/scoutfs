@@ -101,12 +101,13 @@ static int write_alloc_root(struct scoutfs_super_block *super, int fd,
 }
 
 struct mkfs_args {
-	unsigned long long quorum_count;
 	char *meta_device;
 	char *data_device;
 	unsigned long long max_meta_size;
 	unsigned long long max_data_size;
 	bool force;
+	int nr_slots;
+	struct scoutfs_quorum_slot slots[SCOUTFS_QUORUM_MAX_SLOTS];
 };
 
 /*
@@ -124,12 +125,14 @@ static int do_mkfs(struct mkfs_args *args)
 	struct scoutfs_inode inode;
 	struct scoutfs_alloc_list_block *lblk;
 	struct scoutfs_btree_block *bt = NULL;
+	struct scoutfs_block_header *hdr;
 	struct scoutfs_key key;
 	struct timeval tv;
 	int meta_fd = -1;
 	int data_fd = -1;
 	char uuid_str[37];
 	void *zeros = NULL;
+	char *indent;
 	u64 blkno;
 	u64 meta_size;
 	u64 data_size;
@@ -191,10 +194,7 @@ static int do_mkfs(struct mkfs_args *args)
 	if (ret)
 		goto out;
 
-	/* metadata blocks start after the quorum blocks */
-	next_meta = (SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS) >>
-		    SCOUTFS_BLOCK_SM_LG_SHIFT;
-	/* rest of meta dev is available for metadata blocks */
+	next_meta = SCOUTFS_META_DEV_START_BLKNO;
 	last_meta = (meta_size >> SCOUTFS_BLOCK_LG_SHIFT) - 1;
 	/* Data blocks go on the data dev */
 	first_data = SCOUTFS_DATA_DEV_START_BLKNO;
@@ -215,7 +215,10 @@ static int do_mkfs(struct mkfs_args *args)
 	super->total_data_blocks = cpu_to_le64(last_data - first_data + 1);
 	super->first_data_blkno = cpu_to_le64(first_data);
 	super->last_data_blkno = cpu_to_le64(last_data);
-	super->quorum_count = args->quorum_count;
+
+	assert(sizeof(args->slots) ==
+		     member_sizeof(struct scoutfs_super_block, qconf.slots));
+	memcpy(super->qconf.slots, args->slots, sizeof(args->slots));
 
 	/* fs root starts with root inode and its index items */
 	blkno = next_meta++;
@@ -309,9 +312,11 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* zero out quorum blocks */
+	hdr = zeros;
+	hdr->magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_QUORUM);
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		ret = write_raw_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i,
-				      SCOUTFS_BLOCK_SM_SHIFT, zeros);
+		ret = write_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i,
+				  SCOUTFS_BLOCK_SM_SHIFT, super, hdr);
 		if (ret < 0) {
 			fprintf(stderr, "error zeroing quorum block: %s (%d)\n",
 				strerror(-errno), -errno);
@@ -356,7 +361,7 @@ static int do_mkfs(struct mkfs_args *args)
 	       "  uuid:                 %s\n"
 	       "  64KB metadata blocks: "SIZE_FMT"\n"
 	       "  4KB data blocks:      "SIZE_FMT"\n"
-	       "  quorum count:         %u\n",
+	       "  quorum slots:         ",
 		args->meta_device,
 	        args->data_device,
 		le64_to_cpu(super->hdr.fsid),
@@ -365,8 +370,22 @@ static int do_mkfs(struct mkfs_args *args)
 		SIZE_ARGS(le64_to_cpu(super->total_meta_blocks),
 			  SCOUTFS_BLOCK_LG_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->total_data_blocks),
-			  SCOUTFS_BLOCK_SM_SIZE),
-		super->quorum_count);
+			  SCOUTFS_BLOCK_SM_SIZE));
+
+	indent = "";
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		struct scoutfs_quorum_slot *sl = &super->qconf.slots[i];
+		struct in_addr in;
+
+		if (sl->addr.addr == 0)
+			continue;
+
+		in.s_addr = htonl(le32_to_cpu(sl->addr.addr));
+		printf("%s%u: %s:%u", indent,
+		       i, inet_ntoa(in), le16_to_cpu(sl->addr.port));
+		indent = "\n                        ";
+	}
+	printf("\n");
 
 	ret = 0;
 out:
@@ -383,16 +402,55 @@ out:
 	return ret;
 }
 
+static bool valid_quorum_slots(struct scoutfs_quorum_slot *slots)
+{
+	struct in_addr in;
+	bool valid = true;
+	char *addr;
+	int i;
+	int j;
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		if (slots[i].addr.addr == 0)
+			continue;
+
+		for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
+			if (slots[j].addr.addr == 0)
+				continue;
+
+			if (slots[i].addr.addr == slots[j].addr.addr &&
+			    slots[i].addr.port == slots[j].addr.port) {
+
+				in.s_addr =
+					htonl(le32_to_cpu(slots[i].addr.addr));
+				addr = inet_ntoa(in);
+				fprintf(stderr, "quorum slot nr %u and %u have the same address %s:%u\n",
+					i, j, addr,
+					le16_to_cpu(slots[i].addr.port));
+				valid = false;
+			}
+		}
+	}
+
+	return valid;
+}
+
 static int parse_opt(int key, char *arg, struct argp_state *state)
 {
 	struct mkfs_args *args = state->input;
+	struct scoutfs_quorum_slot slot;
 	int ret;
 
 	switch (key) {
 	case 'Q':
-		ret = parse_u64(arg, &args->quorum_count);
-		if (ret)
+		ret = parse_quorum_slot(&slot, arg);
+		if (ret < 0)
 			return ret;
+		if (args->slots[ret].addr.addr != 0)
+			argp_error(state, "Quorum slot %u already specified before slot '%s'\n",
+				   ret, arg);
+		args->slots[ret] = slot;
+		args->nr_slots++;
 		break;
 	case 'f':
 		args->force = true;
@@ -432,12 +490,14 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 			argp_error(state, "more than two arguments given");
 		break;
 	case ARGP_KEY_FINI:
-		if (!args->quorum_count)
-			argp_error(state, "must provide nonzero quorum count with --quorum-count|-Q option");
+		if (!args->nr_slots)
+			argp_error(state, "must specify at least one quorum slot with --quorum-count|-Q");
 		if (!args->meta_device)
 			argp_error(state, "no metadata device argument given");
 		if (!args->data_device)
 			argp_error(state, "no data device argument given");
+		if (!valid_quorum_slots(args->slots))
+			argp_error(state, "invalid quorum slot configuration");
 		break;
 	default:
 		break;
@@ -447,7 +507,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 }
 
 static struct argp_option options[] = {
-	{ "quorum-count", 'Q', "NUM", 0, "Number of voters required to use the filesystem [Required]"},
+	{ "quorum-slot", 'Q', "NR,ADDR,PORT", 0, "Specify quorum slot addresses [Required]"},
 	{ "force", 'f', NULL, 0, "Overwrite existing data on block devices"},
 	{ "max-meta-size", 'm', "SIZE", 0, "Use a size less than the base metadata device size (bytes or KMGTP units)"},
 	{ "max-data-size", 'd', "SIZE", 0, "Use a size less than the base data device size (bytes or KMGTP units)"},
@@ -463,7 +523,7 @@ static struct argp argp = {
 
 static int mkfs_cmd(int argc, char *argv[])
 {
-	struct mkfs_args mkfs_args = {0};
+	struct mkfs_args mkfs_args = {NULL,};
 	int ret;
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &mkfs_args);
