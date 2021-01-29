@@ -305,25 +305,25 @@ out:
  *
  * In the typical case a mount reads the super blocks and finds the
  * address of the currently running server and connects to it.
- * Non-voting clients who can't connect will keep trying alternating
- * reading the address and getting connect timeouts.
+ * Non-quorum member clients who can't connect will keep trying
+ * alternating reading the address and getting connect timeouts.
  *
- * Voting mounts will try to elect a leader if they can't connect to the
- * server.  When a quorum can't connect and are able to elect a leader
+ * Quorum members will try to elect a leader if they can't connect to
+ * the server.  When then can't connect and are able to elect a leader
  * then a new server is started.  The new server will write its address
  * in the super and everyone will be able to connect.
  *
  * There's a tricky bit of coordination required to safely unmount.
  * Clients need to tell the server that they won't be coming back with a
  * farewell request.  Once a client receives its farewell response it
- * can exit.  But a majority of clients need to stick around to elect a
- * server to process all their farewell requests.  This is coordinated
- * by having the greeting tell the server that a client is a voter.  The
- * server then holds on to farewell requests from voters until only
- * requests from the final quorum remain.  These farewell responses are
- * only sent after updating an unmount barrier in the super to indicate
- * to the final quorum that they can safely exit without having received
- * a farewell response over the network.
+ * can exit.  But a majority of quorum members need to stick around to
+ * elect a server to process all their farewell requests.  This is
+ * coordinated by having the greeting tell the server that a client is a
+ * quorum member.  The server then holds on to farewell requests from
+ * members until only requests from the final quorum remain.  These
+ * farewell responses are only sent after updating an unmount barrier in
+ * the super to indicate to the final quorum that they can safely exit
+ * without having received a farewell response over the network.
  */
 static void scoutfs_client_connect_worker(struct work_struct *work)
 {
@@ -333,7 +333,7 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = NULL;
 	struct mount_options *opts = &sbi->opts;
-	const bool am_voter = opts->server_addr.sin_addr.s_addr != 0;
+	const bool am_quorum = opts->server_addr.sin_addr.s_addr != 0;
 	struct scoutfs_net_greeting greet;
 	struct sockaddr_in sin;
 	ktime_t timeout_abs;
@@ -351,7 +351,7 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 		goto out;
 
 	/* can safely unmount if we see that server processed our farewell */
-	if (am_voter && client->sending_farewell &&
+	if (am_quorum && client->sending_farewell &&
 	    (le64_to_cpu(super->unmount_barrier) > client->greeting_umb)) {
 		client->farewell_error = 0;
 		complete(&client->farewell_comp);
@@ -367,12 +367,12 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	else
 		ret = -ENOTCONN;
 
-	/* voters try to elect a leader if they couldn't connect */
 	if (ret < 0) {
-		/* non-voters will keep retrying */
-		if (!am_voter)
+		/* non-quorum members will delay then retry connect */
+		if (!am_quorum)
 			goto out;
 
+		/* quorum members try to elect a leader */
 		/* make sure local server isn't writing super during votes */
 		scoutfs_server_stop(sb);
 
@@ -399,8 +399,8 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	greet.flags = 0;
 	if (client->sending_farewell)
 		greet.flags |= cpu_to_le64(SCOUTFS_NET_GREETING_FLAG_FAREWELL);
-	if (am_voter)
-		greet.flags |= cpu_to_le64(SCOUTFS_NET_GREETING_FLAG_VOTER);
+	if (am_quorum)
+		greet.flags |= cpu_to_le64(SCOUTFS_NET_GREETING_FLAG_QUORUM);
 
 	ret = scoutfs_net_submit_request(sb, client->conn,
 					 SCOUTFS_NET_CMD_GREETING,

@@ -1034,8 +1034,8 @@ static int insert_mounted_client(struct super_block *sb, u64 rid,
 
 	init_mounted_client_key(&key, rid);
 	mcv.flags = 0;
-	if (gr_flags & SCOUTFS_NET_GREETING_FLAG_VOTER)
-		mcv.flags |= SCOUTFS_MOUNTED_CLIENT_VOTER;
+	if (gr_flags & SCOUTFS_NET_GREETING_FLAG_QUORUM)
+		mcv.flags |= SCOUTFS_MOUNTED_CLIENT_QUORUM;
 
 	return scoutfs_btree_insert(sb, &server->alloc, &server->wri,
 				    &super->mounted_clients, &key, &mcv,
@@ -1046,9 +1046,6 @@ static int insert_mounted_client(struct super_block *sb, u64 rid,
  * Remove the record of a mounted client.  The record can already be
  * removed if we're processing a farewell on behalf of a client that
  * already had a previous server process its farewell.
- *
- * When we remove the last mounted client that's voting we write a new
- * quorum block with the updated unmount_barrier.
  *
  * The caller has to serialize with farewell processing.
  */
@@ -1259,19 +1256,18 @@ static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
 
 /*
  * This work processes farewell requests asynchronously.  Requests from
- * voting clients can be held until only the final quorum remains and
+ * quorum members can be held until only the final quorum remains and
  * they've all sent farewell requests.
  *
- * When we remove the last mounted client record for the last voting
- * client then we increase the unmount_barrier and write it to the super
- * block.  If voting clients don't get their farewell response they'll
- * see the greater umount_barrier in the super and will know that their
- * farewell has been processed and that they can exit.
+ * When we remove the last mounted client record for the last quorum
+ * member then we increase the unmount_barrier and write it to the super
+ * block.  If members don't get their farewell response they'll see the
+ * greater umount_barrier in the super and will know that their farewell
+ * has been processed and that they can exit.
  *
- * Responses that are waiting for clients who aren't voting are
- * immediately sent.  Clients that don't have a mounted client record
- * have already had their farewell processed by another server and can
- * proceed.
+ * Responses for clients who aren't members are immediately sent.
+ * Clients that don't have a mounted client record have already had
+ * their farewell processed by another server and can proceed.
  *
  * Farewell responses are unique in that sending them causes the server
  * to shutdown the connection to the client next time the socket
@@ -1299,7 +1295,7 @@ static void farewell_worker(struct work_struct *work)
 	LIST_HEAD(reqs);
 	LIST_HEAD(send);
 	bool deleted = false;
-	bool voting;
+	bool is_quorum;
 	bool more_reqs;
 	int ret;
 
@@ -1308,7 +1304,7 @@ static void farewell_worker(struct work_struct *work)
 	list_splice_init(&server->farewell_requests, &reqs);
 	mutex_unlock(&server->farewell_mutex);
 
-	/* count how many reqs requests are from voting clients */
+	/* count how many reqs requests are from quorum members */
 	nr_unmounting = 0;
 	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
 		init_mounted_client_key(&key, fw->rid);
@@ -1327,10 +1323,10 @@ static void farewell_worker(struct work_struct *work)
 		}
 
 		mcv = iref.val;
-		voting = (mcv->flags & SCOUTFS_MOUNTED_CLIENT_VOTER) != 0;
+		is_quorum = (mcv->flags & SCOUTFS_MOUNTED_CLIENT_QUORUM) != 0;
 		scoutfs_btree_put_iref(&iref);
 
-		if (!voting) {
+		if (!is_quorum) {
 			list_move_tail(&fw->entry, &send);
 			continue;
 		}
@@ -1338,7 +1334,7 @@ static void farewell_worker(struct work_struct *work)
 		nr_unmounting++;
 	}
 
-	/* see how many mounted clients could vote for quorum */
+	/* see how many mounted clients are quorum members */
 	init_mounted_client_key(&key, 0);
 	for (;;) {
 		ret = scoutfs_btree_next(sb, &super->mounted_clients, &key,
@@ -1356,7 +1352,7 @@ static void farewell_worker(struct work_struct *work)
 		key = *iref.key;
 		mcv = iref.val;
 
-		if (mcv->flags & SCOUTFS_MOUNTED_CLIENT_VOTER)
+		if (mcv->flags & SCOUTFS_MOUNTED_CLIENT_QUORUM)
 			nr_mounted++;
 
 		scoutfs_btree_put_iref(&iref);
@@ -1392,7 +1388,7 @@ static void farewell_worker(struct work_struct *work)
 			goto out;
 	}
 
-	/* update the unmount barrier if we deleted all voting clients */
+	/* update the unmount barrier if we deleted all quorum members */
 	if (deleted && nr_mounted == 0) {
 		ret = scoutfs_server_hold_commit(sb);
 		if (ret)

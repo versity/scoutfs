@@ -306,7 +306,7 @@ struct scoutfs_mounted_client_btree_val {
 	__u8 flags;
 };
 
-#define SCOUTFS_MOUNTED_CLIENT_VOTER	(1 << 0)
+#define SCOUTFS_MOUNTED_CLIENT_QUORUM	(1 << 0)
 
 /*
  * srch files are a contiguous run of blocks with compressed entries
@@ -757,7 +757,7 @@ struct scoutfs_net_greeting {
 };
 
 #define SCOUTFS_NET_GREETING_FLAG_FAREWELL	(1 << 0)
-#define SCOUTFS_NET_GREETING_FLAG_VOTER		(1 << 1)
+#define SCOUTFS_NET_GREETING_FLAG_QUORUM	(1 << 1)
 #define SCOUTFS_NET_GREETING_FLAG_INVALID	(~(__u64)0 << 2)
 
 /*
