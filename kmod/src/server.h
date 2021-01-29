@@ -69,8 +69,7 @@ int scoutfs_server_apply_commit(struct super_block *sb, int err);
 
 struct sockaddr_in;
 struct scoutfs_quorum_elected_info;
-int scoutfs_server_start(struct super_block *sb, struct sockaddr_in *sin,
-			 u64 term);
+int scoutfs_server_start(struct super_block *sb, u64 term);
 void scoutfs_server_abort(struct super_block *sb);
 void scoutfs_server_stop(struct super_block *sb);
 

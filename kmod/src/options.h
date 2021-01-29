@@ -6,13 +6,13 @@
 #include "format.h"
 
 enum scoutfs_mount_options {
-	Opt_server_addr,
+	Opt_quorum_slot_nr,
 	Opt_metadev_path,
 	Opt_err,
 };
 
 struct mount_options {
-	struct sockaddr_in server_addr;
+	int quorum_slot_nr;
 	char *metadev_path;
 };
 

@@ -14,6 +14,7 @@
 #define SCOUTFS_BLOCK_MAGIC_SRCH_BLOCK	0x897e4a7d
 #define SCOUTFS_BLOCK_MAGIC_SRCH_PARENT	0xb23a2a05
 #define SCOUTFS_BLOCK_MAGIC_ALLOC_LIST	0x8a93ac83
+#define SCOUTFS_BLOCK_MAGIC_QUORUM	0xbc310868
 
 /*
  * The super block, quorum block, and file data allocation granularity
@@ -54,15 +55,19 @@
 #define SCOUTFS_SUPER_BLKNO ((64ULL * 1024) >> SCOUTFS_BLOCK_SM_SHIFT)
 
 /*
- * A reasonably large region of aligned quorum blocks follow the super
- * block.  Each voting cycle reads the entire region so we don't want it
- * to be too enormous.  256K seems like a reasonably chunky single IO.
- * The number of blocks in the region also determines the number of
- * mounts that have a reasonable probability of not overwriting each
- * other's random block locations.
+ * A small number of quorum blocks follow the super block, enough of
+ * them to match the starting offset of the super block so the region is
+ * aligned to the power of two that contains it.
  */
-#define SCOUTFS_QUORUM_BLKNO	((256ULL * 1024) >> SCOUTFS_BLOCK_SM_SHIFT)
-#define SCOUTFS_QUORUM_BLOCKS	((256ULL * 1024) >> SCOUTFS_BLOCK_SM_SHIFT)
+#define SCOUTFS_QUORUM_BLKNO	(SCOUTFS_SUPER_BLKNO + 1)
+#define SCOUTFS_QUORUM_BLOCKS	(SCOUTFS_SUPER_BLKNO - 1)
+
+/*
+ * Free metadata blocks start after the quorum blocks
+ */
+#define SCOUTFS_META_DEV_START_BLKNO				\
+	((SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS) >>	\
+	 SCOUTFS_BLOCK_SM_LG_SHIFT)
 
 /*
  * Start data on the data device aligned as well.
@@ -537,49 +542,77 @@ struct scoutfs_xattr {
 
 #define SCOUTFS_UUID_BYTES 16
 
-/*
- * Mounts read all the quorum blocks and write to one random quorum
- * block during a cycle.  The min cycle time limits the per-mount iop
- * load during elections.  The random cycle delay makes it less likely
- * that mounts will read and write at the same time and miss each
- * other's writes.  An election only completes if a quorum of mounts
- * vote for a leader before any of their elections timeout.  This is
- * made less likely by the probability that mounts will overwrite each
- * others random block locations.  The max quorum count limits that
- * probability.  9 mounts only have a 55% chance of writing to unique 4k
- * blocks in a 256k region.  The election timeout is set to include
- * enough cycles to usually complete the election.  Once a leader is
- * elected it spends a number of cycles writing out blocks with itself
- * logged as a leader.  This reduces the possibility that servers
- * will have their log entries overwritten and not be fenced.
- */
-#define SCOUTFS_QUORUM_MAX_COUNT		9
-#define SCOUTFS_QUORUM_CYCLE_LO_MS		10
-#define SCOUTFS_QUORUM_CYCLE_HI_MS		20
-#define SCOUTFS_QUORUM_TERM_LO_MS		250
-#define SCOUTFS_QUORUM_TERM_HI_MS		500
-#define SCOUTFS_QUORUM_ELECTED_LOG_CYCLES	10
+#define SCOUTFS_QUORUM_MAX_SLOTS	15
 
-struct scoutfs_quorum_block {
+/*
+ * To elect a leader, members race to have their variable election
+ * timeouts expire.  If they're first to send a vote request with a
+ * greater term to a majority of waiting members they'll be elected with
+ * a majority.  If the timeouts are too close, the vote may be split and
+ * everyone will wait for another cycle of variable timeouts to expire.
+ *
+ * These determine how long it will take to elect a leader once there's
+ * no evidence of a server (no leader quorum blocks on mount; heartbeat
+ * timeout expired.)
+ */
+#define SCOUTFS_QUORUM_ELECT_MIN_MS	250
+#define SCOUTFS_QUORUM_ELECT_VAR_MS	100
+
+/*
+ * Once a leader is elected they send out heartbeats at regular
+ * intervals to force members to wait the much longer heartbeat timeout.
+ * Once heartbeat timeout expires without receiving a heartbeat they'll
+ * switch over the performing elections.
+ *
+ * These determine how long it could take members to notice that a
+ * leader has gone silent and start to elect a new leader.
+ */
+#define SCOUTFS_QUORUM_HB_IVAL_MS	100
+#define SCOUTFS_QUORUM_HB_TIMEO_MS	(5 * MSEC_PER_SEC)
+
+struct scoutfs_quorum_message {
 	__le64 fsid;
-	__le64 blkno;
+	__le64 version;
 	__le64 term;
-	__le64 write_nr;
-	__le64 voter_rid;
-	__le64 vote_for_rid;
+	__u8 type;
+	__u8 from;
+	__u8 __pad[2];
 	__le32 crc;
-	__u8 log_nr;
-	__u8 __pad[3];
-	struct scoutfs_quorum_log {
-		__le64 term;
-		__le64 rid;
-		struct scoutfs_inet_addr addr;
-	} log[0];
 };
 
-#define SCOUTFS_QUORUM_LOG_MAX						  \
-	((SCOUTFS_BLOCK_SM_SIZE - sizeof(struct scoutfs_quorum_block)) /  \
-		sizeof(struct scoutfs_quorum_log))
+/* a candidate requests a vote */
+#define SCOUTFS_QUORUM_MSG_REQUEST_VOTE	0
+/* followers send votes to candidates */
+#define SCOUTFS_QUORUM_MSG_VOTE		1
+/* elected leaders broadcast heartbeats to delay elections */
+#define SCOUTFS_QUORUM_MSG_HEARTBEAT	2
+/* leaders broadcast as they leave to break heartbeat timeout */
+#define SCOUTFS_QUORUM_MSG_RESIGNATION	3
+#define SCOUTFS_QUORUM_MSG_INVALID	4
+
+/*
+ * The version is currently always 0, but will be used by mounts to
+ * discover that membership has changed.
+ */
+struct scoutfs_quorum_config {
+	__le64 version;
+	struct scoutfs_quorum_slot {
+		struct scoutfs_inet_addr addr;
+	} slots[SCOUTFS_QUORUM_MAX_SLOTS];
+};
+
+struct scoutfs_quorum_block {
+	struct scoutfs_block_header hdr;
+	__le64 term;
+	__le64 random_write_mark;
+	__le64 flags;
+	struct scoutfs_quorum_block_event {
+		__le64 rid;
+		struct scoutfs_timespec ts;
+	} write, update_term, set_leader, clear_leader, fenced;
+};
+
+#define SCOUTFS_QUORUM_BLOCK_LEADER (1 << 0)
 
 #define SCOUTFS_FLAG_IS_META_BDEV 0x01
 
@@ -597,12 +630,8 @@ struct scoutfs_super_block {
 	__le64 total_data_blocks;
 	__le64 first_data_blkno;
 	__le64 last_data_blkno;
-	__le64 quorum_fenced_term;
-	__le64 quorum_server_term;
 	__le64 unmount_barrier;
-	__u8 quorum_count;
-	__u8 __pad[7];
-	struct scoutfs_inet_addr server_addr;
+	struct scoutfs_quorum_config qconf;
 	struct scoutfs_alloc_root meta_alloc[2];
 	struct scoutfs_alloc_root data_alloc;
 	struct scoutfs_alloc_list_head server_meta_avail[2];

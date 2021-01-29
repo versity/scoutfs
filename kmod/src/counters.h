@@ -139,18 +139,21 @@
 	EXPAND_COUNTER(net_recv_invalid_message)		\
 	EXPAND_COUNTER(net_recv_messages)			\
 	EXPAND_COUNTER(net_unknown_request)			\
-	EXPAND_COUNTER(quorum_cycle)				\
-	EXPAND_COUNTER(quorum_elected_leader)			\
-	EXPAND_COUNTER(quorum_election_timeout)			\
-	EXPAND_COUNTER(quorum_failure)				\
-	EXPAND_COUNTER(quorum_read_block)			\
-	EXPAND_COUNTER(quorum_read_block_error)			\
+	EXPAND_COUNTER(quorum_elected)				\
+	EXPAND_COUNTER(quorum_fence_error)			\
+	EXPAND_COUNTER(quorum_fence_leader)			\
 	EXPAND_COUNTER(quorum_read_invalid_block)		\
-	EXPAND_COUNTER(quorum_saw_super_leader)			\
-	EXPAND_COUNTER(quorum_timedout)				\
-	EXPAND_COUNTER(quorum_write_block)			\
-	EXPAND_COUNTER(quorum_write_block_error)		\
-	EXPAND_COUNTER(quorum_fenced)				\
+	EXPAND_COUNTER(quorum_recv_error)			\
+	EXPAND_COUNTER(quorum_recv_heartbeat)			\
+	EXPAND_COUNTER(quorum_recv_invalid)			\
+	EXPAND_COUNTER(quorum_recv_resignation)			\
+	EXPAND_COUNTER(quorum_recv_vote)			\
+	EXPAND_COUNTER(quorum_send_heartbeat)			\
+	EXPAND_COUNTER(quorum_send_resignation)			\
+	EXPAND_COUNTER(quorum_send_request)			\
+	EXPAND_COUNTER(quorum_send_vote)			\
+	EXPAND_COUNTER(quorum_server_shutdown)			\
+	EXPAND_COUNTER(quorum_term_follower)			\
 	EXPAND_COUNTER(server_commit_hold)			\
 	EXPAND_COUNTER(server_commit_queue)			\
 	EXPAND_COUNTER(server_commit_worker)			\

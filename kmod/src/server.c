@@ -59,7 +59,6 @@ struct server_info {
 	int err;
 	bool shutting_down;
 	struct completion start_comp;
-	struct sockaddr_in listen_sin;
 	u64 term;
 	struct scoutfs_net_connection *conn;
 
@@ -1362,7 +1361,7 @@ static void farewell_worker(struct work_struct *work)
 	/* send as many responses as we can to maintain quorum */
 	while ((fw = list_first_entry_or_null(&reqs, struct farewell_request,
 					      entry)) &&
-	       (nr_mounted > super->quorum_count ||
+	       (nr_mounted > scoutfs_quorum_votes_needed(sb) ||
 		nr_unmounting >= nr_mounted)) {
 
 		list_move_tail(&fw->entry, &send);
@@ -1544,18 +1543,17 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct super_block *sb = server->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
+	struct mount_options *opts = &sbi->opts;
 	struct scoutfs_net_connection *conn = NULL;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
 	struct sockaddr_in sin;
 	LIST_HEAD(conn_list);
 	u64 max_vers;
 	int ret;
-	int err;
 
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
-	sin = server->listen_sin;
-
+	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server setting up at "SIN_FMT, SIN_ARG(&sin));
 
 	conn = scoutfs_net_alloc_conn(sb, server_notify_up, server_notify_down,
@@ -1574,9 +1572,6 @@ static void scoutfs_server_worker(struct work_struct *work)
 						  : "");
 		goto out;
 	}
-
-	if (ret)
-		goto out;
 
 	/* start up the server subsystems before accepting */
 	ret = scoutfs_read_super(sb, super);
@@ -1617,19 +1612,6 @@ static void scoutfs_server_worker(struct work_struct *work)
 	if (ret)
 		goto shutdown;
 
-	/*
-	 * Write our address in the super before it's possible for net
-	 * processing to start writing the super as part of
-	 * transactions.  In theory clients could be trying to connect
-	 * to our address without having seen it in the super (maybe
-	 * they saw it a long time ago).
-	 */
-	scoutfs_addr_from_sin(&super->server_addr, &sin);
-	super->quorum_server_term = cpu_to_le64(server->term);
-	ret = scoutfs_write_super(sb, super);
-	if (ret < 0)
-		goto shutdown;
-
 	/* start accepting connections and processing work */
 	server->conn = conn;
 	scoutfs_net_listen(sb, conn);
@@ -1656,29 +1638,13 @@ shutdown:
 	scoutfs_lock_server_destroy(sb);
 
 out:
-	scoutfs_quorum_clear_leader(sb);
 	scoutfs_net_free_conn(sb, conn);
+
+	/* let quorum know that we've shutdown */
+	scoutfs_quorum_server_shutdown(sb);
 
 	scoutfs_info(sb, "server stopped at "SIN_FMT, SIN_ARG(&sin));
 	trace_scoutfs_server_work_exit(sb, 0, ret);
-
-	/*
-	 * Always try to clear our presence in the super so that we're
-	 * not fenced.  We do this last because other mounts will try to
-	 * reach quorum the moment they see zero here.  The later we do
-	 * this the longer we have to finish shutdown while clients
-	 * timeout.
-	 */
-	err = scoutfs_read_super(sb, super);
-	if (err == 0) {
-		super->quorum_fenced_term = cpu_to_le64(server->term);
-		memset(&super->server_addr, 0, sizeof(super->server_addr));
-		err = scoutfs_write_super(sb, super);
-	}
-	if (err < 0) {
-		scoutfs_err(sb, "failed to clear election term %llu at "SIN_FMT", this mount could be fenced",
-			    server->term, SIN_ARG(&sin));
-	}
 
 	server->err = ret;
 	complete(&server->start_comp);
@@ -1689,14 +1655,12 @@ out:
  * the super block's fence_term has been set to the new server's term so
  * that it won't be fenced.
  */
-int scoutfs_server_start(struct super_block *sb, struct sockaddr_in *sin,
-			 u64 term)
+int scoutfs_server_start(struct super_block *sb, u64 term)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	server->err = 0;
 	server->shutting_down = false;
-	server->listen_sin = *sin;
 	server->term = term;
 	init_completion(&server->start_comp);
 

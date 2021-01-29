@@ -176,7 +176,8 @@ static int scoutfs_show_options(struct seq_file *seq, struct dentry *root)
 	struct super_block *sb = root->d_sb;
 	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
 
-	seq_printf(seq, ",server_addr="SIN_FMT, SIN_ARG(&opts->server_addr));
+	if (opts->quorum_slot_nr >= 0)
+		seq_printf(seq, ",quorum_slot_nr=%d", opts->quorum_slot_nr);
 	seq_printf(seq, ",metadev_path=%s", opts->metadev_path);
 
 	return 0;
@@ -192,20 +193,19 @@ static ssize_t metadev_path_show(struct kobject *kobj,
 }
 SCOUTFS_ATTR_RO(metadev_path);
 
-static ssize_t server_addr_show(struct kobject *kobj,
+static ssize_t quorum_server_nr_show(struct kobject *kobj,
 			      struct kobj_attribute *attr, char *buf)
 {
 	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
 	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
 
-	return snprintf(buf, PAGE_SIZE, SIN_FMT"\n",
-			SIN_ARG(&opts->server_addr));
+	return snprintf(buf, PAGE_SIZE, "%d\n", opts->quorum_slot_nr);
 }
-SCOUTFS_ATTR_RO(server_addr);
+SCOUTFS_ATTR_RO(quorum_server_nr);
 
 static struct attribute *mount_options_attrs[] = {
 	SCOUTFS_ATTR_PTR(metadev_path),
-	SCOUTFS_ATTR_PTR(server_addr),
+	SCOUTFS_ATTR_PTR(quorum_server_nr),
 	NULL,
 };
 
@@ -257,14 +257,11 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_item_destroy(sb);
 	scoutfs_forest_destroy(sb);
 
-	/* the server locks the listen address and compacts */
+	scoutfs_quorum_destroy(sb);
 	scoutfs_lock_shutdown(sb);
 	scoutfs_server_destroy(sb);
 	scoutfs_net_destroy(sb);
 	scoutfs_lock_destroy(sb);
-
-	/* server clears quorum leader flag during shutdown */
-	scoutfs_quorum_destroy(sb);
 
 	scoutfs_block_destroy(sb);
 	scoutfs_destroy_triggers(sb);
@@ -390,17 +387,8 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 
 	/* XXX do we want more rigorous invalid super checking? */
 
-	if (super->quorum_count == 0 ||
-	    super->quorum_count > SCOUTFS_QUORUM_MAX_COUNT) {
-		scoutfs_err(sb, "super block has invalid quorum count %u, must be > 0 and <= %u",
-			    super->quorum_count, SCOUTFS_QUORUM_MAX_COUNT);
-		ret = -EINVAL;
-		goto out;
-	}
-
 	if (invalid_blkno_limits(sb, "meta",
-				 (SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS)
-				    << SCOUTFS_BLOCK_SM_LG_SHIFT,
+			         SCOUTFS_META_DEV_START_BLKNO,
 				 super->first_meta_blkno,
 				 super->last_meta_blkno, sbi->meta_bdev,
 				 SCOUTFS_BLOCK_LG_SHIFT) ||
@@ -605,8 +593,8 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_setup_trans(sb) ?:
 	      scoutfs_lock_setup(sb) ?:
 	      scoutfs_net_setup(sb) ?:
-	      scoutfs_quorum_setup(sb) ?:
 	      scoutfs_server_setup(sb) ?:
+	      scoutfs_quorum_setup(sb) ?:
 	      scoutfs_client_setup(sb) ?:
 	      scoutfs_lock_rid(sb, SCOUTFS_LOCK_WRITE, 0, sbi->rid,
 				   &sbi->rid_lock) ?:
