@@ -309,6 +309,34 @@ int scoutfs_write_super(struct super_block *sb,
 				      sizeof(struct scoutfs_super_block));
 }
 
+static bool invalid_blkno_limits(struct super_block *sb, char *which,
+				 u64 start, __le64 first, __le64 last,
+				 struct block_device *bdev, int shift)
+{
+	u64 blkno;
+
+	if (le64_to_cpu(first) < start) {
+		scoutfs_err(sb, "super block first %s blkno %llu is within first valid blkno %llu",
+			which, le64_to_cpu(first), start);
+		return true;
+	}
+
+	if (le64_to_cpu(first) > le64_to_cpu(last)) {
+		scoutfs_err(sb, "super block first %s blkno %llu is greater than last %s blkno %llu",
+			which, le64_to_cpu(first), which, le64_to_cpu(last));
+		return true;
+	}
+
+	blkno = (i_size_read(bdev->bd_inode) >> shift) - 1;
+	if (le64_to_cpu(last) > blkno) {
+		scoutfs_err(sb, "super block last %s blkno %llu is beyond device size last blkno %llu",
+			which, le64_to_cpu(last), blkno);
+		return true;
+	}
+
+	return false;
+}
+
 /*
  * Read super, specifying bdev.
  */
@@ -316,9 +344,9 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 					struct block_device *bdev,
 					struct scoutfs_super_block *super_res)
 {
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super;
 	__le32 calc;
-	u64 blkno;
 	int ret;
 
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
@@ -370,40 +398,18 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 		goto out;
 	}
 
-	blkno = (SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS) >>
-		SCOUTFS_BLOCK_SM_LG_SHIFT;
-	if (le64_to_cpu(super->first_meta_blkno) < blkno) {
-		scoutfs_err(sb, "super block first meta blkno %llu is within quorum blocks",
-			le64_to_cpu(super->first_meta_blkno));
+	if (invalid_blkno_limits(sb, "meta",
+				 (SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS)
+				    << SCOUTFS_BLOCK_SM_LG_SHIFT,
+				 super->first_meta_blkno,
+				 super->last_meta_blkno, sbi->meta_bdev,
+				 SCOUTFS_BLOCK_LG_SHIFT) ||
+	    invalid_blkno_limits(sb, "data",
+			         SCOUTFS_DATA_DEV_START_BLKNO,
+				 super->first_data_blkno,
+				 super->last_data_blkno, sb->s_bdev,
+				 SCOUTFS_BLOCK_SM_SHIFT)) {
 		ret = -EINVAL;
-		goto out;
-	}
-
-	if (le64_to_cpu(super->first_meta_blkno) >
-	    le64_to_cpu(super->last_meta_blkno)) {
-		scoutfs_err(sb, "super block first meta blkno %llu is greater than last meta blkno %llu",
-			le64_to_cpu(super->first_meta_blkno),
-			le64_to_cpu(super->last_meta_blkno));
-		ret = -EINVAL;
-		goto out;
-	}
-
-	if (le64_to_cpu(super->first_data_blkno) >
-	    le64_to_cpu(super->last_data_blkno)) {
-		scoutfs_err(sb, "super block first data blkno %llu is greater than last data blkno %llu",
-			le64_to_cpu(super->first_data_blkno),
-			le64_to_cpu(super->last_data_blkno));
-		ret = -EINVAL;
-		goto out;
-	}
-
-	blkno = (i_size_read(sb->s_bdev->bd_inode) >>
-		 SCOUTFS_BLOCK_SM_SHIFT) - 1;
-	if (le64_to_cpu(super->last_data_blkno) > blkno) {
-		scoutfs_err(sb, "super block last data blkno %llu is outsite device size last blkno %llu",
-			le64_to_cpu(super->last_data_blkno), blkno);
-		ret = -EINVAL;
-		goto out;
 	}
 
 out:
