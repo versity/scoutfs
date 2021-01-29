@@ -8,7 +8,6 @@
 #include <errno.h>
 #include <string.h>
 #include <limits.h>
-#include <assert.h>
 #include <argp.h>
 
 #include "sparse.h"
@@ -207,9 +206,6 @@ static int do_release(struct release_args *args)
 			args->path, strerror(errno), errno);
 		return ret;
 	}
-
-	assert(args->offset % SCOUTFS_BLOCK_SM_SIZE == 0);
-	assert(args->length % SCOUTFS_BLOCK_SM_SIZE == 0);
 
 	ioctl_args.offset = args->offset;
 	ioctl_args.length = args->length;
