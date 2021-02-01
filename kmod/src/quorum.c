@@ -1053,7 +1053,7 @@ out:
 	if (ret)
 		scoutfs_quorum_destroy(sb);
 
-	return 0;
+	return ret;
 }
 
 /*
