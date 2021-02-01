@@ -176,19 +176,6 @@ struct scoutfs_key {
 #define skfl_neglen	_sk_second
 #define skfl_blkno	_sk_third
 
-struct scoutfs_radix_block {
-	struct scoutfs_block_header hdr;
-	union {
-		struct scoutfs_radix_ref {
-			__le64 blkno;
-			__le64 seq;
-			__le64 sm_total;
-			__le64 lg_total;
-		} refs[0];
-		__le64 bits[0];
-	};
-};
-
 struct scoutfs_avl_root {
 	__le16 node;
 };
