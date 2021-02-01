@@ -4,25 +4,23 @@
 # At the start of the test all mounts are mounted.  Each iteration
 # randomly decides to change each mount or to leave it alone.
 #
-# They create dirty items before unmounting to encourage compaction
-# while unmounting
+# Each iteration create dirty items across the mounts randomly, giving
+# unmount some work to do.
 #
 # For this test to be meaningful it needs multiple mounts beyond the
-# quorum set which can be racing to mount and unmount.  A reasonable
-# config would be 5 mounts with 3 quorum.  But the test will run with
-# whatever count it finds.
+# quorum majority which can be racing to mount and unmount.  A
+# reasonable config would be 5 mounts with 3 quorum members.  But the
+# test will run with whatever count it finds.
 #
-# This assumes that all the mounts are configured as voting servers.  We
-# could update it to be more clever and know that it can always safely
-# unmount mounts that aren't configured as servers.
+# The test assumes that the first mounts are the quorum members.
 #
 
-# nothing to do if we can't unmount
-test "$T_NR_MOUNTS" == "$T_QUORUM" && \
-	t_skip "only quorum members mounted, can't unmount"
+majority_nr=$(t_majority_count)
+quorum_nr=$T_QUORUM
 
-nr_mounted=$T_NR_MOUNTS
-nr_quorum=$T_QUORUM
+cur_quorum=$quorum_nr
+test "$cur_quorum" == "$majority_nr" && \
+	t_skip "all quorum members make up majority, need more mounts to unmount"
 
 echo "== create per mount files" 
 for i in $(t_fs_nrs); do
@@ -55,19 +53,28 @@ while [ "$SECONDS" -lt "$END" ]; do
 		fi
 
 		if [ "${mounted[$i]}" == 1 ]; then
-			if [ "$nr_mounted" -gt "$nr_quorum" ]; then
+			#
+			# can always unmount non-quorum mounts,
+			# can only unmount quorum members beyond majority
+			#
+			if [ "$i" -ge "$quorum_nr" -o \
+			     "$cur_quorum" -gt "$majority_nr" ]; then
 				t_umount $i &
 				pid=$!
 				pids="$pids $pid"
 				mounted[$i]=0
-				(( nr_mounted-- ))
+				if [ "$i" -lt "$quorum_nr" ]; then
+					(( cur_quorum-- ))
+				fi
 			fi
 		else
 			t_mount $i &
 			pid=$!
 			pids="$pids $pid"
 			mounted[$i]=1
-			(( nr_mounted++ ))
+			if [ "$i" -lt "$quorum_nr" ]; then
+				(( cur_quorum++ ))
+			fi
 		fi
 	done
 		

@@ -99,6 +99,19 @@ t_first_client_nr()
 	t_fail "t_first_client_nr didn't find any clients"
 }
 
+#
+# The number of quorum members needed to form a majority to start the
+# server.
+#
+t_majority_count()
+{
+	if [ "$T_QUORUM" -lt 3 ]; then
+		echo 1
+	else
+		echo $(((T_QUORUM / 2) + 1))
+	fi
+}
+
 t_mount()
 {
 	local nr="$1"
