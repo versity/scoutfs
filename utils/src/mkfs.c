@@ -32,12 +32,22 @@
 #include "leaf_item_hash.h"
 #include "blkid.h"
 
-static int write_raw_block(int fd, u64 blkno, int shift, void *blk)
+/*
+ * Update the block header fields and write out the block.
+ */
+static int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
+		       int shift, struct scoutfs_block_header *hdr)
 {
 	size_t size = 1ULL << shift;
 	ssize_t ret;
 
-	ret = pwrite(fd, blk, size, blkno << shift);
+	hdr->magic = cpu_to_le32(magic);
+	hdr->fsid = fsid;
+	hdr->blkno = cpu_to_le64(blkno);
+	hdr->seq = cpu_to_le64(seq);
+	hdr->crc = cpu_to_le32(crc_block(hdr, size));
+
+	ret = pwrite(fd, hdr, size, blkno << shift);
 	if (ret != size) {
 		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
 			blkno, ret, strerror(errno), errno);
@@ -48,34 +58,17 @@ static int write_raw_block(int fd, u64 blkno, int shift, void *blk)
 }
 
 /*
- * Update the block's header and write it out.
- */
-static int write_block(int fd, u64 blkno, int shift,
-		       struct scoutfs_super_block *super,
-		       struct scoutfs_block_header *hdr)
-{
-	size_t size = 1ULL << shift;
-
-	if (super)
-		*hdr = super->hdr;
-	hdr->blkno = cpu_to_le64(blkno);
-	hdr->crc = cpu_to_le32(crc_block(hdr, size));
-
-	return write_raw_block(fd, blkno, shift, hdr);
-}
-
-/*
  * Write the single btree block that contains the blkno and len indexed
  * items to store the given extent, and update the root to point to it.
  */
-static int write_alloc_root(struct scoutfs_super_block *super, int fd,
+static int write_alloc_root(int fd, __le64 fsid,
 			    struct scoutfs_alloc_root *root,
 			    struct scoutfs_btree_block *bt,
-			    u64 blkno, u64 start, u64 len)
+			    u64 seq, u64 blkno, u64 start, u64 len)
 {
 	struct scoutfs_key key;
 
-	btree_init_root_single(&root->root, bt, blkno, 1, super->hdr.fsid);
+	btree_init_root_single(&root->root, bt, seq, blkno);
 	root->total_len = cpu_to_le64(len);
 
 	memset(&key, 0, sizeof(key));
@@ -94,10 +87,8 @@ static int write_alloc_root(struct scoutfs_super_block *super, int fd,
 	key.skfl_blkno = cpu_to_le64(start);
 	btree_append_item(bt, &key, NULL, 0);
 
-	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
-					    SCOUTFS_BLOCK_LG_SIZE));
-
-	return write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
+	return write_block(fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, seq, blkno,
+			   SCOUTFS_BLOCK_LG_SHIFT, &bt->hdr);
 }
 
 struct mkfs_args {
@@ -142,10 +133,12 @@ static int do_mkfs(struct mkfs_args *args)
 	u64 last_data;
 	u64 meta_start;
 	u64 meta_len;
+	__le64 fsid;
 	int ret;
 	int i;
 
 	gettimeofday(&tv, NULL);
+	pseudo_random_bytes(&fsid, sizeof(fsid));
 
 	meta_fd = open(args->meta_device, O_RDWR | O_EXCL);
 	if (meta_fd < 0) {
@@ -202,9 +195,6 @@ static int do_mkfs(struct mkfs_args *args)
 
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
-	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
-	super->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_SUPER);
-	super->hdr.seq = cpu_to_le64(1);
 	super->version = cpu_to_le64(SCOUTFS_INTEROP_VERSION);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
@@ -222,7 +212,7 @@ static int do_mkfs(struct mkfs_args *args)
 
 	/* fs root starts with root inode and its index items */
 	blkno = next_meta++;
-	btree_init_root_single(&super->fs_root, bt, blkno, 1, super->hdr.fsid);
+	btree_init_root_single(&super->fs_root, bt, 1, blkno);
 
 	memset(&key, 0, sizeof(key));
 	key.sk_zone = SCOUTFS_INODE_INDEX_ZONE;
@@ -247,10 +237,8 @@ static int do_mkfs(struct mkfs_args *args)
 	inode.mtime.nsec = inode.atime.nsec;
 	btree_append_item(bt, &key, &inode, sizeof(inode));
 
-	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
-					    SCOUTFS_BLOCK_LG_SIZE));
-
-	ret = write_raw_block(meta_fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
+	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, 1, blkno,
+			  SCOUTFS_BLOCK_LG_SHIFT, &bt->hdr);
 	if (ret)
 		goto out;
 
@@ -259,11 +247,6 @@ static int do_mkfs(struct mkfs_args *args)
 	lblk = (void *)bt;
 	memset(lblk, 0, SCOUTFS_BLOCK_LG_SIZE);
 
-	lblk->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_ALLOC_LIST);
-	lblk->hdr.fsid = super->hdr.fsid;
-	lblk->hdr.blkno = cpu_to_le64(blkno);
-	lblk->hdr.seq = cpu_to_le64(1);
-
 	meta_len = (64 * 1024 * 1024) >> SCOUTFS_BLOCK_LG_SHIFT;
 	for (i = 0; i < meta_len; i++) {
 		lblk->blknos[i] = cpu_to_le64(next_meta);
@@ -271,20 +254,20 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 	lblk->nr = cpu_to_le32(i);
 
-	super->server_meta_avail[0].ref.blkno = lblk->hdr.blkno;
-	super->server_meta_avail[0].ref.seq = lblk->hdr.seq;
+	super->server_meta_avail[0].ref.blkno = cpu_to_le64(blkno);
+	super->server_meta_avail[0].ref.seq = cpu_to_le64(1);
 	super->server_meta_avail[0].total_nr = le32_to_le64(lblk->nr);
 	super->server_meta_avail[0].first_nr = lblk->nr;
 
-	lblk->hdr.crc = cpu_to_le32(crc_block(&bt->hdr, SCOUTFS_BLOCK_LG_SIZE));
-	ret = write_raw_block(meta_fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, lblk);
+	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_ALLOC_LIST, fsid, 1,
+			  blkno, SCOUTFS_BLOCK_LG_SHIFT, &lblk->hdr);
 	if (ret)
 		goto out;
 
 	/* the data allocator has a single extent */
 	blkno = next_meta++;
-	ret = write_alloc_root(super, meta_fd, &super->data_alloc, bt,
-			       blkno, first_data,
+	ret = write_alloc_root(meta_fd, fsid, &super->data_alloc, bt,
+			       1, blkno, first_data,
 			       le64_to_cpu(super->total_data_blocks));
 	if (ret < 0)
 		goto out;
@@ -301,8 +284,8 @@ static int do_mkfs(struct mkfs_args *args)
 	/* each meta alloc root contains a portion of free metadata extents */
 	for (i = 0; i < array_size(super->meta_alloc); i++) {
 		blkno = next_meta++;
-		ret = write_alloc_root(super, meta_fd, &super->meta_alloc[i], bt,
-				       blkno, meta_start,
+		ret = write_alloc_root(meta_fd, fsid, &super->meta_alloc[i], bt,
+				       1, blkno, meta_start,
 				       min(meta_len,
 					   last_meta - meta_start + 1));
 		if (ret < 0)
@@ -313,10 +296,10 @@ static int do_mkfs(struct mkfs_args *args)
 
 	/* zero out quorum blocks */
 	hdr = zeros;
-	hdr->magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_QUORUM);
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		ret = write_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i,
-				  SCOUTFS_BLOCK_SM_SHIFT, super, hdr);
+		ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_QUORUM, fsid,
+				  1, SCOUTFS_QUORUM_BLKNO + i,
+				  SCOUTFS_BLOCK_SM_SHIFT, hdr);
 		if (ret < 0) {
 			fprintf(stderr, "error zeroing quorum block: %s (%d)\n",
 				strerror(-errno), -errno);
@@ -325,9 +308,9 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* write the super block to data dev and meta dev*/
-	super->hdr.seq = cpu_to_le64(1);
-	ret = write_block(data_fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  NULL, &super->hdr);
+	ret = write_block(data_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid, 1,
+			  SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			  &super->hdr);
 	if (ret)
 		goto out;
 
@@ -339,8 +322,9 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	super->flags |= cpu_to_le64(SCOUTFS_FLAG_IS_META_BDEV);
-	ret = write_block(meta_fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  NULL, &super->hdr);
+	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid,
+			  1, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			  &super->hdr);
 	if (ret)
 		goto out;
 
