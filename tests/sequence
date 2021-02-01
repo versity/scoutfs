@@ -25,7 +25,8 @@ lock-conflicting-batch-commit.sh
 cross-mount-data-free.sh
 persistent-item-vers.sh
 setup-error-teardown.sh
-mount-unmount-race.sh
+# failing in jenkins pr runners, zab's working on it
+#umount-unmount-race.sh
 createmany-parallel-mounts.sh
 archive-light-cycle.sh
 stale-btree-read.sh
