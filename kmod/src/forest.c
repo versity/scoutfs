@@ -348,15 +348,9 @@ retry:
 	ret = 0;
 out:
 	if (ret == -ESTALE) {
-		if (memcmp(&prev_refs, &refs, sizeof(refs)) == 0) {
-			ret = -EIO;
-			goto out;
-		}
+		if (memcmp(&prev_refs, &refs, sizeof(refs)) == 0)
+			return -EIO;
 		prev_refs = refs;
-
-		ret = scoutfs_client_get_roots(sb, &roots);
-		if (ret)
-			goto out;
 		goto retry;
 	}
 
