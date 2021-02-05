@@ -150,7 +150,7 @@ static int client_lock_response(struct super_block *sb,
 				void *resp, unsigned int resp_len,
 				int error, void *data)
 {
-	if (resp_len != sizeof(struct scoutfs_net_lock_grant_response))
+	if (resp_len != sizeof(struct scoutfs_net_lock))
 		return -EINVAL;
 
 	/* XXX error? */

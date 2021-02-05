@@ -895,11 +895,6 @@ struct scoutfs_net_lock {
 	__u8 __pad[6];
 };
 
-struct scoutfs_net_lock_grant_response {
-	struct scoutfs_net_lock nl;
-	struct scoutfs_net_roots roots;
-};
-
 struct scoutfs_net_lock_recover {
 	__le16 nr;
 	__u8 __pad[6];

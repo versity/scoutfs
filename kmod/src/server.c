@@ -182,7 +182,7 @@ int scoutfs_server_apply_commit(struct super_block *sb, int err)
 	return err;
 }
 
-void scoutfs_server_get_roots(struct super_block *sb,
+static void get_roots(struct super_block *sb,
 			      struct scoutfs_net_roots *roots)
 {
 	DECLARE_SERVER_INFO(sb, server);
@@ -556,7 +556,7 @@ static int server_get_roots(struct super_block *sb,
 		memset(&roots, 0, sizeof(roots));
 		ret = -EINVAL;
 	}  else {
-		scoutfs_server_get_roots(sb, &roots);
+		get_roots(sb, &roots);
 		ret = 0;
 	}
 
@@ -862,13 +862,13 @@ int scoutfs_server_lock_request(struct super_block *sb, u64 rid,
 }
 
 int scoutfs_server_lock_response(struct super_block *sb, u64 rid, u64 id,
-				 struct scoutfs_net_lock_grant_response *gr)
+				 struct scoutfs_net_lock *nl)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
 
 	return scoutfs_net_response_node(sb, server->conn, rid,
 					 SCOUTFS_NET_CMD_LOCK, id, 0,
-					 gr, sizeof(*gr));
+					 nl, sizeof(*nl));
 }
 
 static bool invalid_recover(struct scoutfs_net_lock_recover *nlr,
