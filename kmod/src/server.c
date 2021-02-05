@@ -91,6 +91,7 @@ struct server_info {
 
 	struct mutex logs_mutex;
 	struct mutex srch_mutex;
+	struct mutex mounted_clients_mutex;
 
 	/* stable versions stored from commits, given in locks and rpcs */
 	seqcount_t roots_seqcount;
@@ -1030,15 +1031,20 @@ static int insert_mounted_client(struct super_block *sb, u64 rid,
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct scoutfs_mounted_client_btree_val mcv;
 	struct scoutfs_key key;
+	int ret;
 
 	init_mounted_client_key(&key, rid);
 	mcv.flags = 0;
 	if (gr_flags & SCOUTFS_NET_GREETING_FLAG_QUORUM)
 		mcv.flags |= SCOUTFS_MOUNTED_CLIENT_QUORUM;
 
-	return scoutfs_btree_insert(sb, &server->alloc, &server->wri,
-				    &super->mounted_clients, &key, &mcv,
-				    sizeof(mcv));
+	mutex_lock(&server->mounted_clients_mutex);
+	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
+				   &super->mounted_clients, &key, &mcv,
+				   sizeof(mcv));
+	mutex_unlock(&server->mounted_clients_mutex);
+
+	return ret;
 }
 
 /*
@@ -1057,8 +1063,10 @@ static int delete_mounted_client(struct super_block *sb, u64 rid)
 
 	init_mounted_client_key(&key, rid);
 
+	mutex_lock(&server->mounted_clients_mutex);
 	ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
 				   &super->mounted_clients, &key);
+	mutex_unlock(&server->mounted_clients_mutex);
 	if (ret == -ENOENT)
 		ret = 0;
 
@@ -1177,10 +1185,8 @@ static int server_greeting(struct super_block *sb,
 		if (ret < 0)
 			goto send_err;
 
-		mutex_lock(&server->farewell_mutex);
 		ret = insert_mounted_client(sb, le64_to_cpu(gr->rid),
 					    le64_to_cpu(gr->flags));
-		mutex_unlock(&server->farewell_mutex);
 
 		ret = scoutfs_server_apply_commit(sb, ret);
 		queue_work(server->wq, &server->farewell_work);
@@ -1297,8 +1303,10 @@ static void farewell_worker(struct work_struct *work)
 	nr_unmounting = 0;
 	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
 		init_mounted_client_key(&key, fw->rid);
+		mutex_lock(&server->mounted_clients_mutex);
 		ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key,
 					   &iref);
+		mutex_unlock(&server->mounted_clients_mutex);
 		if (ret == 0 && invalid_mounted_client_item(&iref)) {
 			scoutfs_btree_put_iref(&iref);
 			ret = -EIO;
@@ -1326,8 +1334,10 @@ static void farewell_worker(struct work_struct *work)
 	/* see how many mounted clients are quorum members */
 	init_mounted_client_key(&key, 0);
 	for (;;) {
+		mutex_lock(&server->mounted_clients_mutex);
 		ret = scoutfs_btree_next(sb, &super->mounted_clients, &key,
 					 &iref);
+		mutex_unlock(&server->mounted_clients_mutex);
 		if (ret == 0 && invalid_mounted_client_item(&iref)) {
 			scoutfs_btree_put_iref(&iref);
 			ret = -EIO;
@@ -1696,6 +1706,7 @@ int scoutfs_server_setup(struct super_block *sb)
 	mutex_init(&server->alloc_mutex);
 	mutex_init(&server->logs_mutex);
 	mutex_init(&server->srch_mutex);
+	mutex_init(&server->mounted_clients_mutex);
 	seqcount_init(&server->roots_seqcount);
 
 	server->wq = alloc_workqueue("scoutfs_server",
