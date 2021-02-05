@@ -1551,7 +1551,6 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct scoutfs_net_connection *conn = NULL;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
 	struct sockaddr_in sin;
-	LIST_HEAD(conn_list);
 	u64 max_vers;
 	int ret;
 

@@ -944,7 +944,6 @@ static void scoutfs_net_listen_worker(struct work_struct *work)
 	struct scoutfs_net_connection *acc_conn;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
 	struct socket *acc_sock;
-	LIST_HEAD(conn_list);
 	int ret;
 
 	trace_scoutfs_net_listen_work_enter(sb, 0, 0);
