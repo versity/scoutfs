@@ -630,7 +630,6 @@ struct scoutfs_super_block {
 	__le64 total_data_blocks;
 	__le64 first_data_blkno;
 	__le64 last_data_blkno;
-	__le64 unmount_barrier;
 	struct scoutfs_quorum_config qconf;
 	struct scoutfs_alloc_root meta_alloc[2];
 	struct scoutfs_alloc_root data_alloc;
@@ -765,12 +764,6 @@ enum scoutfs_dentry_type {
  * the same serer after receiving a greeting response and to a new
  * server after failover.
  *
- * @unmount_barrier: Incremented every time the remaining majority of
- * quorum members all agree to leave.  The server tells a quorum member
- * the value that it's connecting under so that if the client sees the
- * value increase in the super block then it knows that the server has
- * processed its farewell and can safely unmount.
- *
  * @rid: The client's random id that was generated once as the mount
  * started up.  This identifies a specific remote mount across
  * connections and servers.  It's set to the client's rid in both the
@@ -780,7 +773,6 @@ struct scoutfs_net_greeting {
 	__le64 fsid;
 	__le64 version;
 	__le64 server_term;
-	__le64 unmount_barrier;
 	__le64 rid;
 	__le64 flags;
 };

@@ -1145,7 +1145,6 @@ static int server_greeting(struct super_block *sb,
 	struct scoutfs_net_greeting *gr = arg;
 	struct scoutfs_net_greeting greet;
 	DECLARE_SERVER_INFO(sb, server);
-	__le64 umb = 0;
 	bool reconnecting;
 	bool first_contact;
 	bool farewell;
@@ -1178,10 +1177,6 @@ static int server_greeting(struct super_block *sb,
 		if (ret < 0)
 			goto send_err;
 
-		spin_lock(&server->lock);
-		umb = super->unmount_barrier;
-		spin_unlock(&server->lock);
-
 		mutex_lock(&server->farewell_mutex);
 		ret = insert_mounted_client(sb, le64_to_cpu(gr->rid),
 					    le64_to_cpu(gr->flags));
@@ -1189,8 +1184,6 @@ static int server_greeting(struct super_block *sb,
 
 		ret = scoutfs_server_apply_commit(sb, ret);
 		queue_work(server->wq, &server->farewell_work);
-	} else {
-		umb = gr->unmount_barrier;
 	}
 
 send_err:
@@ -1199,7 +1192,6 @@ send_err:
 	greet.fsid = super->hdr.fsid;
 	greet.version = super->version;
 	greet.server_term = cpu_to_le64(server->term);
-	greet.unmount_barrier = umb;
 	greet.rid = gr->rid;
 	greet.flags = 0;
 
@@ -1255,16 +1247,15 @@ static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
 
 /*
  * This work processes farewell requests asynchronously.  Requests from
- * quorum members can be held until only the final quorum remains and
+ * quorum members can be held until only the final majority remains and
  * they've all sent farewell requests.
  *
- * When we remove the last mounted client record for the last quorum
- * member then we increase the unmount_barrier and write it to the super
- * block.  If members don't get their farewell response they'll see the
- * greater umount_barrier in the super and will know that their farewell
- * has been processed and that they can exit.
+ * A client can be disconnected before receiving our farewell response.
+ * Before reconnecting they check for their mounted client item, if it's
+ * been removed then they know that their farewell has been processed
+ * and that they finish unmounting without reconnecting.
  *
- * Responses for clients who aren't members are immediately sent.
+ * Responses for clients who aren't quorum members are immediately sent.
  * Clients that don't have a mounted client record have already had
  * their farewell processed by another server and can proceed.
  *
@@ -1293,7 +1284,6 @@ static void farewell_worker(struct work_struct *work)
 	struct scoutfs_key key;
 	LIST_HEAD(reqs);
 	LIST_HEAD(send);
-	bool deleted = false;
 	bool is_quorum;
 	bool more_reqs;
 	int ret;
@@ -1367,7 +1357,6 @@ static void farewell_worker(struct work_struct *work)
 		list_move_tail(&fw->entry, &send);
 		nr_mounted--;
 		nr_unmounting--;
-		deleted = true;
 	}
 
 	/* process and send farewell responses */
@@ -1376,24 +1365,12 @@ static void farewell_worker(struct work_struct *work)
 		if (ret)
 			goto out;
 
+		/* delete mounted client last, client reconnect looks for it */
 		ret = scoutfs_lock_server_farewell(sb, fw->rid) ?:
 		      remove_trans_seq(sb, fw->rid) ?:
 		      reclaim_log_trees(sb, fw->rid) ?:
-		      delete_mounted_client(sb, fw->rid) ?:
-		      cancel_srch_compact(sb, fw->rid);
-
-		ret = scoutfs_server_apply_commit(sb, ret);
-		if (ret)
-			goto out;
-	}
-
-	/* update the unmount barrier if we deleted all quorum members */
-	if (deleted && nr_mounted == 0) {
-		ret = scoutfs_server_hold_commit(sb);
-		if (ret)
-			goto out;
-
-		le64_add_cpu(&super->unmount_barrier, 1);
+		      cancel_srch_compact(sb, fw->rid) ?:
+		      delete_mounted_client(sb, fw->rid);
 
 		ret = scoutfs_server_apply_commit(sb, ret);
 		if (ret)

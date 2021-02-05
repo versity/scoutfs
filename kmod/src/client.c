@@ -289,8 +289,51 @@ static int client_greeting(struct super_block *sb,
 	scoutfs_net_client_greeting(sb, conn, new_server);
 
 	client->server_term = le64_to_cpu(gr->server_term);
-	client->greeting_umb = le64_to_cpu(gr->unmount_barrier);
 	ret = 0;
+out:
+	return ret;
+}
+
+/*
+ * The client is deciding if it needs to keep trying to reconnect to
+ * have its farewell request processed.  The server removes our mounted
+ * client item last so that if we don't see it we know the server has
+ * processed our farewell and we don't need to reconnect, we can unmount
+ * safely.
+ *
+ * This is peeking at btree blocks that the server could be actively
+ * freeing with cow updates so it can see stale blocks, we just return
+ * the error and we'll retry eventually as the connection times out.
+ */
+static int lookup_mounted_client_item(struct super_block *sb, u64 rid)
+{
+	struct scoutfs_key key = {
+		.sk_zone = SCOUTFS_MOUNTED_CLIENT_ZONE,
+		.skmc_rid = cpu_to_le64(rid),
+	};
+	struct scoutfs_super_block *super;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	int ret;
+
+	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
+	if (!super) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = scoutfs_read_super(sb, super);
+	if (ret)
+		goto out;
+
+	ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key, &iref);
+	if (ret == 0) {
+		scoutfs_btree_put_iref(&iref);
+		ret = 1;
+	}
+	if (ret == -ENOENT)
+		ret = 0;
+
+	kfree(super);
 out:
 	return ret;
 }
@@ -318,26 +361,16 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 						  connect_dwork.work);
 	struct super_block *sb = client->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = NULL;
+	struct scoutfs_super_block *super = &sbi->super;
 	struct mount_options *opts = &sbi->opts;
 	const bool am_quorum = opts->quorum_slot_nr >= 0;
 	struct scoutfs_net_greeting greet;
 	struct sockaddr_in sin;
 	int ret;
 
-	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
-	if (!super) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	ret = scoutfs_read_super(sb, super);
-	if (ret)
-		goto out;
-
-	/* can safely unmount if we see that server processed our farewell */
-	if (am_quorum && client->sending_farewell &&
-	    (le64_to_cpu(super->unmount_barrier) > client->greeting_umb)) {
+	/* can unmount once server farewell handling removes our item */
+	if (client->sending_farewell &&
+	    lookup_mounted_client_item(sb, sbi->rid) == 0) {
 		client->farewell_error = 0;
 		complete(&client->farewell_comp);
 		ret = 0;
@@ -357,7 +390,6 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	greet.fsid = super->hdr.fsid;
 	greet.version = super->version;
 	greet.server_term = cpu_to_le64(client->server_term);
-	greet.unmount_barrier = cpu_to_le64(client->greeting_umb);
 	greet.rid = cpu_to_le64(sbi->rid);
 	greet.flags = 0;
 	if (client->sending_farewell)
@@ -372,7 +404,6 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	if (ret)
 		scoutfs_net_shutdown(sb, client->conn);
 out:
-	kfree(super);
 
 	/* always have a small delay before retrying to avoid storms */
 	if (ret && !atomic_read(&client->shutting_down))
