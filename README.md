@@ -65,8 +65,13 @@ The steps for getting scoutfs mounted and operational are:
  2. Make a new filesystem on the devices with the userspace utilities
  3. Mount the devices on all the nodes
 
-In this example we run all of these commands on three nodes.  The names
-of the block devices are the same on all the nodes.
+In this example we use three nodes.  The names of the block devices are
+the same on all the nodes.  Two of the nodes will be quorum members.  A
+majority of quorum members must be mounted to elect a leader to run a
+server that all the mounts connect to.  It should be noted that two
+quorum members results in a majority of one, each member itself, so
+split brain elections are possible but so unlikely that it's fine for a
+demonstration.
 
 1. Get the Kernel Module and Userspace Binaries
 
@@ -88,24 +93,30 @@ of the block devices are the same on all the nodes.
    alias scoutfs=$PWD/scoutfs/utils/src/scoutfs
    ```
 
-2. Make a New Filesystem (**destroys contents, no questions asked**)
+2. Make a New Filesystem (**destroys contents**)
 
-   We specify that two of our three nodes must be present to form a
-   quorum for the system to function.
+   We specify quorum slots with the addresses of each of the quorum
+   member nodes, the metadata device, and the data device.
 
    ```shell
-   scoutfs mkfs -Q 2 /dev/meta_dev /dev/data_dev
+   scoutfs mkfs -Q 0,$NODE0_ADDR,12345 -Q 1,$NODE1_ADDR,12345 /dev/meta_dev /dev/data_dev
    ```
 
 3. Mount the Filesystem
 
-   Each mounting node provides its local IP address on which it will run
-   an internal server for the other mounts if it is elected the leader by
-   the quorum.
+   First, mount each of the quorum nodes so that they can elect and
+   start a server for the remaining node to connect to.  The slot numbers
+   were specified with the leading "0,..."  and "1,..." in the mkfs options
+   above.
 
    ```shell
-   mkdir /mnt/scoutfs
-   mount -t scoutfs -o server_addr=$NODE_ADDR,metadev_path=/dev/meta_dev /dev/data_dev /mnt/scoutfs
+   mount -t scoutfs -o quorum_slot_nr=$SLOT_NR,metadev_path=/dev/meta_dev /dev/data_dev /mnt/scoutfs
+   ```
+
+   Then mount the remaining node which can now connect to the running server.
+
+   ```shell
+   mount -t scoutfs -o metadev_path=/dev/meta_dev /dev/data_dev /mnt/scoutfs
    ```
 
 4. For Kicks, Observe the Metadata Change Index
