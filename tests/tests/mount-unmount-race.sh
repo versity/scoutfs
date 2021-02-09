@@ -61,6 +61,8 @@ while [ "$SECONDS" -lt "$END" ]; do
 			     "$cur_quorum" -gt "$majority_nr" ]; then
 				t_umount $i &
 				pid=$!
+				echo "umount $i pid $pid quo $cur_quorum" \
+					>> $T_TMP.log
 				pids="$pids $pid"
 				mounted[$i]=0
 				if [ "$i" -lt "$quorum_nr" ]; then
@@ -71,6 +73,7 @@ while [ "$SECONDS" -lt "$END" ]; do
 			t_mount $i &
 			pid=$!
 			pids="$pids $pid"
+			echo "mount $i pid $pid quo $cur_quorum" >> $T_TMP.log
 			mounted[$i]=1
 			if [ "$i" -lt "$quorum_nr" ]; then
 				(( cur_quorum++ ))
@@ -80,7 +83,12 @@ while [ "$SECONDS" -lt "$END" ]; do
 		
 	echo "waiting (secs $SECONDS)" >> $T_TMP.log
 	for p in $pids; do
-		t_quiet wait $p
+		wait $p
+		rc=$?
+		if [ "$rc" != 0 ]; then
+			echo "waiting for pid $p returned $rc"
+			t_fail "background mount/umount returned error"
+		fi
 	done
 	echo "done waiting (secs $SECONDS))" >> $T_TMP.log
 done
