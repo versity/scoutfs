@@ -129,7 +129,7 @@ t_umount()
 	test "$nr" -lt "$T_NR_MOUNTS" || \
 		t_fail "fs nr $nr invalid"
 
-	eval t_quiet umount \$T_DB$i
+	eval t_quiet umount \$T_M$i
 }
 
 #
