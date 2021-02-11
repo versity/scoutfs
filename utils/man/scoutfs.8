@@ -32,7 +32,7 @@ A path within a ScoutFS filesystem.
 .PD
 
 .TP
-.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-count} NUM [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-f|--force]"
+.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-slot} NR,ADDR,PORT [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-f|--force]"
 .sp
 Initialize a new ScoutFS filesystem on the target devices. Since ScoutFS uses
 separate block devices for its metadata and data storage, two are required.
@@ -57,18 +57,20 @@ a faster block device for the metadata device.
 The path to the block device to be used for ScoutFS file data.  If possible, use
 a larger block device for the data device.
 .TP
-.B "-Q, --quorum-count NUM"
-The number of mounts needed to reach quorum and elect one
-to be the server.  Mounts of the filesystem will hang until a quorum of
-mounts are operational.
-.sp
-Mounts with the
-.B server_addr
-mount option participate in quorum.  The safest quorum number is the
-smallest majority of an odd number of participating mounts.  For
-example,
-two out of three total mounts.  This ensures that there can only be one
-set of mounts that can establish quorum.
+.B "-Q, --quorum-slot NR,ADDR,PORT"
+Each \-Q option configures a quorum slot.  The NR specifies the number
+of the slot to configure which must be between 0 and 14.  Each slot
+number must only be used once, but they can be used in any order and
+they need not be consecutive.  This is to allow natural relationships
+between slot numbers and nodes which may have arbitrary numbering
+schemes.  ADDR and PORT are the numerical IPv4 address and port which
+will be used as the UDP endpoint for leader elections and as the TCP
+listening address for server connections.  The number of configured
+slots determines the size of the quorum of member mounts which must be
+present to start the server for the filesystem to operate.  A simple
+majority is typically required, while one mount is sufficient if only
+one or two slots are configured.  Until the majority quorum are present,
+all mounts will hang waiting for a server to connect to.
 .TP
 .B "-m, --max-meta-size SIZE"
 Limit the space used by ScoutFS on the metadata device to the
