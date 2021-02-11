@@ -114,4 +114,7 @@ static inline int memcmp_lens(const void *a, int a_len,
 int get_path(char *path, int flags);
 int read_block(int fd, u64 blkno, int shift, void **ret_val);
 
+#define __stringify_1(x) #x
+#define __stringify(x) __stringify_1(x)
+
 #endif
