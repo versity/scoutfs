@@ -1285,53 +1285,20 @@ static void farewell_worker(struct work_struct *work)
 	struct farewell_request *tmp;
 	struct farewell_request *fw;
 	SCOUTFS_BTREE_ITEM_REF(iref);
-	unsigned int nr_unmounting = 0;
-	unsigned int nr_mounted = 0;
+	unsigned int quo_reqs = 0;
+	unsigned int quo_mnts = 0;
+	unsigned int non_mnts = 0;
 	struct scoutfs_key key;
 	LIST_HEAD(reqs);
 	LIST_HEAD(send);
-	bool is_quorum;
 	bool more_reqs;
 	int ret;
 
-	/* grab all the requests that are waiting */
 	mutex_lock(&server->farewell_mutex);
 	list_splice_init(&server->farewell_requests, &reqs);
 	mutex_unlock(&server->farewell_mutex);
 
-	/* count how many reqs requests are from quorum members */
-	nr_unmounting = 0;
-	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
-		init_mounted_client_key(&key, fw->rid);
-		mutex_lock(&server->mounted_clients_mutex);
-		ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key,
-					   &iref);
-		mutex_unlock(&server->mounted_clients_mutex);
-		if (ret == 0 && invalid_mounted_client_item(&iref)) {
-			scoutfs_btree_put_iref(&iref);
-			ret = -EIO;
-		}
-		if (ret < 0) {
-			if (ret == -ENOENT) {
-				list_move_tail(&fw->entry, &send);
-				continue;
-			}
-			goto out;
-		}
-
-		mcv = iref.val;
-		is_quorum = (mcv->flags & SCOUTFS_MOUNTED_CLIENT_QUORUM) != 0;
-		scoutfs_btree_put_iref(&iref);
-
-		if (!is_quorum) {
-			list_move_tail(&fw->entry, &send);
-			continue;
-		}
-
-		nr_unmounting++;
-	}
-
-	/* see how many mounted clients are quorum members */
+	/* first count mounted clients who could send requests */
 	init_mounted_client_key(&key, 0);
 	for (;;) {
 		mutex_lock(&server->mounted_clients_mutex);
@@ -1352,21 +1319,61 @@ static void farewell_worker(struct work_struct *work)
 		mcv = iref.val;
 
 		if (mcv->flags & SCOUTFS_MOUNTED_CLIENT_QUORUM)
-			nr_mounted++;
+			quo_mnts++;
+		else
+			non_mnts++;
 
 		scoutfs_btree_put_iref(&iref);
 		scoutfs_key_inc(&key);
 	}
 
-	/* send as many responses as we can to maintain quorum */
-	while ((fw = list_first_entry_or_null(&reqs, struct farewell_request,
-					      entry)) &&
-	       (nr_mounted > scoutfs_quorum_votes_needed(sb) ||
-		nr_unmounting >= nr_mounted)) {
+	/* walk requests, checking their mounted client items */
+	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
+		init_mounted_client_key(&key, fw->rid);
+		mutex_lock(&server->mounted_clients_mutex);
+		ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key,
+					   &iref);
+		mutex_unlock(&server->mounted_clients_mutex);
+		if (ret == 0 && invalid_mounted_client_item(&iref)) {
+			scoutfs_btree_put_iref(&iref);
+			ret = -EIO;
+		}
+		if (ret < 0) {
+			/* missing items means we've already processed */
+			if (ret == -ENOENT) {
+				list_move(&fw->entry, &send);
+				continue;
+			}
+			goto out;
+		}
 
-		list_move_tail(&fw->entry, &send);
-		nr_mounted--;
-		nr_unmounting--;
+		mcv = iref.val;
+
+		/* count quo reqs, can always send to non-quo clients */
+		if (mcv->flags & SCOUTFS_MOUNTED_CLIENT_QUORUM) {
+			quo_reqs++;
+		} else {
+			list_move(&fw->entry, &send);
+			non_mnts--;
+		}
+
+		scoutfs_btree_put_iref(&iref);
+	}
+
+	/*
+	 * Only requests from quorum members remain and we've counted
+	 * them and remaining mounts.  Send responses as long as enough
+	 * quorum clients remain for a majority, or all the requests are
+	 * from the final majority of quorum clients they're the only
+	 * mounted clients.
+	 */
+	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
+		if ((quo_mnts > scoutfs_quorum_votes_needed(sb)) ||
+		    ((quo_reqs == quo_mnts) && (non_mnts == 0))) {
+			list_move_tail(&fw->entry, &send);
+			quo_mnts--;
+			quo_reqs--;
+		}
 	}
 
 	/* process and send farewell responses */
