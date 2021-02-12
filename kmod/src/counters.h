@@ -21,16 +21,20 @@
 	EXPAND_COUNTER(alloc_move)				\
 	EXPAND_COUNTER(alloc_moved_extent)			\
 	EXPAND_COUNTER(alloc_stale_cached_list_block)		\
-	EXPAND_COUNTER(block_cache_access)			\
+	EXPAND_COUNTER(block_cache_access_update)		\
 	EXPAND_COUNTER(block_cache_alloc_failure)		\
 	EXPAND_COUNTER(block_cache_alloc_page_order)		\
 	EXPAND_COUNTER(block_cache_alloc_virt)			\
 	EXPAND_COUNTER(block_cache_end_io_error)		\
 	EXPAND_COUNTER(block_cache_forget)			\
 	EXPAND_COUNTER(block_cache_free)			\
+	EXPAND_COUNTER(block_cache_free_work)			\
 	EXPAND_COUNTER(block_cache_invalidate)			\
-	EXPAND_COUNTER(block_cache_lru_move)			\
 	EXPAND_COUNTER(block_cache_shrink)			\
+	EXPAND_COUNTER(block_cache_shrink_next)			\
+	EXPAND_COUNTER(block_cache_shrink_recent)		\
+	EXPAND_COUNTER(block_cache_shrink_remove)		\
+	EXPAND_COUNTER(block_cache_shrink_restart)		\
 	EXPAND_COUNTER(btree_compact_values)			\
 	EXPAND_COUNTER(btree_compact_values_enomem)		\
 	EXPAND_COUNTER(btree_delete)				\
