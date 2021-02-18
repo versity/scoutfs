@@ -74,7 +74,7 @@ struct server_info {
 	unsigned long nr_clients;
 
 	/* track clients waiting in unmmount for farewell response */
-	struct mutex farewell_mutex;
+	spinlock_t farewell_lock;
 	struct list_head farewell_requests;
 	struct work_struct farewell_work;
 
@@ -1294,9 +1294,9 @@ static void farewell_worker(struct work_struct *work)
 	bool more_reqs;
 	int ret;
 
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	list_splice_init(&server->farewell_requests, &reqs);
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
 
 	/* first count mounted clients who could send requests */
 	init_mounted_client_key(&key, 0);
@@ -1409,11 +1409,11 @@ static void farewell_worker(struct work_struct *work)
 
 	ret = 0;
 out:
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	more_reqs = !list_empty(&server->farewell_requests);
 	list_splice_init(&reqs, &server->farewell_requests);
 	list_splice_init(&send, &server->farewell_requests);
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
 
 	if (ret < 0)
 		stop_server(server);
@@ -1426,15 +1426,17 @@ static void free_farewell_requests(struct super_block *sb, u64 rid)
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
 	struct farewell_request *tmp;
 	struct farewell_request *fw;
+	LIST_HEAD(rid_list);
 
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	list_for_each_entry_safe(fw, tmp, &server->farewell_requests, entry) {
-		if (rid == 0 || fw->rid == rid) {
-			list_del_init(&fw->entry);
-			kfree(fw);
-		}
+		if (rid == 0 || fw->rid == rid)
+			list_move_tail(&fw->entry, &rid_list);
 	}
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
+
+	list_for_each_entry_safe(fw, tmp, &rid_list, entry)
+		kfree(fw);
 }
 
 /*
@@ -1468,9 +1470,9 @@ static int server_farewell(struct super_block *sb,
 	fw->rid = rid;
 	fw->net_id = id;
 
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	list_add_tail(&fw->entry, &server->farewell_requests);
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
 
 	queue_farewell_work(server);
 
@@ -1707,7 +1709,7 @@ int scoutfs_server_setup(struct super_block *sb)
 	INIT_WORK(&server->commit_work, scoutfs_server_commit_func);
 	init_rwsem(&server->seq_rwsem);
 	INIT_LIST_HEAD(&server->clients);
-	mutex_init(&server->farewell_mutex);
+	spin_lock_init(&server->farewell_lock);
 	INIT_LIST_HEAD(&server->farewell_requests);
 	INIT_WORK(&server->farewell_work, farewell_worker);
 	mutex_init(&server->alloc_mutex);
