@@ -1611,7 +1611,7 @@ TRACE_EVENT(scoutfs_get_name,
 );
 
 TRACE_EVENT(scoutfs_btree_read_error,
-	TP_PROTO(struct super_block *sb, struct scoutfs_btree_ref *ref),
+	TP_PROTO(struct super_block *sb, struct scoutfs_block_ref *ref),
 
 	TP_ARGS(sb, ref),
 
@@ -1661,7 +1661,7 @@ TRACE_EVENT(scoutfs_btree_dirty_block,
 TRACE_EVENT(scoutfs_btree_walk,
 	TP_PROTO(struct super_block *sb, struct scoutfs_btree_root *root,
 		 struct scoutfs_key *key, int flags, int level,
-		 struct scoutfs_btree_ref *ref),
+		 struct scoutfs_block_ref *ref),
 
 	TP_ARGS(sb, root, key, flags, level, ref),
 
@@ -1989,8 +1989,8 @@ DEFINE_EVENT(scoutfs_forest_bloom_class, scoutfs_forest_bloom_search,
 );
 
 TRACE_EVENT(scoutfs_forest_prepare_commit,
-	TP_PROTO(struct super_block *sb, struct scoutfs_btree_ref *item_ref,
-		 struct scoutfs_btree_ref *bloom_ref),
+	TP_PROTO(struct super_block *sb, struct scoutfs_block_ref *item_ref,
+		 struct scoutfs_block_ref *bloom_ref),
 	TP_ARGS(sb, item_ref, bloom_ref),
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS

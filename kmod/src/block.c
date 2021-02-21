@@ -114,33 +114,13 @@ do {												\
 #define BLOCK_PRIVATE(_bl) \
 	container_of((_bl), struct block_private, bl)
 
-/*
- * These _block_header helpers are from a previous generation and may
- * be refactored away.
- */
-
-__le32 scoutfs_block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
+static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 {
 	int off = offsetof(struct scoutfs_block_header, crc) +
 		  FIELD_SIZEOF(struct scoutfs_block_header, crc);
 	u32 calc = crc32c(~0, (char *)hdr + off, size - off);
 
 	return cpu_to_le32(calc);
-}
-
-bool scoutfs_block_valid_crc(struct scoutfs_block_header *hdr, u32 size)
-{
-	return hdr->crc == scoutfs_block_calc_crc(hdr, size);
-}
-
-bool scoutfs_block_valid_ref(struct super_block *sb,
-			     struct scoutfs_block_header *hdr,
-			     __le64 seq, __le64 blkno)
-{
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-
-	return hdr->fsid == super->hdr.fsid && hdr->seq == seq &&
-	       hdr->blkno == blkno;
 }
 
 static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
@@ -625,7 +605,7 @@ static bool uptodate_or_error(struct block_private *bp)
 	       test_bit(BLOCK_BIT_ERROR, &bp->bits);
 }
 
-struct scoutfs_block *scoutfs_block_read(struct super_block *sb, u64 blkno)
+static struct block_private *block_read(struct super_block *sb, u64 blkno)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
 	struct block_private *bp = NULL;
@@ -654,45 +634,69 @@ out:
 		return ERR_PTR(ret);
 	}
 
-	return &bp->bl;
+	return bp;
 }
 
 /*
- * Drop a stale cached read block from the cache.  A future read will
- * re-read the block from the device.  This doesn't drop the caller's reference,
- * they still have to call _put.
+ * Btree blocks don't have rigid cache consistency.  We can be following
+ * block references into cached blocks that are now stale or can be
+ * following a stale root into blocks that have been overwritten.  If we
+ * hit a block that looks stale we first invalidate the cache and retry,
+ * returning -ESTALE if it still looks wrong.  The caller can retry the
+ * read from a more current root or decide that this is a persistent
+ * error.
  */
-void scoutfs_block_invalidate(struct super_block *sb, struct scoutfs_block *bl)
-{
-	struct block_private *bp = BLOCK_PRIVATE(bl);
-
-	if (!WARN_ON_ONCE(test_bit(BLOCK_BIT_DIRTY, &bp->bits))) {
-		scoutfs_inc_counter(sb, block_cache_invalidate);
-		block_remove(sb, bp);
-		TRACE_BLOCK(invalidate, bp);
-	}
-}
-
-/* This is only used for large metadata blocks */
-bool scoutfs_block_consistent_ref(struct super_block *sb,
-				  struct scoutfs_block *bl,
-				  __le64 seq, __le64 blkno, u32 magic)
+int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
+			   struct scoutfs_block **bl_ret)
 {
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct block_private *bp = BLOCK_PRIVATE(bl);
-	struct scoutfs_block_header *hdr = bl->data;
+	struct scoutfs_block_header *hdr;
+	struct block_private *bp = NULL;
+	bool retried = false;
+	int ret;
 
+retry:
+	bp = block_read(sb, le64_to_cpu(ref->blkno));
+	if (IS_ERR(bp)) {
+		ret = PTR_ERR(bp);
+		goto out;
+	}
+	hdr = bp->bl.data;
+
+	/* corrupted writes might be a sign of a stale reference */
 	if (!test_bit(BLOCK_BIT_CRC_VALID, &bp->bits)) {
-		if (hdr->crc !=
-		    scoutfs_block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE))
-			return false;
+		if (hdr->crc != block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE)) {
+			ret = -ESTALE;
+			goto out;
+		}
+
 		set_bit(BLOCK_BIT_CRC_VALID, &bp->bits);
 	}
 
-	return hdr->magic == cpu_to_le32(magic) &&
-	       hdr->fsid == super->hdr.fsid &&
-	       hdr->seq == seq &&
-	       hdr->blkno == blkno;
+	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != super->hdr.fsid ||
+	    hdr->seq != ref->seq || hdr->blkno != ref->blkno) {
+		ret = -ESTALE;
+		goto out;
+	}
+
+	ret = 0;
+out:
+	if (ret == -ESTALE && !retried) {
+		retried = true;
+		scoutfs_inc_counter(sb, block_cache_remove_stale);
+		block_remove(sb, bp);
+		block_put(sb, bp);
+		bp = NULL;
+		goto retry;
+	}
+
+	if (ret < 0) {
+		block_put(sb, bp);
+		bp = NULL;
+	}
+
+	*bl_ret = bp ? &bp->bl : NULL;
+	return ret;
 }
 
 void scoutfs_block_put(struct super_block *sb, struct scoutfs_block *bl)
@@ -762,7 +766,7 @@ int scoutfs_block_writer_write(struct super_block *sb,
 	/* checksum everything to reduce time between io submission merging */
 	list_for_each_entry(bp, &wri->dirty_list, dirty_entry) {
 		hdr = bp->bl.data;
-		hdr->crc = scoutfs_block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE);
+		hdr->crc = block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE);
 	}
 
         blk_start_plug(&plug);
@@ -1013,8 +1017,7 @@ static int sm_block_io(struct block_device *bdev, int rw, u64 blkno,
 		if (len < SCOUTFS_BLOCK_SM_SIZE)
 			memset((char *)pg_hdr + len, 0,
 			       SCOUTFS_BLOCK_SM_SIZE - len);
-		pg_hdr->crc = scoutfs_block_calc_crc(pg_hdr,
-						     SCOUTFS_BLOCK_SM_SIZE);
+		pg_hdr->crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
 
 	bio = bio_alloc(GFP_NOFS, 1);
@@ -1039,8 +1042,7 @@ static int sm_block_io(struct block_device *bdev, int rw, u64 blkno,
 
 	if (ret == 0 && !(rw & WRITE)) {
 		memcpy(hdr, pg_hdr, len);
-		*blk_crc = scoutfs_block_calc_crc(pg_hdr,
-						  SCOUTFS_BLOCK_SM_SIZE);
+		*blk_crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
 out:
 	__free_page(page);

@@ -66,8 +66,8 @@ struct forest_info {
 	struct forest_info *name = SCOUTFS_SB(sb)->forest_info
 
 struct forest_refs {
-	struct scoutfs_btree_ref fs_ref;
-	struct scoutfs_btree_ref logs_ref;
+	struct scoutfs_block_ref fs_ref;
+	struct scoutfs_block_ref logs_ref;
 };
 
 /* initialize some refs that initially aren't equal */
@@ -96,20 +96,16 @@ static void calc_bloom_nrs(struct forest_bloom_nrs *bloom,
 	}
 }
 
-static struct scoutfs_block *read_bloom_ref(struct super_block *sb,
-					    struct scoutfs_btree_ref *ref)
+static struct scoutfs_block *read_bloom_ref(struct super_block *sb, struct scoutfs_block_ref *ref)
 {
 	struct scoutfs_block *bl;
+	int ret;
 
-	bl = scoutfs_block_read(sb, le64_to_cpu(ref->blkno));
-	if (IS_ERR(bl))
-		return bl;
-
-	if (!scoutfs_block_consistent_ref(sb, bl, ref->seq, ref->blkno,
-					  SCOUTFS_BLOCK_MAGIC_BLOOM)) {
-		scoutfs_block_invalidate(sb, bl);
-		scoutfs_block_put(sb, bl);
-		return ERR_PTR(-ESTALE);
+	ret = scoutfs_block_read_ref(sb, ref, SCOUTFS_BLOCK_MAGIC_BLOOM, &bl);
+	if (ret < 0) {
+		if (ret == -ESTALE)
+			scoutfs_inc_counter(sb, forest_bloom_stale);
+		bl = ERR_PTR(ret);
 	}
 
 	return bl;
@@ -386,7 +382,7 @@ int scoutfs_forest_set_bloom_bits(struct super_block *sb,
 	struct scoutfs_block *new_bl = NULL;
 	struct scoutfs_block *bl = NULL;
 	struct scoutfs_bloom_block *bb;
-	struct scoutfs_btree_ref *ref;
+	struct scoutfs_block_ref *ref;
 	struct forest_bloom_nrs bloom;
 	int nr_set = 0;
 	u64 blkno;

@@ -619,18 +619,13 @@ static void move_items(struct scoutfs_btree_block *dst,
  * This is used to lookup cached blocks, read blocks, cow blocks for
  * dirtying, and allocate new blocks.
  *
- * Btree blocks don't have rigid cache consistency.  We can be following
- * block references into cached blocks that are now stale or can be
- * following a stale root into blocks that have been overwritten.  If we
- * hit a block that looks stale we first invalidate the cache and retry,
- * returning -ESTALE if it still looks wrong.  The caller can retry the
- * read from a more current root or decide that this is a persistent
- * error.
+ * If we read a stale block we return stale so the caller can retry with
+ * a newer root or return an error.
  */
 static int get_ref_block(struct super_block *sb,
 			 struct scoutfs_alloc *alloc,
 			 struct scoutfs_block_writer *wri, int flags,
-			 struct scoutfs_btree_ref *ref,
+			 struct scoutfs_block_ref *ref,
 			 struct scoutfs_block **bl_ret)
 {
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
@@ -638,40 +633,16 @@ static int get_ref_block(struct super_block *sb,
 	struct scoutfs_btree_block *new;
 	struct scoutfs_block *new_bl = NULL;
 	struct scoutfs_block *bl = NULL;
-	bool retried = false;
 	u64 blkno;
 	u64 seq;
 	int ret;
 
 	/* always get the current block, either to return or cow from */
 	if (ref && ref->blkno) {
-retry:
-
-		bl = scoutfs_block_read(sb, le64_to_cpu(ref->blkno));
-		if (IS_ERR(bl)) {
-			trace_scoutfs_btree_read_error(sb, ref);
-			scoutfs_inc_counter(sb, btree_read_error);
-			ret = PTR_ERR(bl);
-			goto out;
-		}
-		bt = (void *)bl->data;
-
-		if (!scoutfs_block_consistent_ref(sb, bl, ref->seq, ref->blkno,
-						  SCOUTFS_BLOCK_MAGIC_BTREE) ||
-		    scoutfs_trigger(sb, BTREE_STALE_READ)) {
-
-			scoutfs_inc_counter(sb, btree_stale_read);
-
-			scoutfs_block_invalidate(sb, bl);
-			scoutfs_block_put(sb, bl);
-			bl = NULL;
-
-			if (!retried) {
-				retried = true;
-				goto retry;
-			}
-
-			ret = -ESTALE;
+		ret = scoutfs_block_read_ref(sb, ref, SCOUTFS_BLOCK_MAGIC_BTREE, &bl);
+		if (ret < 0) {
+			if (ret == -ESTALE)
+				scoutfs_inc_counter(sb, btree_stale_read);
 			goto out;
 		}
 
@@ -766,7 +737,7 @@ static void create_parent_item(struct scoutfs_btree_block *parent,
 {
 	struct scoutfs_avl_node *par;
 	int cmp;
-	struct scoutfs_btree_ref ref = {
+	struct scoutfs_block_ref ref = {
 		.blkno = child->hdr.blkno,
 		.seq = child->hdr.seq,
 	};
@@ -784,7 +755,7 @@ static void update_parent_item(struct scoutfs_btree_block *parent,
 			       struct scoutfs_btree_item *par_item,
 			       struct scoutfs_btree_block *child)
 {
-	struct scoutfs_btree_ref *ref = item_val(parent, par_item);
+	struct scoutfs_block_ref *ref = item_val(parent, par_item);
 
 	par_item->key = *item_key(last_item(child));
 	ref->blkno = child->hdr.blkno;
@@ -837,7 +808,7 @@ static int try_split(struct super_block *sb,
 
 	/* parents need to leave room for child references */
 	if (right->level)
-		val_len = sizeof(struct scoutfs_btree_ref);
+		val_len = sizeof(struct scoutfs_block_ref);
 
 	/* don't need to split if there's enough space for the item */
 	if (mid_free_item_room(right, val_len))
@@ -905,7 +876,7 @@ static int try_join(struct super_block *sb,
 	struct scoutfs_btree_item *sib_par_item;
 	struct scoutfs_btree_block *sib;
 	struct scoutfs_block *sib_bl;
-	struct scoutfs_btree_ref *ref;
+	struct scoutfs_block_ref *ref;
 	unsigned int sib_tot;
 	bool move_right;
 	int to_move;
@@ -1194,7 +1165,7 @@ static int btree_walk(struct super_block *sb,
 	struct scoutfs_btree_item *prev;
 	struct scoutfs_avl_node *next_node;
 	struct scoutfs_avl_node *node;
-	struct scoutfs_btree_ref *ref;
+	struct scoutfs_block_ref *ref;
 	unsigned int level;
 	unsigned int nr;
 	int ret;

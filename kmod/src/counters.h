@@ -20,7 +20,7 @@
 	EXPAND_COUNTER(alloc_list_freed_hi)			\
 	EXPAND_COUNTER(alloc_move)				\
 	EXPAND_COUNTER(alloc_moved_extent)			\
-	EXPAND_COUNTER(alloc_stale_cached_list_block)		\
+	EXPAND_COUNTER(alloc_stale_list_block)			\
 	EXPAND_COUNTER(block_cache_access_update)		\
 	EXPAND_COUNTER(block_cache_alloc_failure)		\
 	EXPAND_COUNTER(block_cache_alloc_page_order)		\
@@ -29,7 +29,7 @@
 	EXPAND_COUNTER(block_cache_forget)			\
 	EXPAND_COUNTER(block_cache_free)			\
 	EXPAND_COUNTER(block_cache_free_work)			\
-	EXPAND_COUNTER(block_cache_invalidate)			\
+	EXPAND_COUNTER(block_cache_remove_stale)		\
 	EXPAND_COUNTER(block_cache_shrink)			\
 	EXPAND_COUNTER(block_cache_shrink_next)			\
 	EXPAND_COUNTER(block_cache_shrink_recent)		\
@@ -46,7 +46,6 @@
 	EXPAND_COUNTER(btree_lookup)				\
 	EXPAND_COUNTER(btree_next)				\
 	EXPAND_COUNTER(btree_prev)				\
-	EXPAND_COUNTER(btree_read_error)			\
 	EXPAND_COUNTER(btree_split)				\
 	EXPAND_COUNTER(btree_stale_read)			\
 	EXPAND_COUNTER(btree_update)				\
@@ -77,6 +76,7 @@
 	EXPAND_COUNTER(ext_op_remove)				\
 	EXPAND_COUNTER(forest_bloom_fail)			\
 	EXPAND_COUNTER(forest_bloom_pass)			\
+	EXPAND_COUNTER(forest_bloom_stale)			\
 	EXPAND_COUNTER(forest_read_items)			\
 	EXPAND_COUNTER(forest_roots_next_hint)			\
 	EXPAND_COUNTER(forest_set_bloom_bits)			\
@@ -167,7 +167,6 @@
 	EXPAND_COUNTER(srch_compact_flush)			\
 	EXPAND_COUNTER(srch_compact_log_page)			\
 	EXPAND_COUNTER(srch_compact_removed_entry)		\
-	EXPAND_COUNTER(srch_inconsistent_ref)			\
 	EXPAND_COUNTER(srch_rotate_log)				\
 	EXPAND_COUNTER(srch_search_log)				\
 	EXPAND_COUNTER(srch_search_log_block)			\

@@ -358,31 +358,24 @@ static void list_block_sort(struct scoutfs_alloc_list_block *lblk)
 
 /*
  * We're always reading blocks that we own, so we shouldn't see stale
- * references.  But the cached block can be stale and we can need to
- * invalidate it.
+ * references but we could retry reads after dropping stale cached
+ * blocks.  If we do see a stale error then we've hit persistent
+ * corruption.
  */
-static int read_list_block(struct super_block *sb,
-			   struct scoutfs_alloc_list_ref *ref,
+static int read_list_block(struct super_block *sb, struct scoutfs_block_ref *ref,
 			   struct scoutfs_block **bl_ret)
 {
-	struct scoutfs_block *bl = NULL;
+	int ret;
 
-	bl = scoutfs_block_read(sb, le64_to_cpu(ref->blkno));
-	if (!IS_ERR_OR_NULL(bl) &&
-	    !scoutfs_block_consistent_ref(sb, bl, ref->seq, ref->blkno,
-					  SCOUTFS_BLOCK_MAGIC_ALLOC_LIST)) {
-		scoutfs_inc_counter(sb, alloc_stale_cached_list_block);
-		scoutfs_block_invalidate(sb, bl);
-		scoutfs_block_put(sb, bl);
-		bl = scoutfs_block_read(sb, le64_to_cpu(ref->blkno));
-	}
-	if (IS_ERR(bl)) {
-		*bl_ret = NULL;
-		return PTR_ERR(bl);
-	}
+	ret = scoutfs_block_read_ref(sb, ref, SCOUTFS_BLOCK_MAGIC_ALLOC_LIST, bl_ret);
+	if (ret < 0) {
+		if (ret == -ESTALE) {
+			scoutfs_inc_counter(sb, alloc_stale_list_block);
+			ret = -EIO;
+		}
+	};
 
-	*bl_ret = bl;
-	return 0;
+	return ret;
 }
 
 /*
@@ -396,7 +389,7 @@ static int read_list_block(struct super_block *sb,
 static int dirty_list_block(struct super_block *sb,
 			    struct scoutfs_alloc *alloc,
 			    struct scoutfs_block_writer *wri,
-			    struct scoutfs_alloc_list_ref *ref,
+			    struct scoutfs_block_ref *ref,
 			    u64 dirty, u64 *old,
 			    struct scoutfs_block **bl_ret)
 {
@@ -497,7 +490,7 @@ static int dirty_alloc_blocks(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,
 			      struct scoutfs_block_writer *wri)
 {
-	struct scoutfs_alloc_list_ref orig_freed;
+	struct scoutfs_block_ref orig_freed;
 	struct scoutfs_alloc_list_block *lblk;
 	struct scoutfs_block *av_bl = NULL;
 	struct scoutfs_block *fr_bl = NULL;
@@ -1106,7 +1099,7 @@ int scoutfs_alloc_splice_list(struct super_block *sb,
 			      struct scoutfs_alloc_list_head *src)
 {
 	struct scoutfs_alloc_list_block *lblk;
-	struct scoutfs_alloc_list_ref *ref;
+	struct scoutfs_block_ref *ref;
 	struct scoutfs_block *prev = NULL;
 	struct scoutfs_block *bl = NULL;
 	int ret = 0;
@@ -1169,8 +1162,8 @@ bool scoutfs_alloc_meta_low(struct super_block *sb,
 int scoutfs_alloc_foreach(struct super_block *sb,
 			  scoutfs_alloc_foreach_cb_t cb, void *arg)
 {
-	struct scoutfs_btree_ref stale_refs[2] = {{0,}};
-	struct scoutfs_btree_ref refs[2] = {{0,}};
+	struct scoutfs_block_ref stale_refs[2] = {{0,}};
+	struct scoutfs_block_ref refs[2] = {{0,}};
 	struct scoutfs_super_block *super = NULL;
 	struct scoutfs_srch_compact *sc;
 	struct scoutfs_log_trees lt;

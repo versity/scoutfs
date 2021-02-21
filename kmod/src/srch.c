@@ -284,39 +284,15 @@ static void init_file_block(struct super_block *sb, struct scoutfs_block *bl,
  */
 static int read_srch_block(struct super_block *sb,
 			   struct scoutfs_block_writer *wri, int level,
-			   struct scoutfs_srch_ref *ref,
+			   struct scoutfs_block_ref *ref,
 			   struct scoutfs_block **bl_ret)
 {
-	struct scoutfs_block *bl;
-	int retries = 0;
-	int ret = 0;
-	int mag;
+	u32 magic = level ? SCOUTFS_BLOCK_MAGIC_SRCH_PARENT : SCOUTFS_BLOCK_MAGIC_SRCH_BLOCK;
+	int ret;
 
-	mag = level ? SCOUTFS_BLOCK_MAGIC_SRCH_PARENT :
-		      SCOUTFS_BLOCK_MAGIC_SRCH_BLOCK;
-retry:
-	bl = scoutfs_block_read(sb, le64_to_cpu(ref->blkno));
-	if (!IS_ERR_OR_NULL(bl) &&
-	    !scoutfs_block_consistent_ref(sb, bl, ref->seq, ref->blkno, mag)) {
-
-		scoutfs_inc_counter(sb, srch_inconsistent_ref);
-		scoutfs_block_writer_forget(sb, wri, bl);
-		scoutfs_block_invalidate(sb, bl);
-		scoutfs_block_put(sb, bl);
-		bl = NULL;
-
-		if (retries++ == 0)
-			goto retry;
-
-		bl = ERR_PTR(-ESTALE);
+	ret = scoutfs_block_read_ref(sb, ref, magic, bl_ret);
+	if (ret == -ESTALE)
 		scoutfs_inc_counter(sb, srch_read_stale);
-	}
-	if (IS_ERR(bl)) {
-		ret = PTR_ERR(bl);
-		bl = NULL;
-	}
-
-	*bl_ret = bl;
 	return ret;
 }
 
@@ -333,7 +309,7 @@ static int read_path_block(struct super_block *sb,
 {
 	struct scoutfs_block *bl = NULL;
 	struct scoutfs_srch_parent *srp;
-	struct scoutfs_srch_ref ref;
+	struct scoutfs_block_ref ref;
 	int level;
 	int ind;
 	int ret;
@@ -393,7 +369,7 @@ static int get_file_block(struct super_block *sb,
 	struct scoutfs_block *bl = NULL;
 	struct scoutfs_srch_parent *srp;
 	struct scoutfs_block *new_bl;
-	struct scoutfs_srch_ref *ref;
+	struct scoutfs_block_ref *ref;
 	u64 blkno = 0;
 	int level;
 	int ind;
