@@ -255,24 +255,9 @@ static u8 height_for_blk(u64 blk)
 	return hei;
 }
 
-static void init_file_block(struct super_block *sb, struct scoutfs_block *bl,
-			    int level)
+static inline u32 srch_level_magic(int level)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct scoutfs_block_header *hdr;
-
-	/* don't leak uninit kernel mem.. block should do this for us? */
-	memset(bl->data, 0, SCOUTFS_BLOCK_LG_SIZE);
-
-	hdr = bl->data;
-	hdr->fsid = super->hdr.fsid;
-	hdr->blkno = cpu_to_le64(bl->blkno);
-	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
-
-	if (level)
-		hdr->magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_SRCH_PARENT);
-	else
-		hdr->magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_SRCH_BLOCK);
+	return level ? SCOUTFS_BLOCK_MAGIC_SRCH_PARENT : SCOUTFS_BLOCK_MAGIC_SRCH_BLOCK;
 }
 
 /*
@@ -287,7 +272,7 @@ static int read_srch_block(struct super_block *sb,
 			   struct scoutfs_block_ref *ref,
 			   struct scoutfs_block **bl_ret)
 {
-	u32 magic = level ? SCOUTFS_BLOCK_MAGIC_SRCH_PARENT : SCOUTFS_BLOCK_MAGIC_SRCH_BLOCK;
+	u32 magic = srch_level_magic(level);
 	int ret;
 
 	ret = scoutfs_block_read_ref(sb, ref, magic, bl_ret);
@@ -368,12 +353,10 @@ static int get_file_block(struct super_block *sb,
 	struct scoutfs_block_header *hdr;
 	struct scoutfs_block *bl = NULL;
 	struct scoutfs_srch_parent *srp;
-	struct scoutfs_block *new_bl;
+	struct scoutfs_block_ref new_root_ref;
 	struct scoutfs_block_ref *ref;
-	u64 blkno = 0;
 	int level;
 	int ind;
-	int err;
 	int ret;
 	u8 hei;
 
@@ -385,29 +368,21 @@ static int get_file_block(struct super_block *sb,
 			goto out;
 		}
 
-		ret = scoutfs_alloc_meta(sb, alloc, wri, &blkno);
+		memset(&new_root_ref, 0, sizeof(new_root_ref));
+		level = sfl->height;
+
+		ret = scoutfs_block_dirty_ref(sb, alloc, wri, &new_root_ref,
+					      srch_level_magic(level), &bl, 0, NULL);
 		if (ret < 0)
 			goto out;
 
-		bl = scoutfs_block_create(sb, blkno);
-		if (IS_ERR(bl)) {
-			ret = PTR_ERR(bl);
-			goto out;
-		}
-		blkno = 0;
-
-		scoutfs_block_writer_mark_dirty(sb, wri, bl);
-
-		init_file_block(sb, bl, sfl->height);
-		if (sfl->height) {
+		if (level) {
 			srp = bl->data;
-			srp->refs[0].blkno = sfl->ref.blkno;
-			srp->refs[0].seq = sfl->ref.seq;
+			srp->refs[0] = sfl->ref;
 		}
 
 		hdr = bl->data;
-		sfl->ref.blkno = hdr->blkno;
-		sfl->ref.seq = hdr->seq;
+		sfl->ref = new_root_ref;
 		sfl->height++;
 		scoutfs_block_put(sb, bl);
 		bl = NULL;
@@ -423,54 +398,13 @@ static int get_file_block(struct super_block *sb,
 			goto out;
 		}
 
-		/* read an existing block */
-		if (ref->blkno) {
-			ret = read_srch_block(sb, wri, level, ref, &bl);
-			if (ret < 0)
-				goto out;
-		}
-
-		/* allocate a new block if we need it */
-		if (!ref->blkno || ((flags & GFB_DIRTY) &&
-				    !scoutfs_block_writer_is_dirty(sb, bl))) {
-			ret = scoutfs_alloc_meta(sb, alloc, wri, &blkno);
-			if (ret < 0)
-				goto out;
-
-			new_bl = scoutfs_block_create(sb, blkno);
-			if (IS_ERR(new_bl)) {
-				ret = PTR_ERR(new_bl);
-				goto out;
-			}
-
-			if (bl) {
-				/* cow old block if we have one */
-				ret = scoutfs_free_meta(sb, alloc, wri,
-							bl->blkno);
-				if (ret)
-					goto out;
-
-				memcpy(new_bl->data, bl->data,
-				       SCOUTFS_BLOCK_LG_SIZE);
-				scoutfs_block_put(sb, bl);
-				bl = new_bl;
-				hdr = bl->data;
-				hdr->blkno = cpu_to_le64(bl->blkno);
-				prandom_bytes(&hdr->seq, sizeof(hdr->seq));
-			} else {
-				/* init new allocated block */
-				bl = new_bl;
-				init_file_block(sb, bl, level);
-			}
-
-			blkno = 0;
-			scoutfs_block_writer_mark_dirty(sb, wri, bl);
-
-			/* update file or parent block ref */
-			hdr = bl->data;
-			ref->blkno = hdr->blkno;
-			ref->seq = hdr->seq;
-		}
+		if (flags & GFB_DIRTY)
+			ret = scoutfs_block_dirty_ref(sb, alloc, wri, ref, srch_level_magic(level),
+						      &bl, 0, NULL);
+		else
+			ret = scoutfs_block_read_ref(sb, ref, srch_level_magic(level), &bl);
+		if (ret < 0)
+			goto out;
 
 		if (level == 0) {
 			ret = 0;
@@ -489,12 +423,6 @@ static int get_file_block(struct super_block *sb,
 
 out:
 	scoutfs_block_put(sb, parent);
-
-	/* return allocated blkno on error */
-	if (blkno > 0) {
-		err = scoutfs_free_meta(sb, alloc, wri, blkno);
-		BUG_ON(err); /* radix should have been dirty */
-	}
 
 	if (ret < 0) {
 		scoutfs_block_put(sb, bl);

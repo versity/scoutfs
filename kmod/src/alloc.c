@@ -393,82 +393,8 @@ static int dirty_list_block(struct super_block *sb,
 			    u64 dirty, u64 *old,
 			    struct scoutfs_block **bl_ret)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct scoutfs_block *cow_bl = NULL;
-	struct scoutfs_block *bl = NULL;
-	struct scoutfs_alloc_list_block *lblk;
-	bool undo_alloc = false;
-	u64 blkno;
-	int ret;
-	int err;
-
-	blkno = le64_to_cpu(ref->blkno);
-	if (blkno) {
-		ret = read_list_block(sb, ref, &bl);
-		if (ret < 0)
-			goto out;
-
-		if (scoutfs_block_writer_is_dirty(sb, bl)) {
-			ret = 0;
-			goto out;
-		}
-	}
-
-	if (dirty == 0) {
-		ret = scoutfs_alloc_meta(sb, alloc, wri, &dirty);
-		if (ret < 0)
-			goto out;
-		undo_alloc = true;
-	}
-
-	cow_bl = scoutfs_block_create(sb, dirty);
-	if (IS_ERR(cow_bl)) {
-		ret = PTR_ERR(cow_bl);
-		goto out;
-	}
-
-	if (old) {
-		*old = blkno;
-	} else if (blkno) {
-		ret = scoutfs_free_meta(sb, alloc, wri, blkno);
-		if (ret < 0)
-			goto out;
-	}
-
-	if (bl)
-		memcpy(cow_bl->data, bl->data, SCOUTFS_BLOCK_LG_SIZE);
-	else
-		memset(cow_bl->data, 0, SCOUTFS_BLOCK_LG_SIZE);
-	scoutfs_block_put(sb, bl);
-	bl = cow_bl;
-	cow_bl = NULL;
-
-	lblk = bl->data;
-	lblk->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_ALLOC_LIST);
-	lblk->hdr.fsid = super->hdr.fsid;
-	lblk->hdr.blkno = cpu_to_le64(bl->blkno);
-	prandom_bytes(&lblk->hdr.seq, sizeof(lblk->hdr.seq));
-
-	ref->blkno = lblk->hdr.blkno;
-	ref->seq = lblk->hdr.seq;
-
-	scoutfs_block_writer_mark_dirty(sb, wri, bl);
-	ret = 0;
-
-out:
-	scoutfs_block_put(sb, cow_bl);
-	if (ret < 0 && undo_alloc) {
-		err = scoutfs_free_meta(sb, alloc, wri, dirty);
-		BUG_ON(err); /* inconsistent */
-	}
-
-	if (ret < 0) {
-		scoutfs_block_put(sb, bl);
-		bl = NULL;
-	}
-	*bl_ret = bl;
-
-	return ret;
+	return scoutfs_block_dirty_ref(sb, alloc, wri, ref, SCOUTFS_BLOCK_MAGIC_ALLOC_LIST,
+				       bl_ret, dirty, old);
 }
 
 /* Allocate a new dirty list block if we fill up more than 3/4 of the block. */

@@ -20,11 +20,10 @@ void scoutfs_block_put(struct super_block *sb, struct scoutfs_block *bl);
 
 void scoutfs_block_writer_init(struct super_block *sb,
 			       struct scoutfs_block_writer *wri);
-void scoutfs_block_writer_mark_dirty(struct super_block *sb,
-				     struct scoutfs_block_writer *wri,
-				     struct scoutfs_block *bl);
-bool scoutfs_block_writer_is_dirty(struct super_block *sb,
-				   struct scoutfs_block *bl);
+int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri, struct scoutfs_block_ref *ref,
+			    u32 magic, struct scoutfs_block **bl_ret,
+			    u64 dirty_blkno, u64 *ref_blkno);
 int scoutfs_block_writer_write(struct super_block *sb,
 			       struct scoutfs_block_writer *wri);
 void scoutfs_block_writer_forget_all(struct super_block *sb,

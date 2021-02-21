@@ -377,18 +377,14 @@ out:
 int scoutfs_forest_set_bloom_bits(struct super_block *sb,
 				  struct scoutfs_lock *lock)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	DECLARE_FOREST_INFO(sb, finf);
-	struct scoutfs_block *new_bl = NULL;
 	struct scoutfs_block *bl = NULL;
 	struct scoutfs_bloom_block *bb;
 	struct scoutfs_block_ref *ref;
 	struct forest_bloom_nrs bloom;
 	int nr_set = 0;
-	u64 blkno;
 	u64 nr;
 	int ret;
-	int err;
 	int i;
 
 	nr = le64_to_cpu(finf->our_log.nr);
@@ -406,53 +402,11 @@ int scoutfs_forest_set_bloom_bits(struct super_block *sb,
 
 	ref = &finf->our_log.bloom_ref;
 
-	if (ref->blkno) {
-		bl = read_bloom_ref(sb, ref);
-		if (IS_ERR(bl)) {
-			ret = PTR_ERR(bl);
-			goto unlock;
-		}
-		bb = bl->data;
-	}
-
-	if (!ref->blkno || !scoutfs_block_writer_is_dirty(sb, bl)) {
-
-		ret = scoutfs_alloc_meta(sb, finf->alloc, finf->wri, &blkno);
-		if (ret < 0)
-			goto unlock;
-
-		new_bl = scoutfs_block_create(sb, blkno);
-		if (IS_ERR(new_bl)) {
-			err = scoutfs_free_meta(sb, finf->alloc, finf->wri,
-						blkno);
-			BUG_ON(err); /* could have dirtied */
-			ret = PTR_ERR(new_bl);
-			goto unlock;
-		}
-
-		if (bl) {
-			err = scoutfs_free_meta(sb, finf->alloc, finf->wri,
-						le64_to_cpu(ref->blkno));
-			BUG_ON(err); /* could have dirtied */
-			memcpy(new_bl->data, bl->data, SCOUTFS_BLOCK_LG_SIZE);
-		} else {
-			memset(new_bl->data, 0, SCOUTFS_BLOCK_LG_SIZE);
-		}
-
-		scoutfs_block_writer_mark_dirty(sb, finf->wri, new_bl);
-
-		scoutfs_block_put(sb, bl);
-		bl = new_bl;
-		bb = bl->data;
-		new_bl = NULL;
-
-		bb->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BLOOM);
-		bb->hdr.fsid = super->hdr.fsid;
-		bb->hdr.blkno = cpu_to_le64(blkno);
-		prandom_bytes(&bb->hdr.seq, sizeof(bb->hdr.seq));
-		ref->blkno = bb->hdr.blkno;
-		ref->seq = bb->hdr.seq;
-	}
+	ret = scoutfs_block_dirty_ref(sb, finf->alloc, finf->wri, ref, SCOUTFS_BLOCK_MAGIC_BLOOM,
+				      &bl, 0, NULL);
+	if (ret < 0)
+		goto unlock;
+	bb = bl->data;
 
 	for (i = 0; i < ARRAY_SIZE(bloom.nrs); i++) {
 		if (!test_and_set_bit_le(bloom.nrs[i], bb->bits)) {

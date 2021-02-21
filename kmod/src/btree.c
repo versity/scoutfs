@@ -80,7 +80,7 @@ enum btree_walk_flags {
 	 BTW_NEXT	= (1 <<  0), /* return >= key */
 	 BTW_PREV	= (1 <<  1), /* return <= key */
 	 BTW_DIRTY	= (1 <<  2), /* cow stable blocks */
-	 BTW_ALLOC	= (1 <<  3), /* allocate a new block for 0 ref */
+	 BTW_ALLOC	= (1 <<  3), /* allocate a new block for 0 ref, requires dirty */
 	 BTW_INSERT	= (1 <<  4), /* walking to insert, try splitting */
 	 BTW_DELETE	= (1 <<  5), /* walking to delete, try joining */
 };
@@ -628,102 +628,27 @@ static int get_ref_block(struct super_block *sb,
 			 struct scoutfs_block_ref *ref,
 			 struct scoutfs_block **bl_ret)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct scoutfs_btree_block *bt = NULL;
-	struct scoutfs_btree_block *new;
-	struct scoutfs_block *new_bl = NULL;
-	struct scoutfs_block *bl = NULL;
-	u64 blkno;
-	u64 seq;
 	int ret;
 
-	/* always get the current block, either to return or cow from */
-	if (ref && ref->blkno) {
-		ret = scoutfs_block_read_ref(sb, ref, SCOUTFS_BLOCK_MAGIC_BTREE, &bl);
-		if (ret < 0) {
-			if (ret == -ESTALE)
-				scoutfs_inc_counter(sb, btree_stale_read);
-			goto out;
-		}
+	if (WARN_ON_ONCE((flags & BTW_ALLOC) && !(flags & BTW_DIRTY)))
+		return -EINVAL;
 
-		/*
-		 * We need to create a new dirty copy of the block if
-		 * the caller asked for it.  If the block is already
-		 * dirty then we can return it.
-		 */
-		if (!(flags & BTW_DIRTY) ||
-		    scoutfs_block_writer_is_dirty(sb, bl)) {
-			ret = 0;
-			goto out;
-		}
-
-	} else if (!(flags & BTW_ALLOC)) {
+	if (ref->blkno == 0 && !(flags & BTW_ALLOC)) {
 		ret = -ENOENT;
 		goto out;
 	}
 
-	ret = scoutfs_alloc_meta(sb, alloc, wri, &blkno);
-	if (ret < 0)
-		goto out;
-
-	prandom_bytes(&seq, sizeof(seq));
-
-	new_bl = scoutfs_block_create(sb, blkno);
-	if (IS_ERR(new_bl)) {
-		ret = scoutfs_free_meta(sb, alloc, wri, blkno);
-		BUG_ON(ret);
-		ret = PTR_ERR(new_bl);
-		goto out;
-	}
-	new = (void *)new_bl->data;
-
-	/* free old stable blkno we're about to overwrite */
-	if (ref && ref->blkno) {
-		ret = scoutfs_free_meta(sb, alloc, wri,
-					le64_to_cpu(ref->blkno));
-		if (ret) {
-			ret = scoutfs_free_meta(sb, alloc, wri, blkno);
-			BUG_ON(ret);
-			scoutfs_block_put(sb, new_bl);
-			new_bl = NULL;
-			goto out;
-		}
-	}
-
-	scoutfs_block_writer_mark_dirty(sb, wri, new_bl);
-
-	trace_scoutfs_btree_dirty_block(sb, blkno, seq,
-					bt ? le64_to_cpu(bt->hdr.blkno) : 0,
-					bt ? le64_to_cpu(bt->hdr.seq) : 0);
-
-	if (bt) {
-		/* returning a cow of an existing block */
-		memcpy(new, bt, SCOUTFS_BLOCK_LG_SIZE);
-		scoutfs_block_put(sb, bl);
-	} else {
-		/* returning a newly allocated block */
-		memset(new, 0, SCOUTFS_BLOCK_LG_SIZE);
-		new->hdr.fsid = super->hdr.fsid;
-	}
-	bl = new_bl;
-	bt = new;
-
-	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
-	bt->hdr.blkno = cpu_to_le64(blkno);
-	bt->hdr.seq = cpu_to_le64(seq);
-	if (ref) {
-		ref->blkno = bt->hdr.blkno;
-		ref->seq = bt->hdr.seq;
-	}
-	ret = 0;
-
+	if (flags & BTW_DIRTY)
+		ret = scoutfs_block_dirty_ref(sb, alloc, wri, ref, SCOUTFS_BLOCK_MAGIC_BTREE,
+					      bl_ret, 0, NULL);
+	else
+		ret = scoutfs_block_read_ref(sb, ref, SCOUTFS_BLOCK_MAGIC_BTREE, bl_ret);
 out:
-	if (ret) {
-		scoutfs_block_put(sb, bl);
-		bl = NULL;
+	if (ret < 0) {
+		if (ret == -ESTALE)
+			scoutfs_inc_counter(sb, btree_stale_read);
 	}
 
-	*bl_ret = bl;
 	return ret;
 }
 
@@ -803,6 +728,7 @@ static int try_split(struct super_block *sb,
 	struct scoutfs_block *par_bl = NULL;
 	struct scoutfs_btree_block *left;
 	struct scoutfs_key max_key;
+	struct scoutfs_block_ref zeros;
 	int ret;
 	int err;
 
@@ -820,7 +746,8 @@ static int try_split(struct super_block *sb,
 	scoutfs_inc_counter(sb, btree_split);
 
 	/* alloc split neighbour first to avoid unwinding tree growth */
-	ret = get_ref_block(sb, alloc, wri, BTW_ALLOC, NULL, &left_bl);
+	memset(&zeros, 0, sizeof(zeros));
+	ret = get_ref_block(sb, alloc, wri, BTW_ALLOC | BTW_DIRTY, &zeros, &left_bl);
 	if (ret)
 		return ret;
 	left = left_bl->data;
@@ -828,7 +755,8 @@ static int try_split(struct super_block *sb,
 	init_btree_block(left, right->level);
 
 	if (!parent) {
-		ret = get_ref_block(sb, alloc, wri, BTW_ALLOC, NULL, &par_bl);
+		memset(&zeros, 0, sizeof(zeros));
+		ret = get_ref_block(sb, alloc, wri, BTW_ALLOC | BTW_DIRTY, &zeros, &par_bl);
 		if (ret) {
 			err = scoutfs_free_meta(sb, alloc, wri,
 						le64_to_cpu(left->hdr.blkno));
@@ -1196,8 +1124,7 @@ restart:
 		if (!(flags & BTW_INSERT)) {
 			ret = -ENOENT;
 		} else {
-			ret = get_ref_block(sb, alloc, wri, BTW_ALLOC,
-					    &root->ref, &bl);
+			ret = get_ref_block(sb, alloc, wri, BTW_ALLOC | BTW_DIRTY, &root->ref, &bl);
 			if (ret == 0) {
 				bt = bl->data;
 				init_btree_block(bt, 0);

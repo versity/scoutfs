@@ -28,6 +28,7 @@
 #include "counters.h"
 #include "msg.h"
 #include "scoutfs_trace.h"
+#include "alloc.h"
 
 /*
  * The scoutfs block cache manages metadata blocks that can be larger
@@ -719,9 +720,8 @@ void scoutfs_block_writer_init(struct super_block *sb,
  * and allocate with an advancing cursor so we always dirty in block
  * offset order and can walk our list to submit nice ordered IO.
  */
-void scoutfs_block_writer_mark_dirty(struct super_block *sb,
-				     struct scoutfs_block_writer *wri,
-				     struct scoutfs_block *bl)
+static void block_mark_dirty(struct super_block *sb, struct scoutfs_block_writer *wri,
+			     struct scoutfs_block *bl)
 {
 	struct block_private *bp = BLOCK_PRIVATE(bl);
 
@@ -736,12 +736,117 @@ void scoutfs_block_writer_mark_dirty(struct super_block *sb,
 	}
 }
 
-bool scoutfs_block_writer_is_dirty(struct super_block *sb,
-				   struct scoutfs_block *bl)
+static bool block_is_dirty(struct block_private *bp)
 {
-	struct block_private *bp = BLOCK_PRIVATE(bl);
-
 	return test_bit(BLOCK_BIT_DIRTY, &bp->bits) != 0;
+}
+
+/*
+ * Give the caller a dirty block that is pointed to by their ref.
+ *
+ * The ref may already refer to a cached dirty block.  In that case the
+ * dirty block is returned.
+ *
+ * If the ref doesn't refer to a dirty block, then a new block is always
+ * allocated and returned.  If the ref refers to an existing block then
+ * its contents are copied into the new block.
+ *
+ * If a new blkno is allocated then the ref is updated and any existing
+ * blkno is freed.
+ *
+ * The dirty_blkno and ref_blkno arguments are used by the metadata
+ * allocator to avoid recursing into itself.  dirty_blkno provides the
+ * blkno of the new dirty block to avoid calling _alloc_meta and
+ * ref_blkno is set to the old blkno instead of freeing it with
+ * _free_meta.
+ */
+int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri, struct scoutfs_block_ref *ref,
+			    u32 magic, struct scoutfs_block **bl_ret,
+			    u64 dirty_blkno, u64 *ref_blkno)
+{
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_block *cow_bl = NULL;
+	struct scoutfs_block *bl = NULL;
+	struct block_private *bp = NULL;
+	struct scoutfs_block_header *hdr;
+	bool undo_alloc = false;
+	u64 blkno;
+	int ret;
+	int err;
+
+	blkno = le64_to_cpu(ref->blkno);
+	if (blkno) {
+		ret = scoutfs_block_read_ref(sb, ref, magic, bl_ret);
+		if (ret < 0)
+			goto out;
+		bl = *bl_ret;
+		bp = BLOCK_PRIVATE(bl);
+
+		if (block_is_dirty(bp)) {
+			ret = 0;
+			goto out;
+		}
+	}
+
+	if (dirty_blkno == 0) {
+		ret = scoutfs_alloc_meta(sb, alloc, wri, &dirty_blkno);
+		if (ret < 0)
+			goto out;
+		undo_alloc = true;
+	}
+
+	cow_bl = scoutfs_block_create(sb, dirty_blkno);
+	if (IS_ERR(cow_bl)) {
+		ret = PTR_ERR(cow_bl);
+		goto out;
+	}
+
+	if (ref_blkno) {
+		*ref_blkno = blkno;
+	} else if (blkno) {
+		ret = scoutfs_free_meta(sb, alloc, wri, blkno);
+		if (ret < 0)
+			goto out;
+	}
+
+	if (bl)
+		memcpy(cow_bl->data, bl->data, SCOUTFS_BLOCK_LG_SIZE);
+	else
+		memset(cow_bl->data, 0, SCOUTFS_BLOCK_LG_SIZE);
+	scoutfs_block_put(sb, bl);
+	bl = cow_bl;
+	cow_bl = NULL;
+
+	hdr = bl->data;
+	hdr->magic = cpu_to_le32(magic);
+	hdr->fsid = super->hdr.fsid;
+	hdr->blkno = cpu_to_le64(bl->blkno);
+	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
+
+	trace_scoutfs_block_dirty_ref(sb, le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq),
+				      le64_to_cpu(hdr->blkno), le64_to_cpu(hdr->seq));
+
+	ref->blkno = hdr->blkno;
+	ref->seq = hdr->seq;
+
+	block_mark_dirty(sb, wri, bl);
+	ret = 0;
+
+out:
+	scoutfs_block_put(sb, cow_bl);
+	if (ret < 0 && undo_alloc) {
+		err = scoutfs_free_meta(sb, alloc, wri, dirty_blkno);
+		BUG_ON(err); /* inconsistent */
+	}
+
+	if (ret < 0) {
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+	}
+	*bl_ret = bl;
+
+	return ret;
 }
 
 /*

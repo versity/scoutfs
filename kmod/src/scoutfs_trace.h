@@ -1631,33 +1631,6 @@ TRACE_EVENT(scoutfs_btree_read_error,
 		  SCSB_TRACE_ARGS, __entry->blkno, __entry->seq)
 );
 
-TRACE_EVENT(scoutfs_btree_dirty_block,
-	TP_PROTO(struct super_block *sb, u64 blkno, u64 seq,
-		 u64 bt_blkno, u64 bt_seq),
-
-	TP_ARGS(sb, blkno, seq, bt_blkno, bt_seq),
-
-	TP_STRUCT__entry(
-		SCSB_TRACE_FIELDS
-		__field(__u64, blkno)
-		__field(__u64, seq)
-		__field(__u64, bt_blkno)
-		__field(__u64, bt_seq)
-	),
-
-	TP_fast_assign(
-		SCSB_TRACE_ASSIGN(sb);
-		__entry->blkno = blkno;
-		__entry->seq = seq;
-		__entry->bt_blkno = bt_blkno;
-		__entry->bt_seq = bt_seq;
-	),
-
-	TP_printk(SCSBF" blkno %llu seq %llu bt_blkno %llu bt_seq %llu",
-		  SCSB_TRACE_ARGS, __entry->blkno, __entry->seq,
-		  __entry->bt_blkno, __entry->bt_seq)
-);
-
 TRACE_EVENT(scoutfs_btree_walk,
 	TP_PROTO(struct super_block *sb, struct scoutfs_btree_root *root,
 		 struct scoutfs_key *key, int flags, int level,
@@ -2054,6 +2027,33 @@ TRACE_EVENT(scoutfs_forest_init_our_log,
 	TP_printk(SCSBF" rid %016llx nr %llu blkno %llu seq %llx",
 		  SCSB_TRACE_ARGS, __entry->b_rid, __entry->nr,
 		  __entry->blkno, __entry->seq)
+);
+
+TRACE_EVENT(scoutfs_block_dirty_ref,
+	TP_PROTO(struct super_block *sb, u64 ref_blkno, u64 ref_seq,
+		 u64 block_blkno, u64 block_seq),
+
+	TP_ARGS(sb, ref_blkno, ref_seq, block_blkno, block_seq),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ref_blkno)
+		__field(__u64, ref_seq)
+		__field(__u64, block_blkno)
+		__field(__u64, block_seq)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ref_blkno = ref_blkno;
+		__entry->ref_seq = ref_seq;
+		__entry->block_blkno = block_blkno;
+		__entry->block_seq = block_seq;
+	),
+
+	TP_printk(SCSBF" ref_blkno %llu ref_seq %llu block_blkno %llu block_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->ref_blkno, __entry->ref_seq,
+		  __entry->block_blkno, __entry->block_seq)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_block_class,
