@@ -388,10 +388,10 @@ static int print_alloc_item(struct scoutfs_key *key, void *val,
 typedef int (*print_item_func)(struct scoutfs_key *key, void *val,
 			       unsigned val_len, void *arg);
 
-static int print_btree_ref(struct scoutfs_key *key, void *val,
+static int print_block_ref(struct scoutfs_key *key, void *val,
 			   unsigned val_len, print_item_func func, void *arg)
 {
-	struct scoutfs_btree_ref *ref = val;
+	struct scoutfs_block_ref *ref = val;
 
 	func(key, NULL, 0, arg);
 	printf("    ref blkno %llu seq %llu\n",
@@ -433,7 +433,7 @@ static void print_leaf_item_hash(struct scoutfs_btree_block *bt)
 }
 
 static int print_btree_block(int fd, struct scoutfs_super_block *super,
-			     char *which, struct scoutfs_btree_ref *ref,
+			     char *which, struct scoutfs_block_ref *ref,
 			     print_item_func func, void *arg, u8 level)
 {
 	struct scoutfs_btree_item *item;
@@ -500,7 +500,7 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 			val_len);
 
 		if (level)
-			print_btree_ref(key, val, val_len, func, arg);
+			print_block_ref(key, val, val_len, func, arg);
 		else
 			func(key, val, val_len, arg);
 	}
@@ -531,11 +531,10 @@ static int print_btree(int fd, struct scoutfs_super_block *super, char *which,
 	return ret;
 }
 
-static int print_alloc_list_block(int fd, char *str,
-				  struct scoutfs_alloc_list_ref *ref)
+static int print_alloc_list_block(int fd, char *str, struct scoutfs_block_ref *ref)
 {
 	struct scoutfs_alloc_list_block *lblk;
-	struct scoutfs_alloc_list_ref next;
+	struct scoutfs_block_ref next;
 	u64 blkno;
 	u64 start;
 	u64 len;
@@ -583,7 +582,7 @@ static int print_alloc_list_block(int fd, char *str,
 	return print_alloc_list_block(fd, str, &next);
 }
 
-static int print_srch_block(int fd, struct scoutfs_srch_ref *ref, int level)
+static int print_srch_block(int fd, struct scoutfs_block_ref *ref, int level)
 {
 	struct scoutfs_srch_parent *srp;
 	struct scoutfs_srch_block *srb;
@@ -729,7 +728,7 @@ static int print_srch_root_files(struct scoutfs_key *key, void *val,
 }
 
 static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
-				  struct scoutfs_btree_ref *ref,
+				  struct scoutfs_block_ref *ref,
 				  print_item_func func, void *arg)
 {
 	struct scoutfs_btree_item *item;
