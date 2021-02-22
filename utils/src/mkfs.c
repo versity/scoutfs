@@ -32,12 +32,22 @@
 #include "leaf_item_hash.h"
 #include "blkid.h"
 
-static int write_raw_block(int fd, u64 blkno, int shift, void *blk)
+/*
+ * Update the block header fields and write out the block.
+ */
+static int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
+		       int shift, struct scoutfs_block_header *hdr)
 {
 	size_t size = 1ULL << shift;
 	ssize_t ret;
 
-	ret = pwrite(fd, blk, size, blkno << shift);
+	hdr->magic = cpu_to_le32(magic);
+	hdr->fsid = fsid;
+	hdr->blkno = cpu_to_le64(blkno);
+	hdr->seq = cpu_to_le64(seq);
+	hdr->crc = cpu_to_le32(crc_block(hdr, size));
+
+	ret = pwrite(fd, hdr, size, blkno << shift);
 	if (ret != size) {
 		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
 			blkno, ret, strerror(errno), errno);
@@ -48,34 +58,17 @@ static int write_raw_block(int fd, u64 blkno, int shift, void *blk)
 }
 
 /*
- * Update the block's header and write it out.
- */
-static int write_block(int fd, u64 blkno, int shift,
-		       struct scoutfs_super_block *super,
-		       struct scoutfs_block_header *hdr)
-{
-	size_t size = 1ULL << shift;
-
-	if (super)
-		*hdr = super->hdr;
-	hdr->blkno = cpu_to_le64(blkno);
-	hdr->crc = cpu_to_le32(crc_block(hdr, size));
-
-	return write_raw_block(fd, blkno, shift, hdr);
-}
-
-/*
  * Write the single btree block that contains the blkno and len indexed
  * items to store the given extent, and update the root to point to it.
  */
-static int write_alloc_root(struct scoutfs_super_block *super, int fd,
+static int write_alloc_root(int fd, __le64 fsid,
 			    struct scoutfs_alloc_root *root,
 			    struct scoutfs_btree_block *bt,
-			    u64 blkno, u64 start, u64 len)
+			    u64 seq, u64 blkno, u64 start, u64 len)
 {
 	struct scoutfs_key key;
 
-	btree_init_root_single(&root->root, bt, blkno, 1, super->hdr.fsid);
+	btree_init_root_single(&root->root, bt, seq, blkno);
 	root->total_len = cpu_to_le64(len);
 
 	memset(&key, 0, sizeof(key));
@@ -94,19 +87,18 @@ static int write_alloc_root(struct scoutfs_super_block *super, int fd,
 	key.skfl_blkno = cpu_to_le64(start);
 	btree_append_item(bt, &key, NULL, 0);
 
-	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
-					    SCOUTFS_BLOCK_LG_SIZE));
-
-	return write_raw_block(fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
+	return write_block(fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, seq, blkno,
+			   SCOUTFS_BLOCK_LG_SHIFT, &bt->hdr);
 }
 
 struct mkfs_args {
-	unsigned long long quorum_count;
 	char *meta_device;
 	char *data_device;
 	unsigned long long max_meta_size;
 	unsigned long long max_data_size;
 	bool force;
+	int nr_slots;
+	struct scoutfs_quorum_slot slots[SCOUTFS_QUORUM_MAX_SLOTS];
 };
 
 /*
@@ -124,12 +116,14 @@ static int do_mkfs(struct mkfs_args *args)
 	struct scoutfs_inode inode;
 	struct scoutfs_alloc_list_block *lblk;
 	struct scoutfs_btree_block *bt = NULL;
+	struct scoutfs_block_header *hdr;
 	struct scoutfs_key key;
 	struct timeval tv;
 	int meta_fd = -1;
 	int data_fd = -1;
 	char uuid_str[37];
 	void *zeros = NULL;
+	char *indent;
 	u64 blkno;
 	u64 meta_size;
 	u64 data_size;
@@ -139,10 +133,12 @@ static int do_mkfs(struct mkfs_args *args)
 	u64 last_data;
 	u64 meta_start;
 	u64 meta_len;
+	__le64 fsid;
 	int ret;
 	int i;
 
 	gettimeofday(&tv, NULL);
+	pseudo_random_bytes(&fsid, sizeof(fsid));
 
 	meta_fd = open(args->meta_device, O_RDWR | O_EXCL);
 	if (meta_fd < 0) {
@@ -191,10 +187,7 @@ static int do_mkfs(struct mkfs_args *args)
 	if (ret)
 		goto out;
 
-	/* metadata blocks start after the quorum blocks */
-	next_meta = (SCOUTFS_QUORUM_BLKNO + SCOUTFS_QUORUM_BLOCKS) >>
-		    SCOUTFS_BLOCK_SM_LG_SHIFT;
-	/* rest of meta dev is available for metadata blocks */
+	next_meta = SCOUTFS_META_DEV_START_BLKNO;
 	last_meta = (meta_size >> SCOUTFS_BLOCK_LG_SHIFT) - 1;
 	/* Data blocks go on the data dev */
 	first_data = SCOUTFS_DATA_DEV_START_BLKNO;
@@ -202,9 +195,6 @@ static int do_mkfs(struct mkfs_args *args)
 
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
-	pseudo_random_bytes(&super->hdr.fsid, sizeof(super->hdr.fsid));
-	super->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_SUPER);
-	super->hdr.seq = cpu_to_le64(1);
 	super->version = cpu_to_le64(SCOUTFS_INTEROP_VERSION);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
@@ -215,11 +205,14 @@ static int do_mkfs(struct mkfs_args *args)
 	super->total_data_blocks = cpu_to_le64(last_data - first_data + 1);
 	super->first_data_blkno = cpu_to_le64(first_data);
 	super->last_data_blkno = cpu_to_le64(last_data);
-	super->quorum_count = args->quorum_count;
+
+	assert(sizeof(args->slots) ==
+		     member_sizeof(struct scoutfs_super_block, qconf.slots));
+	memcpy(super->qconf.slots, args->slots, sizeof(args->slots));
 
 	/* fs root starts with root inode and its index items */
 	blkno = next_meta++;
-	btree_init_root_single(&super->fs_root, bt, blkno, 1, super->hdr.fsid);
+	btree_init_root_single(&super->fs_root, bt, 1, blkno);
 
 	memset(&key, 0, sizeof(key));
 	key.sk_zone = SCOUTFS_INODE_INDEX_ZONE;
@@ -244,10 +237,8 @@ static int do_mkfs(struct mkfs_args *args)
 	inode.mtime.nsec = inode.atime.nsec;
 	btree_append_item(bt, &key, &inode, sizeof(inode));
 
-	bt->hdr.crc = cpu_to_le32(crc_block(&bt->hdr,
-					    SCOUTFS_BLOCK_LG_SIZE));
-
-	ret = write_raw_block(meta_fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, bt);
+	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, 1, blkno,
+			  SCOUTFS_BLOCK_LG_SHIFT, &bt->hdr);
 	if (ret)
 		goto out;
 
@@ -256,11 +247,6 @@ static int do_mkfs(struct mkfs_args *args)
 	lblk = (void *)bt;
 	memset(lblk, 0, SCOUTFS_BLOCK_LG_SIZE);
 
-	lblk->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_ALLOC_LIST);
-	lblk->hdr.fsid = super->hdr.fsid;
-	lblk->hdr.blkno = cpu_to_le64(blkno);
-	lblk->hdr.seq = cpu_to_le64(1);
-
 	meta_len = (64 * 1024 * 1024) >> SCOUTFS_BLOCK_LG_SHIFT;
 	for (i = 0; i < meta_len; i++) {
 		lblk->blknos[i] = cpu_to_le64(next_meta);
@@ -268,20 +254,20 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 	lblk->nr = cpu_to_le32(i);
 
-	super->server_meta_avail[0].ref.blkno = lblk->hdr.blkno;
-	super->server_meta_avail[0].ref.seq = lblk->hdr.seq;
+	super->server_meta_avail[0].ref.blkno = cpu_to_le64(blkno);
+	super->server_meta_avail[0].ref.seq = cpu_to_le64(1);
 	super->server_meta_avail[0].total_nr = le32_to_le64(lblk->nr);
 	super->server_meta_avail[0].first_nr = lblk->nr;
 
-	lblk->hdr.crc = cpu_to_le32(crc_block(&bt->hdr, SCOUTFS_BLOCK_LG_SIZE));
-	ret = write_raw_block(meta_fd, blkno, SCOUTFS_BLOCK_LG_SHIFT, lblk);
+	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_ALLOC_LIST, fsid, 1,
+			  blkno, SCOUTFS_BLOCK_LG_SHIFT, &lblk->hdr);
 	if (ret)
 		goto out;
 
 	/* the data allocator has a single extent */
 	blkno = next_meta++;
-	ret = write_alloc_root(super, meta_fd, &super->data_alloc, bt,
-			       blkno, first_data,
+	ret = write_alloc_root(meta_fd, fsid, &super->data_alloc, bt,
+			       1, blkno, first_data,
 			       le64_to_cpu(super->total_data_blocks));
 	if (ret < 0)
 		goto out;
@@ -298,8 +284,8 @@ static int do_mkfs(struct mkfs_args *args)
 	/* each meta alloc root contains a portion of free metadata extents */
 	for (i = 0; i < array_size(super->meta_alloc); i++) {
 		blkno = next_meta++;
-		ret = write_alloc_root(super, meta_fd, &super->meta_alloc[i], bt,
-				       blkno, meta_start,
+		ret = write_alloc_root(meta_fd, fsid, &super->meta_alloc[i], bt,
+				       1, blkno, meta_start,
 				       min(meta_len,
 					   last_meta - meta_start + 1));
 		if (ret < 0)
@@ -309,9 +295,11 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* zero out quorum blocks */
+	hdr = zeros;
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		ret = write_raw_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i,
-				      SCOUTFS_BLOCK_SM_SHIFT, zeros);
+		ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_QUORUM, fsid,
+				  1, SCOUTFS_QUORUM_BLKNO + i,
+				  SCOUTFS_BLOCK_SM_SHIFT, hdr);
 		if (ret < 0) {
 			fprintf(stderr, "error zeroing quorum block: %s (%d)\n",
 				strerror(-errno), -errno);
@@ -320,9 +308,9 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* write the super block to data dev and meta dev*/
-	super->hdr.seq = cpu_to_le64(1);
-	ret = write_block(data_fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  NULL, &super->hdr);
+	ret = write_block(data_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid, 1,
+			  SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			  &super->hdr);
 	if (ret)
 		goto out;
 
@@ -334,8 +322,9 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	super->flags |= cpu_to_le64(SCOUTFS_FLAG_IS_META_BDEV);
-	ret = write_block(meta_fd, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  NULL, &super->hdr);
+	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid,
+			  1, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			  &super->hdr);
 	if (ret)
 		goto out;
 
@@ -356,7 +345,7 @@ static int do_mkfs(struct mkfs_args *args)
 	       "  uuid:                 %s\n"
 	       "  64KB metadata blocks: "SIZE_FMT"\n"
 	       "  4KB data blocks:      "SIZE_FMT"\n"
-	       "  quorum count:         %u\n",
+	       "  quorum slots:         ",
 		args->meta_device,
 	        args->data_device,
 		le64_to_cpu(super->hdr.fsid),
@@ -365,8 +354,22 @@ static int do_mkfs(struct mkfs_args *args)
 		SIZE_ARGS(le64_to_cpu(super->total_meta_blocks),
 			  SCOUTFS_BLOCK_LG_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->total_data_blocks),
-			  SCOUTFS_BLOCK_SM_SIZE),
-		super->quorum_count);
+			  SCOUTFS_BLOCK_SM_SIZE));
+
+	indent = "";
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		struct scoutfs_quorum_slot *sl = &super->qconf.slots[i];
+		struct in_addr in;
+
+		if (sl->addr.addr == 0)
+			continue;
+
+		in.s_addr = htonl(le32_to_cpu(sl->addr.addr));
+		printf("%s%u: %s:%u", indent,
+		       i, inet_ntoa(in), le16_to_cpu(sl->addr.port));
+		indent = "\n                        ";
+	}
+	printf("\n");
 
 	ret = 0;
 out:
@@ -383,16 +386,55 @@ out:
 	return ret;
 }
 
+static bool valid_quorum_slots(struct scoutfs_quorum_slot *slots)
+{
+	struct in_addr in;
+	bool valid = true;
+	char *addr;
+	int i;
+	int j;
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		if (slots[i].addr.addr == 0)
+			continue;
+
+		for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
+			if (slots[j].addr.addr == 0)
+				continue;
+
+			if (slots[i].addr.addr == slots[j].addr.addr &&
+			    slots[i].addr.port == slots[j].addr.port) {
+
+				in.s_addr =
+					htonl(le32_to_cpu(slots[i].addr.addr));
+				addr = inet_ntoa(in);
+				fprintf(stderr, "quorum slot nr %u and %u have the same address %s:%u\n",
+					i, j, addr,
+					le16_to_cpu(slots[i].addr.port));
+				valid = false;
+			}
+		}
+	}
+
+	return valid;
+}
+
 static int parse_opt(int key, char *arg, struct argp_state *state)
 {
 	struct mkfs_args *args = state->input;
+	struct scoutfs_quorum_slot slot;
 	int ret;
 
 	switch (key) {
 	case 'Q':
-		ret = parse_u64(arg, &args->quorum_count);
-		if (ret)
+		ret = parse_quorum_slot(&slot, arg);
+		if (ret < 0)
 			return ret;
+		if (args->slots[ret].addr.addr != 0)
+			argp_error(state, "Quorum slot %u already specified before slot '%s'\n",
+				   ret, arg);
+		args->slots[ret] = slot;
+		args->nr_slots++;
 		break;
 	case 'f':
 		args->force = true;
@@ -432,12 +474,14 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 			argp_error(state, "more than two arguments given");
 		break;
 	case ARGP_KEY_FINI:
-		if (!args->quorum_count)
-			argp_error(state, "must provide nonzero quorum count with --quorum-count|-Q option");
+		if (!args->nr_slots)
+			argp_error(state, "must specify at least one quorum slot with --quorum-count|-Q");
 		if (!args->meta_device)
 			argp_error(state, "no metadata device argument given");
 		if (!args->data_device)
 			argp_error(state, "no data device argument given");
+		if (!valid_quorum_slots(args->slots))
+			argp_error(state, "invalid quorum slot configuration");
 		break;
 	default:
 		break;
@@ -447,7 +491,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 }
 
 static struct argp_option options[] = {
-	{ "quorum-count", 'Q', "NUM", 0, "Number of voters required to use the filesystem [Required]"},
+	{ "quorum-slot", 'Q', "NR,ADDR,PORT", 0, "Specify quorum slot addresses [Required]"},
 	{ "force", 'f', NULL, 0, "Overwrite existing data on block devices"},
 	{ "max-meta-size", 'm', "SIZE", 0, "Use a size less than the base metadata device size (bytes or KMGTP units)"},
 	{ "max-data-size", 'd', "SIZE", 0, "Use a size less than the base data device size (bytes or KMGTP units)"},
@@ -463,7 +507,7 @@ static struct argp argp = {
 
 static int mkfs_cmd(int argc, char *argv[])
 {
-	struct mkfs_args mkfs_args = {0};
+	struct mkfs_args mkfs_args = {NULL,};
 	int ret;
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &mkfs_args);

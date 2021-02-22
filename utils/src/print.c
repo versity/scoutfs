@@ -796,14 +796,25 @@ static char *alloc_addr_str(struct scoutfs_inet_addr *ia)
 	return str;
 }
 
+#define OFF_NAME(x) \
+	{ offsetof(struct scoutfs_quorum_block, x), __stringify_1(x) }
+
 static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 {
+	struct print_events {
+		size_t offset;
+		char *name;
+	} events[] = {
+		OFF_NAME(write), OFF_NAME(update_term), OFF_NAME(set_leader),
+		OFF_NAME(clear_leader), OFF_NAME(fenced),
+	};
 	struct scoutfs_quorum_block *blk = NULL;
+	struct scoutfs_quorum_block_event *ev;
 	char *log_addr = NULL;
 	u64 blkno;
 	int ret;
 	int i;
-	int j;
+	int e;
 
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
 		blkno = SCOUTFS_QUORUM_BLKNO + i;
@@ -812,31 +823,21 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 		if (ret)
 			goto out;
 
-		if (blk->voter_rid != 0) {
-			printf("quorum block blkno %llu\n"
-			       "  fsid %llx blkno %llu crc 0x%08x\n"
-			       "  term %llu write_nr %llu voter_rid %016llx "
-			       "vote_for_rid %016llx\n"
-			       "  log_nr %u\n",
-			       blkno, le64_to_cpu(blk->fsid),
-			       le64_to_cpu(blk->blkno), le32_to_cpu(blk->crc),
-			       le64_to_cpu(blk->term),
-			       le64_to_cpu(blk->write_nr),
-			       le64_to_cpu(blk->voter_rid),
-			       le64_to_cpu(blk->vote_for_rid),
-			       blk->log_nr);
-			for (j = 0; j < blk->log_nr; j++) {
-				free(log_addr);
-				log_addr = alloc_addr_str(&blk->log[j].addr);
-				if (!log_addr) {
-					ret = -ENOMEM;
-					goto out;
-				}
-				printf("  [%u]: term %llu rid %llu addr %s\n",
-					j, le64_to_cpu(blk->log[j].term),
-					le64_to_cpu(blk->log[j].rid),
-					log_addr);
-			}
+		printf("quorum blkno %llu (slot %llu)\n",
+		       blkno, blkno - SCOUTFS_QUORUM_BLKNO);
+		print_block_header(&blk->hdr, SCOUTFS_BLOCK_SM_SIZE);
+		printf("  term %llu random_write_mark 0x%llx flags 0x%llx\n",
+		       le64_to_cpu(blk->term),
+		       le64_to_cpu(blk->random_write_mark),
+		       le64_to_cpu(blk->flags));
+
+		for (e = 0; e < array_size(events); e++) {
+			ev = (void *)blk + events[e].offset;
+
+			printf("  %12s: rid %016llx ts %llu.%08u\n",
+			       events[e].name, le64_to_cpu(ev->rid),
+			       le64_to_cpu(ev->ts.sec),
+			       le32_to_cpu(ev->ts.nsec));
 		}
 	}
 
@@ -850,7 +851,8 @@ out:
 static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 {
 	char uuid_str[37];
-	char *server_addr;
+	char *addr;
+	int i;
 
 	uuid_unparse(super->uuid, uuid_str);
 
@@ -864,16 +866,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       le64_to_cpu(super->version), uuid_str);
 	printf("  flags: 0x%016llx\n", le64_to_cpu(super->flags));
 
-	server_addr = alloc_addr_str(&super->server_addr);
-	if (!server_addr)
-		return;
-
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu next_trans_seq %llu\n"
 	       "  total_meta_blocks %llu first_meta_blkno %llu last_meta_blkno %llu\n"
 	       "  total_data_blocks %llu first_data_blkno %llu last_data_blkno %llu\n"
-	       "  quorum_fenced_term %llu quorum_server_term %llu unmount_barrier %llu\n"
-	       "  quorum_count %u server_addr %s\n"
 	       "  meta_alloc[0]: "ALCROOT_F"\n"
 	       "  meta_alloc[1]: "ALCROOT_F"\n"
 	       "  data_alloc: "ALCROOT_F"\n"
@@ -894,11 +890,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->total_data_blocks),
 		le64_to_cpu(super->first_data_blkno),
 		le64_to_cpu(super->last_data_blkno),
-		le64_to_cpu(super->quorum_fenced_term),
-		le64_to_cpu(super->quorum_server_term),
-		le64_to_cpu(super->unmount_barrier),
-		super->quorum_count,
-		server_addr,
 		ALCROOT_A(&super->meta_alloc[0]),
 		ALCROOT_A(&super->meta_alloc[1]),
 		ALCROOT_A(&super->data_alloc),
@@ -922,7 +913,19 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->fs_root.ref.blkno),
 		le64_to_cpu(super->fs_root.ref.seq));
 
-	free(server_addr);
+	printf("  quorum config version %llu\n",
+		le64_to_cpu(super->qconf.version));
+	for (i = 0; i < array_size(super->qconf.slots); i++) {
+		if (!super->qconf.slots[i].addr.addr &&
+		    !super->qconf.slots[i].addr.port)
+			continue;
+
+		addr = alloc_addr_str(&super->qconf.slots[i].addr);
+		if (addr) {
+			printf("    quorum slot %2u: %s\n", i, addr);
+			free(addr);
+		}
+	}
 }
 
 struct print_args {

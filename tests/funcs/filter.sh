@@ -3,7 +3,7 @@
 t_filter_fs()
 {
 	sed -e 's@mnt/test\.[0-9]*@mnt/test@g' \
-	    -e 's@Device: [a-fA-F0-7]*h/[0-9]*d@Device: 0h/0d@g'
+	    -e 's@Device: [a-fA-F0-9]*h/[0-9]*d@Device: 0h/0d@g'
 }
 
 #

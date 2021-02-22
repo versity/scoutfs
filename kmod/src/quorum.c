@@ -13,766 +13,1073 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
-#include <linux/in.h>
 #include <linux/crc32c.h>
-#include <linux/sort.h>
-#include <linux/buffer_head.h>
 #include <linux/delay.h>
 #include <linux/random.h>
 #include <linux/sched.h>
 #include <linux/hrtimer.h>
-#include <linux/blkdev.h>
+#include <linux/net.h>
+#include <linux/inet.h>
+#include <linux/in.h>
+#include <net/sock.h>
+#include <net/tcp.h>
 
 #include "format.h"
 #include "msg.h"
 #include "counters.h"
 #include "quorum.h"
 #include "server.h"
+#include "block.h"
 #include "net.h"
 #include "sysfs.h"
 #include "scoutfs_trace.h"
 
 /*
- * scoutfs mounts communicate through a region of preallocated blocks to
- * elect a leader who starts the server.  Mounts which have been
- * configured with a server address and which can't connect to a server
- * attempt to form a quorum to elect a new leader who starts a new
+ * This quorum subsystem is responsible for ensuring that only one
+ * server is ever running among the mounts and has exclusive read/write
+ * access to the server structures in the metadata device.
+ *
+ * A specific set of mounts are quorum members as indicated by the
+ * quorum_slot_nr mount option.  That option refers to the slot in the
+ * super block that contains their configuration.  Only these mounts
+ * participate in the election of the leader.
+ *
+ * As each quorum member mounts it starts background work that uses a
+ * simplified raft leader election protocol to elect a leader.  Each
+ * mount listens on a udp socket at the address found in its slot in the
+ * super block.  It then sends and receives raft messages to and from
+ * the other slot addresses in the super block.  As the protocol
+ * progresses eventually a mount will receive enough votes to become the
+ * leader.  We're not using the full key-value store of raft, just the
+ * leadership election.  Much of the functionality matches the raft
+ * concepts (roles, messages, timeouts) but there's no key value logs to
+ * synchronize.
+ *
+ * Once elected leader, the mount now has to ensure that it's the only
+ * running server.  There could be previously elected servers still
+ * running (maybe they've deadlocked, or lost network communications).
+ * In addition to a configuration slot in the super block, each quorum
+ * member also has a known block location that represents their slot.
+ * They set a flag in their block indicating that they've been elected
+ * leader, then read slots for all the other blocks looking for
+ * previously active leaders to fence.  After that it can start the
  * server.
  *
- * The mounts participating in the election use a variant of the raft
- * election protocol to establish quorum and elect a leader.  We use
- * block reads and writes instead of network messages.  Mounts read all
- * the blocks looking for messages to receive.  Mounts write their vote
- * to a random block in the region to send a message to all other
- * mounts.  Unlikely collisions are analogous to lossy networks losing
- * messages and are handled by the protocol.
+ * It's critical to raft elections that a participant's term not go
+ * backwards in time so each mount also uses its quorum block to store
+ * the greatest term it has used in messages.
  *
- * We allow a "majority" of 1 voter when there are less than three
- * possible voters.  This lets a simple network establish quorum.  If
- * the raft quorum timeouts align to leaders could both elect themselves
- * and race to fence each other.  In the worst case they could continue
- * to do this indefinitely but it's unlikely as it would require a
- * sequence of identical random raft timeouts.
+ * The quorum work still runs in the background while the server is
+ * running.  The leader quorum work will regularly send heartbeat
+ * messages to the other quorum members to keep them from electing a new
+ * leader.  If the server shuts down, or the mount disappears, the other
+ * quorum members will stop receiving heartbeats and will elect a new
+ * leader.
  *
- * One of the reasons we use block reads and writes as the quorum
- * communication medium is that it lets us leave behind a shared
- * persistent log of previous election results.  This then lets a newly
- * elected leader fence all previously elected leaders that haven't
- * shutdown so that they can safely assume exclusive access to the
- * shared device.  Every written block includes a log of election
- * results.  Every voter merges the log from every block it reads the
- * block it writes.  A leader doesn't attempt to fence until it's spent
- * a few cycles writing blocks with itself as the log entry.  This gives
- * other voters time to migrate the log entry through the blocks.
- *
- * Once a leader is elected it fences any previously elected leaders
- * still present in the log it merged while reading all the voting
- * blocks.  Once they've fenced they update the super block record of
- * the latest term that has been fenced.  This trims the log over time
- * and keeps from attempting to fence the same mounts multiple times.
- * As the server later shuts down it writes its term into the super to
- * stop it from being fenced.
- *
- * The final complication comes during unmount.  Clients exit after the
- * server responds to their farewell request.  But a majority of clients
- * need to be present to elect a server to process farewell requests.
- * The server knows which clients will attempt to vote for quorum and
- * only responds to their farewell requests once they're no longer
- * needed to elect a server -- either there's still quorum remaining of
- * other mounts or the only mounts remaining are all quorum voters that
- * have sent farewell requests.  Before sending these final responses
- * the server updates an unmount_barrier field in the super.  If clients
- * that are waiting for a farewell response see the unmount barrier
- * increment they know that their farewell has been processed and they
- * can assume a successful farewell response and exit cleanly.
- *
- * XXX: - actually fence
+ * Typically we require a strict majority of the configured quorum
+ * members to elect a leader.  However, for simple usability, we do
+ * allow a majority of 1 when there are only one or two quorum members.
+ * In the two member case this can lead to split elections where each
+ * mount races to elect itself as leader and attempt to fence the other.
+ * The random election timeouts in raft make this unlikely, but it is
+ * possible.
  */
 
-struct quorum_info {
-	struct scoutfs_sysfs_attrs ssa;
-
-	bool is_leader;
+/*
+ * The fields of the message that the receiver can use after the message
+ * has been validated.
+ */
+struct quorum_host_msg {
+	u64 term;
+	u8 type;
+	u8 from;
 };
+
+struct last_msg {
+	struct quorum_host_msg msg;
+	struct timespec64 ts;
+};
+
+enum quorum_role { FOLLOWER, CANDIDATE, LEADER };
+
+struct quorum_status {
+	enum quorum_role role;
+	u64 term;
+	int vote_for;
+	unsigned long vote_bits;
+	ktime_t timeout;
+};
+
+struct quorum_info {
+	struct super_block *sb;
+	struct work_struct work;
+	struct socket *sock;
+	bool shutdown;
+
+	unsigned long flags;
+	int votes_needed;
+
+	spinlock_t show_lock;
+	struct quorum_status show_status;
+	struct last_msg last_send[SCOUTFS_QUORUM_MAX_SLOTS];
+	struct last_msg last_recv[SCOUTFS_QUORUM_MAX_SLOTS];
+
+	struct scoutfs_sysfs_attrs ssa;
+};
+
+#define QINF_FLAG_SERVER 0
 
 #define DECLARE_QUORUM_INFO(sb, name) \
 	struct quorum_info *name = SCOUTFS_SB(sb)->quorum_info
 #define DECLARE_QUORUM_INFO_KOBJ(kobj, name) \
 	DECLARE_QUORUM_INFO(SCOUTFS_SYSFS_ATTRS_SB(kobj), name)
 
-/*
- * Return an absolute ktime timeout expires value in the future after a
- * random duration between hi and lo where both limits are possible.
- */
-static ktime_t random_to(u32 lo, u32 hi)
+static bool quorum_slot_present(struct scoutfs_super_block *super, int i)
 {
-	return ktime_add_ms(ktime_get(), lo + prandom_u32_max((hi + 1) - lo));
+	BUG_ON(i < 0 || i > SCOUTFS_QUORUM_MAX_SLOTS);
+
+	return super->qconf.slots[i].addr.addr != 0;
 }
 
-/*
- * The caller is about to read all the quorum blocks.  We invalidate any
- * cached blocks and issue one large contiguous read to repopulate the
- * cache.  The caller then uses normal __bread to read each block.  I'm
- * not a huge fan of the plug but I couldn't get the individual
- * readahead requests merged without it.
- */
-static void readahead_quorum_blocks(struct super_block *sb)
+static ktime_t election_timeout(void)
 {
+	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_ELECT_MIN_MS +
+				 prandom_u32_max(SCOUTFS_QUORUM_ELECT_VAR_MS));
+}
+
+static ktime_t heartbeat_interval(void)
+{
+	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_IVAL_MS);
+}
+
+static ktime_t heartbeat_timeout(void)
+{
+	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_TIMEO_MS);
+}
+
+static int create_socket(struct super_block *sb)
+{
+	DECLARE_QUORUM_INFO(sb, qinf);
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct buffer_head *bh;
-	struct blk_plug plug;
-	int i;
-
-	blk_start_plug(&plug);
-
-	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		bh = __getblk(sbi->meta_bdev, SCOUTFS_QUORUM_BLKNO + i,
-			     SCOUTFS_BLOCK_SM_SIZE);
-		if (!bh)
-			continue;
-
-		lock_buffer(bh);
-		clear_buffer_uptodate(bh);
-		unlock_buffer(bh);
-
-		ll_rw_block(READA | REQ_META | REQ_PRIO, 1, &bh);
-		brelse(bh);
-	}
-
-	blk_finish_plug(&plug);
-}
-
-struct quorum_block_head {
-	struct list_head head;
-	union {
-		struct scoutfs_quorum_block blk;
-		u8 bytes[SCOUTFS_BLOCK_SM_SIZE];
-	};
-};
-
-static void free_quorum_blocks(struct list_head *blocks)
-{
-	struct quorum_block_head *qbh;
-	struct quorum_block_head *tmp;
-
-	list_for_each_entry_safe(qbh, tmp, blocks, head) {
-		list_del_init(&qbh->head);
-		kfree(qbh);
-	}
-}
-
-/*
- * Callers don't mind us clobbering the crc temporarily.
- */
-static __le32 quorum_block_crc(struct scoutfs_quorum_block *blk)
-{
-	__le32 calc_crc;
-	__le32 blk_crc;
-
-	blk_crc = blk->crc;
-	blk->crc = 0;
-	calc_crc = cpu_to_le32(crc32c(~0, blk, sizeof(*blk)));
-	blk->crc = blk_crc;
-
-	return calc_crc;
-}
-
-static size_t quorum_block_bytes(struct scoutfs_quorum_block *blk)
-{
-	return offsetof(struct scoutfs_quorum_block,
-			log[blk->log_nr]);
-}
-
-static bool invalid_quorum_block(struct buffer_head *bh,
-				 struct scoutfs_quorum_block *blk)
-{
-	return bh->b_size != SCOUTFS_BLOCK_SM_SIZE ||
-	       sizeof(struct scoutfs_quorum_block) > SCOUTFS_BLOCK_SM_SIZE ||
-	       quorum_block_crc(blk) != blk->crc ||
-	       le64_to_cpu(blk->blkno) != bh->b_blocknr ||
-	       blk->term == 0 ||
-	       blk->log_nr > SCOUTFS_QUORUM_LOG_MAX ||
-	       quorum_block_bytes(blk) > SCOUTFS_BLOCK_SM_SIZE;
-}
-
-/* true if a is stale and should be ignored */
-static bool stale_quorum_block(struct scoutfs_quorum_block *a,
-			       struct scoutfs_quorum_block *b)
-{
-	if (le64_to_cpu(a->term) < le64_to_cpu(b->term))
-		return true;
-
-	if (le64_to_cpu(a->voter_rid) == le64_to_cpu(b->voter_rid) &&
-	    le64_to_cpu(a->write_nr) <= le64_to_cpu(b->write_nr))
-		return true;
-
-	return false;
-}
-
-/*
- * Get the most recent blocks from all the voters for the most recent term.
- * We ignore any corrupt blocks, blocks not for our fsid, previous terms,
- * and previous writes from a rid in the current term.
- */
-static int read_quorum_blocks(struct super_block *sb, struct list_head *blocks)
-{
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_quorum_block *blk;
-	struct quorum_block_head *qbh;
-	struct quorum_block_head *tmp;
-	struct buffer_head *bh = NULL;
-	LIST_HEAD(stale);
-	int ret;
-	int i;
-
-	readahead_quorum_blocks(sb);
-
-	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		brelse(bh);
-		bh = __bread(sbi->meta_bdev, SCOUTFS_QUORUM_BLKNO + i,
-			     SCOUTFS_BLOCK_SM_SIZE);
-		if (!bh) {
-			scoutfs_inc_counter(sb, quorum_read_block_error);
-			ret = -EIO;
-			goto out;
-		}
-		blk = (void *)(bh->b_data);
-
-		/* ignore unwritten blocks or blocks for other filesystems */
-		if (blk->voter_rid == 0 || blk->fsid != super->hdr.fsid)
-			continue;
-
-		if (invalid_quorum_block(bh, blk)) {
-			scoutfs_inc_counter(sb, quorum_read_invalid_block);
-			continue;
-		}
-
-		list_for_each_entry_safe(qbh, tmp, blocks, head) {
-			if (stale_quorum_block(blk, &qbh->blk)) {
-				blk = NULL;
-				break;
-			}
-
-			if (stale_quorum_block(&qbh->blk, blk))
-				list_move(&qbh->head, &stale);
-		}
-		free_quorum_blocks(&stale);
-
-		if (!blk)
-			continue;
-
-		qbh = kmalloc(sizeof(struct quorum_block_head),
-				     GFP_NOFS);
-		if (!qbh) {
-			ret = -ENOMEM;
-			goto out;
-		}
-
-		memcpy(&qbh->blk, blk, quorum_block_bytes(blk));
-		list_add_tail(&qbh->head, blocks);
-	}
-
-	list_for_each_entry(qbh, blocks, head) {
-		trace_scoutfs_quorum_read_block(sb, &qbh->blk);
-		scoutfs_inc_counter(sb, quorum_read_block);
-	}
-
-	ret = 0;
-out:
-	brelse(bh);
-	if (ret < 0)
-		free_quorum_blocks(blocks);
-	return ret;
-}
-
-/*
- * Synchronously write a single quorum block.  The caller has provided
- * the meaningful fields for the write.  We fill in the fsid, blkno, and
- * crc for every write and zero the rest of the block.
- */
-static int write_quorum_block(struct super_block *sb,
-			      struct scoutfs_quorum_block *our_blk)
-{
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_quorum_block *blk;
-	struct buffer_head *bh = NULL;
-	size_t size;
+	struct mount_options *opts = &sbi->opts;
+	struct scoutfs_super_block *super = &sbi->super;
+	struct socket *sock = NULL;
+	struct sockaddr_in sin;
+	int addrlen;
 	int ret;
 
-	BUILD_BUG_ON(sizeof(struct scoutfs_quorum_block) >
-		     SCOUTFS_BLOCK_SM_SIZE);
-
-	bh = __getblk(sbi->meta_bdev, SCOUTFS_QUORUM_BLKNO +
-		      prandom_u32_max(SCOUTFS_QUORUM_BLOCKS),
-		      SCOUTFS_BLOCK_SM_SIZE);
-	if (bh == NULL) {
-		ret = -EIO;
+	ret = sock_create_kern(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	if (ret) {
+		scoutfs_err(sb, "quorum couldn't create udp socket: %d", ret);
 		goto out;
 	}
 
-	size = quorum_block_bytes(our_blk);
-	if (WARN_ON_ONCE(size > SCOUTFS_BLOCK_SM_SIZE || size > bh->b_size)) {
-		ret = -EIO;
+	sock->sk->sk_allocation = GFP_NOFS;
+
+	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
+
+	addrlen = sizeof(sin);
+	ret = kernel_bind(sock, (struct sockaddr *)&sin, addrlen);
+	if (ret) {
+		scoutfs_err(sb, "quorum failed to bind udp socket to "SIN_FMT": %d",
+			    SIN_ARG(&sin), ret);
 		goto out;
 	}
 
-	blk = (void *)bh->b_data;
-	memset(blk, 0, bh->b_size);
-	memcpy(blk, our_blk, size);
-
-	blk->fsid = super->hdr.fsid;
-	blk->blkno = cpu_to_le64(bh->b_blocknr);
-	blk->crc = quorum_block_crc(blk);
-
-	lock_buffer(bh);
-	set_buffer_mapped(bh);
-	bh->b_end_io = end_buffer_write_sync;
-	get_bh(bh);
-	submit_bh(WRITE_SYNC | REQ_META | REQ_PRIO, bh);
-
-	wait_on_buffer(bh);
-	if (!buffer_uptodate(bh))
-		ret = -EIO;
-	else
-		ret = 0;
-
-	if (ret == 0) {
-		trace_scoutfs_quorum_write_block(sb, blk);
-		scoutfs_inc_counter(sb, quorum_write_block);
-	}
 out:
-	if (ret)
-		scoutfs_inc_counter(sb, quorum_write_block_error);
-	brelse(bh);
+	if (ret < 0 && sock) {
+		sock_release(sock);
+		sock = NULL;
+	}
+	qinf->sock = sock;
 	return ret;
 }
 
-/*
- * Returns true if there's an entry for the given election.
- */
-static bool log_contains(struct scoutfs_quorum_block *blk, u64 term, u64 rid)
+static __le32 quorum_message_crc(struct scoutfs_quorum_message *qmes)
 {
-	int i;
+	/* crc up to the crc field at the end */
+	unsigned int len = offsetof(struct scoutfs_quorum_message, crc);
 
-	for (i = 0; i < blk->log_nr; i++) {
-		if (le64_to_cpu(blk->log[i].term) == term &&
-		    le64_to_cpu(blk->log[i].rid) == rid)
-			return true;
-	}
-
-	return false;
+	return cpu_to_le32(crc32c(~0, qmes, len));
 }
 
-/* add an entry to the log, returning error if it's full */
-static int log_add(struct scoutfs_quorum_block *blk, u64 term, u64 rid,
-		   struct scoutfs_inet_addr *addr)
-{
-	int i;
-
-	if (log_contains(blk, term, rid))
-		return 0;
-
-	if (blk->log_nr == SCOUTFS_QUORUM_LOG_MAX)
-		return -ENOSPC;
-
-	i = blk->log_nr++;
-	blk->log[i].term = cpu_to_le64(term);
-	blk->log[i].rid = cpu_to_le64(rid);
-	blk->log[i].addr = *addr;
-
-	return 0;
-}
-
-/* migrate live log entries between blocks, returning err if full */
-static int log_merge(struct scoutfs_quorum_block *our_blk,
-		     struct scoutfs_quorum_block *blk,
-		     u64 fenced_term)
-{
-	int ret;
-	int i;
-
-	for (i = 0; i < blk->log_nr; i++) {
-		if (le64_to_cpu(blk->log[i].term) > fenced_term) {
-			ret = log_add(our_blk, le64_to_cpu(blk->log[i].term),
-				      le64_to_cpu(blk->log[i].rid),
-				      &blk->log[i].addr);
-			if (ret < 0)
-				return ret;
-		}
-	}
-
-	return 0;
-}
-
-/* Remove old log entries for a voter before a given term. */
-static void log_purge(struct scoutfs_quorum_block *blk, u64 term, u64 rid)
-{
-	int i;
-
-	for (i = 0; i < blk->log_nr; i++) {
-		if (le64_to_cpu(blk->log[i].term) < term &&
-		    le64_to_cpu(blk->log[i].rid) == rid) {
-			if (i != blk->log_nr - 1)
-				swap(blk->log[i], blk->log[blk->log_nr - 1]);
-			blk->log_nr--;
-			i--; /* continue from swapped in entry */
-		}
-	}
-}
-
-
-/*
- * The caller received a majority of votes and has been elected.  Before
- * assuming exclusive write access to the device we fence the winners of
- * any previous elections still present in the log.  Once they're fenced
- * we re-read the super and update the fenced_term to indicate that
- * those previous elections can be ignored and purged from the log.
- *
- * We can be attempting this concurrently with both previous and future
- * elected leaders.  The leader with the greatest elected term will win
- * and fence all previous elected leaders.
- *
- * We clobber the caller's block as we go to not fence rids multiple times.
- */
-static int fence_previous(struct super_block *sb,
-			  struct scoutfs_quorum_block *blk,
-			  u64 our_rid, u64 fenced_term, u64 term)
-{
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct sockaddr_in their_sin;
-	int ret;
-	int i;
-
-	for (i = 0; i < blk->log_nr; i++) {
-		if (le64_to_cpu(blk->log[i].rid) != our_rid &&
-		    le64_to_cpu(blk->log[i].term) > fenced_term &&
-		    le64_to_cpu(blk->log[i].term) < term) {
-
-			scoutfs_inc_counter(sb, quorum_fenced);
-			scoutfs_addr_to_sin(&their_sin, &blk->log[i].addr);
-			scoutfs_err(sb, "fencing "SCSBF" at "SIN_FMT,
-					SCSB_LEFR_ARGS(super->hdr.fsid,
-						       blk->log[i].rid),
-					SIN_ARG(&their_sin));
-
-			log_purge(blk, term, le64_to_cpu(blk->log[i].rid));
-			i = -1; /* start over */
-		}
-	}
-
-	/* update fenced term now that we have exclusive access */
-	ret = 0;
-	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
-	if (super) {
-		ret = scoutfs_read_super(sb, super);
-		if (ret == 0) {
-			super->quorum_fenced_term = cpu_to_le64(term - 1);
-			ret = scoutfs_write_super(sb, super);
-
-		}
-		kfree(super);
-	} else {
-		ret = -ENOMEM;
-	}
-
-	if (ret != 0) {
-		scoutfs_err(sb, "failed to update fenced_term in super, this mount will probably be fenced");
-	}
-
-	return ret;
-}
-
-
-
-/*
- * The calling voting mount couldn't connect to a server.  Participate
- * in a raft election to chose a mount to start a new server.  If a
- * majority of other mounts join us then one of us will be elected and
- * our caller will start the server.
- *
- * Voting members read the blocks at regular intervals.  If they see a
- * new election they vote for that candidate for the remainder of the
- * election.  If the election timeout expires they will start a new
- * election and vote for themselves.  Eventually a sufficient majority
- * sees a new election and all vote in the majority for that candidate.
- *
- * The calling client may have just failed to connect to an elected
- * address in the super block.  We assume that server is dead and ignore
- * it when trying to elect a new leader.  But we eventually return with
- * a timeout because the server could actually be fine and the client
- * could have had communication to the server restored.
- *
- * We return success if we see a new server elected.  If we are elected
- * we set the caller's elected_term so they know to start the server.
- */
-int scoutfs_quorum_election(struct super_block *sb, ktime_t timeout_abs,
-			    u64 prev_term, u64 *elected_term)
+static void send_msg_members(struct super_block *sb, int type, u64 term,
+			     int only)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
 	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = NULL;
-	struct scoutfs_quorum_block *our_blk = NULL;
-	struct scoutfs_quorum_block *blk;
-	struct quorum_block_head *qbh;
-	struct scoutfs_inet_addr addr;
-	enum { VOTER, CANDIDATE };
-	ktime_t cycle_to;
-	ktime_t term_to;
-	LIST_HEAD(blocks);
-	u64 vote_for_write_nr;
-	u64 vote_for_rid;
-	u64 write_nr;
-	u64 term;
-	int log_cycles = 0;
-	int votes;
-	int role;
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct timespec64 ts;
+	int i;
+
+	struct scoutfs_quorum_message qmes = {
+		.fsid = super->hdr.fsid,
+		.term = cpu_to_le64(term),
+		.type = type,
+		.from = opts->quorum_slot_nr,
+	};
+	struct kvec kv =  {
+		.iov_base = &qmes,
+		.iov_len = sizeof(qmes),
+	};
+	struct sockaddr_in sin;
+	struct msghdr mh = {
+		.msg_iov = (struct iovec *)&kv,
+		.msg_iovlen = 1,
+		.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL,
+		.msg_name = &sin,
+		.msg_namelen = sizeof(sin),
+	};
+
+	trace_scoutfs_quorum_send_message(sb, term, type, only);
+
+	qmes.crc = quorum_message_crc(&qmes);
+
+	ts = ktime_to_timespec64(ktime_get());
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		if (!quorum_slot_present(super, i) ||
+		    (only >= 0 && i != only) || i == opts->quorum_slot_nr)
+			continue;
+
+		scoutfs_quorum_slot_sin(super, i, &sin);
+		kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
+
+		spin_lock(&qinf->show_lock);
+		qinf->last_send[i].msg.term = term;
+		qinf->last_send[i].msg.type = type;
+		qinf->last_send[i].ts = ts;
+		spin_unlock(&qinf->show_lock);
+
+		if (i == only)
+			break;
+	}
+}
+
+#define send_msg_to(sb, type, term, nr)  send_msg_members(sb, type, term, nr)
+#define send_msg_others(sb, type, term)  send_msg_members(sb, type, term, -1)
+
+/*
+ * The caller passes in their absolute timeout which we translate to a
+ * relative timeval for RCVTIMEO.  It defines a 0.0 timeval as blocking
+ * indefinitely so we're careful to set dontwait if we happen to hit a
+ * 0.0 timeval.
+ */
+static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
+		    ktime_t abs_to)
+{
+	DECLARE_QUORUM_INFO(sb, qinf);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_quorum_message qmes;
+	struct timeval tv;
+	ktime_t rel_to;
+	ktime_t now;
 	int ret;
 
-	*elected_term = 0;
+	struct kvec kv =  {
+		.iov_base = &qmes,
+		.iov_len = sizeof(struct scoutfs_quorum_message),
+	};
+	struct msghdr mh = {
+		.msg_iov = (struct iovec *)&kv,
+		.msg_iovlen = 1,
+		.msg_flags = MSG_NOSIGNAL,
+	};
 
-	trace_scoutfs_quorum_election(sb, prev_term);
+	memset(msg, 0, sizeof(*msg));
 
-	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
-	our_blk = kmalloc(SCOUTFS_BLOCK_SM_SIZE, GFP_NOFS);
-	if (!super || !our_blk) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	now = ktime_get();
+	if (ktime_before(now, abs_to))
+		rel_to = ktime_sub(abs_to, now);
+	else
+		rel_to = ns_to_ktime(0);
 
-	/* start out as a passive voter */
-	role = VOTER;
-	term = 0;
-	write_nr = 0;
-	vote_for_rid = 0;
-	vote_for_write_nr = 0;
-
-	/* we'll become a candidate if we don't see another candidate */
-	term_to = random_to(SCOUTFS_QUORUM_TERM_LO_MS,
-			    SCOUTFS_QUORUM_TERM_HI_MS);
-
-	for (;;) {
-		memset(our_blk, 0, SCOUTFS_BLOCK_SM_SIZE);
-
-		scoutfs_inc_counter(sb, quorum_cycle);
-
-		ret = scoutfs_read_super(sb, super);
-		if (ret)
-			goto out;
-
-		/* done if we see evidence of a new server */
-		if (le64_to_cpu(super->quorum_server_term) > prev_term) {
-			scoutfs_inc_counter(sb, quorum_saw_super_leader);
-			ret = 0;
-			goto out;
-		}
-
-		/* done if we couldn't elect anyone */
-		if (ktime_after(ktime_get(), timeout_abs)) {
-			scoutfs_inc_counter(sb, quorum_timedout);
-			ret = -ETIMEDOUT;
-			goto out;
-		}
-
-		/* become a candidate if the election times out */
-		if (ktime_after(ktime_get(), term_to)) {
-			scoutfs_inc_counter(sb, quorum_election_timeout);
-			term_to = random_to(SCOUTFS_QUORUM_TERM_LO_MS,
-					    SCOUTFS_QUORUM_TERM_HI_MS);
-			role = CANDIDATE;
-			term++;
-			vote_for_rid = sbi->rid;
-			log_cycles = 0;
-		}
-
-		free_quorum_blocks(&blocks);
-		ret = read_quorum_blocks(sb, &blocks);
+	tv = ktime_to_timeval(rel_to);
+	if (tv.tv_sec == 0 && tv.tv_usec == 0) {
+		mh.msg_flags |= MSG_DONTWAIT;
+	} else {
+		ret = kernel_setsockopt(qinf->sock, SOL_SOCKET, SO_RCVTIMEO,
+					(char *)&tv, sizeof(tv));
 		if (ret < 0)
-			goto out;
-
-		votes = 0;
-
-		list_for_each_entry(qbh, &blocks, head) {
-			blk = &qbh->blk;
-
-			/*
-			 * Become a voter for a candidate the first time
-			 * we see a new term.
-			 *
-			 * And also if we're a candidate and see a
-			 * higher rid candidate in our term.  This
-			 * minimizes instability when two quorums are
-			 * possible and race to elect two leaders.  This
-			 * is only barely reasonable when accepting the
-			 * risk of instability in two mount
-			 * configurations.
-			 */
-			if ((le64_to_cpu(blk->term) > term) ||
-			    (role == CANDIDATE &&
-			     le64_to_cpu(blk->term) == term &&
-			     blk->voter_rid == blk->vote_for_rid &&
-			     le64_to_cpu(blk->voter_rid) > sbi->rid)) {
-				role = VOTER;
-				term = le64_to_cpu(blk->term);
-				vote_for_rid = le64_to_cpu(blk->vote_for_rid);
-				vote_for_write_nr = 0;
-				votes = 0;
-				log_cycles = 0;
-			}
-
-			/* candidate writes suppress voter election timers */
-			if (role == VOTER &&
-			    blk->voter_rid == blk->vote_for_rid &&
-			    le64_to_cpu(blk->write_nr) > vote_for_write_nr) {
-				term_to = random_to(SCOUTFS_QUORUM_TERM_LO_MS,
-						    SCOUTFS_QUORUM_TERM_HI_MS);
-				vote_for_write_nr = le64_to_cpu(blk->write_nr);
-			}
-
-			/* count our votes */
-			if (role == CANDIDATE &&
-			    le64_to_cpu(blk->vote_for_rid) == sbi->rid) {
-				votes++;
-			}
-
-			/* try to write greater write_nr */
-			write_nr = max(write_nr, le64_to_cpu(blk->write_nr));
-		}
-
-		trace_scoutfs_quorum_election_vote(sb, role, term,
-						   vote_for_rid, votes,
-						   log_cycles,
-						   super->quorum_count);
-
-		/* first merge logs from all votes this term */
-		list_for_each_entry(qbh, &blocks, head) {
-			blk = &qbh->blk;
-
-			ret = log_merge(our_blk, blk,
-					le64_to_cpu(super->quorum_fenced_term));
-			if (ret < 0)
-				goto out;
-		}
-
-		/* remove logs for voters that can't be servers */
-		list_for_each_entry(qbh, &blocks, head) {
-			blk = &qbh->blk;
-
-			if (blk->voter_rid != blk->vote_for_rid)
-				log_purge(our_blk, le64_to_cpu(blk->term),
-					  le64_to_cpu(blk->voter_rid));
-		}
-
-		/* add ourselves to the log when we see vote quorum */
-		if (role == CANDIDATE && votes >= super->quorum_count) {
-			scoutfs_addr_from_sin(&addr, &opts->server_addr);
-			ret = log_add(our_blk, term, vote_for_rid, &addr);
-			if (ret < 0)
-				goto out;
-			log_cycles++; /* will be written *this* cycle */
-		}
-
-		/* elected candidates can proceed after their log cycles */
-		if (role == CANDIDATE &&
-		    log_cycles > SCOUTFS_QUORUM_ELECTED_LOG_CYCLES) {
-			/* our_blk is clobbered */
-			ret = fence_previous(sb, our_blk, sbi->rid,
-					le64_to_cpu(super->quorum_fenced_term),
-					term);
-			if (ret < 0)
-				goto out;
-			scoutfs_inc_counter(sb, quorum_elected_leader);
-			qinf->is_leader = true;
-			*elected_term = term;
-			goto out;
-		}
-
-		/* write our block every cycle */
-		if (term > 0) {
-			our_blk->term = cpu_to_le64(term);
-			write_nr++;
-			our_blk->write_nr = cpu_to_le64(write_nr);
-			our_blk->voter_rid = cpu_to_le64(sbi->rid);
-			our_blk->vote_for_rid = cpu_to_le64(vote_for_rid);
-
-			ret = write_quorum_block(sb, our_blk);
-			if (ret < 0)
-				goto out;
-		}
-
-		/* add a small random delay to each cycle */
-		cycle_to = random_to(SCOUTFS_QUORUM_CYCLE_LO_MS,
-				     SCOUTFS_QUORUM_CYCLE_HI_MS);
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		schedule_hrtimeout(&cycle_to, HRTIMER_MODE_ABS);
+			return ret;
 	}
 
-out:
-	free_quorum_blocks(&blocks);
-	kfree(super);
-	kfree(our_blk);
+	ret = kernel_recvmsg(qinf->sock, &mh, &kv, 1, kv.iov_len, mh.msg_flags);
+	if (ret < 0)
+		return ret;
 
-	trace_scoutfs_quorum_election_ret(sb, ret, *elected_term);
-	if (ret)
-		scoutfs_inc_counter(sb, quorum_failure);
+	if (ret != sizeof(qmes) ||
+	    qmes.crc != quorum_message_crc(&qmes) ||
+	    qmes.fsid != super->hdr.fsid ||
+	    qmes.type >= SCOUTFS_QUORUM_MSG_INVALID ||
+	    qmes.from >= SCOUTFS_QUORUM_MAX_SLOTS ||
+	    !quorum_slot_present(super, qmes.from)) {
+		/* should we be trying to open a new socket? */
+		scoutfs_inc_counter(sb, quorum_recv_invalid);
+		return -EAGAIN;
+	}
+
+	msg->term = le64_to_cpu(qmes.term);
+	msg->type = qmes.type;
+	msg->from = qmes.from;
+
+	trace_scoutfs_quorum_recv_message(sb, msg->term, msg->type, msg->from);
+
+	spin_lock(&qinf->show_lock);
+	qinf->last_recv[msg->from].msg = *msg;
+	qinf->last_recv[msg->from].ts = ktime_to_timespec64(ktime_get());
+	spin_unlock(&qinf->show_lock);
+
+	return 0;
+}
+
+/*
+ * The caller can provide a mark that they're using to track their
+ * written blocks.  It's updated as they write the block and we can
+ * compare it with what we read to see if there have been unexpected
+ * intervening writes to the block -- the caller is supposed to have
+ * exclusive access to the block (or was fenced).
+ */
+static int read_quorum_block(struct super_block *sb, u64 blkno,
+			     struct scoutfs_quorum_block *blk, __le64 *mark)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	__le32 crc;
+	int ret;
+
+	if (WARN_ON_ONCE(blkno < SCOUTFS_QUORUM_BLKNO) ||
+	    WARN_ON_ONCE(blkno >= (SCOUTFS_QUORUM_BLKNO +
+				   SCOUTFS_QUORUM_BLOCKS)))
+		return -EINVAL;
+
+	ret = scoutfs_block_read_sm(sb, sbi->meta_bdev, blkno,
+				     &blk->hdr, sizeof(*blk), &crc);
+
+	/* detect invalid blocks */
+	if (ret == 0 &&
+	    ((blk->hdr.crc != crc) ||
+	     (le32_to_cpu(blk->hdr.magic) != SCOUTFS_BLOCK_MAGIC_QUORUM) ||
+	     (blk->hdr.fsid != super->hdr.fsid) ||
+	     (le64_to_cpu(blk->hdr.blkno) != blkno))) {
+		scoutfs_inc_counter(sb, quorum_read_invalid_block);
+		ret = -EIO;
+	}
+
+	if (mark && *mark != 0 && blk->random_write_mark != *mark) {
+		scoutfs_err(sb, "read unexpected quorum block write mark, are multiple mounts configured with the same slot?");
+		ret = -EIO;
+	}
+
+	if (ret < 0)
+		scoutfs_err(sb, "quorum block read error %d", ret);
 
 	return ret;
 }
 
-void scoutfs_quorum_clear_leader(struct super_block *sb)
+static void set_quorum_block_event(struct super_block *sb,
+				   struct scoutfs_quorum_block *blk,
+				   struct scoutfs_quorum_block_event *ev)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct timespec64 ts;
+
+	getnstimeofday64(&ts);
+
+	ev->rid = cpu_to_le64(sbi->rid);
+	ev->ts.sec = cpu_to_le64(ts.tv_sec);
+	ev->ts.nsec = cpu_to_le32(ts.tv_nsec);
+}
+
+/*
+ * Every time we write a block we update the write stamp and random
+ * write mark so readers can see our write.
+ */
+static int write_quorum_block(struct super_block *sb, u64 blkno,
+			      struct scoutfs_quorum_block *blk, __le64 *mark)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	int ret;
+
+	if (WARN_ON_ONCE(blkno < SCOUTFS_QUORUM_BLKNO) ||
+	    WARN_ON_ONCE(blkno >= (SCOUTFS_QUORUM_BLKNO +
+				   SCOUTFS_QUORUM_BLOCKS)))
+		return -EINVAL;
+
+	do {
+		get_random_bytes(&blk->random_write_mark,
+				 sizeof(blk->random_write_mark));
+	} while (blk->random_write_mark == 0);
+
+	if (mark)
+		*mark = blk->random_write_mark;
+
+	set_quorum_block_event(sb, blk, &blk->write);
+
+	ret = scoutfs_block_write_sm(sb, sbi->meta_bdev, blkno,
+				      &blk->hdr, sizeof(*blk));
+	if (ret < 0)
+		scoutfs_err(sb, "quorum block write error %d", ret);
+
+	return ret;
+}
+
+/*
+ * Read the caller's slot's current quorum block, make a change, and
+ * write it back out.  If the caller provides a mark it can cause read
+ * errors if we read a mark that doesn't match the last mark that the
+ * caller wrote.
+ */
+static int update_quorum_block(struct super_block *sb, u64 blkno,
+			       __le64 *mark, int role, u64 term)
+{
+	struct scoutfs_quorum_block blk;
+	u64 flags;
+	u64 bits;
+	u64 set;
+	int ret;
+
+	ret = read_quorum_block(sb, blkno, &blk, mark);
+	if (ret == 0) {
+		if (blk.term != cpu_to_le64(term)) {
+			blk.term = cpu_to_le64(term);
+			set_quorum_block_event(sb, &blk, &blk.update_term);
+		}
+
+		flags = le64_to_cpu(blk.flags);
+		bits = SCOUTFS_QUORUM_BLOCK_LEADER;
+		set = role == LEADER ? SCOUTFS_QUORUM_BLOCK_LEADER : 0;
+		if ((flags & bits) != set)
+			set_quorum_block_event(sb, &blk,
+					       set ? &blk.set_leader :
+					             &blk.clear_leader);
+		blk.flags = cpu_to_le64((flags & ~bits) | set);
+
+		ret = write_quorum_block(sb, blkno, &blk, mark);
+	}
+
+	return ret;
+}
+
+
+/*
+ * The calling server has been elected and updated their block, but
+ * can't yet assume that it has exclusive access to the metadata device.
+ * We read all the quorum blocks looking for previously elected leaders
+ * to fence so that we're the only leader running.
+ */
+static int fence_leader_blocks(struct super_block *sb)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	struct mount_options *opts = &sbi->opts;
+	struct scoutfs_quorum_block blk;
+	struct sockaddr_in sin;
+	u64 blkno;
+	int ret = 0;
+	int i;
+
+	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		if (i == opts->quorum_slot_nr)
+			continue;
+
+		blkno = SCOUTFS_QUORUM_BLKNO + i;
+		ret = read_quorum_block(sb, blkno, &blk, NULL);
+		if (ret < 0)
+			goto out;
+
+		if (!(le64_to_cpu(blk.flags) & SCOUTFS_QUORUM_BLOCK_LEADER))
+			continue;
+
+		scoutfs_inc_counter(sb, quorum_fence_leader);
+		scoutfs_quorum_slot_sin(super, i, &sin);
+
+		scoutfs_err(sb, "fencing "SCSBF" at "SIN_FMT,
+			    SCSB_LEFR_ARGS(super->hdr.fsid, blk.set_leader.rid),
+			    SIN_ARG(&sin));
+
+		blk.flags &= ~cpu_to_le64(SCOUTFS_QUORUM_BLOCK_LEADER);
+		set_quorum_block_event(sb, &blk, &blk.fenced);
+
+		ret = write_quorum_block(sb, blkno, &blk, NULL);
+		if (ret < 0)
+			goto out;
+	}
+
+out:
+	if (ret < 0) {
+		scoutfs_err(sb, "error %d fencing active", ret);
+		scoutfs_inc_counter(sb, quorum_fence_error);
+	}
+
+	return ret;
+}
+
+/*
+ * The quorum work always runs in the background of quorum member
+ * mounts.  It's responsible for starting and stopping the server if
+ * it's elected leader, and the server can call back into it to let it
+ * know that it has shut itself down (perhaps due to error) so that the
+ * work should stop sending heartbeats.
+ */
+static void scoutfs_quorum_worker(struct work_struct *work)
+{
+	struct quorum_info *qinf = container_of(work, struct quorum_info, work);
+	struct super_block *sb = qinf->sb;
+	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
+	struct scoutfs_quorum_block blk;
+	struct sockaddr_in unused;
+	struct quorum_host_msg msg;
+	struct quorum_status qst;
+	__le64 mark;
+	u64 blkno;
+	int ret;
+
+	/* recording votes from slots as native single word bitmap */
+	BUILD_BUG_ON(SCOUTFS_QUORUM_MAX_SLOTS > BITS_PER_LONG);
+
+	/* get our starting term from our persistent block */
+	mark = 0;
+	blkno = SCOUTFS_QUORUM_BLKNO + opts->quorum_slot_nr;
+	ret = read_quorum_block(sb, blkno, &blk, &mark);
+	if (ret < 0)
+		goto out;
+
+	/* start out as a follower */
+	qst.role = FOLLOWER;
+	qst.term = le64_to_cpu(blk.term);
+	qst.vote_for = -1;
+	qst.vote_bits = 0;
+
+	/* see if there's a server to chose heartbeat or election timeout */
+	if (scoutfs_quorum_server_sin(sb, &unused) == 0)
+		qst.timeout = heartbeat_timeout();
+	else
+		qst.timeout = election_timeout();
+
+	while (!qinf->shutdown) {
+
+		ret = recv_msg(sb, &msg, qst.timeout);
+		if (ret < 0) {
+			if (ret != -ETIMEDOUT && ret != -EAGAIN) {
+				scoutfs_err(sb, "quorum recvmsg err %d", ret);
+				scoutfs_inc_counter(sb, quorum_recv_error);
+				goto out;
+			}
+			msg.type = SCOUTFS_QUORUM_MSG_INVALID;
+			ret = 0;
+		}
+
+		/* ignore messages from older terms */
+		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
+		    msg.term < qst.term)
+			msg.type = SCOUTFS_QUORUM_MSG_INVALID;
+
+		/* if the server has shutdown we become follower */
+		if (!test_bit(QINF_FLAG_SERVER, &qinf->flags) &&
+		    qst.role == LEADER) {
+			qst.role = FOLLOWER;
+			qst.vote_for = -1;
+			qst.vote_bits = 0;
+			qst.timeout = election_timeout();
+			scoutfs_inc_counter(sb, quorum_server_shutdown);
+
+			send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
+					qst.term);
+			scoutfs_inc_counter(sb, quorum_send_resignation);
+
+			ret = update_quorum_block(sb, blkno, &mark,
+						  qst.role, qst.term);
+			if (ret < 0)
+				goto out;
+		}
+
+		spin_lock(&qinf->show_lock);
+		qinf->show_status = qst;
+		spin_unlock(&qinf->show_lock);
+
+		trace_scoutfs_quorum_loop(sb, qst.role, qst.term, qst.vote_for,
+					  qst.vote_bits,
+					  ktime_to_timespec64(qst.timeout));
+
+		/* receiving greater terms resets term, becomes follower */
+		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
+		    msg.term > qst.term) {
+			if (qst.role == LEADER) {
+				scoutfs_warn(sb, "saw msg type %u from %u for term %llu while leader in term %llu, shutting down server.",
+					     msg.type, msg.from, msg.term, qst.term);
+				scoutfs_server_stop(sb);
+			}
+			qst.role = FOLLOWER;
+			qst.term = msg.term;
+			qst.vote_for = -1;
+			qst.vote_bits = 0;
+			scoutfs_inc_counter(sb, quorum_term_follower);
+
+			if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT)
+				qst.timeout = heartbeat_timeout();
+			else
+				qst.timeout = election_timeout();
+
+			/* store our increased term */
+			ret = update_quorum_block(sb, blkno, &mark,
+						  qst.role, qst.term);
+			if (ret < 0)
+				goto out;
+		}
+
+		/* followers and candidates start new election on timeout */
+		if (qst.role != LEADER &&
+		    ktime_after(ktime_get(), qst.timeout)) {
+			qst.role = CANDIDATE;
+			qst.term++;
+			qst.vote_for = -1;
+			qst.vote_bits = 0;
+			set_bit(opts->quorum_slot_nr, &qst.vote_bits);
+			send_msg_others(sb, SCOUTFS_QUORUM_MSG_REQUEST_VOTE,
+					qst.term);
+			qst.timeout = election_timeout();
+			scoutfs_inc_counter(sb, quorum_send_request);
+		}
+
+		/* candidates count votes in their term */
+		if (qst.role == CANDIDATE &&
+		    msg.type == SCOUTFS_QUORUM_MSG_VOTE) {
+			if (test_bit(msg.from, &qst.vote_bits)) {
+				scoutfs_warn(sb, "already received vote from %u in term %llu, are there multiple mounts with quorum_slot_nr=%u?",
+					     msg.from, qst.term, msg.from);
+			}
+			set_bit(msg.from, &qst.vote_bits);
+			scoutfs_inc_counter(sb, quorum_recv_vote);
+		}
+
+		/*
+		 * Candidates become leaders when they receive enough
+		 * votes.  (Possibly only counting their own vote in
+		 * single vote majorities.)
+		 */
+		if (qst.role == CANDIDATE &&
+		    hweight_long(qst.vote_bits) >= qinf->votes_needed) {
+			qst.role = LEADER;
+			scoutfs_inc_counter(sb, quorum_elected);
+
+			/* send heartbeat before server starts */
+			send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT,
+					qst.term);
+			qst.timeout = heartbeat_interval();
+
+			/* set our leader flag and fence */
+			ret = update_quorum_block(sb, blkno, &mark,
+						  qst.role, qst.term) ?:
+			      fence_leader_blocks(sb);
+			if (ret < 0)
+				goto out;
+
+			/* make very sure server is fully shut down */
+			scoutfs_server_stop(sb);
+			/* set server bit before server shutdown could clear */
+			set_bit(QINF_FLAG_SERVER, &qinf->flags);
+
+			ret = scoutfs_server_start(sb, qst.term);
+			if (ret < 0) {
+				scoutfs_err(sb, "server startup failed with %d",
+					    ret);
+				goto out;
+			}
+		}
+
+		/* leaders regularly send heartbeats to delay elections */
+		if (qst.role == LEADER &&
+		    ktime_after(ktime_get(), qst.timeout)) {
+			send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT,
+					qst.term);
+			qst.timeout = heartbeat_interval();
+			scoutfs_inc_counter(sb, quorum_send_heartbeat);
+		}
+
+		/* receiving heartbeats extends timeout, delaying elections */
+		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
+			qst.timeout = heartbeat_timeout();
+			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
+		}
+
+		/* receiving a resignation from server starts election */
+		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
+		    qst.role == FOLLOWER &&
+		    msg.term == qst.term) {
+			qst.timeout = election_timeout();
+			scoutfs_inc_counter(sb, quorum_recv_resignation);
+		}
+
+		/* followers vote once per term */
+		if (qst.role == FOLLOWER &&
+		    msg.type == SCOUTFS_QUORUM_MSG_REQUEST_VOTE &&
+		    qst.vote_for == -1) {
+			qst.vote_for = msg.from;
+			send_msg_to(sb, SCOUTFS_QUORUM_MSG_VOTE, qst.term,
+				    msg.from);
+			scoutfs_inc_counter(sb, quorum_send_vote);
+		}
+	}
+
+	/* always try to stop a running server as we stop */
+	if (test_bit(QINF_FLAG_SERVER, &qinf->flags)) {
+		scoutfs_server_stop(sb);
+		send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
+				qst.term);
+	}
+
+	/* always try to clear leader block as we stop to avoid fencing */
+	if (qst.role == LEADER) {
+		ret = update_quorum_block(sb, blkno, &mark,
+					  FOLLOWER, qst.term);
+		if (ret < 0)
+			goto out;
+	}
+out:
+	if (ret < 0) {
+		scoutfs_err(sb, "quorum service saw error %d, shutting down.  Cluster will be degraded until this slot is remounted to restart the quorum service",
+			    ret);
+	}
+}
+
+/*
+ * Set a flag for the quorum work's next iteration to indicate that the
+ * server has shutdown and that it should step down as leader, update
+ * quorum blocks, and stop sending heartbeats.
+ */
+void scoutfs_quorum_server_shutdown(struct super_block *sb)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
 
-	qinf->is_leader = false;
+	set_bit(QINF_FLAG_SERVER, &qinf->flags);
 }
+
+/*
+ * Clients read quorum blocks looking for the leader with a server whose
+ * address it can try and connect to.
+ *
+ * There can be multiple running servers if a client checks before a
+ * server has had a chance to fence any old servers.  We try to use the
+ * block with the most recent timestamp.  If we get it wrong the
+ * connection will timeout and the client will try again, presumably
+ * finding a single server block.
+ */
+int scoutfs_quorum_server_sin(struct super_block *sb, struct sockaddr_in *sin)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_quorum_block blk;
+	struct timespec64 recent = {0,};
+	struct timespec64 ts;
+	int ret;
+	int i;
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk,
+					NULL);
+		if (ret < 0) {
+			scoutfs_err(sb, "error reading quorum block nr %u: %d",
+				    i, ret);
+			goto out;
+		}
+
+		ts.tv_sec = le64_to_cpu(blk.set_leader.ts.sec);
+		ts.tv_nsec = le32_to_cpu(blk.set_leader.ts.nsec);
+
+		if ((le64_to_cpu(blk.flags) & SCOUTFS_QUORUM_BLOCK_LEADER) &&
+		    (timespec64_to_ns(&ts) > timespec64_to_ns(&recent))) {
+			recent = ts;
+			scoutfs_quorum_slot_sin(super, i, sin);
+			continue;
+		}
+	}
+
+	if (timespec64_to_ns(&recent) == 0)
+		ret = -ENOENT;
+
+out:
+	return ret;
+}
+
+/*
+ * The number of votes needed for a member to reach quorum and be
+ * elected the leader: a majority of the number of present slots in the
+ * super block.
+ */
+u8 scoutfs_quorum_votes_needed(struct super_block *sb)
+{
+	DECLARE_QUORUM_INFO(sb, qinf);
+
+	return qinf->votes_needed;
+}
+
+void scoutfs_quorum_slot_sin(struct scoutfs_super_block *super, int i,
+			     struct sockaddr_in *sin)
+{
+	BUG_ON(i < 0 || i >= SCOUTFS_QUORUM_MAX_SLOTS);
+
+	scoutfs_addr_to_sin(sin, &super->qconf.slots[i].addr);
+}
+
+static char *role_str(int role)
+{
+	static char *roles[] = {
+		[FOLLOWER] = "follower",
+		[CANDIDATE] = "candidate",
+		[LEADER] = "leader",
+	};
+
+	if (role < 0 || role > ARRAY_SIZE(roles) || !roles[role])
+		return "invalid";
+
+	return roles[role];
+}
+
+#define snprintf_ret(buf, size, retp, fmt...)				\
+do {									\
+	__typeof__(buf) _buf = buf;					\
+	__typeof__(size) _size = size;					\
+	__typeof__(retp) _retp = retp;					\
+	__typeof__(*retp) _ret = *_retp;				\
+	__typeof__(*retp) _len;						\
+									\
+	if (_ret >= 0 && _ret < _size) {				\
+		_len = snprintf(_buf + _ret, _size - _ret, ##fmt);	\
+		if (_len < 0)						\
+			_ret = _len;					\
+		else							\
+			_ret += _len;					\
+		*_retp = _ret;						\
+	}								\
+} while (0)
+
+static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
+			   char *buf)
+{
+	DECLARE_QUORUM_INFO_KOBJ(kobj, qinf);
+	struct mount_options *opts = &SCOUTFS_SB(qinf->sb)->opts;
+	struct quorum_status qst;
+	struct last_msg last;
+	struct timespec64 ts;
+	size_t size;
+	int ret;
+	int i;
+
+	spin_lock(&qinf->show_lock);
+	qst = qinf->show_status;
+	spin_unlock(&qinf->show_lock);
+
+	size = PAGE_SIZE;
+	ret = 0;
+
+	snprintf_ret(buf, size, &ret, "quorum_slot_nr %u\n",
+		     opts->quorum_slot_nr);
+	snprintf_ret(buf, size, &ret, "term %llu\n",
+		     qst.term);
+	snprintf_ret(buf, size, &ret, "role %d (%s)\n",
+		     qst.role, role_str(qst.role));
+	snprintf_ret(buf, size, &ret, "vote_for %d\n",
+		     qst.vote_for);
+	snprintf_ret(buf, size, &ret, "vote_bits 0x%lx (count %lu)\n",
+		     qst.vote_bits, hweight_long(qst.vote_bits));
+	ts = ktime_to_timespec64(qst.timeout);
+	snprintf_ret(buf, size, &ret, "timeout %llu.%u\n",
+		     (u64)ts.tv_sec, (int)ts.tv_nsec);
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		spin_lock(&qinf->show_lock);
+		last = qinf->last_send[i];
+		spin_unlock(&qinf->show_lock);
+
+		if (last.msg.term == 0)
+			continue;
+
+		snprintf_ret(buf, size, &ret,
+			     "last_send to %u term %llu type %u ts %llu.%u\n",
+			     i, last.msg.term, last.msg.type,
+			     (u64)last.ts.tv_sec, (int)last.ts.tv_nsec);
+	}
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		spin_lock(&qinf->show_lock);
+		last = qinf->last_recv[i];
+		spin_unlock(&qinf->show_lock);
+
+		if (last.msg.term == 0)
+			continue;
+		snprintf_ret(buf, size, &ret,
+			     "last_recv from %u term %llu type %u ts %llu.%u\n",
+			     i, last.msg.term, last.msg.type,
+			     (u64)last.ts.tv_sec, (int)last.ts.tv_nsec);
+	}
+
+	return ret;
+}
+SCOUTFS_ATTR_RO(status);
 
 static ssize_t is_leader_show(struct kobject *kobj,
 			      struct kobj_attribute *attr, char *buf)
 {
 	DECLARE_QUORUM_INFO_KOBJ(kobj, qinf);
 
-	return snprintf(buf, PAGE_SIZE, "%u", !!qinf->is_leader);
+	return snprintf(buf, PAGE_SIZE, "%u",
+		        !!(qinf->show_status.role == LEADER));
 }
 SCOUTFS_ATTR_RO(is_leader);
 
 static struct attribute *quorum_attrs[] = {
+	SCOUTFS_ATTR_PTR(status),
 	SCOUTFS_ATTR_PTR(is_leader),
 	NULL,
 };
 
+static inline bool valid_ipv4_unicast(__be32 addr)
+{
+	return !(ipv4_is_multicast(addr) && ipv4_is_lbcast(addr) &&
+		 ipv4_is_zeronet(addr) && ipv4_is_local_multicast(addr));
+}
+
+static inline bool valid_ipv4_port(__be16 port)
+{
+	return port != 0 && be16_to_cpu(port) != U16_MAX;
+}
+
+static int verify_quorum_slots(struct super_block *sb)
+{
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	DECLARE_QUORUM_INFO(sb, qinf);
+	struct sockaddr_in other;
+	struct sockaddr_in sin;
+	int found = 0;
+	int i;
+	int j;
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		if (!quorum_slot_present(super, i))
+			continue;
+
+		scoutfs_quorum_slot_sin(super, i, &sin);
+
+		if (!valid_ipv4_unicast(sin.sin_addr.s_addr)) {
+			scoutfs_err(sb, "quorum slot #%d has invalid ipv4 unicast address: "SIN_FMT,
+				    i,  SIN_ARG(&sin));
+			return -EINVAL;
+		}
+
+		if (!valid_ipv4_port(sin.sin_port)) {
+			scoutfs_err(sb, "quorum slot #%d has invalid ipv4 port number:"SIN_FMT,
+				    i,  SIN_ARG(&sin));
+			return -EINVAL;
+		}
+
+		for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
+			scoutfs_quorum_slot_sin(super, j, &other);
+
+			if (sin.sin_addr.s_addr == other.sin_addr.s_addr &&
+			    sin.sin_port == other.sin_port) {
+				scoutfs_err(sb, "quorum slots #%u and #%u have the same address: "SIN_FMT,
+					    i, j, SIN_ARG(&sin));
+				return -EINVAL;
+			}
+		}
+
+		found++;
+	}
+
+	if (found == 0)  {
+		scoutfs_err(sb, "no populated quorum slots in superblock");
+		return -EINVAL;
+	}
+
+	/*
+	 * Always require a majority except in the pathological cases of
+	 * 1 or 2 members.
+	 */
+	if (found < 3)
+		qinf->votes_needed = 1;
+	else
+		qinf->votes_needed = (found / 2) + 1;
+
+	return 0;
+}
+
+/*
+ * Once this schedules the quorum worker it can be elected leader and
+ * start the server, possibly before this returns.
+ */
 int scoutfs_quorum_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct mount_options *opts = &sbi->opts;
 	struct quorum_info *qinf;
 	int ret;
+
+	if (opts->quorum_slot_nr < 0)
+		return 0;
 
 	qinf = kzalloc(sizeof(struct quorum_info), GFP_KERNEL);
 	if (!qinf) {
 		ret = -ENOMEM;
 		goto out;
 	}
+
+	spin_lock_init(&qinf->show_lock);
+	INIT_WORK(&qinf->work, scoutfs_quorum_worker);
 	scoutfs_sysfs_init_attrs(sb, &qinf->ssa);
 
 	sbi->quorum_info = qinf;
+	qinf->sb = sb;
+
+	ret = verify_quorum_slots(sb);
+	if (ret < 0)
+		goto out;
+
+	/* create in setup so errors cause mount to fail */
+	ret = create_socket(sb);
+	if (ret < 0)
+		goto out;
 
 	ret = scoutfs_sysfs_create_attrs(sb, &qinf->ssa, quorum_attrs,
 					 "quorum");
+	if (ret < 0)
+		goto out;
+
+	schedule_work(&qinf->work);
+
 out:
 	if (ret)
 		scoutfs_quorum_destroy(sb);
 
-	return 0;
+	return ret;
 }
 
+/*
+ * Shutdown the quorum worker and destroy all our resources.
+ *
+ * This is called after client destruction which only completes once
+ * farewell requests are resolved. That only happens for a quorum member
+ * once it isn't needed for quorum.
+ *
+ * The work is the only place that starts the server, and it stops the
+ * server as it exits, so we can wait for it to finish and know that no
+ * server can be running to call back into us as it shuts down.
+ */
 void scoutfs_quorum_destroy(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct quorum_info *qinf = SCOUTFS_SB(sb)->quorum_info;
 
 	if (qinf) {
+		qinf->shutdown = true;
+		flush_work(&qinf->work);
+
 		scoutfs_sysfs_destroy_attrs(sb, &qinf->ssa);
+		if (qinf->sock)
+			sock_release(qinf->sock);
+
 		kfree(qinf);
 		sbi->quorum_info = NULL;
 	}

@@ -3,7 +3,7 @@
 
 void btree_init_root_single(struct scoutfs_btree_root *root,
 			    struct scoutfs_btree_block *bt,
-			    u64 blkno, u64 seq, __le64 fsid);
+			    u64 seq, u64 blkno);
 
 void btree_append_item(struct scoutfs_btree_block *bt,
 		       struct scoutfs_key *key, void *val, int val_len);

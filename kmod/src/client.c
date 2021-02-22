@@ -34,13 +34,10 @@
 
 /*
  * The client is responsible for maintaining a connection to the server.
- * This includes managing quorum elections that determine which client
- * should run the server that all the clients connect to.
  */
 
 #define CLIENT_CONNECT_DELAY_MS		(MSEC_PER_SEC / 10)
 #define CLIENT_CONNECT_TIMEOUT_MS	(1 * MSEC_PER_SEC)
-#define CLIENT_QUORUM_TIMEOUT_MS	(5 * MSEC_PER_SEC)
 
 struct client_info {
 	struct super_block *sb;
@@ -292,52 +289,30 @@ static int client_greeting(struct super_block *sb,
 	scoutfs_net_client_greeting(sb, conn, new_server);
 
 	client->server_term = le64_to_cpu(gr->server_term);
-	client->greeting_umb = le64_to_cpu(gr->unmount_barrier);
 	ret = 0;
 out:
 	return ret;
 }
 
 /*
- * This work is responsible for maintaining a connection from the client
- * to the server.  It's queued on mount and disconnect and we requeue
- * the work if the work fails and we're not shutting down.
+ * The client is deciding if it needs to keep trying to reconnect to
+ * have its farewell request processed.  The server removes our mounted
+ * client item last so that if we don't see it we know the server has
+ * processed our farewell and we don't need to reconnect, we can unmount
+ * safely.
  *
- * In the typical case a mount reads the super blocks and finds the
- * address of the currently running server and connects to it.
- * Non-voting clients who can't connect will keep trying alternating
- * reading the address and getting connect timeouts.
- *
- * Voting mounts will try to elect a leader if they can't connect to the
- * server.  When a quorum can't connect and are able to elect a leader
- * then a new server is started.  The new server will write its address
- * in the super and everyone will be able to connect.
- *
- * There's a tricky bit of coordination required to safely unmount.
- * Clients need to tell the server that they won't be coming back with a
- * farewell request.  Once a client receives its farewell response it
- * can exit.  But a majority of clients need to stick around to elect a
- * server to process all their farewell requests.  This is coordinated
- * by having the greeting tell the server that a client is a voter.  The
- * server then holds on to farewell requests from voters until only
- * requests from the final quorum remain.  These farewell responses are
- * only sent after updating an unmount barrier in the super to indicate
- * to the final quorum that they can safely exit without having received
- * a farewell response over the network.
+ * This is peeking at btree blocks that the server could be actively
+ * freeing with cow updates so it can see stale blocks, we just return
+ * the error and we'll retry eventually as the connection times out.
  */
-static void scoutfs_client_connect_worker(struct work_struct *work)
+static int lookup_mounted_client_item(struct super_block *sb, u64 rid)
 {
-	struct client_info *client = container_of(work, struct client_info,
-						  connect_dwork.work);
-	struct super_block *sb = client->sb;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = NULL;
-	struct mount_options *opts = &sbi->opts;
-	const bool am_voter = opts->server_addr.sin_addr.s_addr != 0;
-	struct scoutfs_net_greeting greet;
-	struct sockaddr_in sin;
-	ktime_t timeout_abs;
-	u64 elected_term;
+	struct scoutfs_key key = {
+		.sk_zone = SCOUTFS_MOUNTED_CLIENT_ZONE,
+		.skmc_rid = cpu_to_le64(rid),
+	};
+	struct scoutfs_super_block *super;
+	SCOUTFS_BTREE_ITEM_REF(iref);
 	int ret;
 
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
@@ -350,57 +325,77 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	if (ret)
 		goto out;
 
-	/* can safely unmount if we see that server processed our farewell */
-	if (am_voter && client->sending_farewell &&
-	    (le64_to_cpu(super->unmount_barrier) > client->greeting_umb)) {
+	ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key, &iref);
+	if (ret == 0) {
+		scoutfs_btree_put_iref(&iref);
+		ret = 1;
+	}
+	if (ret == -ENOENT)
+		ret = 0;
+
+	kfree(super);
+out:
+	return ret;
+}
+
+/*
+ * This work is responsible for maintaining a connection from the client
+ * to the server.  It's queued on mount and disconnect and we requeue
+ * the work if the work fails and we're not shutting down.
+ *
+ * We ask quorum for an address to try and connect to.  If there isn't
+ * one, or it fails, we back off a bit before trying again.
+ *
+ * There's a tricky bit of coordination required to safely unmount.
+ * Clients need to tell the server that they won't be coming back with a
+ * farewell request.  Once the server processes a farewell request from
+ * the client it can forget the client.  If the connection is broken
+ * before the client gets the farewell response it doesn't want to
+ * reconnect to send it again.. instead the client can read the metadata
+ * device to check for the lack of an item which indicates that the
+ * server has processed its farewell.
+ */
+static void scoutfs_client_connect_worker(struct work_struct *work)
+{
+	struct client_info *client = container_of(work, struct client_info,
+						  connect_dwork.work);
+	struct super_block *sb = client->sb;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	struct mount_options *opts = &sbi->opts;
+	const bool am_quorum = opts->quorum_slot_nr >= 0;
+	struct scoutfs_net_greeting greet;
+	struct sockaddr_in sin;
+	int ret;
+
+	/* can unmount once server farewell handling removes our item */
+	if (client->sending_farewell &&
+	    lookup_mounted_client_item(sb, sbi->rid) == 0) {
 		client->farewell_error = 0;
 		complete(&client->farewell_comp);
 		ret = 0;
 		goto out;
 	}
 
-	/* try to connect to the super's server address */
-	scoutfs_addr_to_sin(&sin, &super->server_addr);
-	if (sin.sin_addr.s_addr != 0 && sin.sin_port != 0)
-		ret = scoutfs_net_connect(sb, client->conn, &sin,
-					  CLIENT_CONNECT_TIMEOUT_MS);
-	else
-		ret = -ENOTCONN;
-
-	/* voters try to elect a leader if they couldn't connect */
-	if (ret < 0) {
-		/* non-voters will keep retrying */
-		if (!am_voter)
-			goto out;
-
-		/* make sure local server isn't writing super during votes */
-		scoutfs_server_stop(sb);
-
-		timeout_abs = ktime_add_ms(ktime_get(),
-					   CLIENT_QUORUM_TIMEOUT_MS);
-
-		ret = scoutfs_quorum_election(sb, timeout_abs,
-					le64_to_cpu(super->quorum_server_term),
-					&elected_term);
-		/* start the server if we were asked to */
-		if (elected_term > 0)
-			ret = scoutfs_server_start(sb, &opts->server_addr,
-						   elected_term);
-		ret = -ENOTCONN;
+	ret = scoutfs_quorum_server_sin(sb, &sin);
+	if (ret < 0)
 		goto out;
-	}
+
+	ret = scoutfs_net_connect(sb, client->conn, &sin,
+				  CLIENT_CONNECT_TIMEOUT_MS);
+	if (ret < 0)
+		goto out;
 
 	/* send a greeting to verify endpoints of each connection */
 	greet.fsid = super->hdr.fsid;
 	greet.version = super->version;
 	greet.server_term = cpu_to_le64(client->server_term);
-	greet.unmount_barrier = cpu_to_le64(client->greeting_umb);
 	greet.rid = cpu_to_le64(sbi->rid);
 	greet.flags = 0;
 	if (client->sending_farewell)
 		greet.flags |= cpu_to_le64(SCOUTFS_NET_GREETING_FLAG_FAREWELL);
-	if (am_voter)
-		greet.flags |= cpu_to_le64(SCOUTFS_NET_GREETING_FLAG_VOTER);
+	if (am_quorum)
+		greet.flags |= cpu_to_le64(SCOUTFS_NET_GREETING_FLAG_QUORUM);
 
 	ret = scoutfs_net_submit_request(sb, client->conn,
 					 SCOUTFS_NET_CMD_GREETING,
@@ -409,7 +404,6 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	if (ret)
 		scoutfs_net_shutdown(sb, client->conn);
 out:
-	kfree(super);
 
 	/* always have a small delay before retrying to avoid storms */
 	if (ret && !atomic_read(&client->shutting_down))

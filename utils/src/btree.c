@@ -25,17 +25,13 @@ static void init_block(struct scoutfs_btree_block *bt, int level)
  */
 void btree_init_root_single(struct scoutfs_btree_root *root,
 			    struct scoutfs_btree_block *bt,
-			    u64 blkno, u64 seq, __le64 fsid)
+			    u64 seq, u64 blkno)
 {
 	root->ref.blkno = cpu_to_le64(blkno);
-	root->ref.seq = cpu_to_le64(1);
+	root->ref.seq = cpu_to_le64(seq);
 	root->height = 1;
 
 	memset(bt, 0, SCOUTFS_BLOCK_LG_SIZE);
-	bt->hdr.magic = cpu_to_le32(SCOUTFS_BLOCK_MAGIC_BTREE);
-	bt->hdr.fsid = fsid;
-	bt->hdr.blkno = cpu_to_le64(blkno);
-	bt->hdr.seq = cpu_to_le64(1);
 
 	init_block(bt, 0);
 }

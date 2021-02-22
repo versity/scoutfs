@@ -37,17 +37,25 @@ t_quiet make
 t_quiet sync
 # pwd stays in xfstests dir to build config and run
 
+#
+# Each filesystem needs specific mkfs and mount options because we put
+# quorum member addresess in mkfs options and the metadata device in
+# mount options.
+#
 cat << EOF > local.config
 export FSTYP=scoutfs
-export MKFS_OPTIONS="-Q 1"
+export MKFS_OPTIONS="-f"
+export MKFS_TEST_OPTIONS="-Q 0,127.0.0.1,42000"
+export MKFS_SCRATCH_OPTIONS="-Q 0,127.0.0.1,43000"
+export MKFS_DEV_OPTIONS="-Q 0,127.0.0.1,44000"
 export TEST_DEV=$T_DB0
 export TEST_DIR=$T_M0
 export SCRATCH_META_DEV=$T_EX_META_DEV
 export SCRATCH_DEV=$T_EX_DATA_DEV
 export SCRATCH_MNT="$T_TMPDIR/mnt.scratch"
-export SCOUTFS_SCRATCH_MOUNT_OPTIONS="-o server_addr=127.0.0.1,metadev_path=$T_EX_META_DEV"
-export MOUNT_OPTIONS="-o server_addr=127.0.0.1,metadev_path=$T_MB0"
-export TEST_FS_MOUNT_OPTS="-o server_addr=127.0.0.1,metadev_path=$T_MB0"
+export SCOUTFS_SCRATCH_MOUNT_OPTIONS="-o quorum_slot_nr=0,metadev_path=$T_EX_META_DEV"
+export MOUNT_OPTIONS="-o quorum_slot_nr=0,metadev_path=$T_MB0"
+export TEST_FS_MOUNT_OPTS="-o quorum_slot_nr=0,metadev_path=$T_MB0"
 EOF
 
 cat << EOF > local.exclude

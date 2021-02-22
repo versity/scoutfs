@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdio.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "sparse.h"
 #include "util.h"
@@ -151,4 +154,66 @@ int parse_timespec(char *str, struct timespec *ts)
 	ts->tv_nsec = nsec;
 
 	return 0;
+}
+
+/*
+ * Parse a quorum slot specification string "NR,ADDR,PORT" into its
+ * component parts.  We use sscanf to both parse the leading NR and
+ * trailing PORT integers, and to pull out the inner ADDR string which
+ * is then parsed to make sure that it's a valid unicast ipv4 address.
+ * We require that all components be specified, and sccanf will check
+ * this by the number of matches it returns.
+ */
+int parse_quorum_slot(struct scoutfs_quorum_slot *slot, char *arg)
+{
+#define ADDR_CHARS 45 /* max ipv6 */
+	char addr[ADDR_CHARS + 1] = {'\0',};
+	struct in_addr in;
+	int port;
+	int parsed;
+	int nr;
+	int ret;
+
+	/* leading and trailing ints, an inner sized string without ,, all separated by , */
+	ret = sscanf(arg, "%u,%"__stringify(ADDR_CHARS)"[^,],%u%n",
+		     &nr, addr, &port, &parsed);
+	if (ret == EOF) {
+		printf("error parsing quorum slot '%s': %s\n",
+			arg, strerror(errno));
+		return -EINVAL;
+	}
+
+	if (parsed != strlen(arg)) {
+		printf("extra unparsed trailing characters in quorum slot '%s'\n",
+			arg);
+		return -EINVAL;
+	}
+
+	if (ret != 3) {
+		printf("failed to parse all three NR,ADDR,PORT tokens in quorum slot '%s'\n", arg);
+		return -EINVAL;
+	}
+
+	if (nr < 0 || nr >= SCOUTFS_QUORUM_MAX_SLOTS) {
+		printf("invalid nr '%d' in quorum slot '%s', must be between 0 and %u\n",
+		       nr, arg, SCOUTFS_QUORUM_MAX_SLOTS - 1);
+		return -EINVAL;
+	}
+
+	if (port <= 0 || port > USHRT_MAX) {
+		printf("invalid ipv4 port '%u' in quorum slot '%s', must be between 1 and %u\n",
+		       port, arg, USHRT_MAX);
+		return -EINVAL;
+	}
+
+	if (inet_aton(addr, &in) == 0 || htonl(in.s_addr) == 0 ||
+	    htonl(in.s_addr) == UINT_MAX) {
+		printf("invalid ipv4 address '%s' in quorum slot '%s'\n",
+		       addr, arg);
+		return -EINVAL;
+	}
+
+	slot->addr.addr = cpu_to_le32(htonl(in.s_addr));
+	slot->addr.port = cpu_to_le16(port);
+	return nr;
 }

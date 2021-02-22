@@ -59,7 +59,6 @@ struct server_info {
 	int err;
 	bool shutting_down;
 	struct completion start_comp;
-	struct sockaddr_in listen_sin;
 	u64 term;
 	struct scoutfs_net_connection *conn;
 
@@ -75,7 +74,7 @@ struct server_info {
 	unsigned long nr_clients;
 
 	/* track clients waiting in unmmount for farewell response */
-	struct mutex farewell_mutex;
+	spinlock_t farewell_lock;
 	struct list_head farewell_requests;
 	struct work_struct farewell_work;
 
@@ -92,6 +91,7 @@ struct server_info {
 
 	struct mutex logs_mutex;
 	struct mutex srch_mutex;
+	struct mutex mounted_clients_mutex;
 
 	/* stable versions stored from commits, given in locks and rpcs */
 	seqcount_t roots_seqcount;
@@ -1031,24 +1031,26 @@ static int insert_mounted_client(struct super_block *sb, u64 rid,
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct scoutfs_mounted_client_btree_val mcv;
 	struct scoutfs_key key;
+	int ret;
 
 	init_mounted_client_key(&key, rid);
 	mcv.flags = 0;
-	if (gr_flags & SCOUTFS_NET_GREETING_FLAG_VOTER)
-		mcv.flags |= SCOUTFS_MOUNTED_CLIENT_VOTER;
+	if (gr_flags & SCOUTFS_NET_GREETING_FLAG_QUORUM)
+		mcv.flags |= SCOUTFS_MOUNTED_CLIENT_QUORUM;
 
-	return scoutfs_btree_insert(sb, &server->alloc, &server->wri,
-				    &super->mounted_clients, &key, &mcv,
-				    sizeof(mcv));
+	mutex_lock(&server->mounted_clients_mutex);
+	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
+				   &super->mounted_clients, &key, &mcv,
+				   sizeof(mcv));
+	mutex_unlock(&server->mounted_clients_mutex);
+
+	return ret;
 }
 
 /*
  * Remove the record of a mounted client.  The record can already be
  * removed if we're processing a farewell on behalf of a client that
  * already had a previous server process its farewell.
- *
- * When we remove the last mounted client that's voting we write a new
- * quorum block with the updated unmount_barrier.
  *
  * The caller has to serialize with farewell processing.
  */
@@ -1061,8 +1063,10 @@ static int delete_mounted_client(struct super_block *sb, u64 rid)
 
 	init_mounted_client_key(&key, rid);
 
+	mutex_lock(&server->mounted_clients_mutex);
 	ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
 				   &super->mounted_clients, &key);
+	mutex_unlock(&server->mounted_clients_mutex);
 	if (ret == -ENOENT)
 		ret = 0;
 
@@ -1149,7 +1153,6 @@ static int server_greeting(struct super_block *sb,
 	struct scoutfs_net_greeting *gr = arg;
 	struct scoutfs_net_greeting greet;
 	DECLARE_SERVER_INFO(sb, server);
-	__le64 umb = 0;
 	bool reconnecting;
 	bool first_contact;
 	bool farewell;
@@ -1182,19 +1185,11 @@ static int server_greeting(struct super_block *sb,
 		if (ret < 0)
 			goto send_err;
 
-		spin_lock(&server->lock);
-		umb = super->unmount_barrier;
-		spin_unlock(&server->lock);
-
-		mutex_lock(&server->farewell_mutex);
 		ret = insert_mounted_client(sb, le64_to_cpu(gr->rid),
 					    le64_to_cpu(gr->flags));
-		mutex_unlock(&server->farewell_mutex);
 
 		ret = scoutfs_server_apply_commit(sb, ret);
 		queue_work(server->wq, &server->farewell_work);
-	} else {
-		umb = gr->unmount_barrier;
 	}
 
 send_err:
@@ -1203,7 +1198,6 @@ send_err:
 	greet.fsid = super->hdr.fsid;
 	greet.version = super->version;
 	greet.server_term = cpu_to_le64(server->term);
-	greet.unmount_barrier = umb;
 	greet.rid = gr->rid;
 	greet.flags = 0;
 
@@ -1259,19 +1253,17 @@ static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
 
 /*
  * This work processes farewell requests asynchronously.  Requests from
- * voting clients can be held until only the final quorum remains and
+ * quorum members can be held until only the final majority remains and
  * they've all sent farewell requests.
  *
- * When we remove the last mounted client record for the last voting
- * client then we increase the unmount_barrier and write it to the super
- * block.  If voting clients don't get their farewell response they'll
- * see the greater umount_barrier in the super and will know that their
- * farewell has been processed and that they can exit.
+ * A client can be disconnected before receiving our farewell response.
+ * Before reconnecting they check for their mounted client item, if it's
+ * been removed then they know that their farewell has been processed
+ * and that they finish unmounting without reconnecting.
  *
- * Responses that are waiting for clients who aren't voting are
- * immediately sent.  Clients that don't have a mounted client record
- * have already had their farewell processed by another server and can
- * proceed.
+ * Responses for clients who aren't quorum members are immediately sent.
+ * Clients that don't have a mounted client record have already had
+ * their farewell processed by another server and can proceed.
  *
  * Farewell responses are unique in that sending them causes the server
  * to shutdown the connection to the client next time the socket
@@ -1293,56 +1285,26 @@ static void farewell_worker(struct work_struct *work)
 	struct farewell_request *tmp;
 	struct farewell_request *fw;
 	SCOUTFS_BTREE_ITEM_REF(iref);
-	unsigned int nr_unmounting = 0;
-	unsigned int nr_mounted = 0;
+	unsigned int quo_reqs = 0;
+	unsigned int quo_mnts = 0;
+	unsigned int non_mnts = 0;
 	struct scoutfs_key key;
 	LIST_HEAD(reqs);
 	LIST_HEAD(send);
-	bool deleted = false;
-	bool voting;
 	bool more_reqs;
 	int ret;
 
-	/* grab all the requests that are waiting */
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	list_splice_init(&server->farewell_requests, &reqs);
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
 
-	/* count how many reqs requests are from voting clients */
-	nr_unmounting = 0;
-	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
-		init_mounted_client_key(&key, fw->rid);
-		ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key,
-					   &iref);
-		if (ret == 0 && invalid_mounted_client_item(&iref)) {
-			scoutfs_btree_put_iref(&iref);
-			ret = -EIO;
-		}
-		if (ret < 0) {
-			if (ret == -ENOENT) {
-				list_move_tail(&fw->entry, &send);
-				continue;
-			}
-			goto out;
-		}
-
-		mcv = iref.val;
-		voting = (mcv->flags & SCOUTFS_MOUNTED_CLIENT_VOTER) != 0;
-		scoutfs_btree_put_iref(&iref);
-
-		if (!voting) {
-			list_move_tail(&fw->entry, &send);
-			continue;
-		}
-
-		nr_unmounting++;
-	}
-
-	/* see how many mounted clients could vote for quorum */
+	/* first count mounted clients who could send requests */
 	init_mounted_client_key(&key, 0);
 	for (;;) {
+		mutex_lock(&server->mounted_clients_mutex);
 		ret = scoutfs_btree_next(sb, &super->mounted_clients, &key,
 					 &iref);
+		mutex_unlock(&server->mounted_clients_mutex);
 		if (ret == 0 && invalid_mounted_client_item(&iref)) {
 			scoutfs_btree_put_iref(&iref);
 			ret = -EIO;
@@ -1356,23 +1318,62 @@ static void farewell_worker(struct work_struct *work)
 		key = *iref.key;
 		mcv = iref.val;
 
-		if (mcv->flags & SCOUTFS_MOUNTED_CLIENT_VOTER)
-			nr_mounted++;
+		if (mcv->flags & SCOUTFS_MOUNTED_CLIENT_QUORUM)
+			quo_mnts++;
+		else
+			non_mnts++;
 
 		scoutfs_btree_put_iref(&iref);
 		scoutfs_key_inc(&key);
 	}
 
-	/* send as many responses as we can to maintain quorum */
-	while ((fw = list_first_entry_or_null(&reqs, struct farewell_request,
-					      entry)) &&
-	       (nr_mounted > super->quorum_count ||
-		nr_unmounting >= nr_mounted)) {
+	/* walk requests, checking their mounted client items */
+	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
+		init_mounted_client_key(&key, fw->rid);
+		mutex_lock(&server->mounted_clients_mutex);
+		ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key,
+					   &iref);
+		mutex_unlock(&server->mounted_clients_mutex);
+		if (ret == 0 && invalid_mounted_client_item(&iref)) {
+			scoutfs_btree_put_iref(&iref);
+			ret = -EIO;
+		}
+		if (ret < 0) {
+			/* missing items means we've already processed */
+			if (ret == -ENOENT) {
+				list_move(&fw->entry, &send);
+				continue;
+			}
+			goto out;
+		}
 
-		list_move_tail(&fw->entry, &send);
-		nr_mounted--;
-		nr_unmounting--;
-		deleted = true;
+		mcv = iref.val;
+
+		/* count quo reqs, can always send to non-quo clients */
+		if (mcv->flags & SCOUTFS_MOUNTED_CLIENT_QUORUM) {
+			quo_reqs++;
+		} else {
+			list_move(&fw->entry, &send);
+			non_mnts--;
+		}
+
+		scoutfs_btree_put_iref(&iref);
+	}
+
+	/*
+	 * Only requests from quorum members remain and we've counted
+	 * them and remaining mounts.  Send responses as long as enough
+	 * quorum clients remain for a majority, or all the requests are
+	 * from the final majority of quorum clients they're the only
+	 * mounted clients.
+	 */
+	list_for_each_entry_safe(fw, tmp, &reqs, entry) {
+		if ((quo_mnts > scoutfs_quorum_votes_needed(sb)) ||
+		    ((quo_reqs == quo_mnts) && (non_mnts == 0))) {
+			list_move_tail(&fw->entry, &send);
+			quo_mnts--;
+			quo_reqs--;
+		}
 	}
 
 	/* process and send farewell responses */
@@ -1381,24 +1382,12 @@ static void farewell_worker(struct work_struct *work)
 		if (ret)
 			goto out;
 
+		/* delete mounted client last, client reconnect looks for it */
 		ret = scoutfs_lock_server_farewell(sb, fw->rid) ?:
 		      remove_trans_seq(sb, fw->rid) ?:
 		      reclaim_log_trees(sb, fw->rid) ?:
-		      delete_mounted_client(sb, fw->rid) ?:
-		      cancel_srch_compact(sb, fw->rid);
-
-		ret = scoutfs_server_apply_commit(sb, ret);
-		if (ret)
-			goto out;
-	}
-
-	/* update the unmount barrier if we deleted all voting clients */
-	if (deleted && nr_mounted == 0) {
-		ret = scoutfs_server_hold_commit(sb);
-		if (ret)
-			goto out;
-
-		le64_add_cpu(&super->unmount_barrier, 1);
+		      cancel_srch_compact(sb, fw->rid) ?:
+		      delete_mounted_client(sb, fw->rid);
 
 		ret = scoutfs_server_apply_commit(sb, ret);
 		if (ret)
@@ -1420,11 +1409,11 @@ static void farewell_worker(struct work_struct *work)
 
 	ret = 0;
 out:
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	more_reqs = !list_empty(&server->farewell_requests);
 	list_splice_init(&reqs, &server->farewell_requests);
 	list_splice_init(&send, &server->farewell_requests);
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
 
 	if (ret < 0)
 		stop_server(server);
@@ -1437,15 +1426,17 @@ static void free_farewell_requests(struct super_block *sb, u64 rid)
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
 	struct farewell_request *tmp;
 	struct farewell_request *fw;
+	LIST_HEAD(rid_list);
 
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	list_for_each_entry_safe(fw, tmp, &server->farewell_requests, entry) {
-		if (rid == 0 || fw->rid == rid) {
-			list_del_init(&fw->entry);
-			kfree(fw);
-		}
+		if (rid == 0 || fw->rid == rid)
+			list_move_tail(&fw->entry, &rid_list);
 	}
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
+
+	list_for_each_entry_safe(fw, tmp, &rid_list, entry)
+		kfree(fw);
 }
 
 /*
@@ -1479,9 +1470,9 @@ static int server_farewell(struct super_block *sb,
 	fw->rid = rid;
 	fw->net_id = id;
 
-	mutex_lock(&server->farewell_mutex);
+	spin_lock(&server->farewell_lock);
 	list_add_tail(&fw->entry, &server->farewell_requests);
-	mutex_unlock(&server->farewell_mutex);
+	spin_unlock(&server->farewell_lock);
 
 	queue_farewell_work(server);
 
@@ -1548,18 +1539,17 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct super_block *sb = server->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
+	struct mount_options *opts = &sbi->opts;
 	struct scoutfs_net_connection *conn = NULL;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
 	struct sockaddr_in sin;
 	LIST_HEAD(conn_list);
 	u64 max_vers;
 	int ret;
-	int err;
 
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
-	sin = server->listen_sin;
-
+	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server setting up at "SIN_FMT, SIN_ARG(&sin));
 
 	conn = scoutfs_net_alloc_conn(sb, server_notify_up, server_notify_down,
@@ -1578,9 +1568,6 @@ static void scoutfs_server_worker(struct work_struct *work)
 						  : "");
 		goto out;
 	}
-
-	if (ret)
-		goto out;
 
 	/* start up the server subsystems before accepting */
 	ret = scoutfs_read_super(sb, super);
@@ -1621,19 +1608,6 @@ static void scoutfs_server_worker(struct work_struct *work)
 	if (ret)
 		goto shutdown;
 
-	/*
-	 * Write our address in the super before it's possible for net
-	 * processing to start writing the super as part of
-	 * transactions.  In theory clients could be trying to connect
-	 * to our address without having seen it in the super (maybe
-	 * they saw it a long time ago).
-	 */
-	scoutfs_addr_from_sin(&super->server_addr, &sin);
-	super->quorum_server_term = cpu_to_le64(server->term);
-	ret = scoutfs_write_super(sb, super);
-	if (ret < 0)
-		goto shutdown;
-
 	/* start accepting connections and processing work */
 	server->conn = conn;
 	scoutfs_net_listen(sb, conn);
@@ -1660,29 +1634,13 @@ shutdown:
 	scoutfs_lock_server_destroy(sb);
 
 out:
-	scoutfs_quorum_clear_leader(sb);
 	scoutfs_net_free_conn(sb, conn);
+
+	/* let quorum know that we've shutdown */
+	scoutfs_quorum_server_shutdown(sb);
 
 	scoutfs_info(sb, "server stopped at "SIN_FMT, SIN_ARG(&sin));
 	trace_scoutfs_server_work_exit(sb, 0, ret);
-
-	/*
-	 * Always try to clear our presence in the super so that we're
-	 * not fenced.  We do this last because other mounts will try to
-	 * reach quorum the moment they see zero here.  The later we do
-	 * this the longer we have to finish shutdown while clients
-	 * timeout.
-	 */
-	err = scoutfs_read_super(sb, super);
-	if (err == 0) {
-		super->quorum_fenced_term = cpu_to_le64(server->term);
-		memset(&super->server_addr, 0, sizeof(super->server_addr));
-		err = scoutfs_write_super(sb, super);
-	}
-	if (err < 0) {
-		scoutfs_err(sb, "failed to clear election term %llu at "SIN_FMT", this mount could be fenced",
-			    server->term, SIN_ARG(&sin));
-	}
 
 	server->err = ret;
 	complete(&server->start_comp);
@@ -1693,14 +1651,12 @@ out:
  * the super block's fence_term has been set to the new server's term so
  * that it won't be fenced.
  */
-int scoutfs_server_start(struct super_block *sb, struct sockaddr_in *sin,
-			 u64 term)
+int scoutfs_server_start(struct super_block *sb, u64 term)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	server->err = 0;
 	server->shutting_down = false;
-	server->listen_sin = *sin;
 	server->term = term;
 	init_completion(&server->start_comp);
 
@@ -1753,12 +1709,13 @@ int scoutfs_server_setup(struct super_block *sb)
 	INIT_WORK(&server->commit_work, scoutfs_server_commit_func);
 	init_rwsem(&server->seq_rwsem);
 	INIT_LIST_HEAD(&server->clients);
-	mutex_init(&server->farewell_mutex);
+	spin_lock_init(&server->farewell_lock);
 	INIT_LIST_HEAD(&server->farewell_requests);
 	INIT_WORK(&server->farewell_work, farewell_worker);
 	mutex_init(&server->alloc_mutex);
 	mutex_init(&server->logs_mutex);
 	mutex_init(&server->srch_mutex);
+	mutex_init(&server->mounted_clients_mutex);
 	seqcount_init(&server->roots_seqcount);
 
 	server->wq = alloc_workqueue("scoutfs_server",

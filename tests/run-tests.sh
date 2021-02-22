@@ -52,11 +52,11 @@ $(basename $0) options:
               | the file system to be tested.  Will be clobbered by -m mkfs.
     -m        | Run mkfs on the device before mounting and running
               | tests.  Implies unmounting existing mounts first.
-    -n        | The number of devices and mounts to test.
+    -n <nr>   | The number of devices and mounts to test.
     -P        | Enable trace_printk.
     -p        | Exit script after preparing mounts only, don't run tests.
-    -q <nr>   | Specify the quorum count needed to mount.  This is
-              | used when running mkfs and is needed by a few tests.
+    -q <nr>   | The first <nr> mounts will be quorum members.  Must be
+              | at least 1 and no greater than -n number of mounts.
     -r <dir>  | Specify the directory in which to store results of
               | test runs.  The directory will be created if it doesn't
               | exist.  Previous results will be deleted as each test runs.
@@ -199,7 +199,6 @@ test -e "$T_EX_META_DEV" || die "extra meta device -f '$T_EX_META_DEV' doesn't e
 test -n "$T_EX_DATA_DEV" || die "must specify -e extra data device"
 test -e "$T_EX_DATA_DEV" || die "extra data device -e '$T_EX_DATA_DEV' doesn't exist"
 
-test -n "$T_MKFS" -a -z "$T_QUORUM" && die "mkfs (-m) requires quorum (-q)"
 test -n "$T_RESULTS" || die "must specify -r results dir"
 test -n "$T_XFSTESTS_REPO" -a -z "$T_XFSTESTS_BRANCH" -a -z "$T_SKIP_CHECKOUT" && \
 	die "-X xfstests repo requires -x xfstests branch"
@@ -209,6 +208,12 @@ test -n "$T_XFSTESTS_BRANCH" -a -z "$T_XFSTESTS_REPO" -a -z "$T_SKIP_CHECKOUT" &
 test -n "$T_NR_MOUNTS" || die "must specify -n nr mounts"
 test "$T_NR_MOUNTS" -ge 1 -a "$T_NR_MOUNTS" -le 8 || \
 	 die "-n nr mounts must be >= 1 and <= 8"
+test -n "$T_QUORUM" || \
+	 die "must specify -q number of mounts that are quorum members"
+test "$T_QUORUM" -ge "1" || \
+	 die "-q quorum mmembers must be at least 1"
+test "$T_QUORUM" -le "$T_NR_MOUNTS" || \
+	 die "-q quorum mmembers must not be greater than -n mounts"
 
 # top level paths
 T_KMOD=$(realpath "$(dirname $0)/../kmod")
@@ -307,8 +312,14 @@ if [ -n "$T_UNMOUNT" ]; then
 	unmount_all
 fi
 
+quo=""
 if [ -n "$T_MKFS" ]; then
-	cmd scoutfs mkfs -Q "$T_QUORUM" "$T_META_DEVICE" "$T_DATA_DEVICE" -f
+	for i in $(seq -0 $((T_QUORUM - 1))); do
+		quo="$quo -Q $i,127.0.0.1,$((42000 + i))"
+	done
+
+	msg "making new filesystem with $T_QUORUM quorum members"
+	cmd scoutfs mkfs -f $quo "$T_META_DEVICE" "$T_DATA_DEVICE"
 fi
 
 if [ -n "$T_INSMOD" ]; then
@@ -365,8 +376,12 @@ for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 	dir="/mnt/test.$i"
 	test -d "$dir" || cmd mkdir -p "$dir"
 
+	opts="-o metadev_path=$meta_dev"
+	if [ "$i" -lt "$T_QUORUM" ]; then
+		opts="$opts,quorum_slot_nr=$i"
+	fi
+
 	msg "mounting $meta_dev|$data_dev on $dir"
-	opts="-o server_addr=127.0.0.1,metadev_path=$meta_dev"
 	cmd mount -t scoutfs $opts "$data_dev" "$dir" &
 
 	p="$!"

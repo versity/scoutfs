@@ -21,21 +21,19 @@ contains the filesystem's metadata.
 .sp
 This option is required.
 .TP
-.B server_addr=<ipv4:port>
-The server_addr option indicates that this mount will participate in
-quorum election to try and run a server for all the mounts of its
-filesystem.   The option specifies the local TCP IPv4 address that the
-mount's elected server will listen on for connections from all other
-mounts of the filesystem.
+.B quorum_slot_nr=<number>
+The quorum_slot_nr option assigns a quorum member slot to the mount.
+The mount will use the slot assignment to claim exclusive ownership of
+the slot's configured address and an associated metadata device block.
+Each slot number must be used by only one mount at any given time.
 .sp
-The IPv4 address must be specified as a dotted quad, name resolution is
-not supported.  A specific port may be provided after a seperating
-colon.  If no port is specified then a random port will be chosen.  The
-address will be used for the lifetime of the mount and can not be
-changed.  The mount must be unmounted to specify a different address.
+When a mount is assigned a quorum slot it becomes a quorum member and
+will participate in the raft leader election process and could start
+the server for the filesystem if it is elected leader.
 .sp
-If server_addr is not specified then the mount will read the filesystem
-until it sees the address of an elected server to connect to.
+The assigned number must match one of the slots defined with \-Q options
+when the filesystem was created with mkfs.  If the number assigned
+doesn't match a number created during mkfs then the mount will fail.
 .SH FURTHER READING
 A
 .B scoutfs
