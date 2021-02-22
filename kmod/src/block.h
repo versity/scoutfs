@@ -13,7 +13,6 @@ struct scoutfs_block {
 	void *priv;
 };
 
-struct scoutfs_block *scoutfs_block_create(struct super_block *sb, u64 blkno);
 int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
 			   struct scoutfs_block **bl_ret);
 void scoutfs_block_put(struct super_block *sb, struct scoutfs_block *bl);
