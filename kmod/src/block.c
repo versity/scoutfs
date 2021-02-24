@@ -29,6 +29,7 @@
 #include "msg.h"
 #include "scoutfs_trace.h"
 #include "alloc.h"
+#include "triggers.h"
 
 /*
  * The scoutfs block cache manages metadata blocks that can be larger
@@ -682,7 +683,8 @@ retry:
 
 	ret = 0;
 out:
-	if (ret == -ESTALE && !retried && !block_is_dirty(bp)) {
+	if ((ret == -ESTALE || scoutfs_trigger(sb, BLOCK_REMOVE_STALE)) &&
+	    !retried && !block_is_dirty(bp)) {
 		retried = true;
 		scoutfs_inc_counter(sb, block_cache_remove_stale);
 		block_remove(sb, bp);
