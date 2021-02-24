@@ -39,10 +39,6 @@ struct scoutfs_triggers {
 
 static char *names[] = {
 	[SCOUTFS_TRIGGER_BLOCK_REMOVE_STALE] = "block_remove_stale",
-	[SCOUTFS_TRIGGER_BTREE_STALE_READ] = "btree_stale_read",
-	[SCOUTFS_TRIGGER_BTREE_ADVANCE_RING_HALF] = "btree_advance_ring_half",
-	[SCOUTFS_TRIGGER_HARD_STALE_ERROR] = "hard_stale_error",
-	[SCOUTFS_TRIGGER_SEG_STALE_READ] = "seg_stale_read",
 	[SCOUTFS_TRIGGER_STATFS_LOCK_PURGE] = "statfs_lock_purge",
 };
 
