@@ -47,6 +47,7 @@
 #include "recov.h"
 #include "omap.h"
 #include "volopt.h"
+#include "fence.h"
 #include "scoutfs_trace.h"
 
 static struct dentry *scoutfs_debugfs_root;
@@ -270,6 +271,7 @@ static void scoutfs_put_super(struct super_block *sb)
 
 	scoutfs_block_destroy(sb);
 	scoutfs_destroy_triggers(sb);
+	scoutfs_fence_destroy(sb);
 	scoutfs_options_destroy(sb);
 	scoutfs_sysfs_destroy_attrs(sb, &sbi->mopts_ssa);
 	debugfs_remove(sbi->debug_root);
@@ -606,6 +608,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_sysfs_create_attrs(sb, &sbi->mopts_ssa,
 				mount_options_attrs, "mount_options") ?:
 	      scoutfs_setup_triggers(sb) ?:
+	      scoutfs_fence_setup(sb) ?:
 	      scoutfs_block_setup(sb) ?:
 	      scoutfs_forest_setup(sb) ?:
 	      scoutfs_item_setup(sb) ?:
