@@ -185,6 +185,11 @@ void scoutfs_trans_write_func(struct work_struct *work)
 
 	wait_event(sbi->trans_hold_wq, drained_holders(tri));
 
+	if (scoutfs_forcing_unmount(sb)) {
+		ret = -EIO;
+		goto out;
+	}
+
 	trace_scoutfs_trans_write_func(sb,
 			scoutfs_block_writer_dirty_bytes(sb, &tri->wri));
 
@@ -202,7 +207,7 @@ void scoutfs_trans_write_func(struct work_struct *work)
 			if (ret < 0)
 			      s = "clean advance seq";
 		}
-		goto out;
+		goto err;
 	}
 
 	if (sbi->trans_deadline_expired)
@@ -222,11 +227,12 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	      scoutfs_item_write_done(sb) ?:
 	      (s = "advance seq", scoutfs_client_advance_seq(sb, &trans_seq)) ?:
 	      (s = "get log trees", scoutfs_trans_get_log_trees(sb));
-out:
+err:
 	if (ret < 0)
 		scoutfs_err(sb, "critical transaction commit failure: %s, %d",
 			    s, ret);
 
+out:
 	spin_lock(&sbi->trans_write_lock);
 	sbi->trans_write_count++;
 	sbi->trans_write_ret = ret;

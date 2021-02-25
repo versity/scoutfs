@@ -330,6 +330,9 @@ static int submit_send(struct super_block *sb,
 	    WARN_ON_ONCE(id == 0 && (flags & SCOUTFS_NET_FLAG_RESPONSE)))
 		return -EINVAL;
 
+	if (scoutfs_forcing_unmount(sb))
+		return -EIO;
+
 	msend = kmalloc(offsetof(struct message_send,
 				 nh.data[data_len]), GFP_NOFS);
 	if (!msend)
@@ -420,6 +423,16 @@ static int process_request(struct scoutfs_net_connection *conn,
 			mrecv->nh.data, le16_to_cpu(mrecv->nh.data_len));
 }
 
+static int call_resp_func(struct super_block *sb, struct scoutfs_net_connection *conn,
+			  scoutfs_net_response_t resp_func, void *resp_data,
+			  void *resp, unsigned int resp_len, int error)
+{
+	if (resp_func)
+		return resp_func(sb, conn, resp, resp_len, error, resp_data);
+	else
+		return 0;
+}
+
 /*
  * An incoming response finds the queued request and calls its response
  * function.  The response function for a given request will only be
@@ -434,7 +447,6 @@ static int process_response(struct scoutfs_net_connection *conn,
 	struct message_send *msend;
 	scoutfs_net_response_t resp_func = NULL;
 	void *resp_data;
-	int ret = 0;
 
 	spin_lock(&conn->lock);
 
@@ -449,11 +461,8 @@ static int process_response(struct scoutfs_net_connection *conn,
 
 	spin_unlock(&conn->lock);
 
-	if (resp_func)
-		ret = resp_func(sb, conn, mrecv->nh.data,
-				le16_to_cpu(mrecv->nh.data_len),
-				net_err_to_host(mrecv->nh.error), resp_data);
-	return ret;
+	return call_resp_func(sb, conn, resp_func, resp_data, mrecv->nh.data,
+			      le16_to_cpu(mrecv->nh.data_len), net_err_to_host(mrecv->nh.error));
 }
 
 /*
@@ -823,9 +832,15 @@ static void scoutfs_net_destroy_worker(struct work_struct *work)
 	if (conn->listening_conn && conn->notify_down)
 		conn->notify_down(sb, conn, conn->info, conn->rid);
 
-	/* free all messages, refactor and complete for forced unmount? */
+	/*
+	 * Usually networking is idle and we destroy pending sends, but when forcing unmount
+	 * we can have to wake up waiters by failing pending sends.
+	 */
 	list_splice_init(&conn->resend_queue, &conn->send_queue);
 	list_for_each_entry_safe(msend, tmp, &conn->send_queue, head) {
+		if (scoutfs_forcing_unmount(sb))
+			call_resp_func(sb, conn, msend->resp_func, msend->resp_data,
+				       NULL, 0, -ECONNABORTED);
 		free_msend(ninf, msend);
 	}
 

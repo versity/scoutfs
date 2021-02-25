@@ -466,9 +466,11 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 out:
 
 	/* always have a small delay before retrying to avoid storms */
-	if (ret && !atomic_read(&client->shutting_down))
+	if (ret && !atomic_read(&client->shutting_down) &&
+	    !scoutfs_forcing_unmount(sb)) {
 		queue_delayed_work(client->workq, &client->connect_dwork,
 				   msecs_to_jiffies(CLIENT_CONNECT_DELAY_MS));
+	}
 }
 
 static scoutfs_net_request_t client_req_funcs[] = {
@@ -580,7 +582,7 @@ void scoutfs_client_destroy(struct super_block *sb)
 	if (client == NULL)
 		return;
 
-	if (client->server_term != 0) {
+	if (client->server_term != 0 && !scoutfs_forcing_unmount(sb)) {
 		client->sending_farewell = true;
 		ret = scoutfs_net_submit_request(sb, client->conn,
 						 SCOUTFS_NET_CMD_FAREWELL,

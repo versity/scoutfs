@@ -283,6 +283,21 @@ static void scoutfs_put_super(struct super_block *sb)
 	sb->s_fs_info = NULL;
 }
 
+/*
+ * Record that we're performing a forced unmount.  As put_super drives
+ * destruction of the filesystem we won't issue more network or storage
+ * operations because we assume that they'll hang.  Pending operations
+ * can return errors when it's possible to do so.  We may be racing with
+ * pending operations which can't be canceled.
+ */
+static void scoutfs_umount_begin(struct super_block *sb)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	scoutfs_warn(sb, "forcing unmount, can return errors and lose unsynced data");
+	sbi->forced_unmount = true;
+}
+
 static const struct super_operations scoutfs_super_ops = {
 	.alloc_inode = scoutfs_alloc_inode,
 	.drop_inode = scoutfs_drop_inode,
@@ -292,6 +307,7 @@ static const struct super_operations scoutfs_super_ops = {
 	.statfs = scoutfs_statfs,
 	.show_options = scoutfs_show_options,
 	.put_super = scoutfs_put_super,
+	.umount_begin = scoutfs_umount_begin,
 };
 
 /*

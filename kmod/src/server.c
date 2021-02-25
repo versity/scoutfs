@@ -284,6 +284,11 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 
 	down_write(&server->commit_rwsem);
 
+	if (scoutfs_forcing_unmount(sb)) {
+		ret = -EIO;
+		goto out;
+	}
+
 	/* make sure next avail has sufficient blocks */
 	ret = scoutfs_alloc_fill_list(sb, &server->alloc, &server->wri,
 				      server->other_avail,
