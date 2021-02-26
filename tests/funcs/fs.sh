@@ -17,6 +17,17 @@ t_sync_seq_index()
 	t_quiet sync
 }
 
+t_mount_rid()
+{
+	local nr="${1:-0}"
+	local mnt="$(eval echo \$T_M$nr)"
+	local rid
+
+	rid=$(scoutfs statfs -s rid -p "$mnt")
+
+	echo "$rid"
+}
+
 #
 # Output the "f.$fsid.r.$rid" identifier string for the given mount
 # number, 0 is used by default if none is specified. 
@@ -130,6 +141,16 @@ t_umount()
 		t_fail "fs nr $nr invalid"
 
 	eval t_quiet umount \$T_M$nr
+}
+
+t_force_umount()
+{
+	local nr="$1"
+
+	test "$nr" -lt "$T_NR_MOUNTS" || \
+		t_fail "fs nr $nr invalid"
+
+	eval t_quiet umount -f \$T_M$nr
 }
 
 #
@@ -276,4 +297,68 @@ t_counter_diff_changed() {
 	test "$diff" -eq 0 && \
 		echo "counter $which didn't change" ||
 		echo "counter $which changed"
+}
+
+#
+# See if we can find a local mount with the caller's rid.
+#
+t_rid_is_mounted() {
+	local rid="$1"
+	local fr="$1"
+
+	for fr in /sys/fs/scoutfs/*; do
+		if [ "$(cat $fr/rid)" == "$rid" ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+#
+# A given mount is being fenced if any mount has a fence request pending
+# for it which hasn't finished and been removed.
+#
+t_rid_is_fencing() {
+	local rid="$1"
+	local fr
+
+	for fr in /sys/fs/scoutfs/*; do
+		if [ -d "$fr/fence/$rid" ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+#
+# Wait until the mount identified by the first rid arg is not in any
+# states specified by the remaining state description word args.
+#
+t_wait_if_rid_is() {
+	local rid="$1"
+
+	while ( [[ $* =~ mounted ]] && t_rid_is_mounted $rid ) ||
+	      ( [[ $* =~ fencing ]] && t_rid_is_fencing $rid ) ; do
+		sleep .5
+	done
+}
+
+#
+# Wait until any mount identifies itself as the elected leader.  We can
+# be waiting while tests mount and unmount so mounts may not be mounted
+# at the test's expected mount points.
+#
+t_wait_for_leader() {
+	local i
+
+	while sleep .25; do
+		for i in $(t_fs_nrs); do
+			local ldr="$(t_sysfs_path $i 2>/dev/null)/quorum/is_leader"
+			if [ "$(cat $ldr 2>/dev/null)" == "1" ]; then
+				return
+			fi
+		done
+	done
 }

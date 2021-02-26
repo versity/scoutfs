@@ -1,0 +1,5 @@
+== make sure all mounts can see each other
+== force unmount one client, connection timeout, fence nop, mount
+== force unmount all non-server, connection timeout, fence nop, mount
+== force unmount server, quorum elects new leader, fence nop, mount
+== force unmount everything, new server fences all previous
