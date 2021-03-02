@@ -1621,19 +1621,28 @@ int scoutfs_orphan_inode(struct inode *inode)
 }
 
 /*
- * Track an inode that could have dirty pages.  Used to kick off writeback
- * on all dirty pages during transaction commit without tying ourselves in
- * knots trying to call through the high level vfs sync methods.
+ * Track an inode that could have dirty pages.  Used to kick off
+ * writeback on all dirty pages during transaction commit without tying
+ * ourselves in knots trying to call through the high level vfs sync
+ * methods.
+ *
+ * This is called by writers who hold the inode and transaction.  The
+ * inode's presence in the rbtree is removed by destroy_inode, prevented
+ * by the inode hold, and by committing the transaction, which is
+ * prevented by holding the transaction.  The inode can only go from
+ * empty to on the rbtree while we're here.
  */
 void scoutfs_inode_queue_writeback(struct inode *inode)
 {
 	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	spin_lock(&inf->writeback_lock);
-	if (RB_EMPTY_NODE(&si->writeback_node))
-		insert_writeback_inode(inf, si);
-	spin_unlock(&inf->writeback_lock);
+	if (RB_EMPTY_NODE(&si->writeback_node)) {
+		spin_lock(&inf->writeback_lock);
+		if (RB_EMPTY_NODE(&si->writeback_node))
+			insert_writeback_inode(inf, si);
+		spin_unlock(&inf->writeback_lock);
+	}
 }
 
 /*
