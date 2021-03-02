@@ -252,7 +252,7 @@ void scoutfs_alloc_init(struct scoutfs_alloc *alloc,
 {
 	memset(alloc, 0, sizeof(struct scoutfs_alloc));
 
-	spin_lock_init(&alloc->lock);
+	seqlock_init(&alloc->seqlock);
 	mutex_init(&alloc->mutex);
 	alloc->avail = *avail;
 	alloc->freed = *freed;
@@ -607,7 +607,8 @@ int scoutfs_alloc_meta(struct super_block *sb, struct scoutfs_alloc *alloc,
 	if (ret < 0)
 		goto out;
 
-	spin_lock(&alloc->lock);
+	write_seqlock(&alloc->seqlock);
+
 	lblk = alloc->dirty_avail_bl->data;
 	if (WARN_ON_ONCE(lblk->nr == 0)) {
 		/* shouldn't happen, transaction should commit first */
@@ -617,7 +618,8 @@ int scoutfs_alloc_meta(struct super_block *sb, struct scoutfs_alloc *alloc,
 		list_block_remove(&alloc->avail, lblk, 1);
 		ret = 0;
 	}
-	spin_unlock(&alloc->lock);
+
+	write_sequnlock(&alloc->seqlock);
 
 out:
 	if (ret < 0)
@@ -640,7 +642,8 @@ int scoutfs_free_meta(struct super_block *sb, struct scoutfs_alloc *alloc,
 	if (ret < 0)
 		goto out;
 
-	spin_lock(&alloc->lock);
+	write_seqlock(&alloc->seqlock);
+
 	lblk = alloc->dirty_freed_bl->data;
 	if (WARN_ON_ONCE(list_block_space(lblk->nr) == 0)) {
 		/* shouldn't happen, transaction should commit first */
@@ -649,7 +652,8 @@ int scoutfs_free_meta(struct super_block *sb, struct scoutfs_alloc *alloc,
 		list_block_add(&alloc->freed, lblk, blkno);
 		ret = 0;
 	}
-	spin_unlock(&alloc->lock);
+
+	write_sequnlock(&alloc->seqlock);
 
 out:
 	scoutfs_inc_counter(sb, alloc_free_meta);
@@ -1147,17 +1151,23 @@ out:
 
 /*
  * Returns true if meta avail and free don't have room for the given
- * number of alloctions or frees.
+ * number of allocations or frees.  This is called at a significantly
+ * higher frequency than allocations as writers try to enter
+ * transactions.  This is the only reader of the seqlock which gives
+ * read-mostly sampling instead of bouncing a spinlock around all the
+ * cores.
  */
 bool scoutfs_alloc_meta_low(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 nr)
 {
+	unsigned int seq;
 	bool lo;
 
-	spin_lock(&alloc->lock);
-	lo = le32_to_cpu(alloc->avail.first_nr) < nr ||
-	     list_block_space(alloc->freed.first_nr) < nr;
-	spin_unlock(&alloc->lock);
+	do {
+		seq = read_seqbegin(&alloc->seqlock);
+		lo = le32_to_cpu(alloc->avail.first_nr) < nr ||
+		     list_block_space(alloc->freed.first_nr) < nr;
+	} while (read_seqretry(&alloc->seqlock, seq));
 
 	return lo;
 }
