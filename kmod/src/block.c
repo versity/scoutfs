@@ -19,6 +19,8 @@
 #include <linux/sched.h>
 #include <linux/bio.h>
 #include <linux/blkdev.h>
+#include <linux/rhashtable.h>
+#include <linux/random.h>
 
 #include "format.h"
 #include "super.h"
@@ -26,6 +28,8 @@
 #include "counters.h"
 #include "msg.h"
 #include "scoutfs_trace.h"
+#include "alloc.h"
+#include "triggers.h"
 
 /*
  * The scoutfs block cache manages metadata blocks that can be larger
@@ -33,22 +37,25 @@
  * dirty blocks that are written together.  We pin dirty blocks in
  * memory and only checksum them all as they're all written.
  *
- * An LRU is maintained so the VM can reclaim the oldest presumably
- * unlikely to be used blocks.  But we don't maintain a perfect record
- * of access order.  We only move accessed blocks to the tail of the rcu
- * if they weren't in the most recently moved fraction of the total
- * population.  This means that reclaim will walk through waves of that
- * fraction of the population.  It's close enough and removes lru
- * maintenance locking from the fast path.
+ * Memory reclaim is driven by maintaining two very coarse groups of
+ * blocks.  As we access blocks we mark them with an increasing counter
+ * to discourage them from being reclaimed.  We then define a threshold
+ * at the current counter minus half the population.  Recent blocks have
+ * a counter greater than the threshold, and all other blocks with
+ * counters less than it are considered older and are candidates for
+ * reclaim.  This results in access updates rarely modifying an atomic
+ * counter as blocks need to be moved into the recent group, and shrink
+ * can randomly scan blocks looking for the half of the population that
+ * will be in the old group.  It's reasonably effective, but is
+ * particularly efficient and avoids contention between concurrent
+ * accesses and shrinking.
  */
 
 struct block_info {
 	struct super_block *sb;
-	spinlock_t lock;
-	struct radix_tree_root radix;
-	struct list_head lru_list;
-	u64 lru_nr;
-	u64 lru_move_counter;
+	atomic_t total_inserted;
+	atomic64_t access_counter;
+	struct rhashtable ht;
 	wait_queue_head_t waitq;
 	struct shrinker shrinker;
 	struct work_struct free_work;
@@ -64,22 +71,33 @@ enum block_status_bits {
 	BLOCK_BIT_DIRTY,	/* dirty, writer will write */
 	BLOCK_BIT_IO_BUSY,	/* bios are in flight */
 	BLOCK_BIT_ERROR,	/* saw IO error */
-	BLOCK_BIT_DELETED,	/* has been deleted from radix tree */
 	BLOCK_BIT_PAGE_ALLOC,	/* page (possibly high order) allocation */
 	BLOCK_BIT_VIRT,		/* mapped virt allocation */
 	BLOCK_BIT_CRC_VALID,	/* crc has been verified */
 };
 
+/*
+ * We want to tie atomic changes in refcounts to whether or not the
+ * block is still visible in the hash table, so we store the hash
+ * table's reference up at a known high bit.  We could naturally set the
+ * inserted bit through excessive refcount increments.  We don't do
+ * anything about that but at least warn if we get close.
+ *
+ * We're avoiding the high byte for no real good reason, just out of a
+ * historical fear of implementations that don't provide the full
+ * precision.
+ */
+#define BLOCK_REF_INSERTED	(1U << 23)
+#define BLOCK_REF_FULL		(BLOCK_REF_INSERTED >> 1)
+
 struct block_private {
 	struct scoutfs_block bl;
 	struct super_block *sb;
 	atomic_t refcount;
-	union {
-		struct list_head lru_entry;
-		struct llist_node free_node;
-	};
-	u64 lru_moved;
+	u64 accessed;
+	struct rhash_head ht_head;
 	struct list_head dirty_entry;
+	struct llist_node free_node;
 	unsigned long bits;
 	atomic_t io_count;
 	union {
@@ -88,45 +106,23 @@ struct block_private {
 	};
 };
 
-#define TRACE_BLOCK(which, bp)						\
-do {									\
-	__typeof__(bp) _bp = (bp);					\
-	trace_scoutfs_block_##which(_bp->sb, _bp, _bp->bl.blkno,	\
-				   atomic_read(&_bp->refcount),		\
-				   atomic_read(&_bp->io_count),		\
-				   _bp->bits, _bp->lru_moved);		\
+#define TRACE_BLOCK(which, bp)									\
+do {												\
+	__typeof__(bp) _bp = (bp);								\
+	trace_scoutfs_block_##which(_bp->sb, _bp, _bp->bl.blkno, atomic_read(&_bp->refcount),	\
+				    atomic_read(&_bp->io_count), _bp->bits, _bp->accessed);	\
 } while (0)
 
 #define BLOCK_PRIVATE(_bl) \
 	container_of((_bl), struct block_private, bl)
 
-/*
- * These _block_header helpers are from a previous generation and may
- * be refactored away.
- */
-
-__le32 scoutfs_block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
+static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 {
 	int off = offsetof(struct scoutfs_block_header, crc) +
 		  FIELD_SIZEOF(struct scoutfs_block_header, crc);
 	u32 calc = crc32c(~0, (char *)hdr + off, size - off);
 
 	return cpu_to_le32(calc);
-}
-
-bool scoutfs_block_valid_crc(struct scoutfs_block_header *hdr, u32 size)
-{
-	return hdr->crc == scoutfs_block_calc_crc(hdr, size);
-}
-
-bool scoutfs_block_valid_ref(struct super_block *sb,
-			     struct scoutfs_block_header *hdr,
-			     __le64 seq, __le64 blkno)
-{
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-
-	return hdr->fsid == super->hdr.fsid && hdr->seq == seq &&
-	       hdr->blkno == blkno;
 }
 
 static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
@@ -136,7 +132,7 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 	/*
 	 * If we had multiple blocks per page we'd need to be a little
 	 * more careful with a partial page allocator when allocating
-	 * blocks and would make the lru per-page instead of per-block.
+	 * blocks.
 	 */
 	BUILD_BUG_ON(PAGE_SIZE > SCOUTFS_BLOCK_LG_SIZE);
 
@@ -167,7 +163,6 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 	bp->bl.blkno = blkno;
 	bp->sb = sb;
 	atomic_set(&bp->refcount, 1);
-	INIT_LIST_HEAD(&bp->lru_entry);
 	INIT_LIST_HEAD(&bp->dirty_entry);
 	set_bit(BLOCK_BIT_NEW, &bp->bits);
 	atomic_set(&bp->io_count, 0);
@@ -193,7 +188,6 @@ static void block_free(struct super_block *sb, struct block_private *bp)
 	else
 		BUG();
 
-	/* lru_entry could have been clobbered by union member free_node */
 	WARN_ON_ONCE(!list_empty(&bp->dirty_entry));
 	WARN_ON_ONCE(atomic_read(&bp->refcount));
 	WARN_ON_ONCE(atomic_read(&bp->io_count));
@@ -201,109 +195,178 @@ static void block_free(struct super_block *sb, struct block_private *bp)
 }
 
 /*
- * We free blocks in task context so we can free kernel virtual mappings.
+ * Free all the blocks that were put in the free_llist.  We have to wait
+ * for rcu grace periods to expire to ensure that no more rcu hash list
+ * lookups can see the blocks.
  */
 static void block_free_work(struct work_struct *work)
 {
-	struct block_info *binf = container_of(work, struct block_info,
-					       free_work);
+	struct block_info *binf = container_of(work, struct block_info, free_work);
 	struct super_block *sb = binf->sb;
 	struct block_private *bp;
+	struct block_private *tmp;
 	struct llist_node *deleted;
 
-	deleted = llist_del_all(&binf->free_llist);
+	scoutfs_inc_counter(sb, block_cache_free_work);
 
-	llist_for_each_entry(bp, deleted, free_node) {
+	deleted = llist_del_all(&binf->free_llist);
+	synchronize_rcu();
+
+	llist_for_each_entry_safe(bp, tmp, deleted, free_node) {
 		block_free(sb, bp);
 	}
 }
 
 /*
- * After we've dropped the final ref kick off the final free in task
- * context.  This happens in the relatively rare cases of IO errors,
- * stale cached data, memory pressure, and unmount.
+ * Get a reference to a block while holding an existing reference.
+ */
+static void block_get(struct block_private *bp)
+{
+	WARN_ON_ONCE((atomic_read(&bp->refcount) & ~BLOCK_REF_INSERTED) <= 0);
+
+	atomic_inc(&bp->refcount);
+}
+
+/*
+ * Get a reference to a block as long as it's been inserted in the hash
+ * table and hasn't been removed.
+ */ 
+static struct block_private *block_get_if_inserted(struct block_private *bp)
+{
+	int cnt;
+
+	do {
+		cnt = atomic_read(&bp->refcount);
+		WARN_ON_ONCE(cnt & BLOCK_REF_FULL);
+		if (!(cnt & BLOCK_REF_INSERTED))
+			return NULL;
+
+	} while (atomic_cmpxchg(&bp->refcount, cnt, cnt + 1) != cnt);
+
+	return bp;
+}
+
+/*
+ * Drop the caller's reference.  If this was the final reference we
+ * queue the block to be freed once the rcu period ends.  Readers can be
+ * racing to try to get references to these blocks, but they won't get a
+ * reference because the block isn't present in the hash table any more.
  */
 static void block_put(struct super_block *sb, struct block_private *bp)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
+	int cnt;
 
-	if (!IS_ERR_OR_NULL(bp) && atomic_dec_and_test(&bp->refcount)) {
-		WARN_ON_ONCE(!list_empty(&bp->lru_entry));
-		llist_add(&bp->free_node, &binf->free_llist);
-		schedule_work(&binf->free_work);
+	if (!IS_ERR_OR_NULL(bp)) {
+		cnt = atomic_dec_return(&bp->refcount);
+		if (cnt == 0) {
+			llist_add(&bp->free_node, &binf->free_llist);
+			schedule_work(&binf->free_work);
+		} else {
+			WARN_ON_ONCE(cnt < 0);
+		}
 	}
 }
 
+static const struct rhashtable_params block_ht_params = {
+        .key_len = member_sizeof(struct block_private, bl.blkno),
+        .key_offset = offsetof(struct block_private, bl.blkno),
+        .head_offset = offsetof(struct block_private, ht_head),
+};
+
 /*
- * Add a new block into the cache.  The caller holds the lock and has
- * preloaded the radix.
+ * Insert a new block into the hash table.  Once it is inserted in the
+ * hash table readers can start getting references.  The caller may have
+ * multiple refs but the block can't already be inserted.
  */
-static void block_insert(struct super_block *sb, struct block_private *bp,
-			 u64 blkno)
+static int block_insert(struct super_block *sb, struct block_private *bp)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
+	int ret;
 
-	assert_spin_locked(&binf->lock);
-	BUG_ON(!list_empty(&bp->lru_entry));
+	WARN_ON_ONCE(atomic_read(&bp->refcount) & BLOCK_REF_INSERTED);
 
-	atomic_inc(&bp->refcount);
-	radix_tree_insert(&binf->radix, blkno, bp);
-	list_add_tail(&bp->lru_entry, &binf->lru_list);
-	bp->lru_moved = ++binf->lru_move_counter;
-	binf->lru_nr++;
+	atomic_add(BLOCK_REF_INSERTED, &bp->refcount);
+	ret = rhashtable_insert_fast(&binf->ht, &bp->ht_head, block_ht_params);
+	if (ret < 0) {
+		atomic_sub(BLOCK_REF_INSERTED, &bp->refcount);
+	} else {
+		atomic_inc(&binf->total_inserted);
+		TRACE_BLOCK(insert, bp);
+	}
 
-	TRACE_BLOCK(insert, bp);
+	return ret;
+}
+
+static u64 accessed_recently(struct block_info *binf)
+{
+	return atomic64_read(&binf->access_counter) - (atomic_read(&binf->total_inserted) >> 1);
 }
 
 /*
- * Only move the block to the tail of the LRU if it's outside of the
- * small fraction of the lru population that has been most recently
- * used.  This gives us a reasonable number of most recently accessed
- * blocks which will be reclaimed after the rest of the least recently
- * used blocks while reducing per-access locking overhead of maintaining
- * the LRU.  We don't care about unlikely non-atomic u64 accesses racing
- * and messing up LRU position.
- *
- * This can race with blocks being removed from the cache (shrinking,
- * stale, errors) so we're careful to only move the entry if it's still
- * on the list after we acquire the lock.  We still hold a reference so it's
- * lru_entry hasn't transitioned to being used as the free_node.
+ * Make sure that a block that is being accessed is less likely to be
+ * reclaimed if it is seen by the shrinker.   If the block hasn't been
+ * accessed recently we update its accessed value.
  */
 static void block_accessed(struct super_block *sb, struct block_private *bp)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
-	u64 recent = binf->lru_nr >> 3;
 
-	scoutfs_inc_counter(sb, block_cache_access);
-
-	if (bp->lru_moved < (binf->lru_move_counter - recent)) {
-		spin_lock(&binf->lock);
-		if (!list_empty(&bp->lru_entry)) {
-			list_move_tail(&bp->lru_entry, &binf->lru_list);
-			bp->lru_moved = ++binf->lru_move_counter;
-			scoutfs_inc_counter(sb, block_cache_lru_move);
-		}
-		spin_unlock(&binf->lock);
+	if (bp->accessed == 0 || bp->accessed < accessed_recently(binf)) {
+		scoutfs_inc_counter(sb, block_cache_access_update);
+		bp->accessed = atomic64_inc_return(&binf->access_counter);
 	}
 }
 
 /*
- * Remove a block from the cache and drop its reference.  We only remove
- * the block once as the deleted bit is first set.
+ * The caller wants to remove the block from the hash table and has an
+ * idea what the refcount should be.  If the refcount does still
+ * indicate that the block is hashed, and we're able to clear that bit,
+ * then we can remove it from the hash table.
+ *
+ * The caller makes sure that it's safe to be referencing this block,
+ * either with their own held reference (most everything) or by being in
+ * an rcu grace period (shrink).
+ */
+static bool block_remove_cnt(struct super_block *sb, struct block_private *bp, int cnt)
+{
+	DECLARE_BLOCK_INFO(sb, binf);
+	int ret;
+
+	if ((cnt & BLOCK_REF_INSERTED) &&
+	    (atomic_cmpxchg(&bp->refcount, cnt, cnt & ~BLOCK_REF_INSERTED) == cnt)) {
+
+		TRACE_BLOCK(remove, bp);
+		ret = rhashtable_remove_fast(&binf->ht, &bp->ht_head, block_ht_params);
+		WARN_ON_ONCE(ret); /* must have been inserted */
+		atomic_dec(&binf->total_inserted);
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ * Try to remove the block from the hash table as long as the refcount
+ * indicates that it is still in the hash table.  This can be racing
+ * with normal refcount changes so it might have to retry.
  */
 static void block_remove(struct super_block *sb, struct block_private *bp)
 {
-	DECLARE_BLOCK_INFO(sb, binf);
+	int cnt;
 
-	assert_spin_locked(&binf->lock);
+	do {
+		cnt = atomic_read(&bp->refcount);
+	} while ((cnt & BLOCK_REF_INSERTED) && !block_remove_cnt(sb, bp, cnt));
+}
 
-	if (!test_and_set_bit(BLOCK_BIT_DELETED, &bp->bits)) {
-		BUG_ON(list_empty(&bp->lru_entry));
-		radix_tree_delete(&binf->radix, bp->bl.blkno);
-		list_del_init(&bp->lru_entry);
-		binf->lru_nr--;
-		block_put(sb, bp);
-	}
+/*
+ * Take one shot at removing the block from the hash table if it's still
+ * in the hash table and the caller has the only other reference.
+ */
+static bool block_remove_solo(struct super_block *sb, struct block_private *bp)
+{
+	return block_remove_cnt(sb, bp, BLOCK_REF_INSERTED | 1);
 }
 
 static bool io_busy(struct block_private *bp)
@@ -318,20 +381,29 @@ static bool io_busy(struct block_private *bp)
 static void block_remove_all(struct super_block *sb)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
+	struct rhashtable_iter iter;
 	struct block_private *bp;
 
-	spin_lock(&binf->lock);
+	rhashtable_walk_enter(&binf->ht, &iter);
+	rhashtable_walk_start(&iter);
 
-	while (radix_tree_gang_lookup(&binf->radix, (void **)&bp, 0, 1) == 1) {
-		wait_event(binf->waitq, !io_busy(bp));
-		block_remove(sb, bp);
+	for (;;) {
+		bp = rhashtable_walk_next(&iter);
+		if (bp == NULL)
+			break;
+		if (bp == ERR_PTR(-EAGAIN))
+			continue;
+
+		if (block_get_if_inserted(bp)) {
+			block_remove(sb, bp);
+			block_put(sb, bp);
+		}
 	}
 
-	spin_unlock(&binf->lock);
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
 
-	WARN_ON_ONCE(!list_empty(&binf->lru_list));
-	WARN_ON_ONCE(binf->lru_nr != 0);
-	WARN_ON_ONCE(binf->radix.rnode != NULL);
+	WARN_ON_ONCE(atomic_read(&binf->total_inserted) != 0);
 }
 
 /*
@@ -402,7 +474,7 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 	/* don't let racing end_io during submission think block is complete */
 	atomic_inc(&bp->io_count);
 	set_bit(BLOCK_BIT_IO_BUSY, &bp->bits);
-	atomic_inc(&bp->refcount);
+	block_get(bp);
 
 	blk_start_plug(&plug);
 
@@ -448,30 +520,43 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 	return ret;
 }
 
-/*
- * Return a reference to a cached block in the system, allocating a new
- * block if one isn't found in the radix.  Its contents are undefined if
- * it's newly allocated.
- */
-static struct block_private *block_get(struct super_block *sb, u64 blkno)
+static struct block_private *block_lookup(struct super_block *sb, u64 blkno)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
-	struct block_private *found;
+	struct block_private *bp;
+
+	rcu_read_lock();
+	bp = rhashtable_lookup(&binf->ht, &blkno, block_ht_params);
+	if (bp)
+		bp = block_get_if_inserted(bp);
+	rcu_read_unlock();
+
+	return bp;
+}
+
+/*
+ * Return a reference to a cached block found in the hash table.  If one
+ * isn't found then we try and allocate and insert a new one.  Its
+ * contents are undefined if it's newly allocated.
+ *
+ * Our hash table lookups during rcu can be racing with shrinking and
+ * removal from the hash table.  We only atomically get a reference if
+ * the refcount indicates that the block is still present in the hash
+ * table.
+ */
+static struct block_private *block_lookup_create(struct super_block *sb,
+						 u64 blkno)
+{
 	struct block_private *bp;
 	int ret;
 
-	rcu_read_lock();
-	bp = radix_tree_lookup(&binf->radix, blkno);
-	if (bp)
-		atomic_inc(&bp->refcount);
-	rcu_read_unlock();
+restart:
+	bp = block_lookup(sb, blkno);
 
 	/* drop failed reads that interrupted waiters abandoned */
 	if (bp && (test_bit(BLOCK_BIT_ERROR, &bp->bits) &&
 	           !test_bit(BLOCK_BIT_DIRTY, &bp->bits))) {
-		spin_lock(&binf->lock);
 		block_remove(sb, bp);
-		spin_unlock(&binf->lock);
 		block_put(sb, bp);
 		bp = NULL;
 	}
@@ -483,24 +568,13 @@ static struct block_private *block_get(struct super_block *sb, u64 blkno)
 			goto out;
 		}
 
-		ret = radix_tree_preload(GFP_NOFS);
-		if (ret)
+		ret = block_insert(sb, bp);
+		if (ret < 0) {
+			if (ret == -EEXIST) {
+				block_put(sb, bp);
+				goto restart;
+			}
 			goto out;
-
-		/* could use slot instead of lookup/insert */
-		spin_lock(&binf->lock);
-		found = radix_tree_lookup(&binf->radix, blkno);
-		if (found) {
-			atomic_inc(&found->refcount);
-		} else {
-			block_insert(sb, bp, blkno);
-		}
-		spin_unlock(&binf->lock);
-		radix_tree_preload_end();
-
-		if (found) {
-			block_put(sb, bp);
-			bp = found;
 		}
 	}
 
@@ -516,24 +590,6 @@ out:
 	return bp;
 }
 
-/*
- * Return a cached block or a newly allocated block whose contents are
- * undefined.  The caller is going to initialize the block contents.
- */
-struct scoutfs_block *scoutfs_block_create(struct super_block *sb, u64 blkno)
-{
-	struct block_private *bp;
-
-	bp = block_get(sb, blkno);
-	if (IS_ERR(bp))
-		return ERR_CAST(bp);
-
-	set_bit(BLOCK_BIT_UPTODATE, &bp->bits);
-	set_bit(BLOCK_BIT_CRC_VALID, &bp->bits);
-
-	return &bp->bl;
-}
-
 static bool uptodate_or_error(struct block_private *bp)
 {
 	smp_rmb(); /* test after adding to wait queue */
@@ -541,13 +597,18 @@ static bool uptodate_or_error(struct block_private *bp)
 	       test_bit(BLOCK_BIT_ERROR, &bp->bits);
 }
 
-struct scoutfs_block *scoutfs_block_read(struct super_block *sb, u64 blkno)
+static bool block_is_dirty(struct block_private *bp)
+{
+	return test_bit(BLOCK_BIT_DIRTY, &bp->bits) != 0;
+}
+
+static struct block_private *block_read(struct super_block *sb, u64 blkno)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
 	struct block_private *bp = NULL;
 	int ret;
 
-	bp = block_get(sb, blkno);
+	bp = block_lookup_create(sb, blkno);
 	if (IS_ERR(bp)) {
 		ret = PTR_ERR(bp);
 		goto out;
@@ -570,48 +631,75 @@ out:
 		return ERR_PTR(ret);
 	}
 
-	return &bp->bl;
+	return bp;
 }
 
 /*
- * Drop a stale cached read block from the cache.  A future read will
- * re-read the block from the device.  This doesn't drop the caller's reference,
- * they still have to call _put.
+ * Read a referenced metadata block.
+ *
+ * The caller may be following a stale reference to a block location
+ * that has since been rewritten.  We check that destination block
+ * header fields match the reference.  If they don't, we return -ESTALE
+ * and the caller can chose to retry with newer references or return an
+ * error.  -ESTALE can be a sign of block corruption when the refs are
+ * current.
+ *
+ * Once the caller has the cached block it won't be modified.  A writer
+ * trying to dirty a block at that location will remove our existing
+ * block and insert a new block with modified headers.
  */
-void scoutfs_block_invalidate(struct super_block *sb, struct scoutfs_block *bl)
-{
-	DECLARE_BLOCK_INFO(sb, binf);
-	struct block_private *bp = BLOCK_PRIVATE(bl);
-
-	if (!WARN_ON_ONCE(test_bit(BLOCK_BIT_DIRTY, &bp->bits))) {
-		scoutfs_inc_counter(sb, block_cache_invalidate);
-		spin_lock(&binf->lock);
-		block_remove(sb, bp);
-		spin_unlock(&binf->lock);
-		TRACE_BLOCK(invalidate, bp);
-	}
-}
-
-/* This is only used for large metadata blocks */
-bool scoutfs_block_consistent_ref(struct super_block *sb,
-				  struct scoutfs_block *bl,
-				  __le64 seq, __le64 blkno, u32 magic)
+int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
+			   struct scoutfs_block **bl_ret)
 {
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct block_private *bp = BLOCK_PRIVATE(bl);
-	struct scoutfs_block_header *hdr = bl->data;
+	struct scoutfs_block_header *hdr;
+	struct block_private *bp = NULL;
+	bool retried = false;
+	int ret;
 
+retry:
+	bp = block_read(sb, le64_to_cpu(ref->blkno));
+	if (IS_ERR(bp)) {
+		ret = PTR_ERR(bp);
+		goto out;
+	}
+	hdr = bp->bl.data;
+
+	/* corrupted writes might be a sign of a stale reference */
 	if (!test_bit(BLOCK_BIT_CRC_VALID, &bp->bits)) {
-		if (hdr->crc !=
-		    scoutfs_block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE))
-			return false;
+		if (hdr->crc != block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE)) {
+			ret = -ESTALE;
+			goto out;
+		}
+
 		set_bit(BLOCK_BIT_CRC_VALID, &bp->bits);
 	}
 
-	return hdr->magic == cpu_to_le32(magic) &&
-	       hdr->fsid == super->hdr.fsid &&
-	       hdr->seq == seq &&
-	       hdr->blkno == blkno;
+	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != super->hdr.fsid ||
+	    hdr->seq != ref->seq || hdr->blkno != ref->blkno) {
+		ret = -ESTALE;
+		goto out;
+	}
+
+	ret = 0;
+out:
+	if ((ret == -ESTALE || scoutfs_trigger(sb, BLOCK_REMOVE_STALE)) &&
+	    !retried && !block_is_dirty(bp)) {
+		retried = true;
+		scoutfs_inc_counter(sb, block_cache_remove_stale);
+		block_remove(sb, bp);
+		block_put(sb, bp);
+		bp = NULL;
+		goto retry;
+	}
+
+	if (ret < 0) {
+		block_put(sb, bp);
+		bp = NULL;
+	}
+
+	*bl_ret = bp ? &bp->bl : NULL;
+	return ret;
 }
 
 void scoutfs_block_put(struct super_block *sb, struct scoutfs_block *bl)
@@ -634,30 +722,164 @@ void scoutfs_block_writer_init(struct super_block *sb,
  * and allocate with an advancing cursor so we always dirty in block
  * offset order and can walk our list to submit nice ordered IO.
  */
-void scoutfs_block_writer_mark_dirty(struct super_block *sb,
-				     struct scoutfs_block_writer *wri,
-				     struct scoutfs_block *bl)
+static void block_mark_dirty(struct super_block *sb, struct scoutfs_block_writer *wri,
+			     struct scoutfs_block *bl)
 {
 	struct block_private *bp = BLOCK_PRIVATE(bl);
 
 	if (!test_and_set_bit(BLOCK_BIT_DIRTY, &bp->bits)) {
 		BUG_ON(!list_empty(&bp->dirty_entry));
-		atomic_inc(&bp->refcount);
+		block_get(bp);
 		spin_lock(&wri->lock);
 		list_add_tail(&bp->dirty_entry, &wri->dirty_list);
 		wri->nr_dirty_blocks++;
 		spin_unlock(&wri->lock);
-
 		TRACE_BLOCK(mark_dirty, bp);
 	}
 }
 
-bool scoutfs_block_writer_is_dirty(struct super_block *sb,
-				   struct scoutfs_block *bl)
+/*
+ * Give the caller a dirty block that is pointed to by their ref.
+ *
+ * The ref may already refer to a cached dirty block.  In that case the
+ * dirty block is returned.
+ *
+ * If the ref doesn't refer to a dirty block, then a new block is always
+ * allocated and returned.  If the ref refers to an existing block then
+ * its contents are copied into the new block.
+ *
+ * If a new blkno is allocated then the ref is updated and any existing
+ * blkno is freed.
+ *
+ * A newly allocated block that we insert into the cache and return
+ * might already have an old stale copy inserted in the cache and it
+ * might be actively in use by readers.  Future readers may also try to
+ * read their old block from our newly allocated block.  We always
+ * remove any existing blocks and insert our new block only after
+ * modifying its headers and marking it dirty.  Readers will never have
+ * their blocks modified and they can always identify new mismatched
+ * cached blocks.
+ *
+ * The dirty_blkno and ref_blkno arguments are used by the metadata
+ * allocator to avoid recursing into itself.  dirty_blkno provides the
+ * blkno of the new dirty block to avoid calling _alloc_meta and
+ * ref_blkno is set to the old blkno instead of freeing it with
+ * _free_meta.
+ */
+int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri, struct scoutfs_block_ref *ref,
+			    u32 magic, struct scoutfs_block **bl_ret,
+			    u64 dirty_blkno, u64 *ref_blkno)
 {
-	struct block_private *bp = BLOCK_PRIVATE(bl);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_block *cow_bl = NULL;
+	struct scoutfs_block *bl = NULL;
+	struct block_private *exist_bp = NULL;
+	struct block_private *cow_bp = NULL;
+	struct block_private *bp = NULL;
+	struct scoutfs_block_header *hdr;
+	bool undo_alloc = false;
+	u64 blkno;
+	int ret;
+	int err;
 
-	return test_bit(BLOCK_BIT_DIRTY, &bp->bits) != 0;
+	/* read existing referenced block, if any */
+	blkno = le64_to_cpu(ref->blkno);
+	if (blkno) {
+		ret = scoutfs_block_read_ref(sb, ref, magic, bl_ret);
+		if (ret < 0)
+			goto out;
+		bl = *bl_ret;
+		bp = BLOCK_PRIVATE(bl);
+
+		if (block_is_dirty(bp)) {
+			ret = 0;
+			goto out;
+		}
+	}
+
+	/* allocate new blkno if caller didn't give us one */
+	if (dirty_blkno == 0) {
+		ret = scoutfs_alloc_meta(sb, alloc, wri, &dirty_blkno);
+		if (ret < 0)
+			goto out;
+		undo_alloc = true;
+	}
+
+	/* allocate new cached block */
+	cow_bp = block_alloc(sb, dirty_blkno);
+	if (cow_bp == NULL) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	cow_bl = &cow_bp->bl;
+
+	set_bit(BLOCK_BIT_UPTODATE, &cow_bp->bits);
+	set_bit(BLOCK_BIT_CRC_VALID, &cow_bp->bits);
+
+	/* free original referenced blkno, or give it to the caller to deal with */
+	if (ref_blkno) {
+		*ref_blkno = blkno;
+	} else if (blkno) {
+		ret = scoutfs_free_meta(sb, alloc, wri, blkno);
+		if (ret < 0)
+			goto out;
+	}
+
+	/* copy original block contents, or initialize */
+	if (bl)
+		memcpy(cow_bl->data, bl->data, SCOUTFS_BLOCK_LG_SIZE);
+	else
+		memset(cow_bl->data, 0, SCOUTFS_BLOCK_LG_SIZE);
+	scoutfs_block_put(sb, bl);
+	bl = cow_bl;
+	cow_bl = NULL;
+	bp = cow_bp;
+	cow_bp = NULL;
+
+	hdr = bl->data;
+	hdr->magic = cpu_to_le32(magic);
+	hdr->fsid = super->hdr.fsid;
+	hdr->blkno = cpu_to_le64(bl->blkno);
+	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
+
+	trace_scoutfs_block_dirty_ref(sb, le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq),
+				      le64_to_cpu(hdr->blkno), le64_to_cpu(hdr->seq));
+
+	/* mark the block dirty before it's visible */
+	block_mark_dirty(sb, wri, bl);
+
+	/* insert the new block, maybe removing any existing blocks */
+	while ((ret = block_insert(sb, bp)) == -EEXIST) {
+		exist_bp = block_lookup(sb, dirty_blkno);
+		if (exist_bp) {
+			block_remove(sb, exist_bp);
+			block_put(sb, exist_bp);
+		}
+	}
+	if (ret < 0)
+		goto out;
+
+	/* set the ref now that the block is visible */
+	ref->blkno = hdr->blkno;
+	ref->seq = hdr->seq;
+
+	ret = 0;
+
+out:
+	scoutfs_block_put(sb, cow_bl);
+	if (ret < 0 && undo_alloc) {
+		err = scoutfs_free_meta(sb, alloc, wri, dirty_blkno);
+		BUG_ON(err); /* inconsistent */
+	}
+
+	if (ret < 0) {
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+	}
+	*bl_ret = bl;
+
+	return ret;
 }
 
 /*
@@ -682,7 +904,7 @@ int scoutfs_block_writer_write(struct super_block *sb,
 	/* checksum everything to reduce time between io submission merging */
 	list_for_each_entry(bp, &wri->dirty_list, dirty_entry) {
 		hdr = bp->bl.data;
-		hdr->crc = scoutfs_block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE);
+		hdr->crc = block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE);
 	}
 
         blk_start_plug(&plug);
@@ -792,53 +1014,94 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
 }
 
 /*
- * Remove a number of least recently accessed blocks and free them.  We
- * don't take locking hit of removing blocks from the lru as they're
- * used so this is racing with accesses holding an elevated refcount.
- * We check the refcount to attempt to not free a block that snuck in
- * and is being accessed while the block is still at the head of the
- * LRU.
+ * Remove a number of cached blocks that haven't been used recently.
  *
- * Dirty blocks will always have an elevated refcount (and will be
- * likely be towards the tail of the LRU).  Even if we do remove them
- * from the LRU their dirty refcount will keep them live until IO
- * completes and their dirty refcount is dropped.
+ * We don't maintain a strictly ordered LRU to avoid the contention of
+ * accesses always moving blocks around in some precise global
+ * structure.
+ *
+ * Instead we use counters to divide the blocks into two roughly equal
+ * groups by how recently they were accessed.  We randomly walk all
+ * inserted blocks looking for any blocks in the older half to remove
+ * and free.  The random walk and there being two groups means that we
+ * typically only walk a small multiple of the number we're looking for
+ * before we find them all.
+ *
+ * Our rcu walk of blocks can see blocks in all stages of their life
+ * cycle, from dirty blocks to those with 0 references that are queued
+ * for freeing.  We only want to free idle inserted blocks so we
+ * atomically remove blocks when the only references are ours and the
+ * hash table.
  */
 static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
 {
 	struct block_info *binf = container_of(shrink, struct block_info,
 					       shrinker);
 	struct super_block *sb = binf->sb;
-	struct block_private *tmp;
+	struct rhashtable_iter iter;
 	struct block_private *bp;
 	unsigned long nr;
-	LIST_HEAD(list);
+	u64 recently;
 
 	nr = sc->nr_to_scan;
-	if (!nr)
+	if (nr == 0)
 		goto out;
 
-	spin_lock(&binf->lock);
+	scoutfs_inc_counter(sb, block_cache_shrink);
 
-	list_for_each_entry_safe(bp, tmp, &binf->lru_list, lru_entry) {
+	nr = DIV_ROUND_UP(nr, SCOUTFS_BLOCK_LG_PAGES_PER);
 
-		if (atomic_read(&bp->refcount) > 1)
-			continue;
+restart:
+	recently = accessed_recently(binf);
+	rhashtable_walk_enter(&binf->ht, &iter);
+	rhashtable_walk_start(&iter);
 
-		if (nr-- == 0)
+	/*
+	 * This isn't great but I don't see a better way.  We want to
+	 * walk the hash from a random point so that we're not
+	 * constantly walking over the same region that we've already
+	 * freed old blocks within.  The interface doesn't let us do
+	 * this explicitly, but this seems to work?  The difference this
+	 * makes is enormous, around a few orders of magnitude fewer
+	 * _nexts per shrink.
+	 */
+	if (iter.walker.tbl)
+		iter.slot = prandom_u32_max(iter.walker.tbl->size);
+
+	while (nr > 0) {
+		bp = rhashtable_walk_next(&iter);
+		if (bp == NULL)
 			break;
+		if (bp == ERR_PTR(-EAGAIN)) {
+			/* hard reset to not hold rcu grace period across retries */
+			rhashtable_walk_stop(&iter);
+			rhashtable_walk_exit(&iter);
+			scoutfs_inc_counter(sb, block_cache_shrink_restart);
+			goto restart;
+		}
 
-		TRACE_BLOCK(shrink, bp);
+		scoutfs_inc_counter(sb, block_cache_shrink_next);
 
-		scoutfs_inc_counter(sb, block_cache_shrink);
-		block_remove(sb, bp);
+		if (bp->accessed >= recently) {
+			scoutfs_inc_counter(sb, block_cache_shrink_recent);
+			continue;
+		}
 
+		if (block_get_if_inserted(bp)) {
+			if (block_remove_solo(sb, bp)) {
+				scoutfs_inc_counter(sb, block_cache_shrink_remove);
+				TRACE_BLOCK(shrink, bp);
+				nr--;
+			}
+			block_put(sb, bp);
+		}
 	}
 
-	spin_unlock(&binf->lock);
-
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
 out:
-	return min_t(u64, binf->lru_nr * SCOUTFS_BLOCK_LG_PAGES_PER, INT_MAX);
+	return min_t(u64, (u64)atomic_read(&binf->total_inserted) * SCOUTFS_BLOCK_LG_PAGES_PER,
+		     INT_MAX);
 }
 
 struct sm_block_completion {
@@ -892,8 +1155,7 @@ static int sm_block_io(struct block_device *bdev, int rw, u64 blkno,
 		if (len < SCOUTFS_BLOCK_SM_SIZE)
 			memset((char *)pg_hdr + len, 0,
 			       SCOUTFS_BLOCK_SM_SIZE - len);
-		pg_hdr->crc = scoutfs_block_calc_crc(pg_hdr,
-						     SCOUTFS_BLOCK_SM_SIZE);
+		pg_hdr->crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
 
 	bio = bio_alloc(GFP_NOFS, 1);
@@ -918,8 +1180,7 @@ static int sm_block_io(struct block_device *bdev, int rw, u64 blkno,
 
 	if (ret == 0 && !(rw & WRITE)) {
 		memcpy(hdr, pg_hdr, len);
-		*blk_crc = scoutfs_block_calc_crc(pg_hdr,
-						  SCOUTFS_BLOCK_SM_SIZE);
+		*blk_crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
 out:
 	__free_page(page);
@@ -945,16 +1206,7 @@ int scoutfs_block_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct block_info *binf;
-	loff_t size;
 	int ret;
-
-	/* we store blknos in longs in the radix */
-	size = i_size_read(sb->s_bdev->bd_inode);
-	if ((size >> SCOUTFS_BLOCK_LG_SHIFT) >= LONG_MAX) {
-		scoutfs_err(sb, "Cant reference all blocks in %llu byte device with %u bit long radix tree indexes",
-			size, BITS_PER_LONG);
-		return -EINVAL;
-	}
 
 	binf = kzalloc(sizeof(struct block_info), GFP_KERNEL);
 	if (!binf) {
@@ -962,10 +1214,15 @@ int scoutfs_block_setup(struct super_block *sb)
 		goto out;
 	}
 
+	ret = rhashtable_init(&binf->ht, &block_ht_params);
+	if (ret < 0) {
+		kfree(binf);
+		goto out;
+	}
+
 	binf->sb = sb;
-	spin_lock_init(&binf->lock);
-	INIT_RADIX_TREE(&binf->radix, GFP_ATOMIC); /* insertion preloads */
-	INIT_LIST_HEAD(&binf->lru_list);
+	atomic_set(&binf->total_inserted, 0);
+	atomic64_set(&binf->access_counter, 0);
 	init_waitqueue_head(&binf->waitq);
 	binf->shrinker.shrink = block_shrink;
 	binf->shrinker.seeks = DEFAULT_SEEKS;
@@ -992,10 +1249,9 @@ void scoutfs_block_destroy(struct super_block *sb)
 		unregister_shrinker(&binf->shrinker);
 		block_remove_all(sb);
 		flush_work(&binf->free_work);
+		rhashtable_destroy(&binf->ht);
 
-		WARN_ON_ONCE(!llist_empty(&binf->free_llist));
 		kfree(binf);
-
 		sbi->block_info = NULL;
 	}
 }

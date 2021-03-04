@@ -107,6 +107,15 @@ struct scoutfs_block_header {
 };
 
 /*
+ * A reference to a block.  The corresponding fields in the block_header
+ * must match after having read the block contents.
+ */
+struct scoutfs_block_ref {
+	__le64 blkno;
+	__le64 seq;
+};
+
+/*
  * scoutfs identifies all file system metadata items by a small key
  * struct.
  *
@@ -202,17 +211,12 @@ struct scoutfs_avl_node {
  */
 #define SCOUTFS_BTREE_MAX_HEIGHT 20
 
-struct scoutfs_btree_ref {
-	__le64 blkno;
-	__le64 seq;
-};
-
 /*
  * A height of X means that the first block read will have level X-1 and
  * the leaves will have level 0.
  */
 struct scoutfs_btree_root {
-	struct scoutfs_btree_ref ref;
+	struct scoutfs_block_ref ref;
 	__u8 height;
 	__u8 __pad[7];
 };
@@ -253,18 +257,13 @@ struct scoutfs_btree_block {
 #define SCOUTFS_BTREE_LEAF_ITEM_HASH_BYTES \
 	(SCOUTFS_BTREE_LEAF_ITEM_HASH_NR * sizeof(__le16))
 
-struct scoutfs_alloc_list_ref {
-	__le64 blkno;
-	__le64 seq;
-};
-
 /*
  * first_nr tracks the nr of the first block in the list and is used for
  * allocation sizing. total_nr is the sum of the nr of all the blocks in
  * the list and is used for calculating total free block counts.
  */
 struct scoutfs_alloc_list_head {
-	struct scoutfs_alloc_list_ref ref;
+	struct scoutfs_block_ref ref;
 	__le64 total_nr;
 	__le32 first_nr;
 	__u8 __pad[4];
@@ -283,7 +282,7 @@ struct scoutfs_alloc_list_head {
  */
 struct scoutfs_alloc_list_block {
 	struct scoutfs_block_header hdr;
-	struct scoutfs_alloc_list_ref next;
+	struct scoutfs_block_ref next;
 	__le32 start;
 	__le32 nr;
 	__le64 blknos[0]; /* naturally aligned for sorting */
@@ -329,15 +328,10 @@ struct scoutfs_srch_entry {
 
 #define SCOUTFS_SRCH_ENTRY_MAX_BYTES	(2 + (sizeof(__u64) * 3))
 
-struct scoutfs_srch_ref {
-	__le64 blkno;
-	__le64 seq;
-};
-
 struct scoutfs_srch_file {
 	struct scoutfs_srch_entry first;
 	struct scoutfs_srch_entry last;
-	struct scoutfs_srch_ref ref;
+	struct scoutfs_block_ref ref;
 	__le64 blocks;
 	__le64 entries;
 	__u8 height;
@@ -346,13 +340,13 @@ struct scoutfs_srch_file {
 
 struct scoutfs_srch_parent {
 	struct scoutfs_block_header hdr;
-	struct scoutfs_srch_ref refs[0];
+	struct scoutfs_block_ref refs[0];
 };
 
 #define SCOUTFS_SRCH_PARENT_REFS				\
 	((SCOUTFS_BLOCK_LG_SIZE -				\
 	  offsetof(struct scoutfs_srch_parent, refs)) /		\
-	 sizeof(struct scoutfs_srch_ref))
+	 sizeof(struct scoutfs_block_ref))
 
 struct scoutfs_srch_block {
 	struct scoutfs_block_header hdr;
@@ -423,7 +417,7 @@ struct scoutfs_log_trees {
 	struct scoutfs_alloc_list_head meta_avail;
 	struct scoutfs_alloc_list_head meta_freed;
 	struct scoutfs_btree_root item_root;
-	struct scoutfs_btree_ref bloom_ref;
+	struct scoutfs_block_ref bloom_ref;
 	struct scoutfs_alloc_root data_avail;
 	struct scoutfs_alloc_root data_freed;
 	struct scoutfs_srch_file srch_file;

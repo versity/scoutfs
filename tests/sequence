@@ -28,5 +28,5 @@ setup-error-teardown.sh
 mount-unmount-race.sh
 createmany-parallel-mounts.sh
 archive-light-cycle.sh
-stale-btree-read.sh
+block-stale-reads.sh
 xfstests.sh

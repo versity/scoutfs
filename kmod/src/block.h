@@ -13,27 +13,16 @@ struct scoutfs_block {
 	void *priv;
 };
 
-__le32 scoutfs_block_calc_crc(struct scoutfs_block_header *hdr, u32 size);
-bool scoutfs_block_valid_crc(struct scoutfs_block_header *hdr, u32 size);
-bool scoutfs_block_valid_ref(struct super_block *sb,
-			     struct scoutfs_block_header *hdr,
-			     __le64 seq, __le64 blkno);
-
-struct scoutfs_block *scoutfs_block_create(struct super_block *sb, u64 blkno);
-struct scoutfs_block *scoutfs_block_read(struct super_block *sb, u64 blkno);
-void scoutfs_block_invalidate(struct super_block *sb, struct scoutfs_block *bl);
-bool scoutfs_block_consistent_ref(struct super_block *sb,
-				  struct scoutfs_block *bl,
-				  __le64 seq, __le64 blkno, u32 magic);
+int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
+			   struct scoutfs_block **bl_ret);
 void scoutfs_block_put(struct super_block *sb, struct scoutfs_block *bl);
 
 void scoutfs_block_writer_init(struct super_block *sb,
 			       struct scoutfs_block_writer *wri);
-void scoutfs_block_writer_mark_dirty(struct super_block *sb,
-				     struct scoutfs_block_writer *wri,
-				     struct scoutfs_block *bl);
-bool scoutfs_block_writer_is_dirty(struct super_block *sb,
-				   struct scoutfs_block *bl);
+int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri, struct scoutfs_block_ref *ref,
+			    u32 magic, struct scoutfs_block **bl_ret,
+			    u64 dirty_blkno, u64 *ref_blkno);
 int scoutfs_block_writer_write(struct super_block *sb,
 			       struct scoutfs_block_writer *wri);
 void scoutfs_block_writer_forget_all(struct super_block *sb,
