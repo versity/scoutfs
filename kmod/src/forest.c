@@ -742,7 +742,7 @@ void scoutfs_forest_oino_new_orphan(struct super_block *sb)
 }
 
 /*
- * Alloc, initialize, and mark dirty the oino bloom block.
+ * Alloc a dirty block and initialize as an oino bloom block.
  */
 struct scoutfs_block *scoutfs_forest_oino_alloc(struct super_block *sb,
 						struct scoutfs_alloc *alloc,
@@ -750,25 +750,15 @@ struct scoutfs_block *scoutfs_forest_oino_alloc(struct super_block *sb,
 						u64 trans_seq)
 {
 	struct scoutfs_block *new_bl = NULL;
+	struct scoutfs_block_ref ref = {0};
 	struct scoutfs_bloom_block *bb;
 	u64 blkno;
 	int ret;
-	int err;
 
-	ret = scoutfs_alloc_meta(sb, alloc, wri, &blkno);
+	ret = scoutfs_block_dirty_ref(sb, alloc, wri, &ref, SCOUTFS_BLOCK_MAGIC_BLOOM,
+				      &new_bl, 0, &blkno);
 	if (ret < 0)
-		return NULL;
-
-	new_bl = scoutfs_block_create(sb, blkno);
-	if (IS_ERR(new_bl)) {
-		err = scoutfs_free_meta(sb, alloc, wri, blkno);
-		BUG_ON(err); /* could have dirtied */
-		return new_bl;
-	}
-
-	memset(new_bl->data, 0, SCOUTFS_BLOCK_LG_SIZE);
-
-	scoutfs_block_writer_mark_dirty(sb, wri, new_bl);
+		return ERR_PTR(ret);
 
 	bb = new_bl->data;
 
@@ -788,7 +778,7 @@ int scoutfs_forest_oino_newtrans_alloc(struct super_block *sb, u64 trans_seq)
 {
 	struct scoutfs_block *new_bl = NULL;
 	struct scoutfs_bloom_block *bb;
-	struct scoutfs_btree_ref *ref;
+	struct scoutfs_block_ref *ref;
 	DECLARE_FOREST_INFO(sb, finf);
 	int ret;
 

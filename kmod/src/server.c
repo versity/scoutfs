@@ -428,7 +428,7 @@ static int get_last_seq(struct super_block *sb, __le64 *last_seq)
  * a block is present even before the client commits a transaction.
  */
 static int oino_newroot_alloc(struct super_block *sb,
-				   struct scoutfs_btree_ref *oino_bloom_ref)
+				   struct scoutfs_block_ref *oino_bloom_ref)
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct scoutfs_block *new_bl = NULL;
