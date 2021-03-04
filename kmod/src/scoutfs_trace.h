@@ -423,61 +423,34 @@ TRACE_EVENT(scoutfs_trans_write_func,
 	TP_printk(SCSBF" dirty %lu", SCSB_TRACE_ARGS, __entry->dirty)
 );
 
-TRACE_EVENT(scoutfs_release_trans,
-	TP_PROTO(struct super_block *sb, void *rsv, unsigned int rsv_holders,
-		 unsigned int tri_holders,
-		 unsigned int tri_writing),
+DECLARE_EVENT_CLASS(scoutfs_trans_hold_release_class,
+	TP_PROTO(struct super_block *sb, void *journal_info, int holders),
 
-	TP_ARGS(sb, rsv, rsv_holders, tri_holders, tri_writing),
+	TP_ARGS(sb, journal_info, holders),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
-		__field(void *, rsv)
-		__field(unsigned int, rsv_holders)
-		__field(unsigned int, tri_holders)
-		__field(unsigned int, tri_writing)
+		__field(unsigned long, journal_info)
+		__field(int, holders)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
-		__entry->rsv = rsv;
-		__entry->rsv_holders = rsv_holders;
-		__entry->tri_holders = tri_holders;
-		__entry->tri_writing = tri_writing;
+		__entry->journal_info = (unsigned long)journal_info;
+		__entry->holders = holders;
 	),
 
-	TP_printk(SCSBF" rsv %p holders %u trans holders %u writing %u",
-		  SCSB_TRACE_ARGS, __entry->rsv, __entry->rsv_holders,
-		  __entry->tri_holders, __entry->tri_writing)
+	TP_printk(SCSBF" journal_info 0x%0lx holders %d",
+		  SCSB_TRACE_ARGS, __entry->journal_info, __entry->holders)
 );
 
-TRACE_EVENT(scoutfs_trans_acquired_hold,
-	TP_PROTO(struct super_block *sb,
-		 void *rsv, unsigned int rsv_holders,
-		 unsigned int tri_holders,
-		 unsigned int tri_writing),
-
-	TP_ARGS(sb, rsv, rsv_holders, tri_holders, tri_writing),
-
-	TP_STRUCT__entry(
-		SCSB_TRACE_FIELDS
-		__field(void *, rsv)
-		__field(unsigned int, rsv_holders)
-		__field(unsigned int, tri_holders)
-		__field(unsigned int, tri_writing)
-	),
-
-	TP_fast_assign(
-		SCSB_TRACE_ASSIGN(sb);
-		__entry->rsv = rsv;
-		__entry->rsv_holders = rsv_holders;
-		__entry->tri_holders = tri_holders;
-		__entry->tri_writing = tri_writing;
-	),
-
-	TP_printk(SCSBF" rsv %p holders %u trans holders %u writing %u",
-		  SCSB_TRACE_ARGS, __entry->rsv, __entry->rsv_holders,
-		  __entry->tri_holders, __entry->tri_writing)
+DEFINE_EVENT(scoutfs_trans_hold_release_class, scoutfs_trans_acquired_hold,
+	TP_PROTO(struct super_block *sb, void *journal_info, int holders),
+	TP_ARGS(sb, journal_info, holders)
+);
+DEFINE_EVENT(scoutfs_trans_hold_release_class, scoutfs_release_trans,
+	TP_PROTO(struct super_block *sb, void *journal_info, int holders),
+	TP_ARGS(sb, journal_info, holders)
 );
 
 TRACE_EVENT(scoutfs_ioc_release,

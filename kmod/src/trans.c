@@ -39,17 +39,15 @@
  * track the relationships between dirty blocks so there's only ever one
  * transaction being built.
  *
- * The copy of the on-disk super block in the fs sb info has its header
- * sequence advanced so that new dirty blocks inherit this dirty
- * sequence number.  It's only advanced once all those dirty blocks are
- * reachable after having first written them all out and then the new
- * super with that seq.  It's first incremented at mount.
+ * Committing the current dirty transaction can be triggered by sync, a
+ * regular background commit interval, reaching a dirty block threshold,
+ * or the transaction running out of its private allocator resources.
+ * Once all the current holders release the writing func writes out the
+ * dirty blocks while excluding holders until it finishes.
  *
- * Unfortunately writers can nest.  We don't bother trying to special
- * case holding a transaction that you're already holding because that
- * requires per-task storage.  We just let anyone hold transactions
- * regardless of waiters waiting to write, which risks waiters waiting a
- * very long time.
+ * Unfortunately writing holders can nest.  We track nested hold callers
+ * with the per-task journal_info pointer to avoid deadlocks between
+ * holders that might otherwise wait for a pending commit.
  */
 
 /* sync dirty data at least this often */
@@ -59,9 +57,7 @@
  * XXX move the rest of the super trans_ fields here.
  */
 struct trans_info {
-	spinlock_t lock;
-	unsigned holders;
-	bool writing;
+	atomic_t holders;
 
 	struct scoutfs_log_trees lt;
 	struct scoutfs_alloc alloc;
@@ -71,17 +67,9 @@ struct trans_info {
 #define DECLARE_TRANS_INFO(sb, name) \
 	struct trans_info *name = SCOUTFS_SB(sb)->trans_info
 
-static bool drained_holders(struct trans_info *tri)
-{
-	bool drained;
-
-	spin_lock(&tri->lock);
-	tri->writing = true;
-	drained = tri->holders == 0;
-	spin_unlock(&tri->lock);
-
-	return drained;
-}
+/* avoid the high sign bit out of an abundance of caution*/
+#define TRANS_HOLDERS_WRITE_FUNC_BIT	(1 << 30)
+#define TRANS_HOLDERS_COUNT_MASK	(TRANS_HOLDERS_WRITE_FUNC_BIT - 1)
 
 static int commit_btrees(struct super_block *sb)
 {
@@ -127,6 +115,36 @@ bool scoutfs_trans_has_dirty(struct super_block *sb)
 }
 
 /*
+ * This is racing with wait_event conditions, make sure our atomic
+ * stores and waitqueue loads are ordered.
+ */
+static void sub_holders_and_wake(struct super_block *sb, int val)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	DECLARE_TRANS_INFO(sb, tri);
+
+	atomic_sub(val, &tri->holders);
+	smp_mb(); /* make sure sub is visible before we wake */
+	if (waitqueue_active(&sbi->trans_hold_wq))
+		wake_up(&sbi->trans_hold_wq);
+}
+
+/*
+ * called as a wait_event condition, needs to be careful to not change
+ * task state and is racing with waking paths that sub_return, test, and
+ * wake.
+ */
+static bool drained_holders(struct trans_info *tri)
+{
+	int holders;
+
+	smp_mb(); /* make sure task in wait_event queue before atomic read */
+	holders = atomic_read(&tri->holders) & TRANS_HOLDERS_COUNT_MASK;
+
+	return holders == 0;
+}
+
+/*
  * This work func is responsible for writing out all the dirty blocks
  * that make up the current dirty transaction.  It prevents writers from
  * holding a transaction so it doesn't have to worry about blocks being
@@ -161,6 +179,9 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	int ret = 0;
 
 	sbi->trans_task = current;
+
+	/* mark that we're writing so holders wait for us to finish and clear our bit */
+	atomic_add(TRANS_HOLDERS_WRITE_FUNC_BIT, &tri->holders);
 
 	wait_event(sbi->trans_hold_wq, drained_holders(tri));
 
@@ -213,11 +234,8 @@ out:
 	spin_unlock(&sbi->trans_write_lock);
 	wake_up(&sbi->trans_write_wq);
 
-	spin_lock(&tri->lock);
-	tri->writing = false;
-	spin_unlock(&tri->lock);
-
-	wake_up(&sbi->trans_hold_wq);
+	/* we're done, wake waiting holders */
+	sub_holders_and_wake(sb, TRANS_HOLDERS_WRITE_FUNC_BIT);
 
 	sbi->trans_task = NULL;
 
@@ -309,53 +327,83 @@ void scoutfs_trans_restart_sync_deadline(struct super_block *sb)
 }
 
 /*
- * Each thread reserves space in the segment for their dirty items while
- * they hold the transaction.  This is calculated before the first
- * transaction hold is acquired.  It includes all the potential nested
- * item manipulation that could happen with the transaction held.
- * Including nested holds avoids having to deal with writing out partial
- * transactions while a caller still holds the transaction.
+ * We store nested holders in the lower bits of journal_info.  We use
+ * some higher bits as a magic value to detect if something goes
+ * horribly wrong and it gets clobbered.
  */
+#define TRANS_JI_MAGIC		0xd5700000
+#define TRANS_JI_MAGIC_MASK	0xfff00000
+#define TRANS_JI_COUNT_MASK	0x000fffff
 
-#define SCOUTFS_RESERVATION_MAGIC 0xd57cd13b
-struct scoutfs_reservation {
-	unsigned magic;
-	unsigned holders;
-};
+/* returns true if a caller already had a holder counted in journal_info */
+static bool inc_journal_info_holders(void)
+{
+	unsigned long holders = (unsigned long)current->journal_info;
+
+	WARN_ON_ONCE(holders != 0 && ((holders & TRANS_JI_MAGIC_MASK) != TRANS_JI_MAGIC));
+
+	if (holders == 0)
+		holders = TRANS_JI_MAGIC;
+	holders++;
+
+	current->journal_info = (void *)holders;
+	return (holders > (TRANS_JI_MAGIC | 1));
+}
+
+static void dec_journal_info_holders(void)
+{
+	unsigned long holders = (unsigned long)current->journal_info;
+
+	WARN_ON_ONCE(holders != 0 && ((holders & TRANS_JI_MAGIC_MASK) != TRANS_JI_MAGIC));
+	WARN_ON_ONCE((holders & TRANS_JI_COUNT_MASK) == 0);
+
+	holders--;
+	if (holders == TRANS_JI_MAGIC)
+		holders = 0;
+
+	current->journal_info = (void *)holders;
+}
 
 /*
- * Try to hold the transaction.  If a caller already holds the trans then
- * we piggy back on their hold.  We wait if the writer is trying to
- * write out the transation.  And if our items won't fit then we kick off
- * a write.
+ * This is called as the wait_event condition for holding a transaction.
+ * Increment the holder count unless the writer is present.  We return
+ * false to wait until the writer finishes and wakes us.
  *
- * This is called as a condition for wait_event.  It is very limited in
- * the locking (blocking) it can do because the caller has set the task
- * state before testing the condition safely race with waking after
- * setting the condition.  Our checking the amount of dirty metadata
- * blocks and free data blocks is racy, but we don't mind the risk of
- * delaying or prematurely forcing commits.
+ * This can be racing with itself while there's no waiters.  We retry
+ * the cmpxchg instead of returning and waiting.
  */
-static bool acquired_hold(struct super_block *sb,
-			  struct scoutfs_reservation *rsv)
+static bool inc_holders_unless_writer(struct trans_info *tri)
 {
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	DECLARE_TRANS_INFO(sb, tri);
-	bool acquired = false;
+	int holders;
 
-	spin_lock(&tri->lock);
+	do {
+		smp_mb(); /* make sure we read after wait puts task in queue */
+		holders = atomic_read(&tri->holders);
+		if (holders & TRANS_HOLDERS_WRITE_FUNC_BIT)
+			return false;
 
-	trace_scoutfs_trans_acquired_hold(sb, rsv, rsv->holders,
-					  tri->holders, tri->writing);
+	} while (atomic_cmpxchg(&tri->holders, holders, holders + 1) != holders);
 
-	/* use a caller's existing reservation */
-	if (rsv->holders)
-		goto hold;
+	return true;
+}
 
-	/* wait until the writing thread is finished */
-	if (tri->writing)
-		goto out;
+/*
+ * As we drop the last trans holder we try to wake a writing thread that
+ * was waiting for us to finish.
+ */
+static void release_holders(struct super_block *sb)
+{
+	dec_journal_info_holders();
+	sub_holders_and_wake(sb, 1);
+}
 
+/*
+ * The caller has incremented holders so it is blocking commits.  We
+ * make some quick checks to see if we need to trigger and wait for
+ * another commit before proceeding.
+ */
+static bool commit_before_hold(struct super_block *sb, struct trans_info *tri)
+{
 	/*
 	 * In theory each dirty item page could be straddling two full
 	 * blocks, requiring 4 allocations for each item cache page.
@@ -365,11 +413,9 @@ static bool acquired_hold(struct super_block *sb,
 	 * that it accounts for having to dirty parent blocks and
 	 * whatever dirtying is done during the transaction hold.
 	 */
-	if (scoutfs_alloc_meta_low(sb, &tri->alloc,
-				   scoutfs_item_dirty_pages(sb) * 2)) {
+	if (scoutfs_alloc_meta_low(sb, &tri->alloc, scoutfs_item_dirty_pages(sb) * 2)) {
 		scoutfs_inc_counter(sb, trans_commit_dirty_meta_full);
-		queue_trans_work(sbi);
-		goto out;
+		return true;
 	}
 
 	/*
@@ -381,57 +427,74 @@ static bool acquired_hold(struct super_block *sb,
 	 */
 	if (scoutfs_alloc_meta_low(sb, &tri->alloc, 16)) {
 		scoutfs_inc_counter(sb, trans_commit_meta_alloc_low);
-		queue_trans_work(sbi);
-		goto out;
+		return true;
 	}
 
 	/* Try to refill data allocator before premature enospc */
 	if (scoutfs_data_alloc_free_bytes(sb) <= SCOUTFS_TRANS_DATA_ALLOC_LWM) {
 		scoutfs_inc_counter(sb, trans_commit_data_alloc_low);
-		queue_trans_work(sbi);
+		return true;
+	}
+
+	return false;
+}
+
+static bool acquired_hold(struct super_block *sb)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	DECLARE_TRANS_INFO(sb, tri);
+	bool acquired;
+
+	/* if a caller already has a hold we acquire unconditionally */
+	if (inc_journal_info_holders()) {
+		atomic_inc(&tri->holders);
+		acquired = true;
 		goto out;
 	}
 
-hold:
-	rsv->holders++;
-	tri->holders++;
+	/* wait if the writer is blocking holds */
+	if (!inc_holders_unless_writer(tri)) {
+		dec_journal_info_holders();
+		acquired = false;
+		goto out;
+	}
+
+	/* wait if we're triggering another commit */
+	if (commit_before_hold(sb, tri)) {
+		release_holders(sb);
+		queue_trans_work(sbi);
+		acquired = false;
+		goto out;
+	}
+
+	trace_scoutfs_trans_acquired_hold(sb, current->journal_info, atomic_read(&tri->holders));
 	acquired = true;
-
 out:
-
-	spin_unlock(&tri->lock);
-
 	return acquired;
 }
 
+/*
+ * Try to hold the transaction.  Holding the transaction prevents it
+ * from being committed.  If a transaction is currently being written
+ * then we'll block until it's done and our hold can be granted.
+ *
+ * If a caller already holds the trans then we unconditionally acquire
+ * our hold and return to avoid deadlocks with our caller, the writing
+ * thread, and us.  We record nested holds in a call stack with the
+ * journal_info pointer in the task_struct.
+ *
+ * The writing thread marks itself as a global trans_task which
+ * short-circuits all the hold machinery so it can call code that would
+ * otherwise try to hold transactions while it is writing.
+ */
 int scoutfs_hold_trans(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_reservation *rsv;
-	int ret;
 
 	if (current == sbi->trans_task)
 		return 0;
 
-	rsv = current->journal_info;
-	if (rsv == NULL) {
-		rsv = kzalloc(sizeof(struct scoutfs_reservation), GFP_NOFS);
-		if (!rsv)
-			return -ENOMEM;
-
-		rsv->magic = SCOUTFS_RESERVATION_MAGIC;
-		current->journal_info = rsv;
-	}
-
-	BUG_ON(rsv->magic != SCOUTFS_RESERVATION_MAGIC);
-
-	ret = wait_event_interruptible(sbi->trans_hold_wq,
-				       acquired_hold(sb, rsv));
-	if (ret && rsv->holders == 0) {
-		current->journal_info = NULL;
-		kfree(rsv);
-	}
-	return ret;
+	return wait_event_interruptible(sbi->trans_hold_wq, acquired_hold(sb));
 }
 
 /*
@@ -441,50 +504,22 @@ int scoutfs_hold_trans(struct super_block *sb)
  */
 bool scoutfs_trans_held(void)
 {
-	struct scoutfs_reservation *rsv = current->journal_info;
+	unsigned long holders = (unsigned long)current->journal_info;
 
-	return rsv && rsv->magic == SCOUTFS_RESERVATION_MAGIC;
+	return (holders != 0 && ((holders & TRANS_JI_MAGIC_MASK) == TRANS_JI_MAGIC));
 }
 
-/*
- * As we drop the last hold in the reservation we try and wake other
- * hold attempts that were waiting for space.  As we drop the last trans
- * holder we try to wake a writing thread that was waiting for us to
- * finish.
- */
 void scoutfs_release_trans(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_reservation *rsv;
 	DECLARE_TRANS_INFO(sb, tri);
-	bool wake = false;
 
 	if (current == sbi->trans_task)
 		return;
 
-	rsv = current->journal_info;
-	BUG_ON(!rsv || rsv->magic != SCOUTFS_RESERVATION_MAGIC);
+	release_holders(sb);
 
-	spin_lock(&tri->lock);
-
-	trace_scoutfs_release_trans(sb, rsv, rsv->holders, tri->holders, tri->writing);
-
-	BUG_ON(rsv->holders <= 0);
-	BUG_ON(tri->holders <= 0);
-
-	if (--rsv->holders == 0) {
-		current->journal_info = NULL;
-		kfree(rsv);
-		wake = true;
-	}
-
-	if (--tri->holders == 0)
-		wake = true;
-
-	spin_unlock(&tri->lock);
-
-	if (wake)
-		wake_up(&sbi->trans_hold_wq);
+	trace_scoutfs_release_trans(sb, current->journal_info, atomic_read(&tri->holders));
 }
 
 /*
@@ -513,7 +548,7 @@ int scoutfs_setup_trans(struct super_block *sb)
 	if (!tri)
 		return -ENOMEM;
 
-	spin_lock_init(&tri->lock);
+	atomic_set(&tri->holders, 0);
 	scoutfs_block_writer_init(sb, &tri->wri);
 
 	sbi->trans_write_workq = alloc_workqueue("scoutfs_trans",

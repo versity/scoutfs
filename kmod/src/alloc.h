@@ -72,7 +72,8 @@
  * transaction.
  */
 struct scoutfs_alloc {
-	spinlock_t lock;
+	/* writers rarely modify list_head avail/freed.  readers often check for _meta_alloc_low */
+	seqlock_t seqlock;
 	struct mutex mutex;
 	struct scoutfs_block *dirty_avail_bl;
 	struct scoutfs_block *dirty_freed_bl;
