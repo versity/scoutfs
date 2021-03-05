@@ -90,19 +90,13 @@ enum conn_flags {
 #define SIN_ARG(sin)	sin, be16_to_cpu((sin)->sin_port)
 
 static inline void scoutfs_addr_to_sin(struct sockaddr_in *sin,
-				       struct scoutfs_inet_addr *addr)
+				       union scoutfs_inet_addr *addr)
 {
-	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = cpu_to_be32(le32_to_cpu(addr->addr));
-	sin->sin_port = cpu_to_be16(le16_to_cpu(addr->port));
-}
+	BUG_ON(addr->v4.family != cpu_to_le16(SCOUTFS_AF_IPV4));
 
-static inline void scoutfs_addr_from_sin(struct scoutfs_inet_addr *addr,
-					 struct sockaddr_in *sin)
-{
-	addr->addr = be32_to_le32(sin->sin_addr.s_addr);
-	addr->port = be16_to_le16(sin->sin_port);
-	memset(addr->__pad, 0, sizeof(addr->__pad));
+	sin->sin_family = AF_INET;
+	sin->sin_addr.s_addr = cpu_to_be32(le32_to_cpu(addr->v4.addr));
+	sin->sin_port = cpu_to_be16(le16_to_cpu(addr->v4.port));
 }
 
 struct scoutfs_net_connection *

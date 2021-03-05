@@ -361,12 +361,12 @@ static int do_mkfs(struct mkfs_args *args)
 		struct scoutfs_quorum_slot *sl = &super->qconf.slots[i];
 		struct in_addr in;
 
-		if (sl->addr.addr == 0)
+		if (sl->addr.v4.family != cpu_to_le16(SCOUTFS_AF_IPV4))
 			continue;
 
-		in.s_addr = htonl(le32_to_cpu(sl->addr.addr));
+		in.s_addr = htonl(le32_to_cpu(sl->addr.v4.addr));
 		printf("%s%u: %s:%u", indent,
-		       i, inet_ntoa(in), le16_to_cpu(sl->addr.port));
+		       i, inet_ntoa(in), le16_to_cpu(sl->addr.v4.port));
 		indent = "\n                        ";
 	}
 	printf("\n");
@@ -395,22 +395,28 @@ static bool valid_quorum_slots(struct scoutfs_quorum_slot *slots)
 	int j;
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (slots[i].addr.addr == 0)
+		if (slots[i].addr.v4.family == cpu_to_le16(SCOUTFS_AF_NONE))
 			continue;
 
+		if (slots[i].addr.v4.family != cpu_to_le16(SCOUTFS_AF_IPV4)) {
+			fprintf(stderr, "quorum slot nr %u has invalid family %u\n",
+				i, le16_to_cpu(slots[i].addr.v4.family));
+			valid = false;
+		}
+
 		for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
-			if (slots[j].addr.addr == 0)
+			if (slots[i].addr.v4.family != cpu_to_le16(SCOUTFS_AF_IPV4))
 				continue;
 
-			if (slots[i].addr.addr == slots[j].addr.addr &&
-			    slots[i].addr.port == slots[j].addr.port) {
+			if (slots[i].addr.v4.addr == slots[j].addr.v4.addr &&
+			    slots[i].addr.v4.port == slots[j].addr.v4.port) {
 
 				in.s_addr =
-					htonl(le32_to_cpu(slots[i].addr.addr));
+					htonl(le32_to_cpu(slots[i].addr.v4.addr));
 				addr = inet_ntoa(in);
 				fprintf(stderr, "quorum slot nr %u and %u have the same address %s:%u\n",
 					i, j, addr,
-					le16_to_cpu(slots[i].addr.port));
+					le16_to_cpu(slots[i].addr.v4.port));
 				valid = false;
 			}
 		}
@@ -430,7 +436,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 		ret = parse_quorum_slot(&slot, arg);
 		if (ret < 0)
 			return ret;
-		if (args->slots[ret].addr.addr != 0)
+		if (args->slots[ret].addr.v4.family != cpu_to_le16(SCOUTFS_AF_NONE))
 			argp_error(state, "Quorum slot %u already specified before slot '%s'\n",
 				   ret, arg);
 		args->slots[ret] = slot;

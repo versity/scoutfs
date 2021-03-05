@@ -86,11 +86,33 @@ struct scoutfs_timespec {
 	__u8 __pad[4];
 };
 
-/* XXX ipv6 */
-struct scoutfs_inet_addr {
-	__le32 addr;
+enum scoutfs_inet_family {
+	SCOUTFS_AF_NONE = 0,
+	SCOUTFS_AF_IPV4 = 1,
+	SCOUTFS_AF_IPV6 = 2,
+};
+
+struct scoutfs_inet_addr4 {
+	__le16 family;
 	__le16 port;
-	__u8 __pad[2];
+	__le32 addr;
+};
+
+/*
+ * Not yet supported by code.
+ */
+struct scoutfs_inet_addr6 {
+	__le16 family;
+	__le16 port;
+	__u8 addr[16];
+	__le32 flow_info;
+	__le32 scope_id;
+	__u8 __pad[4];
+};
+
+union scoutfs_inet_addr {
+	struct scoutfs_inet_addr4 v4;
+	struct scoutfs_inet_addr6 v6;
 };
 
 /*
@@ -591,7 +613,7 @@ struct scoutfs_quorum_message {
 struct scoutfs_quorum_config {
 	__le64 version;
 	struct scoutfs_quorum_slot {
-		struct scoutfs_inet_addr addr;
+		union scoutfs_inet_addr addr;
 	} slots[SCOUTFS_QUORUM_MAX_SLOTS];
 };
 
