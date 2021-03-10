@@ -230,15 +230,43 @@ t_counter() {
 }
 
 #
+# output the difference between the current value of a counter and the
+# caller's provided previous value.
+#
+t_counter_diff_value() {
+	local which="$1"
+	local old="$2"
+	local nr="$3"
+	local new="$(t_counter $which $nr)"
+
+	echo "$((new - old))"
+}
+
+#
 # output the value of the given counter for the given mount, defaulting
-# to mount 0 if a mount isn't specified.
+# to mount 0 if a mount isn't specified.  For tests which expect a
+# specific difference in counters.
 #
 t_counter_diff() {
 	local which="$1"
 	local old="$2"
 	local nr="$3"
-	local new
 
-	new="$(t_counter $which $nr)"
-	echo "counter $which diff $((new - old))"
+	echo "counter $which diff $(t_counter_diff_value $which $old $nr)"
+}
+
+#
+# output a message indicating whether or not the counter value changed.
+# For tests that expect a difference, or not, but the amount of
+# difference isn't significant.
+#
+t_counter_diff_changed() {
+	local which="$1"
+	local old="$2"
+	local nr="$3"
+	local diff="$(t_counter_diff_value $which $old $nr)"
+
+	test "$diff" -eq 0 && \
+		echo "counter $which didn't change" ||
+		echo "counter $which changed"
 }
