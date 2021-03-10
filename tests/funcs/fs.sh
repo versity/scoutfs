@@ -209,12 +209,19 @@ t_trigger_show() {
 	echo "trigger $which $string: $(t_trigger_get $which $nr)"
 }
 
-t_trigger_arm() {
+t_trigger_arm_silent() {
 	local which="$1"
 	local nr="$2"
 	local path=$(t_trigger_path "$nr")
 
 	echo 1 > "$path/$which"
+}
+
+t_trigger_arm() {
+	local which="$1"
+	local nr="$2"
+
+	t_trigger_arm_silent $which $nr
 	t_trigger_show $which armed $nr
 }
 
