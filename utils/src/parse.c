@@ -213,7 +213,8 @@ int parse_quorum_slot(struct scoutfs_quorum_slot *slot, char *arg)
 		return -EINVAL;
 	}
 
-	slot->addr.addr = cpu_to_le32(htonl(in.s_addr));
-	slot->addr.port = cpu_to_le16(port);
+	slot->addr.v4.family = cpu_to_le16(SCOUTFS_AF_IPV4);
+	slot->addr.v4.addr = cpu_to_le32(htonl(in.s_addr));
+	slot->addr.v4.port = cpu_to_le16(port);
 	return nr;
 }

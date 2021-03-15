@@ -769,7 +769,7 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 	return 0;
 }
 
-static char *alloc_addr_str(struct scoutfs_inet_addr *ia)
+static char *alloc_addr_str(union scoutfs_inet_addr *ia)
 {
 	struct in_addr addr;
 	char *quad;
@@ -777,12 +777,12 @@ static char *alloc_addr_str(struct scoutfs_inet_addr *ia)
 	int len;
 
 	memset(&addr, 0, sizeof(addr));
-	addr.s_addr = htonl(le32_to_cpu(ia->addr));
+	addr.s_addr = htonl(le32_to_cpu(ia->v4.addr));
 	quad = inet_ntoa(addr);
 	if (quad == NULL)
 		return NULL;
 
-	len = snprintf(NULL, 0, "%s:%u", quad, le16_to_cpu(ia->port));
+	len = snprintf(NULL, 0, "%s:%u", quad, le16_to_cpu(ia->v4.port));
 	if (len < 1 || len > 22)
 		return NULL;
 
@@ -791,7 +791,7 @@ static char *alloc_addr_str(struct scoutfs_inet_addr *ia)
 	if (!str)
 		return NULL;
 
-	snprintf(str, len, "%s:%u", quad, le16_to_cpu(ia->port));
+	snprintf(str, len, "%s:%u", quad, le16_to_cpu(ia->v4.port));
 	return str;
 }
 
@@ -915,8 +915,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("  quorum config version %llu\n",
 		le64_to_cpu(super->qconf.version));
 	for (i = 0; i < array_size(super->qconf.slots); i++) {
-		if (!super->qconf.slots[i].addr.addr &&
-		    !super->qconf.slots[i].addr.port)
+		if (super->qconf.slots[i].addr.v4.family != cpu_to_le16(SCOUTFS_AF_IPV4))
 			continue;
 
 		addr = alloc_addr_str(&super->qconf.slots[i].addr);

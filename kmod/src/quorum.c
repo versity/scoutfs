@@ -138,7 +138,7 @@ static bool quorum_slot_present(struct scoutfs_super_block *super, int i)
 {
 	BUG_ON(i < 0 || i > SCOUTFS_QUORUM_MAX_SLOTS);
 
-	return super->qconf.slots[i].addr.addr != 0;
+	return super->qconf.slots[i].addr.v4.family == cpu_to_le16(SCOUTFS_AF_IPV4);
 }
 
 static ktime_t election_timeout(void)
@@ -976,6 +976,9 @@ static int verify_quorum_slots(struct super_block *sb)
 		}
 
 		for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
+			if (!quorum_slot_present(super, j))
+				continue;
+
 			scoutfs_quorum_slot_sin(super, j, &other);
 
 			if (sin.sin_addr.s_addr == other.sin_addr.s_addr &&
