@@ -941,6 +941,8 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 		ret = -EAFNOSUPPORT;
 	if (ret)
 		goto out;
+
+	conn->last_peername = conn->peername;
 out:
 	return ret;
 }
@@ -1237,9 +1239,9 @@ restart:
 			spin_unlock(&conn->lock);
 			if (!test_conn_fl(conn, shutting_down)) {
 				scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
-					     SIN_ARG(&acc->peername));
+					     SIN_ARG(&acc->last_peername));
 				ret = scoutfs_fence_start(sb, acc->rid,
-						acc->peername.sin_addr.s_addr,
+						acc->last_peername.sin_addr.s_addr,
 						SCOUTFS_FENCE_CLIENT_RECONNECT);
 				if (ret) {
 					scoutfs_err(sb, "client fence returned err %d, shutting down server",
@@ -1317,6 +1319,7 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 	init_waitqueue_head(&conn->waitq);
 	conn->sockname.sin_family = AF_INET;
 	conn->peername.sin_family = AF_INET;
+	conn->last_peername.sin_family = AF_INET;
 	INIT_LIST_HEAD(&conn->accepted_head);
 	INIT_LIST_HEAD(&conn->accepted_list);
 	conn->next_send_seq = 1;

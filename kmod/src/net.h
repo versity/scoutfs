@@ -49,6 +49,7 @@ struct scoutfs_net_connection {
 	u64 greeting_id;
 	struct sockaddr_in sockname;
 	struct sockaddr_in peername;
+	struct sockaddr_in last_peername;
 
 	struct list_head accepted_head;
 	struct scoutfs_net_connection *listening_conn;
