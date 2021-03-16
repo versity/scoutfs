@@ -1546,9 +1546,8 @@ void scoutfs_net_client_greeting(struct super_block *sb,
  * response and they can disconnect cleanly.
  *
  * At this point our connection is idle except for send submissions and
- * shutdown being queued.  Once we shut down a We completely own a We
- * have exclusive access to a previous conn once its shutdown and we set
- * _freeing.
+ * shutdown being queued.  We have exclusive access to the previous conn
+ * once it's shutdown and we set _freeing.
  */
 void scoutfs_net_server_greeting(struct super_block *sb,
 				 struct scoutfs_net_connection *conn,
