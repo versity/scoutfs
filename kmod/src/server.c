@@ -160,10 +160,21 @@ struct commit_waiter {
 	int ret;
 };
 
+static bool test_shutting_down(struct server_info *server)
+{
+	smp_rmb();
+	return server->shutting_down;
+}
+
+static void set_shutting_down(struct server_info *server, bool val)
+{
+	server->shutting_down = val;
+	smp_rmb();
+}
+
 static void stop_server(struct server_info *server)
 {
-	/* wait_event/wake_up provide barriers */
-	server->shutting_down = true;
+	set_shutting_down(server, true);
 	wake_up(&server->waitq);
 }
 
@@ -1550,7 +1561,7 @@ static int cancel_srch_compact(struct super_block *sb, u64 rid)
  */
 static void queue_farewell_work(struct server_info *server)
 {
-	if (!server->shutting_down)
+	if (!test_shutting_down(server))
 		queue_work(server->wq, &server->farewell_work);
 }
 
@@ -2049,7 +2060,7 @@ static void recovery_timeout(struct super_block *sb)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
-	if (!server->shutting_down)
+	if (!test_shutting_down(server))
 		queue_work(server->wq, &server->fence_pending_recov_work);
 }
 
@@ -2114,7 +2125,7 @@ out:
 
 static void queue_reclaim_work(struct server_info *server, unsigned long delay)
 {
-	if (!server->shutting_down)
+	if (!test_shutting_down(server))
 		queue_delayed_work(server->wq, &server->reclaim_dwork, delay);
 }
 
@@ -2270,7 +2281,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	queue_reclaim_work(server, 0);
 
 	/* wait_event/wake_up provide barriers */
-	wait_event_interruptible(server->waitq, server->shutting_down);
+	wait_event_interruptible(server->waitq, test_shutting_down(server));
 
 shutdown:
 	scoutfs_info(sb, "server shutting down at "SIN_FMT, SIN_ARG(&sin));
@@ -2317,7 +2328,7 @@ int scoutfs_server_start(struct super_block *sb, u64 term)
 	DECLARE_SERVER_INFO(sb, server);
 
 	server->err = 0;
-	server->shutting_down = false;
+	set_shutting_down(server, false);
 	server->term = term;
 	init_completion(&server->start_comp);
 
