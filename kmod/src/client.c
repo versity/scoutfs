@@ -49,7 +49,6 @@ struct client_info {
 	struct delayed_work connect_dwork;
 
 	u64 server_term;
-	u64 greeting_umb;
 
 	bool sending_farewell;
 	int farewell_error;
