@@ -586,7 +586,9 @@ static void init_lock_clients_key(struct scoutfs_key *key, u64 rid)
  * the client had already talked to the server then we must find an
  * existing record for it and should begin recovery.  If it doesn't have
  * a record then its timed out and we can't allow it to reconnect.  If
- * its connecting for the first time then we insert a new record.  If
+ * we're creating a new record for a client we can see EEXIST if the
+ * greeting is resent to a new server after the record was committed but
+ * before the response was received by the client.
  *
  * This is running in concurrent client greeting processing contexts.
  */
@@ -611,6 +613,8 @@ int scoutfs_lock_server_greeting(struct super_block *sb, u64 rid,
 		ret = scoutfs_btree_insert(sb, inf->alloc, inf->wri,
 					   &super->lock_clients,
 					   &key, NULL, 0);
+		if (ret == -EEXIST)
+			ret = 0;
 	}
 	mutex_unlock(&inf->mutex);
 
