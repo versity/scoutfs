@@ -1024,6 +1024,12 @@ static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 	};
 }
 
+/*
+ * Insert a new mounted client item for a client that is sending us a
+ * greeting that hasn't yet seen a response.  The greeting can be
+ * retransmitted to a new server after the previous inserted the item so
+ * it's acceptable to see -EEXIST.
+ */
 static int insert_mounted_client(struct super_block *sb, u64 rid,
 				 u64 gr_flags)
 {
@@ -1042,6 +1048,8 @@ static int insert_mounted_client(struct super_block *sb, u64 rid,
 	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
 				   &super->mounted_clients, &key, &mcv,
 				   sizeof(mcv));
+	if (ret == -EEXIST)
+		ret = 0;
 	mutex_unlock(&server->mounted_clients_mutex);
 
 	return ret;
