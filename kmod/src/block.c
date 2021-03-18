@@ -1245,7 +1245,7 @@ out:
 	if (ret)
 		scoutfs_block_destroy(sb);
 
-	return 0;
+	return ret;
 }
 
 void scoutfs_block_destroy(struct super_block *sb)
