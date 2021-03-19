@@ -2402,6 +2402,89 @@ TRACE_EVENT(scoutfs_item_invalidate_page,
 		  sk_trace_args(pg_start), sk_trace_args(pg_end), __entry->pgi)
 );
 
+DECLARE_EVENT_CLASS(scoutfs_omap_group_class,
+	TP_PROTO(struct super_block *sb, void *grp, u64 group_nr, unsigned int group_total,
+		 int bit_nr, int bit_count),
+
+	TP_ARGS(sb, grp, group_nr, group_total, bit_nr, bit_count),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(void *, grp)
+		__field(__u64, group_nr)
+		__field(unsigned int, group_total)
+		__field(int, bit_nr)
+		__field(int, bit_count)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->grp = grp;
+		__entry->group_nr = group_nr;
+		__entry->group_total = group_total;
+		__entry->bit_nr = bit_nr;
+		__entry->bit_count = bit_count;
+	),
+
+	TP_printk(SCSBF" grp %p group_nr %llu group_total %u bit_nr %d bit_count %d",
+		  SCSB_TRACE_ARGS, __entry->grp, __entry->group_nr, __entry->group_total,
+		  __entry->bit_nr, __entry->bit_count)
+);
+
+DEFINE_EVENT(scoutfs_omap_group_class, scoutfs_omap_group_alloc,
+	TP_PROTO(struct super_block *sb, void *grp, u64 group_nr, unsigned int group_total,
+		 int bit_nr, int bit_count),
+	TP_ARGS(sb, grp, group_nr, group_total, bit_nr, bit_count)
+);
+DEFINE_EVENT(scoutfs_omap_group_class, scoutfs_omap_group_free,
+	TP_PROTO(struct super_block *sb, void *grp, u64 group_nr, unsigned int group_total,
+		 int bit_nr, int bit_count),
+	TP_ARGS(sb, grp, group_nr, group_total, bit_nr, bit_count)
+);
+DEFINE_EVENT(scoutfs_omap_group_class, scoutfs_omap_group_inc,
+	TP_PROTO(struct super_block *sb, void *grp, u64 group_nr, unsigned int group_total,
+		 int bit_nr, int bit_count),
+	TP_ARGS(sb, grp, group_nr, group_total, bit_nr, bit_count)
+);
+DEFINE_EVENT(scoutfs_omap_group_class, scoutfs_omap_group_dec,
+	TP_PROTO(struct super_block *sb, void *grp, u64 group_nr, unsigned int group_total,
+		 int bit_nr, int bit_count),
+	TP_ARGS(sb, grp, group_nr, group_total, bit_nr, bit_count)
+);
+DEFINE_EVENT(scoutfs_omap_group_class, scoutfs_omap_group_request,
+	TP_PROTO(struct super_block *sb, void *grp, u64 group_nr, unsigned int group_total,
+		 int bit_nr, int bit_count),
+	TP_ARGS(sb, grp, group_nr, group_total, bit_nr, bit_count)
+);
+DEFINE_EVENT(scoutfs_omap_group_class, scoutfs_omap_group_destroy,
+	TP_PROTO(struct super_block *sb, void *grp, u64 group_nr, unsigned int group_total,
+		 int bit_nr, int bit_count),
+	TP_ARGS(sb, grp, group_nr, group_total, bit_nr, bit_count)
+);
+
+TRACE_EVENT(scoutfs_omap_should_delete,
+	TP_PROTO(struct super_block *sb, u64 ino, unsigned int nlink, int ret),
+
+	TP_ARGS(sb, ino, nlink, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(unsigned int, nlink)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->nlink = nlink;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu nlink %u ret %d",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->nlink, __entry->ret)
+);
+
 #endif /* _TRACE_SCOUTFS_H */
 
 /* This part must be outside protection */

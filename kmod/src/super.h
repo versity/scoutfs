@@ -27,6 +27,7 @@ struct block_info;
 struct forest_info;
 struct srch_info;
 struct recov_info;
+struct omap_info;
 
 struct scoutfs_sb_info {
 	struct super_block *sb;
@@ -49,6 +50,7 @@ struct scoutfs_sb_info {
 	struct block_info *block_info;
 	struct forest_info *forest_info;
 	struct srch_info *srch_info;
+	struct omap_info *omap_info;
 	struct item_cache_info *item_cache_info;
 
 	wait_queue_head_t trans_hold_wq;

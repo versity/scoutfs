@@ -10,6 +10,8 @@
 
 #define SCOUTFS_LOCK_NR_MODES		SCOUTFS_LOCK_INVALID
 
+struct scoutfs_omap_lock;
+
 /*
  * A few fields (start, end, refresh_gen, write_version, granted_mode)
  * are referenced by code outside lock.c.
@@ -47,6 +49,10 @@ struct scoutfs_lock {
 
 	/* the forest tracks which log tree last saw bloom bit updates */
 	atomic64_t forest_bloom_nr;
+
+	/* open ino mapping has a valid map for a held write lock */
+	spinlock_t omap_spinlock;
+	struct scoutfs_omap_lock_data *omap_data;
 };
 
 struct scoutfs_lock_coverage {

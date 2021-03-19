@@ -27,6 +27,7 @@ scoutfs-y +=			\
 	lock_server.o		\
 	msg.o			\
 	net.o			\
+	omap.o			\
 	options.o		\
 	per_task.o		\
 	quorum.o		\

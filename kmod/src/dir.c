@@ -30,6 +30,7 @@
 #include "item.h"
 #include "lock.h"
 #include "hash.h"
+#include "omap.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
 

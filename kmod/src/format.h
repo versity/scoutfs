@@ -840,6 +840,7 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_LOCK_RECOVER,
 	SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
 	SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
+	SCOUTFS_NET_CMD_OPEN_INO_MAP,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };
@@ -959,5 +960,43 @@ enum scoutfs_corruption_sources {
 };
 
 #define SC_NR_LONGS DIV_ROUND_UP(SC_NR_SOURCES, BITS_PER_LONG)
+
+#define SCOUTFS_OPEN_INO_MAP_SHIFT	10
+#define SCOUTFS_OPEN_INO_MAP_BITS	(1 << SCOUTFS_OPEN_INO_MAP_SHIFT)
+#define SCOUTFS_OPEN_INO_MAP_MASK	(SCOUTFS_OPEN_INO_MAP_BITS - 1)
+#define SCOUTFS_OPEN_INO_MAP_LE64S	(SCOUTFS_OPEN_INO_MAP_BITS / 64)
+
+/*
+ * The request and response conversation is as follows:
+ *
+ * client[init] -> server:
+ *	group_nr = G
+ *	req_id = 0	(I)
+ * server -> client[*]
+ *	group_nr = G
+ *	req_id = R
+ * client[*] -> server
+ *	group_nr = G	(I)
+ *	req_id = R
+ *	bits
+ * server -> client[init]
+ *	group_nr = G	(I)
+ *	req_id = R	(I)
+ *	bits
+ *
+ * Many of the fields in individual messages are ignored ("I") because
+ * the net id or the omap req_id can be used to identify the
+ * conversation.  We always include them on the wire to make inspected
+ * messages easier to follow.
+ */
+struct scoutfs_open_ino_map_args {
+	__le64 group_nr;
+	__le64 req_id;
+};
+
+struct scoutfs_open_ino_map {
+	struct scoutfs_open_ino_map_args args;
+	__le64 bits[SCOUTFS_OPEN_INO_MAP_LE64S];
+};
 
 #endif

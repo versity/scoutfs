@@ -39,6 +39,7 @@
 #include "alloc.h"
 #include "forest.h"
 #include "recov.h"
+#include "omap.h"
 
 /*
  * Every active mount can act as the server that listens on a net
@@ -1020,6 +1021,60 @@ out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 
+/* The server is receiving an omap response from the client */
+static int open_ino_map_response(struct super_block *sb, struct scoutfs_net_connection *conn,
+				 void *resp, unsigned int resp_len, int error, void *data)
+{
+	u64 rid = scoutfs_net_client_rid(conn);
+
+	if (resp_len != sizeof(struct scoutfs_open_ino_map))
+		return -EINVAL;
+
+	return scoutfs_omap_server_handle_response(sb, rid, resp);
+}
+
+/* The server is sending an omap request to the client */
+int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
+				     struct scoutfs_open_ino_map_args *args)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+
+	return scoutfs_net_submit_request_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
+					      args, sizeof(*args),
+					      open_ino_map_response, NULL, NULL);
+}
+
+/* The server is sending an omap response to the client */
+int scoutfs_server_send_omap_response(struct super_block *sb, u64 rid, u64 id,
+				      struct scoutfs_open_ino_map *map, int err)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+
+	return scoutfs_net_response_node(sb, server->conn, rid,
+					 SCOUTFS_NET_CMD_OPEN_INO_MAP, id, err,
+					 map, sizeof(*map));
+}
+
+/* The server is receiving an omap request from the client */
+static int server_open_ino_map(struct super_block *sb, struct scoutfs_net_connection *conn,
+			       u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	u64 rid = scoutfs_net_client_rid(conn);
+	int ret;
+
+	if (arg_len != sizeof(struct scoutfs_open_ino_map_args)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = scoutfs_omap_server_handle_request(sb, rid, id, arg);
+out:
+	if (ret < 0)
+		return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
+
+	return 0;
+}
+
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 {
 	*key = (struct scoutfs_key) {
@@ -1237,9 +1292,10 @@ send_err:
 	scoutfs_net_server_greeting(sb, conn, le64_to_cpu(gr->rid), id,
 				    reconnecting, first_contact, farewell);
 
-	/* lock server might send recovery request */
+	/* let layers know we have a client connecting for the first time */
 	if (le64_to_cpu(gr->server_term) != server->term) {
-		ret = scoutfs_lock_server_greeting(sb, le64_to_cpu(gr->rid));
+		ret = scoutfs_lock_server_greeting(sb, le64_to_cpu(gr->rid)) ?:
+		      scoutfs_omap_add_rid(sb, le64_to_cpu(gr->rid));
 		if (ret)
 			goto out;
 	}
@@ -1273,7 +1329,8 @@ static int reclaim_rid(struct super_block *sb, u64 rid)
 	      remove_trans_seq(sb, rid) ?:
 	      reclaim_log_trees(sb, rid) ?:
 	      cancel_srch_compact(sb, rid) ?:
-	      delete_mounted_client(sb, rid);
+	      delete_mounted_client(sb, rid) ?:
+	      scoutfs_omap_remove_rid(sb, rid);
 
 	return scoutfs_server_apply_commit(sb, ret);
 }
@@ -1507,6 +1564,7 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_LOCK]			= server_lock,
 	[SCOUTFS_NET_CMD_SRCH_GET_COMPACT]	= server_srch_get_compact,
 	[SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT]	= server_srch_commit_compact,
+	[SCOUTFS_NET_CMD_OPEN_INO_MAP]		= server_open_ino_map,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 
@@ -1564,7 +1622,8 @@ static void finished_recovery(struct super_block *sb)
 
 	scoutfs_info(sb, "all clients recovered");
 
-	ret = scoutfs_lock_server_finished_recovery(sb);
+	ret = scoutfs_omap_finished_recovery(sb) ?:
+	      scoutfs_lock_server_finished_recovery(sb);
 	if (ret < 0) {
 		scoutfs_err(sb, "error %d resuming after recovery finished, shutting down", ret);
 		stop_server(server);
@@ -1787,6 +1846,7 @@ shutdown:
 	flush_work(&server->commit_work);
 
 	scoutfs_lock_server_destroy(sb);
+	scoutfs_omap_server_shutdown(sb);
 
 out:
 	scoutfs_net_free_conn(sb, conn);

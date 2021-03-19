@@ -27,6 +27,7 @@
 #include "file.h"
 #include "inode.h"
 #include "per_task.h"
+#include "omap.h"
 
 /* TODO: Direct I/O, AIO */
 ssize_t scoutfs_file_aio_read(struct kiocb *iocb, const struct iovec *iov,

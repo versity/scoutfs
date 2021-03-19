@@ -34,6 +34,7 @@
 #include "data.h"
 #include "xattr.h"
 #include "item.h"
+#include "omap.h"
 
 /*
  * scoutfs uses a lock service to manage item cache consistency between
@@ -234,6 +235,7 @@ static void lock_free(struct lock_info *linfo, struct scoutfs_lock *lock)
 	BUG_ON(!list_empty(&lock->shrink_head));
 	BUG_ON(!list_empty(&lock->cov_list));
 
+	scoutfs_omap_free_lock_data(lock->omap_data);
 	kfree(lock);
 }
 
@@ -269,6 +271,7 @@ static struct scoutfs_lock *lock_alloc(struct super_block *sb,
 	lock->mode = SCOUTFS_LOCK_NULL;
 
 	atomic64_set(&lock->forest_bloom_nr, 0);
+	spin_lock_init(&lock->omap_spinlock);
 
 	trace_scoutfs_lock_alloc(sb, lock);
 

@@ -45,6 +45,7 @@
 #include "item.h"
 #include "alloc.h"
 #include "recov.h"
+#include "omap.h"
 #include "scoutfs_trace.h"
 
 static struct dentry *scoutfs_debugfs_root;
@@ -264,6 +265,7 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_recov_destroy(sb);
 	scoutfs_net_destroy(sb);
 	scoutfs_lock_destroy(sb);
+	scoutfs_omap_destroy(sb);
 
 	scoutfs_block_destroy(sb);
 	scoutfs_destroy_triggers(sb);
@@ -593,6 +595,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_inode_setup(sb) ?:
 	      scoutfs_data_setup(sb) ?:
 	      scoutfs_setup_trans(sb) ?:
+	      scoutfs_omap_setup(sb) ?:
 	      scoutfs_lock_setup(sb) ?:
 	      scoutfs_net_setup(sb) ?:
 	      scoutfs_recov_setup(sb) ?:

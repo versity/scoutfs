@@ -33,6 +33,7 @@
 #include "item.h"
 #include "client.h"
 #include "cmp.h"
+#include "omap.h"
 
 /*
  * XXX
@@ -693,6 +694,8 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino)
 		atomic64_set(&si->last_refreshed, 0);
 
 		ret = scoutfs_inode_refresh(inode, lock, 0);
+		if (ret == 0)
+			ret = scoutfs_omap_inc(sb, ino);
 		if (ret) {
 			iget_failed(inode);
 			inode = ERR_PTR(ret);
@@ -1405,10 +1408,17 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	store_inode(&sinode, inode);
 	init_inode_key(&key, scoutfs_ino(inode));
 
+	ret = scoutfs_omap_inc(sb, ino);
+	if (ret < 0)
+		goto out;
+
 	ret = scoutfs_item_create(sb, &key, &sinode, sizeof(sinode), lock);
+	if (ret < 0)
+		scoutfs_omap_dec(sb, ino);
+out:
 	if (ret) {
 		iput(inode);
-		return ERR_PTR(ret);
+		inode = ERR_PTR(ret);
 	}
 
 	return inode;
@@ -1453,15 +1463,15 @@ int scoutfs_orphan_delete(struct super_block *sb, u64 ino)
 
 /*
  * Remove all the items associated with a given inode.  This is only
- * called once nlink has dropped to zero so we don't have to worry about
- * dirents referencing the inode or link backrefs.  Dropping nlink to 0
- * also created an orphan item.  That orphan item will continue
- * triggering attempts to finish previous partial deletion until all
- * deletion is complete and the orphan item is removed.
+ * called once nlink has dropped to zero and nothing has the inode open
+ * so we don't have to worry about dirents referencing the inode or link
+ * backrefs.  Dropping nlink to 0 also created an orphan item.  That
+ * orphan item will continue triggering attempts to finish previous
+ * partial deletion until all deletion is complete and the orphan item
+ * is removed.
  */
-static int delete_inode_items(struct super_block *sb, u64 ino)
+static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lock *lock)
 {
-	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
 	LIST_HEAD(ind_locks);
@@ -1470,10 +1480,6 @@ static int delete_inode_items(struct super_block *sb, u64 ino)
 	u64 ind_seq;
 	u64 size;
 	int ret;
-
-	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino, &lock);
-	if (ret)
-		return ret;
 
 	init_inode_key(&key, ino);
 
@@ -1539,18 +1545,24 @@ out:
 	if (release)
 		scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+
 	return ret;
 }
 
 /*
  * iput_final has already written out the dirty pages to the inode
  * before we get here.  We're left with a clean inode that we have to
- * tear down.  If there are no more links to the inode then we also
- * remove all its persistent structures.
+ * tear down.  We use locking and open inode number bitmaps to decide if
+ * we should finally destroy an inode that is no longer open nor
+ * reachable through directory entries.
  */
 void scoutfs_evict_inode(struct inode *inode)
 {
+	struct super_block *sb = inode->i_sb;
+	const u64 ino = scoutfs_ino(inode);
+	struct scoutfs_lock *lock;
+	int ret;
+
 	trace_scoutfs_evict_inode(inode->i_sb, scoutfs_ino(inode),
 				  inode->i_nlink, is_bad_inode(inode));
 
@@ -1559,8 +1571,17 @@ void scoutfs_evict_inode(struct inode *inode)
 
 	truncate_inode_pages_final(&inode->i_data);
 
-	if (inode->i_nlink == 0)
-		delete_inode_items(inode->i_sb, scoutfs_ino(inode));
+	ret = scoutfs_omap_should_delete(sb, inode, &lock);
+	if (ret > 0) {
+		ret = delete_inode_items(inode->i_sb, scoutfs_ino(inode), lock);
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	}
+	if (ret < 0)
+		scoutfs_err(sb, "error %d while checking to delete inode nr %llu, it might linger.",
+			    ret, ino);
+
+	scoutfs_omap_dec(sb, ino);
+
 clear:
 	clear_inode(inode);
 }
@@ -1588,8 +1609,10 @@ int scoutfs_scan_orphans(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_lock *lock = sbi->rid_lock;
+	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_key key;
 	struct scoutfs_key last;
+	u64 ino;
 	int err = 0;
 	int ret;
 
@@ -1605,7 +1628,13 @@ int scoutfs_scan_orphans(struct super_block *sb)
 		if (ret < 0)
 			goto out;
 
-		ret = delete_inode_items(sb, le64_to_cpu(key.sko_ino));
+		ino = le64_to_cpu(key.sko_ino);
+
+		ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino, &inode_lock);
+		if (ret == 0) {
+			ret = delete_inode_items(sb, le64_to_cpu(key.sko_ino), inode_lock);
+			scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+		}
 		if (ret && ret != -ENOENT && !err)
 			err = ret;
 
