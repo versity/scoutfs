@@ -30,4 +30,5 @@ mount-unmount-race.sh
 createmany-parallel-mounts.sh
 archive-light-cycle.sh
 block-stale-reads.sh
+inode-deletion.sh
 xfstests.sh

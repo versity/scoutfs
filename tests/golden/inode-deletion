@@ -1,0 +1,27 @@
+== basic unlink deletes
+ino found in dseq index
+ino not found in dseq index
+== local open-unlink waits for close to delete
+contents after rm: contents
+ino found in dseq index
+ino not found in dseq index
+== multiple local opens are protected
+contents after rm 1: contents
+contents after rm 2: contents
+ino found in dseq index
+ino not found in dseq index
+== remote unopened unlink deletes
+ino not found in dseq index
+ino not found in dseq index
+== unlink wait for open on other mount
+mount 0 contents after mount 1 rm: contents
+ino found in dseq index
+ino found in dseq index
+stat: cannot stat ‘/mnt/test/test/inode-deletion/file’: No such file or directory
+ino not found in dseq index
+ino not found in dseq index
+== lots of deletions use one open map
+== open files survive remote scanning orphans
+mount 0 contents after mount 1 remounted: contents
+ino not found in dseq index
+ino not found in dseq index
