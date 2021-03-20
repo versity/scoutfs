@@ -1,6 +1,7 @@
 Ran:
 generic/001
 generic/002
+generic/004
 generic/005
 generic/006
 generic/007
@@ -73,7 +74,6 @@ generic/376
 generic/377
 Not
 run:
-generic/004
 generic/008
 generic/009
 generic/012
@@ -278,4 +278,4 @@ shared/004
 shared/032
 shared/051
 shared/289
-Passed all 72 tests
+Passed all 73 tests

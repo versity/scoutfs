@@ -32,7 +32,7 @@ struct move_blocks_args {
 
 static int do_move_blocks(struct move_blocks_args *args)
 {
-	struct scoutfs_ioctl_move_blocks mb;
+	struct scoutfs_ioctl_move_blocks mb = {0};
 	int from_fd = -1;
 	int to_fd = -1;
 	int ret;

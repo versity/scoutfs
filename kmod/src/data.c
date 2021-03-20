@@ -1135,7 +1135,8 @@ static void truncate_inode_pages_extent(struct inode *inode, u64 start, u64 len)
  */
 #define MOVE_DATA_EXTENTS_PER_HOLD 16
 int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
-			     u64 byte_len, struct inode *to, u64 to_off)
+			     u64 byte_len, struct inode *to, u64 to_off, bool is_stage,
+			     u64 data_version)
 {
 	struct scoutfs_inode_info *from_si = SCOUTFS_I(from);
 	struct scoutfs_inode_info *to_si = SCOUTFS_I(to);
@@ -1145,6 +1146,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	struct data_ext_args from_args;
 	struct data_ext_args to_args;
 	struct scoutfs_extent ext;
+	struct timespec cur_time;
 	LIST_HEAD(locks);
 	bool done = false;
 	loff_t from_size;
@@ -1180,6 +1182,11 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		goto out;
 	}
 
+	if (is_stage && (data_version != SCOUTFS_I(to)->data_version)) {
+		ret = -ESTALE;
+		goto out;
+	}
+
 	from_iblock = from_off >> SCOUTFS_BLOCK_SM_SHIFT;
 	count = (byte_len + SCOUTFS_BLOCK_SM_MASK) >> SCOUTFS_BLOCK_SM_SHIFT;
 	to_iblock = to_off >> SCOUTFS_BLOCK_SM_SHIFT;
@@ -1202,7 +1209,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	/* can't stage once data_version changes */
 	scoutfs_inode_get_onoff(from, &junk, &from_offline);
 	scoutfs_inode_get_onoff(to, &junk, &to_offline);
-	if (from_offline || to_offline) {
+	if (from_offline || (to_offline && !is_stage)) {
 		ret = -ENODATA;
 		goto out;
 	}
@@ -1246,6 +1253,8 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 
 		/* arbitrarily limit the number of extents per trans hold */
 		for (i = 0; i < MOVE_DATA_EXTENTS_PER_HOLD; i++) {
+			struct scoutfs_extent off_ext;
+
 			/* find the next extent to move */
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &from_args,
 					       from_iblock, 1, &ext);
@@ -1274,10 +1283,27 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 
 			to_start = to_iblock + (from_start - from_iblock);
 
-			/* insert the new, fails if it overlaps */
-			ret = scoutfs_ext_insert(sb, &data_ext_ops, &to_args,
-						 to_start, len,
-						 map, ext.flags);
+			if (is_stage) {
+				ret = scoutfs_ext_next(sb, &data_ext_ops, &to_args,
+						       to_iblock, 1, &off_ext);
+				if (ret)
+					break;
+
+				if (!scoutfs_ext_inside(to_start, len, &off_ext) ||
+				    !(off_ext.flags & SEF_OFFLINE)) {
+					ret = -EINVAL;
+					break;
+				}
+
+				ret = scoutfs_ext_set(sb, &data_ext_ops, &to_args,
+							 to_start, len,
+							 map, ext.flags);
+			} else {
+				/* insert the new, fails if it overlaps */
+				ret = scoutfs_ext_insert(sb, &data_ext_ops, &to_args,
+							 to_start, len,
+							 map, ext.flags);
+			}
 			if (ret < 0)
 				break;
 
@@ -1285,10 +1311,18 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 			ret = scoutfs_ext_set(sb, &data_ext_ops, &from_args,
 					      from_start, len, 0, 0);
 			if (ret < 0) {
-				/* remove inserted new on err */
-				err = scoutfs_ext_remove(sb, &data_ext_ops,
-							 &to_args, to_start,
-							 len);
+				if (is_stage) {
+					/* re-mark dest range as offline */
+					WARN_ON_ONCE(!(off_ext.flags & SEF_OFFLINE));
+					err = scoutfs_ext_set(sb, &data_ext_ops, &to_args,
+							      to_start, len,
+							      0, off_ext.flags);
+				} else {
+					/* remove inserted new on err */
+					err = scoutfs_ext_remove(sb, &data_ext_ops,
+								 &to_args, to_start,
+								 len);
+				}
 				BUG_ON(err); /* XXX inconsistent */
 				break;
 			}
@@ -1316,12 +1350,15 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		up_write(&from_si->extent_sem);
 		up_write(&to_si->extent_sem);
 
-		from->i_ctime = from->i_mtime =
-			to->i_ctime = to->i_mtime = CURRENT_TIME;
+		cur_time = CURRENT_TIME;
+		if (!is_stage) {
+			to->i_ctime = to->i_mtime = cur_time;
+			scoutfs_inode_inc_data_version(to);
+			scoutfs_inode_set_data_seq(to);
+		}
+		from->i_ctime = from->i_mtime = cur_time;
 		scoutfs_inode_inc_data_version(from);
-		scoutfs_inode_inc_data_version(to);
 		scoutfs_inode_set_data_seq(from);
-		scoutfs_inode_set_data_seq(to);
 
 		scoutfs_update_inode_item(from, from_lock, &locks);
 		scoutfs_update_inode_item(to, to_lock, &locks);

@@ -5,7 +5,7 @@
 #include "lock.h"
 
 extern const struct file_operations scoutfs_dir_fops;
-extern const struct inode_operations scoutfs_dir_iops;
+extern const struct inode_operations_wrapper scoutfs_dir_iops;
 extern const struct inode_operations scoutfs_symlink_iops;
 
 struct scoutfs_link_backref_entry {

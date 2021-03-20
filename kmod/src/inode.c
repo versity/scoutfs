@@ -182,7 +182,8 @@ static void set_inode_ops(struct inode *inode)
 		inode->i_fop = &scoutfs_file_fops;
 		break;
 	case S_IFDIR:
-		inode->i_op = &scoutfs_dir_iops;
+		inode->i_op = &scoutfs_dir_iops.ops;
+		inode->i_flags |= S_IOPS_WRAPPER;
 		inode->i_fop = &scoutfs_dir_fops;
 		break;
 	case S_IFLNK:
@@ -1417,7 +1418,18 @@ static void init_orphan_key(struct scoutfs_key *key, u64 rid, u64 ino)
 	};
 }
 
-static int remove_orphan_item(struct super_block *sb, u64 ino)
+int scoutfs_orphan_dirty(struct super_block *sb, u64 ino)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_lock *lock = sbi->rid_lock;
+	struct scoutfs_key key;
+
+	init_orphan_key(&key, sbi->rid, ino);
+
+	return scoutfs_item_dirty(sb, &key, lock);
+}
+
+int scoutfs_orphan_delete(struct super_block *sb, u64 ino)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_lock *lock = sbi->rid_lock;
@@ -1516,7 +1528,7 @@ retry:
 	if (ret)
 		goto out;
 
-	ret = remove_orphan_item(sb, ino);
+	ret = scoutfs_orphan_delete(sb, ino);
 out:
 	if (release)
 		scoutfs_release_trans(sb);
