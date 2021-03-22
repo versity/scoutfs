@@ -649,6 +649,9 @@ static void scoutfs_kill_sb(struct super_block *sb)
 {
 	trace_scoutfs_kill_sb(sb);
 
+	if (SCOUTFS_HAS_SBI(sb))
+		scoutfs_lock_unmount_begin(sb);
+
 	kill_block_super(sb);
 }
 

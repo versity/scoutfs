@@ -104,6 +104,7 @@ bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 void scoutfs_free_unused_locks(struct super_block *sb, unsigned long nr);
 
 int scoutfs_lock_setup(struct super_block *sb);
+void scoutfs_lock_unmount_begin(struct super_block *sb);
 void scoutfs_lock_shutdown(struct super_block *sb);
 void scoutfs_lock_destroy(struct super_block *sb);
 

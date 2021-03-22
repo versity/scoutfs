@@ -84,6 +84,7 @@ static void scoutfs_inode_ctor(void *obj)
 	init_rwsem(&si->xattr_rwsem);
 	RB_CLEAR_NODE(&si->writeback_node);
 	scoutfs_lock_init_coverage(&si->ino_lock_cov);
+	atomic_set(&si->inv_iput_count, 0);
 
 	inode_init_once(&si->inode);
 }
@@ -313,6 +314,7 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
 			load_inode(inode, &sinode);
 			atomic64_set(&si->last_refreshed, refresh_gen);
 			scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
+			si->drop_invalidated = false;
 		}
 	} else {
 		ret = 0;
@@ -1393,6 +1395,7 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
 	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
+	si->drop_invalidated = false;
 	si->flags = 0;
 
 	scoutfs_inode_set_meta_seq(inode);
@@ -1586,13 +1589,30 @@ clear:
 	clear_inode(inode);
 }
 
+/*
+ * We want to remove inodes from the cache as their count goes to 0 if
+ * they're no longer covered by a cluster lock or if while locked they
+ * were unlinked.
+ *
+ * We don't want unused cached inodes to linger outside of cluster
+ * locking so that they don't prevent final inode deletion on other
+ * nodes.  We don't have specific per-inode or per-dentry locks which
+ * would otherwise remove the stale caches as they're invalidated.
+ * Stale cached inodes provide little value because they're going to be
+ * refreshed the next time they're locked.  Populating the item cache
+ * and loading the inode item is a lot more expensive than initializing
+ * and inserting a newly allocated vfs inode.
+ */
 int scoutfs_drop_inode(struct inode *inode)
 {
-	int ret = generic_drop_inode(inode);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
 
-	trace_scoutfs_drop_inode(inode->i_sb, scoutfs_ino(inode),
-				 inode->i_nlink, inode_unhashed(inode));
-	return ret;
+	trace_scoutfs_drop_inode(sb, scoutfs_ino(inode), inode->i_nlink, inode_unhashed(inode),
+				 si->drop_invalidated);
+
+	return si->drop_invalidated || !scoutfs_lock_is_covered(sb, &si->ino_lock_cov) ||
+	       generic_drop_inode(inode);
 }
 
 /*

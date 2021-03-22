@@ -75,6 +75,7 @@ struct lock_info {
 	struct super_block *sb;
 	spinlock_t lock;
 	bool shutdown;
+	bool unmounting;
 	struct rb_root lock_tree;
 	struct rb_root lock_range_tree;
 	struct shrinker shrinker;
@@ -88,6 +89,9 @@ struct lock_info {
 	struct work_struct shrink_work;
 	struct list_head shrink_list;
 	atomic64_t next_refresh_gen;
+	struct work_struct inv_iput_work;
+	struct llist_head inv_iput_llist;
+
 	struct dentry *tseq_dentry;
 	struct scoutfs_tseq_tree tseq_tree;
 };
@@ -123,11 +127,52 @@ static bool lock_modes_match(int granted, int requested)
 }
 
 /*
+ * Final iput can get into evict and perform final inode deletion which
+ * can delete a lot of items under locks and transactions.  We really
+ * don't want to be doing all that in an iput during invalidation.  When
+ * invalidation sees that iput might perform final deletion it puts them
+ * on a list and queues this work.
+ *
+ * Nothing stops multiple puts for multiple invalidations of an inode
+ * before the work runs so we can track multiple puts in flight.
+ */
+static void lock_inv_iput_worker(struct work_struct *work)
+{
+	struct lock_info *linfo = container_of(work, struct lock_info, inv_iput_work);
+	struct scoutfs_inode_info *si;
+	struct scoutfs_inode_info *tmp;
+	struct llist_node *inodes;
+	bool more;
+
+	inodes = llist_del_all(&linfo->inv_iput_llist);
+
+	llist_for_each_entry_safe(si, tmp, inodes, inv_iput_llnode) {
+		do {
+			more = atomic_dec_return(&si->inv_iput_count) > 0;
+			iput(&si->inode);
+		} while (more);
+	}
+}
+
+/*
  * invalidate cached data associated with an inode whose lock is going
  * away.
+ *
+ * We try to drop cached dentries and inodes covered by the lock if they
+ * aren't referenced.  This removes them from the mount's open map and
+ * allows deletions to be performed by unlink without having to wait for
+ * remote cached inodes to be dropped.
+ *
+ * If the cached inode was already deferring final inode deletion then
+ * we can't perform that inline in invalidation.  The locking alone
+ * deadlock, and it might also take multiple transactions to fully
+ * delete an inode with significant metadata.  We only perform the iput
+ * inline if we know that possible eviction can't perform the final
+ * deletion, otherwise we kick it off to async work.
  */
 static void invalidate_inode(struct super_block *sb, u64 ino)
 {
+	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_inode_info *si;
 	struct inode *inode;
 
@@ -141,7 +186,20 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 			scoutfs_data_wait_changed(inode);
 		}
 
-		iput(inode);
+		/* can't touch during unmount, dcache destroys w/o locks */
+		if (!linfo->unmounting)
+			d_prune_aliases(inode);
+
+		si->drop_invalidated = true;
+		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink > 0) {
+			iput(inode);
+		} else {
+			/* defer iput to work context so we don't evict inodes from invalidation */ 
+			if (atomic_inc_return(&si->inv_iput_count) == 1)
+				llist_add(&si->inv_iput_llnode, &linfo->inv_iput_llist);
+			smp_wmb(); /* count and list visible before work executes */
+			queue_work(linfo->workq, &linfo->inv_iput_work);
+		}
 	}
 }
 
@@ -1536,11 +1594,21 @@ static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
 }
 
 /*
- * The caller is going to be calling _destroy soon and, critically, is
- * about to shutdown networking before calling us so that we don't get
- * any callbacks while we're destroying.  We have to ensure that we
- * won't call networking after this returns.
- *
+ * shrink_dcache_for_umount() tears down dentries with no locking.  We
+ * need to make sure that our invalidation won't touch dentries before
+ * we return and the caller calls the generic vfs unmount path.
+ */
+void scoutfs_lock_unmount_begin(struct super_block *sb)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+
+	if (linfo) {
+		linfo->unmounting = true;
+		flush_delayed_work(&linfo->inv_dwork);
+	}
+}
+
+/*
  * Internal fs threads can be using locking, and locking can have async
  * work pending.  We use ->shutdown to force callers to return
  * -ESHUTDOWN and to prevent the future queueing of work that could call
@@ -1682,6 +1750,8 @@ int scoutfs_lock_setup(struct super_block *sb)
 	INIT_WORK(&linfo->shrink_work, lock_shrink_worker);
 	INIT_LIST_HEAD(&linfo->shrink_list);
 	atomic64_set(&linfo->next_refresh_gen, 0);
+	INIT_WORK(&linfo->inv_iput_work, lock_inv_iput_worker);
+	init_llist_head(&linfo->inv_iput_llist);
 	scoutfs_tseq_tree_init(&linfo->tseq_tree, lock_tseq_show);
 
 	sbi->lock_info = linfo;

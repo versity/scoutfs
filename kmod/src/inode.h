@@ -53,6 +53,11 @@ struct scoutfs_inode_info {
 
 	struct scoutfs_lock_coverage ino_lock_cov;
 
+	/* drop if i_count hits 0, allows drop while invalidate holds coverage */
+	bool drop_invalidated;
+	struct llist_node inv_iput_llnode;
+	atomic_t inv_iput_count;
+
 	struct inode inode;
 };
 
