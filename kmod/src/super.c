@@ -251,6 +251,8 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_unlock(sb, sbi->rid_lock, SCOUTFS_LOCK_WRITE);
 	sbi->rid_lock = NULL;
 
+	scoutfs_lock_shutdown(sb);
+
 	scoutfs_shutdown_trans(sb);
 	scoutfs_client_destroy(sb);
 	scoutfs_inode_destroy(sb);
@@ -258,7 +260,6 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_forest_destroy(sb);
 
 	scoutfs_quorum_destroy(sb);
-	scoutfs_lock_shutdown(sb);
 	scoutfs_server_destroy(sb);
 	scoutfs_recov_destroy(sb);
 	scoutfs_net_destroy(sb);
