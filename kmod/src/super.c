@@ -245,7 +245,6 @@ static void scoutfs_put_super(struct super_block *sb)
 
 	trace_scoutfs_put_super(sb);
 
-	scoutfs_data_destroy(sb);
 	scoutfs_srch_destroy(sb);
 
 	scoutfs_unlock(sb, sbi->rid_lock, SCOUTFS_LOCK_WRITE);
@@ -258,6 +257,7 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_inode_destroy(sb);
 	scoutfs_item_destroy(sb);
 	scoutfs_forest_destroy(sb);
+	scoutfs_data_destroy(sb);
 
 	scoutfs_quorum_destroy(sb);
 	scoutfs_server_destroy(sb);
