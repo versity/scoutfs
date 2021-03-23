@@ -564,8 +564,15 @@ int scoutfs_setup_trans(struct super_block *sb)
 }
 
 /*
- * kill_sb calls sync before getting here so we know that dirty data
- * should be in flight.  We just have to wait for it to quiesce.
+ * While the vfs will have done an fs level sync before calling
+ * put_super, we may have done work down in our level after all the fs
+ * ops were done.  An example is final inode deletion in iput, that's
+ * done in generic_shutdown_super after the sync and before calling our
+ * put_super.
+ *
+ * So we always try to write any remaining dirty transactions before
+ * shutting down.  Typically there won't be any dirty data and the
+ * worker will just return.
  */
 void scoutfs_shutdown_trans(struct super_block *sb)
 {
@@ -573,13 +580,18 @@ void scoutfs_shutdown_trans(struct super_block *sb)
 	DECLARE_TRANS_INFO(sb, tri);
 
 	if (tri) {
-		scoutfs_block_writer_forget_all(sb, &tri->wri);
 		if (sbi->trans_write_workq) {
+			/* immediately queues pending timer */
+			flush_delayed_work(&sbi->trans_write_work);
+			/* prevents re-arming if it has to wait */
 			cancel_delayed_work_sync(&sbi->trans_write_work);
 			destroy_workqueue(sbi->trans_write_workq);
 			/* trans work schedules after shutdown see null */
 			sbi->trans_write_workq = NULL;
 		}
+
+		scoutfs_block_writer_forget_all(sb, &tri->wri);
+
 		kfree(tri);
 		sbi->trans_info = NULL;
 	}
