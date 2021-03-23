@@ -672,6 +672,28 @@ struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
 	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
 }
 
+static int iget_test_nofreeing(struct inode *inode, void *arg)
+{
+	return !(inode->i_state & I_FREEING) && scoutfs_iget_test(inode, arg);
+}
+
+/*
+ * There's a natural risk of a deadlock between lock invalidation and
+ * eviction.  Invalidation blocks locks while looking up inodes and
+ * invalidating local caches.  Inode eviction gets a lock to check final
+ * inode deletion while the inode is marked FREEING which blocks
+ * lookups.
+ *
+ * We have a lookup variant which doesn't return I_FREEING inodes
+ * instead of waiting on them.  If an inode has made it to I_FREEING
+ * then it doesn't have any local caches that are reachable and the lock
+ * invalidation promise is kept.
+ */
+struct inode *scoutfs_ilookup_nofreeing(struct super_block *sb, u64 ino)
+{
+	return ilookup5(sb, ino, iget_test_nofreeing, &ino);
+}
+
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino)
 {
 	struct scoutfs_lock *lock = NULL;

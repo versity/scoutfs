@@ -155,8 +155,10 @@ static void lock_inv_iput_worker(struct work_struct *work)
 }
 
 /*
- * invalidate cached data associated with an inode whose lock is going
- * away.
+ * Invalidate cached data associated with an inode whose lock is going
+ * away.  We ignore indoes with I_FREEING instead of waiting on them to
+ * avoid a deadlock, if they're freeing then they won't be visible to
+ * future lock users and we don't need to invalidate them.
  *
  * We try to drop cached dentries and inodes covered by the lock if they
  * aren't referenced.  This removes them from the mount's open map and
@@ -176,7 +178,7 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 	struct scoutfs_inode_info *si;
 	struct inode *inode;
 
-	inode = scoutfs_ilookup(sb, ino);
+	inode = scoutfs_ilookup_nofreeing(sb, ino);
 	if (inode) {
 		si = SCOUTFS_I(inode);
 
