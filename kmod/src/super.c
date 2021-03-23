@@ -245,8 +245,6 @@ static void scoutfs_put_super(struct super_block *sb)
 
 	trace_scoutfs_put_super(sb);
 
-	sbi->shutdown = true;
-
 	scoutfs_data_destroy(sb);
 	scoutfs_srch_destroy(sb);
 

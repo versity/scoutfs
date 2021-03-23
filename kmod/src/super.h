@@ -85,8 +85,6 @@ struct scoutfs_sb_info {
 
 	struct dentry *debug_root;
 
-	bool shutdown;
-
 	unsigned long corruption_messages_once[SC_NR_LONGS];
 };
 
