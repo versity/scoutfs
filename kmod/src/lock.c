@@ -127,15 +127,19 @@ static bool lock_modes_match(int granted, int requested)
  */
 static void invalidate_inode(struct super_block *sb, u64 ino)
 {
+	struct scoutfs_inode_info *si;
 	struct inode *inode;
 
 	inode = scoutfs_ilookup(sb, ino);
 	if (inode) {
+		si = SCOUTFS_I(inode);
+
 		scoutfs_inc_counter(sb, lock_invalidate_inode);
 		if (S_ISREG(inode->i_mode)) {
 			truncate_inode_pages(inode->i_mapping, 0);
 			scoutfs_data_wait_changed(inode);
 		}
+
 		iput(inode);
 	}
 }
@@ -172,6 +176,16 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
 retry:
+		/* invalidate inodes before removing coverage */
+		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
+			ino = le64_to_cpu(lock->start.ski_ino);
+			last = le64_to_cpu(lock->end.ski_ino);
+			while (ino <= last) {
+				invalidate_inode(sb, ino);
+				ino++;
+			}
+		}
+
 		/* remove cov items to tell users that their cache is stale */
 		spin_lock(&lock->cov_list_lock);
 		list_for_each_entry_safe(cov, tmp, &lock->cov_list, head) {
@@ -186,15 +200,6 @@ retry:
 			scoutfs_inc_counter(sb, lock_invalidate_coverage);
 		}
 		spin_unlock(&lock->cov_list_lock);
-
-		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
-			ino = le64_to_cpu(lock->start.ski_ino);
-			last = le64_to_cpu(lock->end.ski_ino);
-			while (ino <= last) {
-				invalidate_inode(sb, ino);
-				ino++;
-			}
-		}
 
 		scoutfs_item_invalidate(sb, &lock->start, &lock->end);
 	}

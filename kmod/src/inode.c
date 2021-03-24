@@ -82,6 +82,7 @@ static void scoutfs_inode_ctor(void *obj)
 	init_waitqueue_head(&si->data_waitq.waitq);
 	init_rwsem(&si->xattr_rwsem);
 	RB_CLEAR_NODE(&si->writeback_node);
+	scoutfs_lock_init_coverage(&si->ino_lock_cov);
 
 	inode_init_once(&si->inode);
 }
@@ -141,11 +142,14 @@ static void remove_writeback_inode(struct inode_sb_info *inf,
 
 void scoutfs_destroy_inode(struct inode *inode)
 {
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
 
 	spin_lock(&inf->writeback_lock);
 	remove_writeback_inode(inf, SCOUTFS_I(inode));
 	spin_unlock(&inf->writeback_lock);
+
+	scoutfs_lock_del_coverage(inode->i_sb, &si->ino_lock_cov);
 
 	call_rcu(&inode->i_rcu, scoutfs_i_callback);
 }
@@ -307,6 +311,7 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
 		if (ret == 0) {
 			load_inode(inode, &sinode);
 			atomic64_set(&si->last_refreshed, refresh_gen);
+			scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
 		}
 	} else {
 		ret = 0;
@@ -1384,6 +1389,7 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	si->next_xattr_id = 0;
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
+	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
 	si->flags = 0;
 
 	scoutfs_inode_set_meta_seq(inode);

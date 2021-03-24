@@ -51,6 +51,8 @@ struct scoutfs_inode_info {
 	struct rw_semaphore xattr_rwsem;
 	struct rb_node writeback_node;
 
+	struct scoutfs_lock_coverage ino_lock_cov;
+
 	struct inode inode;
 };
 
