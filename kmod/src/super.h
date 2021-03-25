@@ -26,6 +26,7 @@ struct net_info;
 struct block_info;
 struct forest_info;
 struct srch_info;
+struct recov_info;
 
 struct scoutfs_sb_info {
 	struct super_block *sb;
@@ -70,6 +71,7 @@ struct scoutfs_sb_info {
 	struct lock_server_info *lock_server_info;
 	struct client_info *client_info;
 	struct server_info *server_info;
+	struct recov_info *recov_info;
 	struct sysfs_info *sfsinfo;
 
 	struct scoutfs_counters *counters;

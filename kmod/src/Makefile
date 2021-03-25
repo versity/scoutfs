@@ -30,6 +30,7 @@ scoutfs-y +=			\
 	options.o		\
 	per_task.o		\
 	quorum.o		\
+	recov.o			\
 	scoutfs_trace.o		\
 	server.o		\
 	sort_priv.o		\
