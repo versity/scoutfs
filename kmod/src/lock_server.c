@@ -20,10 +20,10 @@
 #include "tseq.h"
 #include "spbm.h"
 #include "block.h"
-#include "btree.h"
 #include "msg.h"
 #include "scoutfs_trace.h"
 #include "lock_server.h"
+#include "recov.h"
 
 /*
  * The scoutfs server implements a simple lock service.  Client mounts
@@ -56,14 +56,11 @@
  * Message requests and responses are reliably delivered in order across
  * reconnection.
  *
- * The server maintains a persistent record of connected clients.  A new
- * server instance discovers these and waits for previously connected
- * clients to reconnect and recover their state before proceeding.  If
- * clients don't reconnect they are forcefully prevented from unsafely
- * accessing the shared persistent storage.  (fenced, according to the
- * rules of the platform.. could range from being powered off to having
- * their switch port disabled to having their local block device set
- * read-only.)
+ * As a new server comes up it recovers lock state from existing clients
+ * which were connected to a previous lock server.  Recover requests are
+ * sent to clients as they connect and they respond with all there
+ * locks.  Once all clients and locks are accounted for normal
+ * processing can resume.
  *
  * The lock server doesn't respond to memory pressure.  The only way
  * locks are freed is if they are invalidated to null on behalf of a
@@ -77,11 +74,7 @@ struct lock_server_info {
 	struct super_block *sb;
 
 	spinlock_t lock;
-	struct mutex mutex;
 	struct rb_root locks_root;
-
-	struct scoutfs_spbm recovery_pending;
-	struct delayed_work recovery_dwork;
 
 	struct scoutfs_tseq_tree tseq_tree;
 	struct dentry *tseq_dentry;
@@ -430,7 +423,7 @@ int scoutfs_lock_server_response(struct super_block *sb, u64 rid,
 		goto out;
 	}
 
-	/* XXX should always have a server lock here?  recovery? */
+	/* XXX should always have a server lock here? */
 	snode = get_server_lock(inf, &nl->key, NULL, false);
 	if (!snode) {
 		ret = -EINVAL;
@@ -473,12 +466,9 @@ out:
  * so we unlock the snode mutex.
  *
  * All progress must wait for all clients to finish with recovery
- * because we don't know which locks they'll hold.  The unlocked
- * recovery_pending test here is OK.  It's filled by setup before
- * anything runs.  It's emptied by recovery completion.  We can get a
- * false nonempty result if we race with recovery completion, but that's
- * OK because recovery completion processes all the locks that have
- * requests after emptying, including the unlikely loser of that race.
+ * because we don't know which locks they'll hold.  Once recover
+ * finishes the server calls us to kick all the locks that were waiting
+ * during recovery.
  */
 static int process_waiting_requests(struct super_block *sb,
 				    struct server_lock_node *snode)
@@ -496,7 +486,7 @@ static int process_waiting_requests(struct super_block *sb,
 
 	/* processing waits for all invalidation responses or recovery */
 	if (!list_empty(&snode->invalidated) ||
-	    !scoutfs_spbm_empty(&inf->recovery_pending)) {
+	    scoutfs_recov_next_pending(sb, SCOUTFS_RECOV_LOCKS) != 0) {
 		ret = 0;
 		goto out;
 	}
@@ -569,89 +559,39 @@ out:
 	return ret;
 }
 
-static void init_lock_clients_key(struct scoutfs_key *key, u64 rid)
-{
-	*key = (struct scoutfs_key) {
-		.sk_zone = SCOUTFS_LOCK_CLIENTS_ZONE,
-		.sklc_rid = cpu_to_le64(rid),
-	};
-}
-
 /*
  * The server received a greeting from a client for the first time.  If
- * the client had already talked to the server then we must find an
- * existing record for it and should begin recovery.  If it doesn't have
- * a record then its timed out and we can't allow it to reconnect.  If
- * we're creating a new record for a client we can see EEXIST if the
- * greeting is resent to a new server after the record was committed but
- * before the response was received by the client.
+ * the client is in lock recovery then we send the initial lock request.
  *
  * This is running in concurrent client greeting processing contexts.
  */
-int scoutfs_lock_server_greeting(struct super_block *sb, u64 rid,
-				 bool should_exist)
+int scoutfs_lock_server_greeting(struct super_block *sb, u64 rid)
 {
-	DECLARE_LOCK_SERVER_INFO(sb, inf);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
 	int ret;
 
-	init_lock_clients_key(&key, rid);
-
-	mutex_lock(&inf->mutex);
-	if (should_exist) {
-		ret = scoutfs_btree_lookup(sb, &super->lock_clients, &key,
-					   &iref);
-		if (ret == 0)
-			scoutfs_btree_put_iref(&iref);
-	} else {
-		ret = scoutfs_btree_insert(sb, inf->alloc, inf->wri,
-					   &super->lock_clients,
-					   &key, NULL, 0);
-		if (ret == -EEXIST)
-			ret = 0;
-	}
-	mutex_unlock(&inf->mutex);
-
-	if (should_exist && ret == 0) {
+	if (scoutfs_recov_is_pending(sb, rid, SCOUTFS_RECOV_LOCKS)) {
 		scoutfs_key_set_zeros(&key);
 		ret = scoutfs_server_lock_recover_request(sb, rid, &key);
-		if (ret)
-			goto out;
+	} else {
+		ret = 0;
 	}
 
-out:
 	return ret;
 }
 
 /*
- * A client sent their last recovery response and can exit recovery.  If
- * they were the last client in recovery then we can process all the
- * server locks that had requests.
+ * All clients have finished lock recovery, we can make forward process
+ * on all the queued requests that were waiting on recovery.
  */
-static int finished_recovery(struct super_block *sb, u64 rid, bool cancel)
+int scoutfs_lock_server_finished_recovery(struct super_block *sb)
 {
 	DECLARE_LOCK_SERVER_INFO(sb, inf);
 	struct server_lock_node *snode;
 	struct scoutfs_key key;
-	bool still_pending;
 	int ret = 0;
 
-	spin_lock(&inf->lock);
-	scoutfs_spbm_clear(&inf->recovery_pending, rid);
-	still_pending = !scoutfs_spbm_empty(&inf->recovery_pending);
-	spin_unlock(&inf->lock);
-	if (still_pending)
-		return 0;
-
-	if (cancel)
-		cancel_delayed_work_sync(&inf->recovery_dwork);
-
 	scoutfs_key_set_zeros(&key);
-
-	scoutfs_info(sb, "all lock clients recovered");
-
 	while ((snode = get_server_lock(inf, &key, NULL, true))) {
 
 		key = snode->key;
@@ -695,16 +635,15 @@ int scoutfs_lock_server_recover_response(struct super_block *sb, u64 rid,
 	int i;
 
 	/* client must be in recovery */
-	spin_lock(&inf->lock);
-	if (!scoutfs_spbm_test(&inf->recovery_pending, rid))
+	if (!scoutfs_recov_is_pending(sb, rid, SCOUTFS_RECOV_LOCKS)) {
 		ret = -EINVAL;
-	spin_unlock(&inf->lock);
-	if (ret)
 		goto out;
+	}
 
 	/* client has sent us all their locks */
 	if (nlr->nr == 0) {
-		ret = finished_recovery(sb, rid, true);
+		scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_LOCKS);
+		ret = 0;
 		goto out;
 	}
 
@@ -755,101 +694,15 @@ out:
 	return ret;
 }
 
-static int get_rid_and_put_ref(struct scoutfs_btree_item_ref *iref, u64 *rid)
-{
-	int ret;
-
-	if (iref->val_len == 0) {
-		*rid = le64_to_cpu(iref->key->sklc_rid);
-		ret = 0;
-	} else {
-		ret = -EIO;
-	}
-	scoutfs_btree_put_iref(iref);
-	return ret;
-}
-
-/*
- * This work executes if enough time passes without all of the clients
- * finishing with recovery and canceling the work.  We walk through the
- * client records and find any that still have their recovery pending.
- */
-static void scoutfs_lock_server_recovery_timeout(struct work_struct *work)
-{
-	struct lock_server_info *inf = container_of(work,
-						    struct lock_server_info,
-						    recovery_dwork.work);
-	struct super_block *sb = inf->sb;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_key key;
-	bool timed_out;
-	u64 rid;
-	int ret;
-
-	ret = scoutfs_server_hold_commit(sb);
-	if (ret)
-		goto out;
-
-	/* we enter recovery if there are any client records */
-	for (rid = 0; ; rid++) {
-		init_lock_clients_key(&key, rid);
-		ret = scoutfs_btree_next(sb, &super->lock_clients, &key, &iref);
-		if (ret == -ENOENT) {
-			ret = 0;
-			break;
-		}
-		if (ret == 0)
-			ret = get_rid_and_put_ref(&iref, &rid);
-		if (ret < 0)
-			break;
-
-		spin_lock(&inf->lock);
-		if (scoutfs_spbm_test(&inf->recovery_pending, rid)) {
-			scoutfs_spbm_clear(&inf->recovery_pending, rid);
-			timed_out = true;
-		} else {
-			timed_out = false;
-		}
-		spin_unlock(&inf->lock);
-
-		if (!timed_out)
-			continue;
-
-		scoutfs_err(sb, "client rid %016llx lock recovery timed out",
-			    rid);
-
-		init_lock_clients_key(&key, rid);
-		ret = scoutfs_btree_delete(sb, inf->alloc, inf->wri,
-					   &super->lock_clients, &key);
-		if (ret)
-			break;
-	}
-
-	ret = scoutfs_server_apply_commit(sb, ret);
-out:
-	/* force processing all pending lock requests */
-	if (ret == 0)
-		ret = finished_recovery(sb, 0, false);
-
-	if (ret < 0) {
-		scoutfs_err(sb, "lock server saw err %d while timing out clients, shutting down", ret);
-		scoutfs_server_abort(sb);
-	}
-}
-
 /*
  * A client is leaving the lock service.  They aren't using locks and
  * won't send any more requests.  We tear down all the state we had for
  * them.  This can be called multiple times for a given client as their
  * farewell is resent to new servers.  It's OK to not find any state.
- * If we fail to delete a persistent entry then we have to shut down and
- * hope that the next server has more luck.
  */
 int scoutfs_lock_server_farewell(struct super_block *sb, u64 rid)
 {
 	DECLARE_LOCK_SERVER_INFO(sb, inf);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct client_lock_entry *clent;
 	struct client_lock_entry *tmp;
 	struct server_lock_node *snode;
@@ -858,20 +711,7 @@ int scoutfs_lock_server_farewell(struct super_block *sb, u64 rid)
 	bool freed;
 	int ret = 0;
 
-	mutex_lock(&inf->mutex);
-	init_lock_clients_key(&key, rid);
-	ret = scoutfs_btree_delete(sb, inf->alloc, inf->wri,
-				   &super->lock_clients, &key);
-	mutex_unlock(&inf->mutex);
-	if (ret == -ENOENT) {
-		ret = 0;
-		goto out;
-	}
-	if (ret < 0)
-		goto out;
-
 	scoutfs_key_set_zeros(&key);
-
 	while ((snode = get_server_lock(inf, &key, NULL, true))) {
 
 		freed = false;
@@ -956,23 +796,14 @@ static void lock_server_tseq_show(struct seq_file *m,
 
 /*
  * Setup the lock server.  This is called before networking can deliver
- * requests.  If we find existing client records then we enter recovery.
- * Lock request processing is deferred until recovery is resolved for
- * all the existing clients, either they reconnect and replay locks or
- * we time them out.
+ * requests.
  */
 int scoutfs_lock_server_setup(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,
 			      struct scoutfs_block_writer *wri, u64 max_vers)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct lock_server_info *inf;
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_key key;
-	unsigned int nr;
-	u64 rid;
-	int ret;
 
 	inf = kzalloc(sizeof(struct lock_server_info), GFP_KERNEL);
 	if (!inf)
@@ -980,11 +811,7 @@ int scoutfs_lock_server_setup(struct super_block *sb,
 
 	inf->sb = sb;
 	spin_lock_init(&inf->lock);
-	mutex_init(&inf->mutex);
 	inf->locks_root = RB_ROOT;
-	scoutfs_spbm_init(&inf->recovery_pending);
-	INIT_DELAYED_WORK(&inf->recovery_dwork,
-			  scoutfs_lock_server_recovery_timeout);
 	scoutfs_tseq_tree_init(&inf->tseq_tree, lock_server_tseq_show);
 	inf->alloc = alloc;
 	inf->wri = wri;
@@ -999,36 +826,7 @@ int scoutfs_lock_server_setup(struct super_block *sb,
 
 	sbi->lock_server_info = inf;
 
-	/* we enter recovery if there are any client records */
-	nr = 0;
-	for (rid = 0; ; rid++) {
-		init_lock_clients_key(&key, rid);
-		ret = scoutfs_btree_next(sb, &super->lock_clients, &key, &iref);
-		if (ret == -ENOENT)
-			break;
-		if (ret == 0)
-			ret = get_rid_and_put_ref(&iref, &rid);
-		if (ret < 0)
-			goto out;
-
-		ret = scoutfs_spbm_set(&inf->recovery_pending, rid);
-		if (ret)
-			goto out;
-		nr++;
-
-		if (rid == U64_MAX)
-			break;
-	}
-	ret = 0;
-
-	if (nr) {
-		schedule_delayed_work(&inf->recovery_dwork,
-				msecs_to_jiffies(LOCK_SERVER_RECOVERY_MS));
-		scoutfs_info(sb, "waiting for %u lock clients to recover", nr);
-	}
-
-out:
-	return ret;
+	return 0;
 }
 
 /*
@@ -1046,8 +844,6 @@ void scoutfs_lock_server_destroy(struct super_block *sb)
 	LIST_HEAD(list);
 
 	if (inf) {
-		cancel_delayed_work_sync(&inf->recovery_dwork);
-
 		debugfs_remove(inf->tseq_dentry);
 
 		rbtree_postorder_for_each_entry_safe(snode, stmp,
@@ -1065,8 +861,6 @@ void scoutfs_lock_server_destroy(struct super_block *sb)
 
 			kfree(snode);
 		}
-
-		scoutfs_spbm_destroy(&inf->recovery_pending);
 
 		kfree(inf);
 		sbi->lock_server_info = NULL;

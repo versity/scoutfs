@@ -1239,15 +1239,7 @@ send_err:
 
 	/* lock server might send recovery request */
 	if (le64_to_cpu(gr->server_term) != server->term) {
-
-		/* we're now doing two commits per greeting, not great */
-		ret = scoutfs_server_hold_commit(sb);
-		if (ret)
-			goto out;
-
-		ret = scoutfs_lock_server_greeting(sb, le64_to_cpu(gr->rid),
-						   gr->server_term != 0);
-		ret = scoutfs_server_apply_commit(sb, ret);
+		ret = scoutfs_lock_server_greeting(sb, le64_to_cpu(gr->rid));
 		if (ret)
 			goto out;
 	}
@@ -1572,6 +1564,7 @@ static void finished_recovery(struct super_block *sb)
 
 	scoutfs_info(sb, "all clients recovered");
 
+	ret = scoutfs_lock_server_finished_recovery(sb);
 	if (ret < 0) {
 		scoutfs_err(sb, "error %d resuming after recovery finished, shutting down", ret);
 		stop_server(server);

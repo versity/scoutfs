@@ -195,9 +195,6 @@ struct scoutfs_key {
 #define sklt_rid	_sk_first
 #define sklt_nr		_sk_second
 
-/* lock clients */
-#define sklc_rid	_sk_first
-
 /* seqs */
 #define skts_trans_seq	_sk_first
 #define skts_rid	_sk_second
@@ -493,11 +490,10 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_LOCK_ZONE			4
 /* Items only stored in server btrees */
 #define SCOUTFS_LOG_TREES_ZONE			6
-#define SCOUTFS_LOCK_CLIENTS_ZONE		7
-#define SCOUTFS_TRANS_SEQ_ZONE			8
-#define SCOUTFS_MOUNTED_CLIENT_ZONE		9
-#define SCOUTFS_SRCH_ZONE			10
-#define SCOUTFS_FREE_EXTENT_ZONE		11
+#define SCOUTFS_TRANS_SEQ_ZONE			7
+#define SCOUTFS_MOUNTED_CLIENT_ZONE		8
+#define SCOUTFS_SRCH_ZONE			9
+#define SCOUTFS_FREE_EXTENT_ZONE		10
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -653,7 +649,6 @@ struct scoutfs_super_block {
 	struct scoutfs_alloc_list_head server_meta_freed[2];
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
-	struct scoutfs_btree_root lock_clients;
 	struct scoutfs_btree_root trans_seqs;
 	struct scoutfs_btree_root mounted_clients;
 	struct scoutfs_btree_root srch_root;
