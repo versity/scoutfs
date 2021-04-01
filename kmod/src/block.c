@@ -396,6 +396,7 @@ static void block_remove_all(struct super_block *sb)
 
 		if (block_get_if_inserted(bp)) {
 			block_remove(sb, bp);
+			WARN_ON_ONCE(atomic_read(&bp->refcount) != 1);
 			block_put(sb, bp);
 		}
 	}
