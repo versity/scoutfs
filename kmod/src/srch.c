@@ -2156,7 +2156,8 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	if (ret < 0)
 		goto commit;
 
-	ret = scoutfs_block_writer_write(sb, &wri);
+	ret = scoutfs_alloc_prepare_commit(sb, &alloc, &wri) ?:
+	      scoutfs_block_writer_write(sb, &wri);
 commit:
 	/* the server won't use our partial compact if _ERROR is set */
 	sc->meta_avail = alloc.avail;
