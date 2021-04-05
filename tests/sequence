@@ -18,6 +18,7 @@ createmany-large-names.sh
 createmany-rename-large-dir.sh
 stage-release-race-alloc.sh
 stage-multi-part.sh
+stage-tmpfile.sh
 basic-posix-consistency.sh
 dirent-consistency.sh
 lock-ex-race-processes.sh

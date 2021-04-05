@@ -38,7 +38,7 @@ static bool ext_overlap(struct scoutfs_extent *ext, u64 start, u64 len)
 	return !(e_end < start || ext->start > end);
 }
 
-static bool ext_inside(u64 start, u64 len, struct scoutfs_extent *out)
+bool scoutfs_ext_inside(u64 start, u64 len, struct scoutfs_extent *out)
 {
 	u64 in_end = start + len - 1;
 	u64 out_end = out->start + out->len - 1;
@@ -241,7 +241,7 @@ int scoutfs_ext_remove(struct super_block *sb, struct scoutfs_ext_ops *ops,
 		goto out;
 
 	/* removed extent must be entirely within found */
-	if (!ext_inside(start, len, &found)) {
+	if (!scoutfs_ext_inside(start, len, &found)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -341,7 +341,7 @@ int scoutfs_ext_set(struct super_block *sb, struct scoutfs_ext_ops *ops,
 
 	if (ret == 0 && ext_overlap(&found, start, len)) {
 		/* set extent must be entirely within found */
-		if (!ext_inside(start, len, &found)) {
+		if (!scoutfs_ext_inside(start, len, &found)) {
 			ret = -EINVAL;
 			goto out;
 		}

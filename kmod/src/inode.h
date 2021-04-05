@@ -114,6 +114,8 @@ int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
 
 int scoutfs_scan_orphans(struct super_block *sb);
+int scoutfs_orphan_dirty(struct super_block *sb, u64 ino);
+int scoutfs_orphan_delete(struct super_block *sb, u64 ino);
 
 void scoutfs_inode_queue_writeback(struct inode *inode);
 int scoutfs_inode_walk_writeback(struct super_block *sb, bool write);

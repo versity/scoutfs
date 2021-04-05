@@ -1,4 +1,4 @@
-CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing 
+CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing -I ../kmod/src
 SHELL := /usr/bin/bash
 
 # each binary command is built from a single .c file
@@ -6,6 +6,7 @@ BIN := src/createmany			\
 	src/dumb_setxattr		\
 	src/handle_cat			\
 	src/bulk_create_paths		\
+	src/stage_tmpfile		\
 	src/find_xattrs
 
 DEPS := $(wildcard src/*.d)

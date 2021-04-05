@@ -59,7 +59,8 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len);
 int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 				     struct scoutfs_lock *lock);
 int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
-			     u64 byte_len, struct inode *to, u64 to_off);
+			     u64 byte_len, struct inode *to, u64 to_off, bool to_stage,
+			     u64 data_version);
 
 int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 			    u8 sef, u8 op, struct scoutfs_data_wait *ow,

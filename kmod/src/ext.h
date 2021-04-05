@@ -31,5 +31,6 @@ int scoutfs_ext_alloc(struct super_block *sb, struct scoutfs_ext_ops *ops,
 		      struct scoutfs_extent *ext);
 int scoutfs_ext_set(struct super_block *sb, struct scoutfs_ext_ops *ops,
 		    void *arg, u64 start, u64 len, u64 map, u8 flags);
+bool scoutfs_ext_inside(u64 start, u64 len, struct scoutfs_extent *out);
 
 #endif

@@ -972,12 +972,18 @@ static long scoutfs_ioc_move_blocks(struct file *file, unsigned long arg)
 		goto out;
 	}
 
+	if (mb.flags & SCOUTFS_IOC_MB_UNKNOWN) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	ret = mnt_want_write_file(file);
 	if (ret < 0)
 		goto out;
 
 	ret = scoutfs_data_move_blocks(from, mb.from_off, mb.len,
-				       to, mb.to_off);
+				       to, mb.to_off, !!(mb.flags & SCOUTFS_IOC_MB_STAGE),
+				       mb.data_version);
 	mnt_drop_write_file(file);
 out:
 	fput(from_file);

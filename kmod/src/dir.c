@@ -813,6 +813,7 @@ static int scoutfs_link(struct dentry *old_dentry,
 	struct scoutfs_lock *dir_lock;
 	struct scoutfs_lock *inode_lock = NULL;
 	LIST_HEAD(ind_locks);
+	bool del_orphan;
 	u64 dir_size;
 	u64 ind_seq;
 	u64 hash;
@@ -841,6 +842,8 @@ static int scoutfs_link(struct dentry *old_dentry,
 		goto out_unlock;
 
 	dir_size = i_size_read(dir) + dentry->d_name.len;
+	del_orphan = (inode->i_nlink == 0);
+
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, dir, false) ?:
@@ -854,6 +857,12 @@ retry:
 	ret = scoutfs_dirty_inode_item(dir, dir_lock);
 	if (ret)
 		goto out;
+
+	if (del_orphan) {
+		ret = scoutfs_orphan_dirty(sb, scoutfs_ino(inode));
+		if (ret)
+			goto out;
+	}
 
 	pos = SCOUTFS_I(dir)->next_readdir_pos++;
 
@@ -869,6 +878,11 @@ retry:
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 	inode->i_ctime = dir->i_mtime;
 	inc_nlink(inode);
+
+	if (del_orphan) {
+		ret = scoutfs_orphan_delete(sb, scoutfs_ino(inode));
+		WARN_ON_ONCE(ret);
+	}
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
@@ -1760,6 +1774,42 @@ static int scoutfs_dir_open(struct inode *inode, struct file *file)
 }
 #endif
 
+static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+	struct super_block *sb = dir->i_sb;
+	struct inode *inode = NULL;
+	struct scoutfs_lock *dir_lock = NULL;
+	struct scoutfs_lock *inode_lock = NULL;
+	LIST_HEAD(ind_locks);
+	int ret;
+
+	if (dentry->d_name.len > SCOUTFS_NAME_LEN)
+		return -ENAMETOOLONG;
+
+	inode = lock_hold_create(dir, dentry, mode, 0,
+				 &dir_lock, &inode_lock, &ind_locks);
+	if (IS_ERR(inode))
+		return PTR_ERR(inode);
+
+	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	insert_inode_hash(inode);
+	d_tmpfile(dentry, inode);
+
+	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
+	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
+	scoutfs_inode_index_unlock(sb, &ind_locks);
+
+	ret = scoutfs_orphan_inode(inode);
+	WARN_ON_ONCE(ret); /* XXX returning error but items deleted */
+
+	scoutfs_release_trans(sb);
+	scoutfs_inode_index_unlock(sb, &ind_locks);
+	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+
+	return ret;
+}
+
 const struct file_operations scoutfs_dir_fops = {
 	.KC_FOP_READDIR	= scoutfs_readdir,
 #ifdef KC_FMODE_KABI_ITERATE
@@ -1770,7 +1820,10 @@ const struct file_operations scoutfs_dir_fops = {
 	.llseek		= generic_file_llseek,
 };
 
-const struct inode_operations scoutfs_dir_iops = {
+
+
+const struct inode_operations_wrapper scoutfs_dir_iops = {
+	.ops = {
 	.lookup		= scoutfs_lookup,
 	.mknod		= scoutfs_mknod,
 	.create		= scoutfs_create,
@@ -1787,6 +1840,8 @@ const struct inode_operations scoutfs_dir_iops = {
 	.removexattr	= scoutfs_removexattr,
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
+	},
+	.tmpfile	= scoutfs_tmpfile,
 };
 
 void scoutfs_dir_exit(void)

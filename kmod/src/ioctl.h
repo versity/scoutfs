@@ -259,7 +259,7 @@ struct scoutfs_ioctl_data_waiting {
 	__u8 _pad[6];
 };
 
-#define SCOUTFS_IOC_DATA_WAITING_FLAGS_UNKNOWN		(U8_MAX << 0)
+#define SCOUTFS_IOC_DATA_WAITING_FLAGS_UNKNOWN		(U64_MAX << 0)
 
 #define SCOUTFS_IOC_DATA_WAITING _IOR(SCOUTFS_IOCTL_MAGIC, 6, \
 				      struct scoutfs_ioctl_data_waiting)
@@ -279,7 +279,7 @@ struct scoutfs_ioctl_setattr_more {
 };
 
 #define SCOUTFS_IOC_SETATTR_MORE_OFFLINE		(1 << 0)
-#define SCOUTFS_IOC_SETATTR_MORE_UNKNOWN		(U8_MAX << 1)
+#define SCOUTFS_IOC_SETATTR_MORE_UNKNOWN		(U64_MAX << 1)
 
 #define SCOUTFS_IOC_SETATTR_MORE _IOW(SCOUTFS_IOCTL_MAGIC, 7, \
 				      struct scoutfs_ioctl_setattr_more)
@@ -418,12 +418,13 @@ struct scoutfs_ioctl_alloc_detail_entry {
  * on the same file system.
  *
  * from_fd specifies the source file and the ioctl is called on the
- * destination file.  Both files must have write access.  from_off
- * specifies the byte offset in the source, to_off is the byte offset in
- * the destination, and len is the number of bytes in the region to
- * move.   All of the offsets and lengths must be in multiples of 4KB,
- * except in the case where the from_off + len ends at the i_size of the
- * source file.
+ * destination file.  Both files must have write access.  from_off specifies
+ * the byte offset in the source, to_off is the byte offset in the
+ * destination, and len is the number of bytes in the region to move.  All of
+ * the offsets and lengths must be in multiples of 4KB, except in the case
+ * where the from_off + len ends at the i_size of the source
+ * file. data_version is only used when STAGE flag is set (see below).  flags
+ * field is currently only used to optionally specify STAGE behavior.
  *
  * This interface only moves extents which are block granular, it does
  * not perform RMW of sub-block byte extents and it does not overwrite
@@ -435,30 +436,41 @@ struct scoutfs_ioctl_alloc_detail_entry {
  * i_size.  The i_size update will maintain final partial blocks in the
  * source.
  *
- * It will return an error if either of the files have offline extents.
- * It will return 0 when all of the extents in the source region have
- * been moved to the destination.  Moving extents updates the ctime,
- * mtime, meta_seq, data_seq, and data_version fields of both the source
- * and destination inodes.  If an error is returned then partial
+ * If STAGE flag is not set, it will return an error if either of the files
+ * have offline extents.  It will return 0 when all of the extents in the
+ * source region have been moved to the destination.  Moving extents updates
+ * the ctime, mtime, meta_seq, data_seq, and data_version fields of both the
+ * source and destination inodes.  If an error is returned then partial
  * progress may have been made and inode fields may have been updated.
+ *
+ * If STAGE flag is set, as above except destination range must be in an
+ * offline extent. Fields are updated only for source inode.
  *
  * Errors specific to this interface include:
  *
  * EINVAL: from_off, len, or to_off aren't a multiple of 4KB; the source
  *	   and destination files are the same inode; either the source or
  *	   destination is not a regular file; the destination file has
- *	   an existing overlapping extent.
+ *	   an existing overlapping extent (if STAGE flag not set); the
+ *	   destination range is not in an offline extent (if STAGE set).
  * EOVERFLOW: either from_off + len or to_off + len exceeded 64bits.
  * EBADF: from_fd isn't a valid open file descriptor.
  * EXDEV: the source and destination files are in different filesystems.
  * EISDIR: either the source or destination is a directory.
- * ENODATA: either the source or destination file have offline extents.
+ * ENODATA: either the source or destination file have offline extents and
+ *	    STAGE flag is not set.
+ * ESTALE: data_version does not match destination data_version.
  */
+#define SCOUTFS_IOC_MB_STAGE		(1 << 0)
+#define SCOUTFS_IOC_MB_UNKNOWN		(U64_MAX << 1)
+
 struct scoutfs_ioctl_move_blocks {
 	__u64 from_fd;
 	__u64 from_off;
 	__u64 len;
 	__u64 to_off;
+	__u64 data_version;
+	__u64 flags;
 };
 
 #define SCOUTFS_IOC_MOVE_BLOCKS _IOR(SCOUTFS_IOCTL_MAGIC, 13, \
