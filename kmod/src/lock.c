@@ -1714,8 +1714,10 @@ void scoutfs_lock_destroy(struct super_block *sb)
 			__lock_del_lru(linfo, lock);
 		if (!list_empty(&lock->grant_head))
 			list_del_init(&lock->grant_head);
-		if (!list_empty(&lock->inv_head))
+		if (!list_empty(&lock->inv_head)) {
 			list_del_init(&lock->inv_head);
+			lock->invalidate_pending = 0;
+		}
 		if (!list_empty(&lock->shrink_head))
 			list_del_init(&lock->shrink_head);
 		lock_remove(linfo, lock);
