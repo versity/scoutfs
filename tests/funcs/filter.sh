@@ -52,8 +52,8 @@ t_filter_dmesg()
 
 	# tests that drop unmount io triggers fencing
 	re="$re|scoutfs .* error: fencing "
-	re="$re|scoutfs .*: waiting for .* lock clients"
-	re="$re|scoutfs .*: all lock clients recovered"
+	re="$re|scoutfs .*: waiting for .* clients"
+	re="$re|scoutfs .*: all clients recovered"
 	re="$re|scoutfs .* error: client rid.*lock recovery timed out"
 
 	# some tests mount w/o options
