@@ -14,7 +14,7 @@ struct scoutfs_link_backref_entry {
 	u64 dir_pos;
 	u16 name_len;
 	struct scoutfs_dirent dent;
-	/* the full name is allocated and stored in dent.name[0] */
+	/* the full name is allocated and stored in dent.name[] */
 };
 
 int scoutfs_dir_get_backref_path(struct super_block *sb, u64 ino, u64 dir_ino,

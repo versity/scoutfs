@@ -259,7 +259,7 @@ struct scoutfs_btree_block {
 	__le16 mid_free_len;
 	__u8 level;
 	__u8 __pad[7];
-	struct scoutfs_btree_item items[0];
+	struct scoutfs_btree_item items[];
 	/* leaf blocks have a fixed size item offset hash table at the end */
 };
 
@@ -307,7 +307,7 @@ struct scoutfs_alloc_list_block {
 	struct scoutfs_block_ref next;
 	__le32 start;
 	__le32 nr;
-	__le64 blknos[0]; /* naturally aligned for sorting */
+	__le64 blknos[]; /* naturally aligned for sorting */
 };
 
 #define SCOUTFS_ALLOC_LIST_MAX_BLOCKS					      \
@@ -362,7 +362,7 @@ struct scoutfs_srch_file {
 
 struct scoutfs_srch_parent {
 	struct scoutfs_block_header hdr;
-	struct scoutfs_block_ref refs[0];
+	struct scoutfs_block_ref refs[];
 };
 
 #define SCOUTFS_SRCH_PARENT_REFS				\
@@ -377,7 +377,7 @@ struct scoutfs_srch_block {
 	struct scoutfs_srch_entry tail;
 	__le32 entry_nr;
 	__le32 entry_bytes;
-	__u8 entries[0];
+	__u8 entries[];
 };
 
 /*
@@ -452,7 +452,7 @@ struct scoutfs_log_item_value {
 	__le64 vers;
 	__u8 flags;
 	__u8 __pad[7];
-	__u8 data[0];
+	__u8 data[];
 };
 
 /*
@@ -467,7 +467,7 @@ struct scoutfs_log_item_value {
 struct scoutfs_bloom_block {
 	struct scoutfs_block_header hdr;
 	__le64 total_set;
-	__le64 bits[0];
+	__le64 bits[];
 };
 
 /*
@@ -549,7 +549,7 @@ struct scoutfs_xattr {
 	__le16 val_len;
 	__u8 name_len;
 	__u8 __pad[5];
-	__u8 name[0];
+	__u8 name[];
 };
 
 
@@ -729,7 +729,7 @@ struct scoutfs_dirent {
 	__le64 pos;
 	__u8 type;
 	__u8 __pad[7];
-	__u8 name[0];
+	__u8 name[];
 };
 
 #define SCOUTFS_NAME_LEN 255
@@ -827,7 +827,7 @@ struct scoutfs_net_header {
 	__u8 flags;
 	__u8 error;
 	__u8 __pad[3];
-	__u8 data[0];
+	__u8 data[];
 };
 
 #define SCOUTFS_NET_FLAG_RESPONSE	(1 << 0)
@@ -898,7 +898,7 @@ struct scoutfs_net_lock {
 struct scoutfs_net_lock_recover {
 	__le16 nr;
 	__u8 __pad[6];
-	struct scoutfs_net_lock locks[0];
+	struct scoutfs_net_lock locks[];
 };
 
 #define SCOUTFS_NET_LOCK_MAX_RECOVER_NR					       \
