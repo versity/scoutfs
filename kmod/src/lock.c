@@ -66,8 +66,6 @@
  * relative to that lock state we resend.
  */
 
-#define GRACE_PERIOD_KT	ms_to_ktime(10)
-
 /*
  * allocated per-super, freed on unmount.
  */
@@ -84,7 +82,7 @@ struct lock_info {
 	struct workqueue_struct *workq;
 	struct work_struct grant_work;
 	struct list_head grant_list;
-	struct delayed_work inv_dwork;
+	struct work_struct inv_work;
 	struct list_head inv_list;
 	struct work_struct shrink_work;
 	struct list_head shrink_list;
@@ -332,23 +330,6 @@ static bool lock_counts_match(int granted, unsigned int *counts)
 }
 
 /*
- * Returns true if there are any mode counts that match with the desired
- * mode.  There can be other non-matching counts as well but we're only
- * testing for the existence of any matching counts.
- */
-static bool lock_count_match_exists(int desired, unsigned int *counts)
-{
-	enum scoutfs_lock_mode mode;
-
-	for (mode = 0; mode < SCOUTFS_LOCK_NR_MODES; mode++) {
-		if (counts[mode] && lock_modes_match(desired, mode))
-			return true;
-	}
-
-	return false;
-}
-
-/*
  * An idle lock has nothing going on.  It can be present in the lru and
  * can be freed by the final put when it has a null mode.
  */
@@ -564,24 +545,6 @@ static void put_lock(struct lock_info *linfo,struct scoutfs_lock *lock)
 	}
 }
 
-/*
- * Locks have a grace period that extends after activity and prevents
- * invalidation.  It's intended to let nodes do reasonable batches of
- * work as locks ping pong between nodes that are doing conflicting
- * work.
- */
-static void extend_grace(struct super_block *sb, struct scoutfs_lock *lock)
-{
-	ktime_t now = ktime_get();
-
-	if (ktime_after(now, lock->grace_deadline))
-		scoutfs_inc_counter(sb, lock_grace_set);
-	else
-		scoutfs_inc_counter(sb, lock_grace_extended);
-
-	lock->grace_deadline = ktime_add(now, GRACE_PERIOD_KT);
-}
-
 static void queue_grant_work(struct lock_info *linfo)
 {
 	assert_spin_locked(&linfo->lock);
@@ -591,19 +554,15 @@ static void queue_grant_work(struct lock_info *linfo)
 }
 
 /*
- * We immediately queue work on the assumption that the caller might
- * have made a change (set a lock mode) which can let one of the
- * invalidating locks make forward progress, even if other locks are
- * waiting for their grace period to elapse.  It's a trade-off between
- * invalidation latency and burning cpu repeatedly finding that locks
- * are still in their grace period.
+ * The caller has made a change (set a lock mode) which can let one of the
+ * invalidating locks make forward progress.
  */
 static void queue_inv_work(struct lock_info *linfo)
 {
 	assert_spin_locked(&linfo->lock);
 
 	if (!list_empty(&linfo->inv_list))
-		mod_delayed_work(linfo->workq, &linfo->inv_dwork, 0);
+		queue_work(linfo->workq, &linfo->inv_work);
 }
 
 /*
@@ -656,15 +615,6 @@ static void bug_on_inconsistent_grant_cache(struct super_block *sb,
  * Grant responses can be reordered with incoming invalidation requests
  * from the server so we have to be careful to only set the new mode
  * once the old mode matches.
- *
- * We extend the grace period as we grant the lock if there is a waiting
- * locker who can use the lock.  This stops invalidation from pulling
- * the granted lock out from under the requester, resulting in a lot of
- * churn with no forward progress.  Using the grace period avoids having
- * to identify a specific waiter and give it an acquired lock.  It's
- * also very similar to waking up the locker and having it win the race
- * against the invalidation.  In that case they'd extend the grace
- * period anyway as they unlock.
  */
 static void lock_grant_worker(struct work_struct *work)
 {
@@ -698,9 +648,6 @@ static void lock_grant_worker(struct work_struct *work)
 		lock->request_pending = 0;
 		lock->mode = nl->new_mode;
 		lock->write_seq = le64_to_cpu(nl->write_seq);
-
-		if (lock_count_match_exists(nl->new_mode, lock->waiters))
-			extend_grace(sb, lock);
 
 		trace_scoutfs_lock_granted(sb, lock);
 		list_del_init(&lock->grant_head);
@@ -765,11 +712,6 @@ int scoutfs_lock_grant_response(struct super_block *sb,
  * invalidate once the lock mode matches what the server told us to
  * invalidate.
  *
- * We delay invalidation processing until a grace period has elapsed
- * since the last unlock.  The intent is to let users do a reasonable
- * batch of work before dropping the lock.  Continuous unlocking can
- * continuously extend the deadline.
- *
  * Before we start invalidating the lock we set the lock to the new
  * mode, preventing further incompatible users of the old mode from
  * using the lock while we're invalidating.
@@ -781,15 +723,11 @@ int scoutfs_lock_grant_response(struct super_block *sb,
  */
 static void lock_invalidate_worker(struct work_struct *work)
 {
-	struct lock_info *linfo = container_of(work, struct lock_info,
-					       inv_dwork.work);
+	struct lock_info *linfo = container_of(work, struct lock_info, inv_work);
 	struct super_block *sb = linfo->sb;
 	struct scoutfs_net_lock *nl;
 	struct scoutfs_lock *lock;
 	struct scoutfs_lock *tmp;
-	unsigned long delay = MAX_JIFFY_OFFSET;
-	ktime_t now = ktime_get();
-	ktime_t deadline;
 	LIST_HEAD(ready);
 	u64 net_id;
 	int ret;
@@ -809,15 +747,6 @@ static void lock_invalidate_worker(struct work_struct *work)
 		if (!lock_counts_match(nl->new_mode, lock->users))
 			continue;
 
-		/* skip if grace hasn't elapsed, record earliest */
-		deadline = lock->grace_deadline;
-		if (!linfo->shutdown && ktime_before(now, deadline)) {
-			delay = min(delay,
-				    nsecs_to_jiffies(ktime_to_ns(
-						ktime_sub(deadline, now))));
-			scoutfs_inc_counter(linfo->sb, lock_grace_wait);
-			continue;
-		}
 		/* set the new mode, no incompatible users during inval */
 		lock->mode = nl->new_mode;
 
@@ -828,7 +757,7 @@ static void lock_invalidate_worker(struct work_struct *work)
 	spin_unlock(&linfo->lock);
 
 	if (list_empty(&ready))
-		goto out;
+		return;
 
 	/* invalidate once the lock is read */
 	list_for_each_entry(lock, &ready, inv_head) {
@@ -872,11 +801,6 @@ static void lock_invalidate_worker(struct work_struct *work)
 	/* grant might have been waiting for invalidate request */
 	queue_grant_work(linfo);
 	spin_unlock(&linfo->lock);
-
-out:
-	/* queue delayed work if invalidations waiting on grace deadline */
-	if (delay != MAX_JIFFY_OFFSET)
-		queue_delayed_work(linfo->workq, &linfo->inv_dwork, delay);
 }
 
 /*
@@ -1348,10 +1272,6 @@ int scoutfs_lock_orphan(struct super_block *sb, enum scoutfs_lock_mode mode, int
 	return lock_key_range(sb, mode, flags, &start, &end, lock);
 }
 
-/*
- * As we unlock we always extend the grace period to give the caller
- * another pass at the lock before its invalidated.
- */
 void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock, enum scoutfs_lock_mode mode)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
@@ -1364,7 +1284,6 @@ void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock, enum scou
 	spin_lock(&linfo->lock);
 
 	lock_dec_count(lock->users, mode);
-	extend_grace(sb, lock);
 	if (lock_mode_can_write(mode))
 		lock->dirty_trans_seq = scoutfs_trans_sample_seq(sb);
 
@@ -1604,7 +1523,7 @@ void scoutfs_lock_unmount_begin(struct super_block *sb)
 
 	if (linfo) {
 		linfo->unmounting = true;
-		flush_delayed_work(&linfo->inv_dwork);
+		flush_work(&linfo->inv_work);
 	}
 }
 
@@ -1697,8 +1616,6 @@ void scoutfs_lock_destroy(struct super_block *sb)
 	spin_unlock(&linfo->lock);
 
 	if (linfo->workq) {
-		/* pending grace work queues normal work */
-		flush_workqueue(linfo->workq);
 		/* now all work won't queue itself */
 		destroy_workqueue(linfo->workq);
 	}
@@ -1759,7 +1676,7 @@ int scoutfs_lock_setup(struct super_block *sb)
 	INIT_LIST_HEAD(&linfo->lru_list);
 	INIT_WORK(&linfo->grant_work, lock_grant_worker);
 	INIT_LIST_HEAD(&linfo->grant_list);
-	INIT_DELAYED_WORK(&linfo->inv_dwork, lock_invalidate_worker);
+	INIT_WORK(&linfo->inv_work, lock_invalidate_worker);
 	INIT_LIST_HEAD(&linfo->inv_list);
 	INIT_WORK(&linfo->shrink_work, lock_shrink_worker);
 	INIT_LIST_HEAD(&linfo->shrink_list);
