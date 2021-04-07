@@ -27,7 +27,6 @@ struct scoutfs_lock {
 	u64 dirty_trans_seq;
 	struct list_head lru_head;
 	wait_queue_head_t waitq;
-	ktime_t grace_deadline;
 	unsigned long request_pending:1,
 		      invalidate_pending:1;
 
