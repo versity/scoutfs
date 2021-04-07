@@ -1074,10 +1074,11 @@ restart:
 		if (bp == NULL)
 			break;
 		if (bp == ERR_PTR(-EAGAIN)) {
-			/* hard reset to not hold rcu grace period across retries */
+			/* hard exit to wait for rcu rebalance to finish */
 			rhashtable_walk_stop(&iter);
 			rhashtable_walk_exit(&iter);
 			scoutfs_inc_counter(sb, block_cache_shrink_restart);
+			synchronize_rcu();
 			goto restart;
 		}
 
