@@ -288,7 +288,7 @@ static int block_insert(struct super_block *sb, struct block_private *bp)
 
 retry:
 	atomic_add(BLOCK_REF_INSERTED, &bp->refcount);
-	ret = rhashtable_insert_fast(&binf->ht, &bp->ht_head, block_ht_params);
+	ret = rhashtable_lookup_insert_fast(&binf->ht, &bp->ht_head, block_ht_params);
 	if (ret < 0) {
 		atomic_sub(BLOCK_REF_INSERTED, &bp->refcount);
 		if (ret == -EBUSY) {
