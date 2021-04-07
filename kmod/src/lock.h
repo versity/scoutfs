@@ -23,7 +23,6 @@ struct scoutfs_lock {
 	u64 refresh_gen;
 	u64 write_version;
 	u64 dirty_trans_seq;
-	struct scoutfs_net_roots roots;
 	struct list_head lru_head;
 	wait_queue_head_t waitq;
 	ktime_t grace_deadline;
@@ -31,7 +30,7 @@ struct scoutfs_lock {
 		      invalidate_pending:1;
 
 	struct list_head grant_head;
-	struct scoutfs_net_lock_grant_response grant_resp;
+	struct scoutfs_net_lock grant_nl;
 	struct list_head inv_head;
 	struct scoutfs_net_lock inv_nl;
 	u64 inv_net_id;
@@ -57,7 +56,7 @@ struct scoutfs_lock_coverage {
 };
 
 int scoutfs_lock_grant_response(struct super_block *sb,
-				struct scoutfs_net_lock_grant_response *gr);
+				struct scoutfs_net_lock *nl);
 int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 				    struct scoutfs_net_lock *nl);
 int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,

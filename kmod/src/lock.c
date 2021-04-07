@@ -638,7 +638,6 @@ static void lock_grant_worker(struct work_struct *work)
 	struct lock_info *linfo = container_of(work, struct lock_info,
 					       grant_work);
 	struct super_block *sb = linfo->sb;
-	struct scoutfs_net_lock_grant_response *gr;
 	struct scoutfs_net_lock *nl;
 	struct scoutfs_lock *lock;
 	struct scoutfs_lock *tmp;
@@ -648,8 +647,7 @@ static void lock_grant_worker(struct work_struct *work)
 	spin_lock(&linfo->lock);
 
 	list_for_each_entry_safe(lock, tmp, &linfo->grant_list, grant_head) {
-		gr = &lock->grant_resp;
-		nl = &lock->grant_resp.nl;
+		nl = &lock->grant_nl;
 
 		/* wait for reordered invalidation to finish */
 		if (lock->mode != nl->old_mode)
@@ -667,7 +665,6 @@ static void lock_grant_worker(struct work_struct *work)
 		lock->request_pending = 0;
 		lock->mode = nl->new_mode;
 		lock->write_version = le64_to_cpu(nl->write_version);
-		lock->roots = gr->roots;
 
 		if (lock_count_match_exists(nl->new_mode, lock->waiters))
 			extend_grace(sb, lock);
@@ -689,9 +686,8 @@ static void lock_grant_worker(struct work_struct *work)
  * work to process.
  */
 int scoutfs_lock_grant_response(struct super_block *sb,
-				struct scoutfs_net_lock_grant_response *gr)
+				struct scoutfs_net_lock *nl)
 {
-	struct scoutfs_net_lock *nl = &gr->nl;
 	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_lock *lock;
 
@@ -705,7 +701,7 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 	trace_scoutfs_lock_grant_response(sb, lock);
 	BUG_ON(!lock->request_pending);
 
-	lock->grant_resp = *gr;
+	lock->grant_nl = *nl;
 	list_add_tail(&lock->grant_head, &linfo->grant_list);
 	queue_grant_work(linfo);
 

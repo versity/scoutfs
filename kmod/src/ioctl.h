@@ -163,7 +163,7 @@ struct scoutfs_ioctl_ino_path_result {
 	__u64 dir_pos;
 	__u16 path_bytes;
 	__u8  _pad[6];
-	__u8  path[0];
+	__u8  path[];
 };
 
 /* Get a single path from the root to the given inode number */

@@ -276,7 +276,6 @@ int scoutfs_forest_read_items(struct super_block *sb,
 	scoutfs_inc_counter(sb, forest_read_items);
 	calc_bloom_nrs(&bloom, &lock->start);
 
-	roots = lock->roots;
 retry:
 	ret = scoutfs_client_get_roots(sb, &roots);
 	if (ret)
@@ -349,15 +348,9 @@ retry:
 	ret = 0;
 out:
 	if (ret == -ESTALE) {
-		if (memcmp(&prev_refs, &refs, sizeof(refs)) == 0) {
-			ret = -EIO;
-			goto out;
-		}
+		if (memcmp(&prev_refs, &refs, sizeof(refs)) == 0)
+			return -EIO;
 		prev_refs = refs;
-
-		ret = scoutfs_client_get_roots(sb, &roots);
-		if (ret)
-			goto out;
 		goto retry;
 	}
 

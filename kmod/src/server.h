@@ -59,11 +59,9 @@ do {								\
 int scoutfs_server_lock_request(struct super_block *sb, u64 rid,
 				struct scoutfs_net_lock *nl);
 int scoutfs_server_lock_response(struct super_block *sb, u64 rid, u64 id,
-				 struct scoutfs_net_lock_grant_response *gr);
+				 struct scoutfs_net_lock *nl);
 int scoutfs_server_lock_recover_request(struct super_block *sb, u64 rid,
 					struct scoutfs_key *key);
-void scoutfs_server_get_roots(struct super_block *sb,
-			      struct scoutfs_net_roots *roots);
 int scoutfs_server_hold_commit(struct super_block *sb);
 int scoutfs_server_apply_commit(struct super_block *sb, int err);
 
