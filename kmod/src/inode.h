@@ -89,7 +89,8 @@ int scoutfs_inode_index_prepare_ino(struct super_block *sb,
 				    struct list_head *list, u64 ino,
 				    umode_t mode);
 int scoutfs_inode_index_try_lock_hold(struct super_block *sb,
-				      struct list_head *list, u64 seq);
+				      struct list_head *list, u64 seq,
+				      bool is_space_creating);
 int scoutfs_inode_index_lock_hold(struct inode *inode, struct list_head *list,
 				  bool set_data_seq);
 void scoutfs_inode_index_unlock(struct super_block *sb, struct list_head *list);

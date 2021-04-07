@@ -12,7 +12,7 @@ int scoutfs_file_fsync(struct file *file, loff_t start, loff_t end,
 		       int datasync);
 void scoutfs_trans_restart_sync_deadline(struct super_block *sb);
 
-int scoutfs_hold_trans(struct super_block *sb);
+int scoutfs_hold_trans(struct super_block *sb, bool is_space_creating);
 bool scoutfs_trans_held(void);
 void scoutfs_release_trans(struct super_block *sb);
 u64 scoutfs_trans_sample_seq(struct super_block *sb);

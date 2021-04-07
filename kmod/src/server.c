@@ -448,6 +448,7 @@ static int server_get_log_trees(struct super_block *sb,
 
 	/* return freed to server for emptying, refill avail  */
 	mutex_lock(&server->alloc_mutex);
+
 	ret = scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
 					server->other_freed,
 					&lt.meta_freed) ?:
@@ -459,6 +460,13 @@ static int server_get_log_trees(struct super_block *sb,
 	      alloc_move_refill(sb, &lt.data_avail, &super->data_alloc,
 				SCOUTFS_SERVER_DATA_FILL_LO,
 				SCOUTFS_SERVER_DATA_FILL_TARGET);
+
+	/* This is likely wrong, but just for now. */
+	if (server->meta_avail->total_len + server->meta_freed->total_len < SCOUTFS_SERVER_META_LOW_CRIT)
+		lt.flags |= SCOUTFS_LT_SPACE_LOW;
+	else
+		lt.flags &= ~SCOUTFS_LT_SPACE_LOW;
+
 	mutex_unlock(&server->alloc_mutex);
 	if (ret < 0)
 		goto unlock;

@@ -315,7 +315,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks,
 							    true);
 		else
-			ret = scoutfs_hold_trans(sb);
+			ret = scoutfs_hold_trans(sb, true);
 		if (ret)
 			break;
 
@@ -757,7 +757,7 @@ retry:
 		      scoutfs_inode_index_prepare(sb, &wbd->ind_locks, inode,
 						  true) ?:
 		      scoutfs_inode_index_try_lock_hold(sb, &wbd->ind_locks,
-							ind_seq);
+							ind_seq, false);
 	} while (ret > 0);
 	if (ret < 0)
 		goto out;
@@ -1238,7 +1238,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		ret = scoutfs_inode_index_start(sb, &seq) ?:
 		      scoutfs_inode_index_prepare(sb, &locks, from, true) ?:
 		      scoutfs_inode_index_prepare(sb, &locks, to, true) ?:
-		      scoutfs_inode_index_try_lock_hold(sb, &locks, seq);
+		      scoutfs_inode_index_try_lock_hold(sb, &locks, seq, false);
 		if (ret > 0)
 			continue;
 		if (ret < 0)

@@ -66,6 +66,15 @@
 	(SCOUTFS_SERVER_META_FILL_TARGET * 2)
 
 /*
+ * Since alloc/freed will only be swapped if freed has greater than
+ * SCOUTFS_SERVER_META_ALLOC_MIN, ensure we don't get close to that
+ * before we start telling clients they can only delete things.
+ */
+#define SCOUTFS_SERVER_META_LOW_CRIT \
+	(SCOUTFS_SERVER_META_ALLOC_MIN * 2)
+
+
+/*
  * A run-time use of a pair of persistent avail/freed roots as a
  * metadata allocator.  It has the machinery needed to lock and avoid
  * recursion when dirtying the list blocks that are used during the

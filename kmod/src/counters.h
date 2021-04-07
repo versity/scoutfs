@@ -184,7 +184,8 @@
 	EXPAND_COUNTER(trans_commit_meta_alloc_low)		\
 	EXPAND_COUNTER(trans_commit_sync_fs)			\
 	EXPAND_COUNTER(trans_commit_timer)			\
-	EXPAND_COUNTER(trans_commit_written)
+	EXPAND_COUNTER(trans_commit_written)			\
+	EXPAND_COUNTER(trans_hold_fail_space_low)
 
 #define FIRST_COUNTER	alloc_alloc_data
 #define LAST_COUNTER	trans_commit_written

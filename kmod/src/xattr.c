@@ -577,7 +577,7 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, inode, false) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq, false);
 	if (ret > 0)
 		goto retry;
 	if (ret)
@@ -778,7 +778,7 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 					     &tgs) != 0)
 			memset(&tgs, 0, sizeof(tgs));
 
-		ret = scoutfs_hold_trans(sb);
+		ret = scoutfs_hold_trans(sb, true);
 		if (ret < 0)
 			break;
 		release = true;

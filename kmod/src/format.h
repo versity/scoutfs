@@ -443,7 +443,11 @@ struct scoutfs_log_trees {
 	__le64 max_item_vers;
 	__le64 rid;
 	__le64 nr;
+	__u8 flags;
+	__u8 __pad[7];
 };
+
+#define SCOUTFS_LT_SPACE_LOW		(1 << 0)
 
 struct scoutfs_log_item_value {
 	__le64 vers;

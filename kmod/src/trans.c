@@ -487,12 +487,19 @@ out:
  * short-circuits all the hold machinery so it can call code that would
  * otherwise try to hold transactions while it is writing.
  */
-int scoutfs_hold_trans(struct super_block *sb)
+int scoutfs_hold_trans(struct super_block *sb, bool is_space_creating)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	DECLARE_TRANS_INFO(sb, tri);
 
 	if (current == sbi->trans_task)
 		return 0;
+
+	/* Error if caller isn't going to free space and space is low */
+	if (!is_space_creating && (tri->lt.flags & SCOUTFS_LT_SPACE_LOW)) {
+		scoutfs_inc_counter(sb, trans_hold_fail_space_low);
+		return -ENOSPC;
+	}
 
 	return wait_event_interruptible(sbi->trans_hold_wq, acquired_hold(sb));
 }

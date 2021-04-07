@@ -85,6 +85,7 @@ int main(int argc, char ** argv)
         double start, last;
         long begin = 0, end = ~0UL >> 1, count = ~0UL >> 1;
         int c, has_fmt_spec = 0, unlink_has_fmt_spec = 0;
+        long size = 0;
 
         /* Handle the last argument in form of "-seconds" */
         if (argc > 1 && argv[argc - 1][0] == '-') {
@@ -97,7 +98,7 @@ int main(int argc, char ** argv)
                 end = end + time(NULL);
         }
 
-        while ((c = getopt(argc, argv, "omdl:r:")) != -1) {
+        while ((c = getopt(argc, argv, "omdl:r:s:")) != -1) {
                 switch(c) {
                 case 'o':
                         do_open++;
@@ -115,6 +116,9 @@ int main(int argc, char ** argv)
                 case 'r':
                         do_unlink++;
                         fmt_unlink = optarg;
+                        break;
+                case 's':
+                        size = strtoul(optarg, NULL, 10);
                         break;
                 case '?':
                         printf("Unknown option '%c'\n", optopt);
@@ -156,6 +160,16 @@ int main(int argc, char ** argv)
                                 rc = errno;
                                 break;
                         }
+                        if (size) {
+                                int ret = posix_fallocate(fd, 0, size);
+                                if (ret) {
+                                        printf("posix_fallocate(%s) error: %s\n", filename,
+                                               strerror(errno));
+                                        rc = errno;
+                                        break;
+                                }
+                        }
+
                         close(fd);
                 } else if (do_link) {
                         rc = link(tgt, filename);
