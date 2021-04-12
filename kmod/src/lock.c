@@ -621,7 +621,7 @@ static void queue_grant_work(struct lock_info *linfo)
 {
 	assert_spin_locked(&linfo->lock);
 
-	if (!list_empty(&linfo->grant_list) && !linfo->shutdown)
+	if (!list_empty(&linfo->grant_list))
 		queue_work(linfo->workq, &linfo->grant_work);
 }
 
@@ -637,7 +637,7 @@ static void queue_inv_work(struct lock_info *linfo)
 {
 	assert_spin_locked(&linfo->lock);
 
-	if (!list_empty(&linfo->inv_list) && !linfo->shutdown)
+	if (!list_empty(&linfo->inv_list))
 		mod_delayed_work(linfo->workq, &linfo->inv_dwork, 0);
 }
 
@@ -868,8 +868,11 @@ static void lock_invalidate_worker(struct work_struct *work)
 		nl = &lock->inv_nl;
 		net_id = lock->inv_net_id;
 
-		ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
-		BUG_ON(ret);
+		/* only lock protocol, inv can't call subsystems after shutdown */
+		if (!linfo->shutdown) {
+			ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
+			BUG_ON(ret);
+		}
 
 		/* respond with the key and modes from the request */
 		ret = scoutfs_client_lock_response(sb, net_id, nl);
@@ -1059,7 +1062,7 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 	lock_inc_count(lock->waiters, mode);
 
 	for (;;) {
-		if (linfo->shutdown) {
+		if (WARN_ON_ONCE(linfo->shutdown)) {
 			ret = -ESHUTDOWN;
 			break;
 		}
@@ -1541,7 +1544,7 @@ restart:
 		BUG_ON(lock->mode == SCOUTFS_LOCK_NULL);
 		BUG_ON(!list_empty(&lock->shrink_head));
 
-		if (linfo->shutdown || nr-- == 0)
+		if (nr-- == 0)
 			break;
 
 		__lock_del_lru(linfo, lock);
@@ -1611,10 +1614,25 @@ void scoutfs_lock_unmount_begin(struct super_block *sb)
 }
 
 /*
- * Internal fs threads can be using locking, and locking can have async
- * work pending.  We use ->shutdown to force callers to return
- * -ESHUTDOWN and to prevent the future queueing of work that could call
- * networking.  Locks whose work is stopped will be torn down by _destroy.
+ * The caller is going to be shutting down transactions and the client.
+ * We need to make sure that locking won't call either after we return.
+ *
+ * At this point all fs callers and internal services that use locks
+ * should have stopped.  We won't have any callers initiating lock
+ * transitions and sending requests.   We set the shutdown flag to catch
+ * anyone who breaks this rule.
+ *
+ * We unregister the shrinker so that we won't try and send null
+ * requests in response to memory pressure.  The locks will all be
+ * unceremoniously dropped once we get a farewell response from the
+ * server which indicates that they destroyed our locking state.
+ *
+ * We will still respond to invalidation requests that have to be
+ * processed to let unmount in other mounts acquire locks and make
+ * progress.  However, we don't fully process the invalidation because
+ * we're shutting down.  We only update the lock state and send the
+ * response.  We shouldn't have any users of locking that require
+ * invalidation correctness at this point.
  */
 void scoutfs_lock_shutdown(struct super_block *sb)
 {
@@ -1627,19 +1645,18 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 
 	trace_scoutfs_lock_shutdown(sb, linfo);
 
-	spin_lock(&linfo->lock);
+	/* stop the shrinker from queueing work */
+	unregister_shrinker(&linfo->shrinker);
+	flush_work(&linfo->shrink_work);
 
+	/* cause current and future lock calls to return errors */
+	spin_lock(&linfo->lock);
 	linfo->shutdown = true;
 	for (node = rb_first(&linfo->lock_tree); node; node = rb_next(node)) {
 		lock = rb_entry(node, struct scoutfs_lock, node);
 		wake_up(&lock->waitq);
 	}
-
 	spin_unlock(&linfo->lock);
-
-	flush_work(&linfo->grant_work);
-	flush_delayed_work(&linfo->inv_dwork);
-	flush_work(&linfo->shrink_work);
 }
 
 /*
@@ -1667,8 +1684,6 @@ void scoutfs_lock_destroy(struct super_block *sb)
 
 	trace_scoutfs_lock_destroy(sb, linfo);
 
-	/* stop the shrinker from queueing work */
-	unregister_shrinker(&linfo->shrinker);
 
 	/* make sure that no one's actively using locks */
 	spin_lock(&linfo->lock);
