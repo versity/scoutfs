@@ -177,7 +177,7 @@ static int do_mkfs(struct mkfs_args *args)
 		goto out;
 	}
 
-	ret = device_size(args->meta_device, meta_fd, 2ULL * (1024 * 1024 * 1024),
+	ret = device_size(args->meta_device, meta_fd, 4ULL * (1024 * 1024 * 1024),
 			  args->max_meta_size, "meta", &meta_size);
 	if (ret)
 		goto out;
