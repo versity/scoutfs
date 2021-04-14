@@ -314,7 +314,7 @@ fi
 
 quo=""
 if [ -n "$T_MKFS" ]; then
-	for i in $(seq -0 $((T_QUORUM - 1))); do
+	for i in $(seq 0 $((T_QUORUM - 1))); do
 		quo="$quo -Q $i,127.0.0.1,$((42000 + i))"
 	done
 
