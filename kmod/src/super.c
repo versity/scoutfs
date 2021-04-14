@@ -168,7 +168,7 @@ out:
 	 * try to free as many locks as possible.
 	 */
 	if (scoutfs_trigger(sb, STATFS_LOCK_PURGE))
-		scoutfs_free_unused_locks(sb, -1UL);
+		scoutfs_free_unused_locks(sb);
 
 	return ret;
 }

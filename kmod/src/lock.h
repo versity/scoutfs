@@ -101,7 +101,7 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 			    enum scoutfs_lock_mode mode);
 
-void scoutfs_free_unused_locks(struct super_block *sb, unsigned long nr);
+void scoutfs_free_unused_locks(struct super_block *sb);
 
 int scoutfs_lock_setup(struct super_block *sb);
 void scoutfs_lock_unmount_begin(struct super_block *sb);

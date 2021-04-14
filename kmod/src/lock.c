@@ -1571,7 +1571,7 @@ out:
 	return ret;
 }
 
-void scoutfs_free_unused_locks(struct super_block *sb, unsigned long nr)
+void scoutfs_free_unused_locks(struct super_block *sb)
 {
 	struct lock_info *linfo = SCOUTFS_SB(sb)->lock_info;
 	struct shrink_control sc = {
