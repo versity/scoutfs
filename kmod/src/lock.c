@@ -781,7 +781,9 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 /*
  * Each lock has received a lock invalidation request from the server
  * which specifies a new mode for the lock.  The server will only send
- * one invalidation request at a time for each lock.
+ * one invalidation request at a time for each lock.  The server can
+ * send another invalidate request after we send the response but before
+ * we reacquire the lock and finish invalidation.
  *
  * This is an unsolicited request from the server so it can arrive at
  * any time after we make the server aware of the lock by initially
@@ -874,6 +876,9 @@ static void lock_invalidate_worker(struct work_struct *work)
 			BUG_ON(ret);
 		}
 
+		/* allow another request after we respond but before we finish */
+		lock->inv_net_id = 0;
+
 		/* respond with the key and modes from the request */
 		ret = scoutfs_client_lock_response(sb, net_id, nl);
 		BUG_ON(ret);
@@ -885,11 +890,13 @@ static void lock_invalidate_worker(struct work_struct *work)
 	spin_lock(&linfo->lock);
 
 	list_for_each_entry_safe(lock, tmp, &ready, inv_head) {
-		list_del_init(&lock->inv_head);
-
-		lock->invalidate_pending = 0;
 		trace_scoutfs_lock_invalidated(sb, lock);
-		wake_up(&lock->waitq);
+		if (lock->inv_net_id == 0) {
+			/* finish if another request didn't arrive */
+			list_del_init(&lock->inv_head);
+			lock->invalidate_pending = 0;
+			wake_up(&lock->waitq);
+		}
 		put_lock(linfo, lock);
 	}
 
@@ -904,34 +911,47 @@ out:
 }
 
 /*
- * Record an incoming invalidate request from the server and add its lock
- * to the list for processing.
+ * Record an incoming invalidate request from the server and add its
+ * lock to the list for processing.  This request can be from a new
+ * server and racing with invalidation that frees from an old server.
+ * It's fine to not find the requested lock and send an immediate
+ * response.
  *
- * This is trusting the server and will crash if it's sent bad requests :/
+ * The invalidation process drops the linfo lock to send responses.  The
+ * moment it does so we can receive another invalidation request (the
+ * server can ask us to go from write->read then read->null).  We allow
+ * for one chain like this but it's a bug if we receive more concurrent
+ * invalidation requests than that.  The server should be only sending
+ * one at a time.
  */
 int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 				    struct scoutfs_net_lock *nl)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_lock *lock;
+	int ret = 0;
 
 	scoutfs_inc_counter(sb, lock_invalidate_request);
 
 	spin_lock(&linfo->lock);
 	lock = get_lock(sb, &nl->key);
-	BUG_ON(!lock);
 	if (lock) {
-		BUG_ON(lock->invalidate_pending);
-		lock->invalidate_pending = 1;
-		lock->inv_nl = *nl;
+		BUG_ON(lock->inv_net_id != 0);
 		lock->inv_net_id = net_id;
-		list_add_tail(&lock->inv_head, &linfo->inv_list);
+		lock->inv_nl = *nl;
+		if (list_empty(&lock->inv_head)) {
+			list_add_tail(&lock->inv_head, &linfo->inv_list);
+			lock->invalidate_pending = 1;
+		}
 		trace_scoutfs_lock_invalidate_request(sb, lock);
 		queue_inv_work(linfo);
 	}
 	spin_unlock(&linfo->lock);
 
-	return 0;
+	if (!lock)
+		ret = scoutfs_client_lock_response(sb, net_id, nl);
+
+	return ret;
 }
 
 /*
