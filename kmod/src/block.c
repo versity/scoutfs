@@ -128,6 +128,7 @@ static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 {
 	struct block_private *bp;
+	unsigned int noio_flags;
 
 	/*
 	 * If we had multiple blocks per page we'd need to be a little
@@ -147,8 +148,19 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 		set_bit(BLOCK_BIT_PAGE_ALLOC, &bp->bits);
 		bp->bl.data = page_address(bp->page);
 	} else {
-		bp->virt = __vmalloc(SCOUTFS_BLOCK_LG_SIZE,
-				     GFP_NOFS | __GFP_HIGHMEM, PAGE_KERNEL);
+		/*
+		 * __vmalloc doesn't pass the gfp flags down to pte
+		 * allocs, they're done with user alloc flags.
+		 * Unfortunately, some lockdep doesn't know that
+		 * PF_NOMEMALLOC prevents __GFP_FS reclaim and generates
+		 * spurious reclaim-on dependencies and warnings.
+		 */
+		lockdep_off();
+		noio_flags = memalloc_noio_save();
+		bp->virt = __vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM, PAGE_KERNEL);
+		memalloc_noio_restore(noio_flags);
+		lockdep_on();
+
 		if (!bp->virt) {
 			kfree(bp);
 			bp = NULL;
@@ -1245,7 +1257,7 @@ out:
 	if (ret)
 		scoutfs_block_destroy(sb);
 
-	return 0;
+	return ret;
 }
 
 void scoutfs_block_destroy(struct super_block *sb)

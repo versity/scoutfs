@@ -33,6 +33,7 @@
 #include "item.h"
 #include "client.h"
 #include "cmp.h"
+#include "omap.h"
 
 /*
  * XXX
@@ -82,6 +83,8 @@ static void scoutfs_inode_ctor(void *obj)
 	init_waitqueue_head(&si->data_waitq.waitq);
 	init_rwsem(&si->xattr_rwsem);
 	RB_CLEAR_NODE(&si->writeback_node);
+	scoutfs_lock_init_coverage(&si->ino_lock_cov);
+	atomic_set(&si->inv_iput_count, 0);
 
 	inode_init_once(&si->inode);
 }
@@ -141,11 +144,14 @@ static void remove_writeback_inode(struct inode_sb_info *inf,
 
 void scoutfs_destroy_inode(struct inode *inode)
 {
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
 
 	spin_lock(&inf->writeback_lock);
 	remove_writeback_inode(inf, SCOUTFS_I(inode));
 	spin_unlock(&inf->writeback_lock);
+
+	scoutfs_lock_del_coverage(inode->i_sb, &si->ino_lock_cov);
 
 	call_rcu(&inode->i_rcu, scoutfs_i_callback);
 }
@@ -307,6 +313,8 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
 		if (ret == 0) {
 			load_inode(inode, &sinode);
 			atomic64_set(&si->last_refreshed, refresh_gen);
+			scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
+			si->drop_invalidated = false;
 		}
 	} else {
 		ret = 0;
@@ -664,6 +672,28 @@ struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
 	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
 }
 
+static int iget_test_nofreeing(struct inode *inode, void *arg)
+{
+	return !(inode->i_state & I_FREEING) && scoutfs_iget_test(inode, arg);
+}
+
+/*
+ * There's a natural risk of a deadlock between lock invalidation and
+ * eviction.  Invalidation blocks locks while looking up inodes and
+ * invalidating local caches.  Inode eviction gets a lock to check final
+ * inode deletion while the inode is marked FREEING which blocks
+ * lookups.
+ *
+ * We have a lookup variant which doesn't return I_FREEING inodes
+ * instead of waiting on them.  If an inode has made it to I_FREEING
+ * then it doesn't have any local caches that are reachable and the lock
+ * invalidation promise is kept.
+ */
+struct inode *scoutfs_ilookup_nofreeing(struct super_block *sb, u64 ino)
+{
+	return ilookup5(sb, ino, iget_test_nofreeing, &ino);
+}
+
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino)
 {
 	struct scoutfs_lock *lock = NULL;
@@ -688,6 +718,8 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino)
 		atomic64_set(&si->last_refreshed, 0);
 
 		ret = scoutfs_inode_refresh(inode, lock, 0);
+		if (ret == 0)
+			ret = scoutfs_omap_inc(sb, ino);
 		if (ret) {
 			iget_failed(inode);
 			inode = ERR_PTR(ret);
@@ -1384,6 +1416,8 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	si->next_xattr_id = 0;
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
+	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
+	si->drop_invalidated = false;
 	si->flags = 0;
 
 	scoutfs_inode_set_meta_seq(inode);
@@ -1399,10 +1433,17 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	store_inode(&sinode, inode);
 	init_inode_key(&key, scoutfs_ino(inode));
 
+	ret = scoutfs_omap_inc(sb, ino);
+	if (ret < 0)
+		goto out;
+
 	ret = scoutfs_item_create(sb, &key, &sinode, sizeof(sinode), lock);
+	if (ret < 0)
+		scoutfs_omap_dec(sb, ino);
+out:
 	if (ret) {
 		iput(inode);
-		return ERR_PTR(ret);
+		inode = ERR_PTR(ret);
 	}
 
 	return inode;
@@ -1447,15 +1488,15 @@ int scoutfs_orphan_delete(struct super_block *sb, u64 ino)
 
 /*
  * Remove all the items associated with a given inode.  This is only
- * called once nlink has dropped to zero so we don't have to worry about
- * dirents referencing the inode or link backrefs.  Dropping nlink to 0
- * also created an orphan item.  That orphan item will continue
- * triggering attempts to finish previous partial deletion until all
- * deletion is complete and the orphan item is removed.
+ * called once nlink has dropped to zero and nothing has the inode open
+ * so we don't have to worry about dirents referencing the inode or link
+ * backrefs.  Dropping nlink to 0 also created an orphan item.  That
+ * orphan item will continue triggering attempts to finish previous
+ * partial deletion until all deletion is complete and the orphan item
+ * is removed.
  */
-static int delete_inode_items(struct super_block *sb, u64 ino)
+static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lock *lock)
 {
-	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
 	LIST_HEAD(ind_locks);
@@ -1464,10 +1505,6 @@ static int delete_inode_items(struct super_block *sb, u64 ino)
 	u64 ind_seq;
 	u64 size;
 	int ret;
-
-	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino, &lock);
-	if (ret)
-		return ret;
 
 	init_inode_key(&key, ino);
 
@@ -1533,18 +1570,24 @@ out:
 	if (release)
 		scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+
 	return ret;
 }
 
 /*
  * iput_final has already written out the dirty pages to the inode
  * before we get here.  We're left with a clean inode that we have to
- * tear down.  If there are no more links to the inode then we also
- * remove all its persistent structures.
+ * tear down.  We use locking and open inode number bitmaps to decide if
+ * we should finally destroy an inode that is no longer open nor
+ * reachable through directory entries.
  */
 void scoutfs_evict_inode(struct inode *inode)
 {
+	struct super_block *sb = inode->i_sb;
+	const u64 ino = scoutfs_ino(inode);
+	struct scoutfs_lock *lock;
+	int ret;
+
 	trace_scoutfs_evict_inode(inode->i_sb, scoutfs_ino(inode),
 				  inode->i_nlink, is_bad_inode(inode));
 
@@ -1553,19 +1596,45 @@ void scoutfs_evict_inode(struct inode *inode)
 
 	truncate_inode_pages_final(&inode->i_data);
 
-	if (inode->i_nlink == 0)
-		delete_inode_items(inode->i_sb, scoutfs_ino(inode));
+	ret = scoutfs_omap_should_delete(sb, inode, &lock);
+	if (ret > 0) {
+		ret = delete_inode_items(inode->i_sb, scoutfs_ino(inode), lock);
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	}
+	if (ret < 0)
+		scoutfs_err(sb, "error %d while checking to delete inode nr %llu, it might linger.",
+			    ret, ino);
+
+	scoutfs_omap_dec(sb, ino);
+
 clear:
 	clear_inode(inode);
 }
 
+/*
+ * We want to remove inodes from the cache as their count goes to 0 if
+ * they're no longer covered by a cluster lock or if while locked they
+ * were unlinked.
+ *
+ * We don't want unused cached inodes to linger outside of cluster
+ * locking so that they don't prevent final inode deletion on other
+ * nodes.  We don't have specific per-inode or per-dentry locks which
+ * would otherwise remove the stale caches as they're invalidated.
+ * Stale cached inodes provide little value because they're going to be
+ * refreshed the next time they're locked.  Populating the item cache
+ * and loading the inode item is a lot more expensive than initializing
+ * and inserting a newly allocated vfs inode.
+ */
 int scoutfs_drop_inode(struct inode *inode)
 {
-	int ret = generic_drop_inode(inode);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
 
-	trace_scoutfs_drop_inode(inode->i_sb, scoutfs_ino(inode),
-				 inode->i_nlink, inode_unhashed(inode));
-	return ret;
+	trace_scoutfs_drop_inode(sb, scoutfs_ino(inode), inode->i_nlink, inode_unhashed(inode),
+				 si->drop_invalidated);
+
+	return si->drop_invalidated || !scoutfs_lock_is_covered(sb, &si->ino_lock_cov) ||
+	       generic_drop_inode(inode);
 }
 
 /*
@@ -1582,8 +1651,10 @@ int scoutfs_scan_orphans(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_lock *lock = sbi->rid_lock;
+	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_key key;
 	struct scoutfs_key last;
+	u64 ino;
 	int err = 0;
 	int ret;
 
@@ -1599,7 +1670,13 @@ int scoutfs_scan_orphans(struct super_block *sb)
 		if (ret < 0)
 			goto out;
 
-		ret = delete_inode_items(sb, le64_to_cpu(key.sko_ino));
+		ino = le64_to_cpu(key.sko_ino);
+
+		ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino, &inode_lock);
+		if (ret == 0) {
+			ret = delete_inode_items(sb, le64_to_cpu(key.sko_ino), inode_lock);
+			scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+		}
 		if (ret && ret != -ENOENT && !err)
 			err = ret;
 

@@ -38,6 +38,8 @@
 #include "srch.h"
 #include "alloc.h"
 #include "forest.h"
+#include "recov.h"
+#include "omap.h"
 
 /*
  * Every active mount can act as the server that listens on a net
@@ -96,6 +98,9 @@ struct server_info {
 	/* stable versions stored from commits, given in locks and rpcs */
 	seqcount_t roots_seqcount;
 	struct scoutfs_net_roots roots;
+
+	/* recovery timeout fences from work */
+	struct work_struct fence_pending_recov_work;
 };
 
 #define DECLARE_SERVER_INFO(sb, name) \
@@ -1016,6 +1021,60 @@ out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 
+/* The server is receiving an omap response from the client */
+static int open_ino_map_response(struct super_block *sb, struct scoutfs_net_connection *conn,
+				 void *resp, unsigned int resp_len, int error, void *data)
+{
+	u64 rid = scoutfs_net_client_rid(conn);
+
+	if (resp_len != sizeof(struct scoutfs_open_ino_map))
+		return -EINVAL;
+
+	return scoutfs_omap_server_handle_response(sb, rid, resp);
+}
+
+/* The server is sending an omap request to the client */
+int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
+				     struct scoutfs_open_ino_map_args *args)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+
+	return scoutfs_net_submit_request_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
+					      args, sizeof(*args),
+					      open_ino_map_response, NULL, NULL);
+}
+
+/* The server is sending an omap response to the client */
+int scoutfs_server_send_omap_response(struct super_block *sb, u64 rid, u64 id,
+				      struct scoutfs_open_ino_map *map, int err)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+
+	return scoutfs_net_response_node(sb, server->conn, rid,
+					 SCOUTFS_NET_CMD_OPEN_INO_MAP, id, err,
+					 map, sizeof(*map));
+}
+
+/* The server is receiving an omap request from the client */
+static int server_open_ino_map(struct super_block *sb, struct scoutfs_net_connection *conn,
+			       u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	u64 rid = scoutfs_net_client_rid(conn);
+	int ret;
+
+	if (arg_len != sizeof(struct scoutfs_open_ino_map_args)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = scoutfs_omap_server_handle_request(sb, rid, id, arg);
+out:
+	if (ret < 0)
+		return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
+
+	return 0;
+}
+
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 {
 	*key = (struct scoutfs_key) {
@@ -1198,7 +1257,12 @@ static int server_greeting(struct super_block *sb,
 
 		ret = scoutfs_server_apply_commit(sb, ret);
 		queue_work(server->wq, &server->farewell_work);
+		if (ret < 0)
+			goto send_err;
 	}
+
+	scoutfs_server_recov_finish(sb, le64_to_cpu(gr->rid), SCOUTFS_RECOV_GREETING);
+	ret = 0;
 
 send_err:
 	err = ret;
@@ -1228,17 +1292,10 @@ send_err:
 	scoutfs_net_server_greeting(sb, conn, le64_to_cpu(gr->rid), id,
 				    reconnecting, first_contact, farewell);
 
-	/* lock server might send recovery request */
+	/* let layers know we have a client connecting for the first time */
 	if (le64_to_cpu(gr->server_term) != server->term) {
-
-		/* we're now doing two commits per greeting, not great */
-		ret = scoutfs_server_hold_commit(sb);
-		if (ret)
-			goto out;
-
-		ret = scoutfs_lock_server_greeting(sb, le64_to_cpu(gr->rid),
-						   gr->server_term != 0);
-		ret = scoutfs_server_apply_commit(sb, ret);
+		ret = scoutfs_lock_server_greeting(sb, le64_to_cpu(gr->rid)) ?:
+		      scoutfs_omap_add_rid(sb, le64_to_cpu(gr->rid));
 		if (ret)
 			goto out;
 	}
@@ -1257,6 +1314,25 @@ static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
 {
 	return (iref->val_len !=
 			sizeof(struct scoutfs_mounted_client_btree_val));
+}
+
+static int reclaim_rid(struct super_block *sb, u64 rid)
+{
+	int ret;
+
+	ret = scoutfs_server_hold_commit(sb);
+	if (ret < 0)
+		return ret;
+
+	/* delete mounted client last, client reconnect looks for it */
+	ret = scoutfs_lock_server_farewell(sb, rid) ?:
+	      remove_trans_seq(sb, rid) ?:
+	      reclaim_log_trees(sb, rid) ?:
+	      cancel_srch_compact(sb, rid) ?:
+	      delete_mounted_client(sb, rid) ?:
+	      scoutfs_omap_remove_rid(sb, rid);
+
+	return scoutfs_server_apply_commit(sb, ret);
 }
 
 /*
@@ -1386,18 +1462,7 @@ static void farewell_worker(struct work_struct *work)
 
 	/* process and send farewell responses */
 	list_for_each_entry_safe(fw, tmp, &send, entry) {
-		ret = scoutfs_server_hold_commit(sb);
-		if (ret)
-			goto out;
-
-		/* delete mounted client last, client reconnect looks for it */
-		ret = scoutfs_lock_server_farewell(sb, fw->rid) ?:
-		      remove_trans_seq(sb, fw->rid) ?:
-		      reclaim_log_trees(sb, fw->rid) ?:
-		      cancel_srch_compact(sb, fw->rid) ?:
-		      delete_mounted_client(sb, fw->rid);
-
-		ret = scoutfs_server_apply_commit(sb, ret);
+		ret = reclaim_rid(sb, fw->rid);
 		if (ret)
 			goto out;
 	}
@@ -1499,6 +1564,7 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_LOCK]			= server_lock,
 	[SCOUTFS_NET_CMD_SRCH_GET_COMPACT]	= server_srch_get_compact,
 	[SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT]	= server_srch_commit_compact,
+	[SCOUTFS_NET_CMD_OPEN_INO_MAP]		= server_open_ino_map,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 
@@ -1538,6 +1604,143 @@ static void server_notify_down(struct super_block *sb,
 	} else {
 		stop_server(server);
 	}
+}
+
+/*
+ * All clients have recovered all state.  Now we can kick all the work
+ * that was waiting on recovery.
+ *
+ * It's a bit of a false dependency to have all work wait for completion
+ * before any work can make progress, but recovery is naturally
+ * concerned about in-memory state.  It should all be quick to recover
+ * once a client arrives.
+ */
+static void finished_recovery(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	int ret = 0;
+
+	scoutfs_info(sb, "all clients recovered");
+
+	ret = scoutfs_omap_finished_recovery(sb) ?:
+	      scoutfs_lock_server_finished_recovery(sb);
+	if (ret < 0) {
+		scoutfs_err(sb, "error %d resuming after recovery finished, shutting down", ret);
+		stop_server(server);
+	}
+}
+
+void scoutfs_server_recov_finish(struct super_block *sb, u64 rid, int which)
+{
+	if (scoutfs_recov_finish(sb, rid, which) > 0)
+		finished_recovery(sb);
+}
+
+/*
+ * If the recovery timeout is too short we'll prematurely evict mounts
+ * that would have recovered.  They need time to have their sockets
+ * timeout, reconnect to the current server, and fully recover their
+ * state.
+ *
+ * If it's too long we'll needlessly delay resuming operations after
+ * clients crash and will never recover.
+ */
+#define SERVER_RECOV_TIMEOUT_MS (30 * MSEC_PER_SEC)
+
+/*
+ * Not all clients recovered in time.  We fence them and reclaim
+ * whatever resources they were using.  If we see a rid here then we're
+ * going to fence it, regardless of if it manages to finish recovery
+ * while we're fencing it.
+ */
+static void fence_pending_recov_worker(struct work_struct *work)
+{
+	struct server_info *server = container_of(work, struct server_info,
+						  fence_pending_recov_work);
+	struct super_block *sb = server->sb;
+	u64 rid;
+	int ret;
+
+	while ((rid = scoutfs_recov_next_pending(sb, SCOUTFS_RECOV_ALL)) > 0) {
+		scoutfs_err(sb, "%lu ms recovery timeout expired for client rid %016llx, fencing",
+			    SERVER_RECOV_TIMEOUT_MS, rid);
+
+		ret = reclaim_rid(sb, rid);
+		if (ret < 0) {
+			scoutfs_err(sb, "error %d reclaiming rid %016llx, shutting down", ret, rid);
+			stop_server(server);
+			break;
+		}
+
+		scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_ALL);
+	}
+}
+
+static void recovery_timeout(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+
+	if (!server->shutting_down)
+		queue_work(server->wq, &server->fence_pending_recov_work);
+}
+
+/*
+ * As the server starts up it needs to start waiting for recovery from
+ * any clients which were previously still mounted in the last running
+ * server.  This is done before networking is started so we won't
+ * receive any messages from clients until we've prepared them all.  If
+ * the clients don't recover in time then they'll be fenced.
+ */
+static int start_recovery(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	unsigned int nr = 0;
+	u64 rid;
+	int ret;
+
+	for (rid = 0; ; rid++) {
+		init_mounted_client_key(&key, rid);
+		ret = scoutfs_btree_next(sb, &super->mounted_clients, &key, &iref);
+		if (ret == -ENOENT) {
+			ret = 0;
+			break;
+		}
+		if (ret == 0) {
+			rid = le64_to_cpu(iref.key->skmc_rid);
+			scoutfs_btree_put_iref(&iref);
+		}
+		if (ret < 0)
+			goto out;
+
+		ret = scoutfs_recov_prepare(sb, rid, SCOUTFS_RECOV_ALL);
+		if (ret < 0) {
+			scoutfs_err(sb, "error %d preparing recovery for client rid %016llx, shutting down",
+				     ret, rid);
+			goto out;
+		}
+
+		nr++;
+	}
+
+	if (nr > 0) {
+		scoutfs_info(sb, "waiting for %u clients to recover", nr);
+
+		ret = scoutfs_recov_begin(sb, recovery_timeout, SERVER_RECOV_TIMEOUT_MS);
+		if (ret > 0) {
+			finished_recovery(sb);
+			ret = 0;
+		}
+	}
+
+out:
+	if (ret < 0) {
+		scoutfs_err(sb, "error %d starting recovery, shutting down", ret);
+		stop_server(server);
+	}
+	return ret;
 }
 
 static void scoutfs_server_worker(struct work_struct *work)
@@ -1610,8 +1813,8 @@ static void scoutfs_server_worker(struct work_struct *work)
 		goto shutdown;
 	}
 
-	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri,
-					max_vers);
+	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri, max_vers) ?:
+	      start_recovery(sb);
 	if (ret)
 		goto shutdown;
 
@@ -1635,10 +1838,15 @@ shutdown:
 	scoutfs_net_shutdown(sb, conn);
 	server->conn = NULL;
 
+	/* stop tracking recovery, cancel timer, flush any fencing */
+	scoutfs_recov_shutdown(sb);
+	flush_work(&server->fence_pending_recov_work);
+
 	/* wait for extra queues by requests, won't find waiters */
 	flush_work(&server->commit_work);
 
 	scoutfs_lock_server_destroy(sb);
+	scoutfs_omap_server_shutdown(sb);
 
 out:
 	scoutfs_net_free_conn(sb, conn);
@@ -1724,6 +1932,7 @@ int scoutfs_server_setup(struct super_block *sb)
 	mutex_init(&server->srch_mutex);
 	mutex_init(&server->mounted_clients_mutex);
 	seqcount_init(&server->roots_seqcount);
+	INIT_WORK(&server->fence_pending_recov_work, fence_pending_recov_worker);
 
 	server->wq = alloc_workqueue("scoutfs_server",
 				     WQ_UNBOUND | WQ_NON_REENTRANT, 0);

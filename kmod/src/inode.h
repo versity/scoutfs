@@ -51,6 +51,13 @@ struct scoutfs_inode_info {
 	struct rw_semaphore xattr_rwsem;
 	struct rb_node writeback_node;
 
+	struct scoutfs_lock_coverage ino_lock_cov;
+
+	/* drop if i_count hits 0, allows drop while invalidate holds coverage */
+	bool drop_invalidated;
+	struct llist_node inv_iput_llnode;
+	atomic_t inv_iput_count;
+
 	struct inode inode;
 };
 
@@ -72,6 +79,7 @@ int scoutfs_orphan_inode(struct inode *inode);
 
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino);
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
+struct inode *scoutfs_ilookup_nofreeing(struct super_block *sb, u64 ino);
 
 void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
 				  u32 minor, u64 ino);

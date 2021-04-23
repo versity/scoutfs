@@ -26,6 +26,8 @@ struct net_info;
 struct block_info;
 struct forest_info;
 struct srch_info;
+struct recov_info;
+struct omap_info;
 
 struct scoutfs_sb_info {
 	struct super_block *sb;
@@ -48,6 +50,7 @@ struct scoutfs_sb_info {
 	struct block_info *block_info;
 	struct forest_info *forest_info;
 	struct srch_info *srch_info;
+	struct omap_info *omap_info;
 	struct item_cache_info *item_cache_info;
 
 	wait_queue_head_t trans_hold_wq;
@@ -70,6 +73,7 @@ struct scoutfs_sb_info {
 	struct lock_server_info *lock_server_info;
 	struct client_info *client_info;
 	struct server_info *server_info;
+	struct recov_info *recov_info;
 	struct sysfs_info *sfsinfo;
 
 	struct scoutfs_counters *counters;
@@ -80,8 +84,6 @@ struct scoutfs_sb_info {
 	struct scoutfs_sysfs_attrs mopts_ssa;
 
 	struct dentry *debug_root;
-
-	bool shutdown;
 
 	unsigned long corruption_messages_once[SC_NR_LONGS];
 };

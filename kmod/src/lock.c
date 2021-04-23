@@ -34,6 +34,7 @@
 #include "data.h"
 #include "xattr.h"
 #include "item.h"
+#include "omap.h"
 
 /*
  * scoutfs uses a lock service to manage item cache consistency between
@@ -74,6 +75,7 @@ struct lock_info {
 	struct super_block *sb;
 	spinlock_t lock;
 	bool shutdown;
+	bool unmounting;
 	struct rb_root lock_tree;
 	struct rb_root lock_range_tree;
 	struct shrinker shrinker;
@@ -87,6 +89,9 @@ struct lock_info {
 	struct work_struct shrink_work;
 	struct list_head shrink_list;
 	atomic64_t next_refresh_gen;
+	struct work_struct inv_iput_work;
+	struct llist_head inv_iput_llist;
+
 	struct dentry *tseq_dentry;
 	struct scoutfs_tseq_tree tseq_tree;
 };
@@ -122,21 +127,81 @@ static bool lock_modes_match(int granted, int requested)
 }
 
 /*
- * invalidate cached data associated with an inode whose lock is going
- * away.
+ * Final iput can get into evict and perform final inode deletion which
+ * can delete a lot of items under locks and transactions.  We really
+ * don't want to be doing all that in an iput during invalidation.  When
+ * invalidation sees that iput might perform final deletion it puts them
+ * on a list and queues this work.
+ *
+ * Nothing stops multiple puts for multiple invalidations of an inode
+ * before the work runs so we can track multiple puts in flight.
+ */
+static void lock_inv_iput_worker(struct work_struct *work)
+{
+	struct lock_info *linfo = container_of(work, struct lock_info, inv_iput_work);
+	struct scoutfs_inode_info *si;
+	struct scoutfs_inode_info *tmp;
+	struct llist_node *inodes;
+	bool more;
+
+	inodes = llist_del_all(&linfo->inv_iput_llist);
+
+	llist_for_each_entry_safe(si, tmp, inodes, inv_iput_llnode) {
+		do {
+			more = atomic_dec_return(&si->inv_iput_count) > 0;
+			iput(&si->inode);
+		} while (more);
+	}
+}
+
+/*
+ * Invalidate cached data associated with an inode whose lock is going
+ * away.  We ignore indoes with I_FREEING instead of waiting on them to
+ * avoid a deadlock, if they're freeing then they won't be visible to
+ * future lock users and we don't need to invalidate them.
+ *
+ * We try to drop cached dentries and inodes covered by the lock if they
+ * aren't referenced.  This removes them from the mount's open map and
+ * allows deletions to be performed by unlink without having to wait for
+ * remote cached inodes to be dropped.
+ *
+ * If the cached inode was already deferring final inode deletion then
+ * we can't perform that inline in invalidation.  The locking alone
+ * deadlock, and it might also take multiple transactions to fully
+ * delete an inode with significant metadata.  We only perform the iput
+ * inline if we know that possible eviction can't perform the final
+ * deletion, otherwise we kick it off to async work.
  */
 static void invalidate_inode(struct super_block *sb, u64 ino)
 {
+	DECLARE_LOCK_INFO(sb, linfo);
+	struct scoutfs_inode_info *si;
 	struct inode *inode;
 
-	inode = scoutfs_ilookup(sb, ino);
+	inode = scoutfs_ilookup_nofreeing(sb, ino);
 	if (inode) {
+		si = SCOUTFS_I(inode);
+
 		scoutfs_inc_counter(sb, lock_invalidate_inode);
 		if (S_ISREG(inode->i_mode)) {
 			truncate_inode_pages(inode->i_mapping, 0);
 			scoutfs_data_wait_changed(inode);
 		}
-		iput(inode);
+
+		/* can't touch during unmount, dcache destroys w/o locks */
+		if (!linfo->unmounting)
+			d_prune_aliases(inode);
+
+		si->drop_invalidated = true;
+		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink > 0) {
+			iput(inode);
+		} else {
+			/* defer iput to work context so we don't evict inodes from invalidation */ 
+			if (atomic_inc_return(&si->inv_iput_count) == 1)
+				llist_add(&si->inv_iput_llnode, &linfo->inv_iput_llist);
+			smp_wmb(); /* count and list visible before work executes */
+			queue_work(linfo->workq, &linfo->inv_iput_work);
+		}
 	}
 }
 
@@ -172,6 +237,16 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
 retry:
+		/* invalidate inodes before removing coverage */
+		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
+			ino = le64_to_cpu(lock->start.ski_ino);
+			last = le64_to_cpu(lock->end.ski_ino);
+			while (ino <= last) {
+				invalidate_inode(sb, ino);
+				ino++;
+			}
+		}
+
 		/* remove cov items to tell users that their cache is stale */
 		spin_lock(&lock->cov_list_lock);
 		list_for_each_entry_safe(cov, tmp, &lock->cov_list, head) {
@@ -186,15 +261,6 @@ retry:
 			scoutfs_inc_counter(sb, lock_invalidate_coverage);
 		}
 		spin_unlock(&lock->cov_list_lock);
-
-		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
-			ino = le64_to_cpu(lock->start.ski_ino);
-			last = le64_to_cpu(lock->end.ski_ino);
-			while (ino <= last) {
-				invalidate_inode(sb, ino);
-				ino++;
-			}
-		}
 
 		scoutfs_item_invalidate(sb, &lock->start, &lock->end);
 	}
@@ -229,6 +295,7 @@ static void lock_free(struct lock_info *linfo, struct scoutfs_lock *lock)
 	BUG_ON(!list_empty(&lock->shrink_head));
 	BUG_ON(!list_empty(&lock->cov_list));
 
+	scoutfs_omap_free_lock_data(lock->omap_data);
 	kfree(lock);
 }
 
@@ -264,6 +331,7 @@ static struct scoutfs_lock *lock_alloc(struct super_block *sb,
 	lock->mode = SCOUTFS_LOCK_NULL;
 
 	atomic64_set(&lock->forest_bloom_nr, 0);
+	spin_lock_init(&lock->omap_spinlock);
 
 	trace_scoutfs_lock_alloc(sb, lock);
 
@@ -553,7 +621,7 @@ static void queue_grant_work(struct lock_info *linfo)
 {
 	assert_spin_locked(&linfo->lock);
 
-	if (!list_empty(&linfo->grant_list) && !linfo->shutdown)
+	if (!list_empty(&linfo->grant_list))
 		queue_work(linfo->workq, &linfo->grant_work);
 }
 
@@ -569,7 +637,7 @@ static void queue_inv_work(struct lock_info *linfo)
 {
 	assert_spin_locked(&linfo->lock);
 
-	if (!list_empty(&linfo->inv_list) && !linfo->shutdown)
+	if (!list_empty(&linfo->inv_list))
 		mod_delayed_work(linfo->workq, &linfo->inv_dwork, 0);
 }
 
@@ -800,8 +868,11 @@ static void lock_invalidate_worker(struct work_struct *work)
 		nl = &lock->inv_nl;
 		net_id = lock->inv_net_id;
 
-		ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
-		BUG_ON(ret);
+		/* only lock protocol, inv can't call subsystems after shutdown */
+		if (!linfo->shutdown) {
+			ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
+			BUG_ON(ret);
+		}
 
 		/* respond with the key and modes from the request */
 		ret = scoutfs_client_lock_response(sb, net_id, nl);
@@ -991,7 +1062,7 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 	lock_inc_count(lock->waiters, mode);
 
 	for (;;) {
-		if (linfo->shutdown) {
+		if (WARN_ON_ONCE(linfo->shutdown)) {
 			ret = -ESHUTDOWN;
 			break;
 		}
@@ -1473,7 +1544,7 @@ restart:
 		BUG_ON(lock->mode == SCOUTFS_LOCK_NULL);
 		BUG_ON(!list_empty(&lock->shrink_head));
 
-		if (linfo->shutdown || nr-- == 0)
+		if (nr-- == 0)
 			break;
 
 		__lock_del_lru(linfo, lock);
@@ -1500,7 +1571,7 @@ out:
 	return ret;
 }
 
-void scoutfs_free_unused_locks(struct super_block *sb, unsigned long nr)
+void scoutfs_free_unused_locks(struct super_block *sb)
 {
 	struct lock_info *linfo = SCOUTFS_SB(sb)->lock_info;
 	struct shrink_control sc = {
@@ -1528,15 +1599,40 @@ static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
 }
 
 /*
- * The caller is going to be calling _destroy soon and, critically, is
- * about to shutdown networking before calling us so that we don't get
- * any callbacks while we're destroying.  We have to ensure that we
- * won't call networking after this returns.
+ * shrink_dcache_for_umount() tears down dentries with no locking.  We
+ * need to make sure that our invalidation won't touch dentries before
+ * we return and the caller calls the generic vfs unmount path.
+ */
+void scoutfs_lock_unmount_begin(struct super_block *sb)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+
+	if (linfo) {
+		linfo->unmounting = true;
+		flush_delayed_work(&linfo->inv_dwork);
+	}
+}
+
+/*
+ * The caller is going to be shutting down transactions and the client.
+ * We need to make sure that locking won't call either after we return.
  *
- * Internal fs threads can be using locking, and locking can have async
- * work pending.  We use ->shutdown to force callers to return
- * -ESHUTDOWN and to prevent the future queueing of work that could call
- * networking.  Locks whose work is stopped will be torn down by _destroy.
+ * At this point all fs callers and internal services that use locks
+ * should have stopped.  We won't have any callers initiating lock
+ * transitions and sending requests.   We set the shutdown flag to catch
+ * anyone who breaks this rule.
+ *
+ * We unregister the shrinker so that we won't try and send null
+ * requests in response to memory pressure.  The locks will all be
+ * unceremoniously dropped once we get a farewell response from the
+ * server which indicates that they destroyed our locking state.
+ *
+ * We will still respond to invalidation requests that have to be
+ * processed to let unmount in other mounts acquire locks and make
+ * progress.  However, we don't fully process the invalidation because
+ * we're shutting down.  We only update the lock state and send the
+ * response.  We shouldn't have any users of locking that require
+ * invalidation correctness at this point.
  */
 void scoutfs_lock_shutdown(struct super_block *sb)
 {
@@ -1549,19 +1645,18 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 
 	trace_scoutfs_lock_shutdown(sb, linfo);
 
-	spin_lock(&linfo->lock);
+	/* stop the shrinker from queueing work */
+	unregister_shrinker(&linfo->shrinker);
+	flush_work(&linfo->shrink_work);
 
+	/* cause current and future lock calls to return errors */
+	spin_lock(&linfo->lock);
 	linfo->shutdown = true;
 	for (node = rb_first(&linfo->lock_tree); node; node = rb_next(node)) {
 		lock = rb_entry(node, struct scoutfs_lock, node);
 		wake_up(&lock->waitq);
 	}
-
 	spin_unlock(&linfo->lock);
-
-	flush_work(&linfo->grant_work);
-	flush_delayed_work(&linfo->inv_dwork);
-	flush_work(&linfo->shrink_work);
 }
 
 /*
@@ -1589,8 +1684,6 @@ void scoutfs_lock_destroy(struct super_block *sb)
 
 	trace_scoutfs_lock_destroy(sb, linfo);
 
-	/* stop the shrinker from queueing work */
-	unregister_shrinker(&linfo->shrinker);
 
 	/* make sure that no one's actively using locks */
 	spin_lock(&linfo->lock);
@@ -1636,8 +1729,10 @@ void scoutfs_lock_destroy(struct super_block *sb)
 			__lock_del_lru(linfo, lock);
 		if (!list_empty(&lock->grant_head))
 			list_del_init(&lock->grant_head);
-		if (!list_empty(&lock->inv_head))
+		if (!list_empty(&lock->inv_head)) {
 			list_del_init(&lock->inv_head);
+			lock->invalidate_pending = 0;
+		}
 		if (!list_empty(&lock->shrink_head))
 			list_del_init(&lock->shrink_head);
 		lock_remove(linfo, lock);
@@ -1674,6 +1769,8 @@ int scoutfs_lock_setup(struct super_block *sb)
 	INIT_WORK(&linfo->shrink_work, lock_shrink_worker);
 	INIT_LIST_HEAD(&linfo->shrink_list);
 	atomic64_set(&linfo->next_refresh_gen, 0);
+	INIT_WORK(&linfo->inv_iput_work, lock_inv_iput_worker);
+	init_llist_head(&linfo->inv_iput_llist);
 	scoutfs_tseq_tree_init(&linfo->tseq_tree, lock_tseq_show);
 
 	sbi->lock_info = linfo;

@@ -339,14 +339,6 @@ static int print_srch_root_item(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-static int print_lock_clients_entry(struct scoutfs_key *key, void *val,
-				    unsigned val_len, void *arg)
-{
-	printf("    rid %016llx\n", le64_to_cpu(key->sklc_rid));
-
-	return 0;
-}
-
 static int print_trans_seqs_entry(struct scoutfs_key *key, void *val,
 				  unsigned val_len, void *arg)
 {
@@ -876,7 +868,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  server_meta_avail[1]: "AL_HEAD_F"\n"
 	       "  server_meta_freed[0]: "AL_HEAD_F"\n"
 	       "  server_meta_freed[1]: "AL_HEAD_F"\n"
-	       "  lock_clients root: height %u blkno %llu seq %llu\n"
 	       "  mounted_clients root: height %u blkno %llu seq %llu\n"
 	       "  srch_root root: height %u blkno %llu seq %llu\n"
 	       "  trans_seqs root: height %u blkno %llu seq %llu\n"
@@ -896,9 +887,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		AL_HEAD_A(&super->server_meta_avail[1]),
 		AL_HEAD_A(&super->server_meta_freed[0]),
 		AL_HEAD_A(&super->server_meta_freed[1]),
-		super->lock_clients.height,
-		le64_to_cpu(super->lock_clients.ref.blkno),
-		le64_to_cpu(super->lock_clients.ref.seq),
 		super->mounted_clients.height,
 		le64_to_cpu(super->mounted_clients.ref.blkno),
 		le64_to_cpu(super->mounted_clients.ref.seq),
@@ -946,11 +934,6 @@ static int print_volume(int fd)
 	print_super_block(super, SCOUTFS_SUPER_BLKNO);
 
 	ret = print_quorum_blocks(fd, super);
-
-	err = print_btree(fd, super, "lock_clients", &super->lock_clients,
-			  print_lock_clients_entry, NULL);
-	if (err && !ret)
-		ret = err;
 
 	err = print_btree(fd, super, "mounted_clients", &super->mounted_clients,
 			  print_mounted_client_entry, NULL);

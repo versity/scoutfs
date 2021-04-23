@@ -195,9 +195,6 @@ struct scoutfs_key {
 #define sklt_rid	_sk_first
 #define sklt_nr		_sk_second
 
-/* lock clients */
-#define sklc_rid	_sk_first
-
 /* seqs */
 #define skts_trans_seq	_sk_first
 #define skts_rid	_sk_second
@@ -493,11 +490,10 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_LOCK_ZONE			4
 /* Items only stored in server btrees */
 #define SCOUTFS_LOG_TREES_ZONE			6
-#define SCOUTFS_LOCK_CLIENTS_ZONE		7
-#define SCOUTFS_TRANS_SEQ_ZONE			8
-#define SCOUTFS_MOUNTED_CLIENT_ZONE		9
-#define SCOUTFS_SRCH_ZONE			10
-#define SCOUTFS_FREE_EXTENT_ZONE		11
+#define SCOUTFS_TRANS_SEQ_ZONE			7
+#define SCOUTFS_MOUNTED_CLIENT_ZONE		8
+#define SCOUTFS_SRCH_ZONE			9
+#define SCOUTFS_FREE_EXTENT_ZONE		10
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -653,7 +649,6 @@ struct scoutfs_super_block {
 	struct scoutfs_alloc_list_head server_meta_freed[2];
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
-	struct scoutfs_btree_root lock_clients;
 	struct scoutfs_btree_root trans_seqs;
 	struct scoutfs_btree_root mounted_clients;
 	struct scoutfs_btree_root srch_root;
@@ -845,6 +840,7 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_LOCK_RECOVER,
 	SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
 	SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
+	SCOUTFS_NET_CMD_OPEN_INO_MAP,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };
@@ -964,5 +960,43 @@ enum scoutfs_corruption_sources {
 };
 
 #define SC_NR_LONGS DIV_ROUND_UP(SC_NR_SOURCES, BITS_PER_LONG)
+
+#define SCOUTFS_OPEN_INO_MAP_SHIFT	10
+#define SCOUTFS_OPEN_INO_MAP_BITS	(1 << SCOUTFS_OPEN_INO_MAP_SHIFT)
+#define SCOUTFS_OPEN_INO_MAP_MASK	(SCOUTFS_OPEN_INO_MAP_BITS - 1)
+#define SCOUTFS_OPEN_INO_MAP_LE64S	(SCOUTFS_OPEN_INO_MAP_BITS / 64)
+
+/*
+ * The request and response conversation is as follows:
+ *
+ * client[init] -> server:
+ *	group_nr = G
+ *	req_id = 0	(I)
+ * server -> client[*]
+ *	group_nr = G
+ *	req_id = R
+ * client[*] -> server
+ *	group_nr = G	(I)
+ *	req_id = R
+ *	bits
+ * server -> client[init]
+ *	group_nr = G	(I)
+ *	req_id = R	(I)
+ *	bits
+ *
+ * Many of the fields in individual messages are ignored ("I") because
+ * the net id or the omap req_id can be used to identify the
+ * conversation.  We always include them on the wire to make inspected
+ * messages easier to follow.
+ */
+struct scoutfs_open_ino_map_args {
+	__le64 group_nr;
+	__le64 req_id;
+};
+
+struct scoutfs_open_ino_map {
+	struct scoutfs_open_ino_map_args args;
+	__le64 bits[SCOUTFS_OPEN_INO_MAP_LE64S];
+};
 
 #endif
