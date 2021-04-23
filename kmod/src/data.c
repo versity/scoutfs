@@ -1285,7 +1285,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 
 			if (is_stage) {
 				ret = scoutfs_ext_next(sb, &data_ext_ops, &to_args,
-						       to_iblock, 1, &off_ext);
+						       to_start, 1, &off_ext);
 				if (ret)
 					break;
 
