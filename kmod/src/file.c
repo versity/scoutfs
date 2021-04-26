@@ -29,7 +29,12 @@
 #include "per_task.h"
 #include "omap.h"
 
-/* TODO: Direct I/O, AIO */
+/*
+ * Start a high level file read.  We check for offline extents in the
+ * read region here so that we only check the extents once.  We use the
+ * dio count to prevent releasing while we're reading after we've
+ * checked the extents.
+ */
 ssize_t scoutfs_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 			      unsigned long nr_segs, loff_t pos)
 {
@@ -43,30 +48,32 @@ ssize_t scoutfs_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	int ret;
 
 retry:
+	/* protect checked extents from release */
+	mutex_lock(&inode->i_mutex);
+	atomic_inc(&inode->i_dio_count);
+	mutex_unlock(&inode->i_mutex);
+
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
 	if (ret)
 		goto out;
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
-		/* protect checked extents from stage/release */
-		mutex_lock(&inode->i_mutex);
-		atomic_inc(&inode->i_dio_count);
-		mutex_unlock(&inode->i_mutex);
-
 		ret = scoutfs_data_wait_check_iov(inode, iov, nr_segs, pos,
 						  SEF_OFFLINE,
 						  SCOUTFS_IOC_DWO_READ,
 						  &dw, inode_lock);
 		if (ret != 0)
 			goto out;
+	} else {
+		WARN_ON_ONCE(true);
 	}
 
 	ret = generic_file_aio_read(iocb, iov, nr_segs, pos);
 
 out:
-	if (scoutfs_per_task_del(&si->pt_data_lock, &pt_ent))
-		inode_dio_done(inode);
+	inode_dio_done(inode);
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 
 	if (scoutfs_data_wait_found(&dw)) {
