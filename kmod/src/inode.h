@@ -79,7 +79,6 @@ int scoutfs_orphan_inode(struct inode *inode);
 
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino);
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
-struct inode *scoutfs_ilookup_nofreeing(struct super_block *sb, u64 ino);
 
 void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
 				  u32 minor, u64 ino);

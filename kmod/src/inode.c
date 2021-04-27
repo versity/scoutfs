@@ -648,12 +648,22 @@ void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off)
 	} while (read_seqcount_retry(&si->seqcount, seq));
 }
 
+/*
+ * We have inversions between getting cluster locks while performing
+ * final deletion on a freeing inode and waiting on a freeing inode
+ * while holding a cluster lock.
+ *
+ * We can avoid these deadlocks by hiding freeing inodes in our hash
+ * lookup function.  We're fine with either returning null or populating
+ * a new inode overlapping with eviction freeing a previous instance of
+ * the inode.
+ */
 static int scoutfs_iget_test(struct inode *inode, void *arg)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	u64 *ino = arg;
 
-	return si->ino == *ino;
+	return (si->ino == *ino) && !(inode->i_state & I_FREEING);
 }
 
 static int scoutfs_iget_set(struct inode *inode, void *arg)
@@ -670,28 +680,6 @@ static int scoutfs_iget_set(struct inode *inode, void *arg)
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
 {
 	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
-}
-
-static int iget_test_nofreeing(struct inode *inode, void *arg)
-{
-	return !(inode->i_state & I_FREEING) && scoutfs_iget_test(inode, arg);
-}
-
-/*
- * There's a natural risk of a deadlock between lock invalidation and
- * eviction.  Invalidation blocks locks while looking up inodes and
- * invalidating local caches.  Inode eviction gets a lock to check final
- * inode deletion while the inode is marked FREEING which blocks
- * lookups.
- *
- * We have a lookup variant which doesn't return I_FREEING inodes
- * instead of waiting on them.  If an inode has made it to I_FREEING
- * then it doesn't have any local caches that are reachable and the lock
- * invalidation promise is kept.
- */
-struct inode *scoutfs_ilookup_nofreeing(struct super_block *sb, u64 ino)
-{
-	return ilookup5(sb, ino, iget_test_nofreeing, &ino);
 }
 
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino)
