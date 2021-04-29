@@ -894,6 +894,9 @@ static void lock_invalidate_worker(struct work_struct *work)
 			list_del_init(&lock->inv_head);
 			lock->invalidate_pending = 0;
 			wake_up(&lock->waitq);
+		} else {
+			/* another request filled nl/net_id, put it back on the list */
+			list_move_tail(&lock->inv_head, &linfo->inv_list);
 		}
 		put_lock(linfo, lock);
 	}
