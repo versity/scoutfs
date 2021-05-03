@@ -13,6 +13,7 @@ lock-refleak.sh
 lock-shrink-consistency.sh
 lock-pr-cw-conflict.sh
 lock-revoke-getcwd.sh
+export-lookup-evict-race.sh
 createmany-parallel.sh
 createmany-large-names.sh
 createmany-rename-large-dir.sh
