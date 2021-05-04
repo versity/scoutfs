@@ -4,3 +4,4 @@ src/dumb_setxattr
 src/handle_cat
 src/bulk_create_paths
 src/find_xattrs
+src/stage_tmpfile
