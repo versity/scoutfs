@@ -757,9 +757,9 @@ enum scoutfs_dentry_type {
 	DIV_ROUND_UP(sizeof(struct scoutfs_xattr) + name_len + val_len, \
 		     (unsigned int)SCOUTFS_XATTR_MAX_PART_SIZE)
 
-#define SCOUTFS_LOCK_INODE_GROUP_NR	1024
+#define SCOUTFS_LOCK_INODE_GROUP_NR	128
 #define SCOUTFS_LOCK_INODE_GROUP_MASK	(SCOUTFS_LOCK_INODE_GROUP_NR - 1)
-#define SCOUTFS_LOCK_SEQ_GROUP_MASK	((1ULL << 10) - 1)
+#define SCOUTFS_LOCK_SEQ_GROUP_MASK	((1ULL << 7) - 1)
 
 /*
  * messages over the wire.
@@ -961,7 +961,7 @@ enum scoutfs_corruption_sources {
 
 #define SC_NR_LONGS DIV_ROUND_UP(SC_NR_SOURCES, BITS_PER_LONG)
 
-#define SCOUTFS_OPEN_INO_MAP_SHIFT	10
+#define SCOUTFS_OPEN_INO_MAP_SHIFT	7
 #define SCOUTFS_OPEN_INO_MAP_BITS	(1 << SCOUTFS_OPEN_INO_MAP_SHIFT)
 #define SCOUTFS_OPEN_INO_MAP_MASK	(SCOUTFS_OPEN_INO_MAP_BITS - 1)
 #define SCOUTFS_OPEN_INO_MAP_LE64S	(SCOUTFS_OPEN_INO_MAP_BITS / 64)
