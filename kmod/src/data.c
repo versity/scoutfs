@@ -558,7 +558,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 	u64 offset;
 	int ret;
 
-	WARN_ON_ONCE(create && !mutex_is_locked(&si->s_i_mutex));
+	WARN_ON_ONCE(create && !rwsem_is_locked(&si->extent_sem));
 
 	/* make sure caller holds a cluster lock */
 	lock = scoutfs_per_task_get(&si->pt_data_lock);
@@ -835,7 +835,6 @@ static int scoutfs_write_begin(struct file *file,
 	if (!wbd)
 		return -ENOMEM;
 
-	mutex_lock(&si->s_i_mutex);	/* released in scoutfs_write_end() */
 	INIT_LIST_HEAD(&wbd->ind_locks);
 	*fsdata = wbd;
 
@@ -940,7 +939,6 @@ static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 				     pos + ret - BACKGROUND_WRITEBACK_BYTES,
 				     pos + ret - 1);
 
-	mutex_unlock(&si->s_i_mutex);	/* locked in scoutfs_write_begin() */
 	return ret;
 }
 
@@ -1145,8 +1143,8 @@ out_extent:
 	up_write(&si->extent_sem);
 out_mutex:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&si->s_i_mutex);
 	inode_unlock(inode);
+	up_write(&si->extent_sem);
 
 out:
 	trace_scoutfs_data_fallocate(sb, ino, mode, offset, len, ret);
@@ -1559,7 +1557,6 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 
 	inode_lock(inode);
 	down_read(&si->extent_sem);
-	mutex_lock(&si->s_i_mutex);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
 	if (ret)
@@ -1953,7 +1950,7 @@ static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 	int err;
 
 	sb_start_pagefault(sb);
-	mutex_lock(&si->s_i_mutex);
+	down_write(&si->extent_sem);
 
 retry:
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
@@ -2044,7 +2041,7 @@ out_release_trans:
 out:
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&si->s_i_mutex);
+	up_write(&si->extent_sem);
 	if (scoutfs_data_wait_found(&dw)) {
 		ret = scoutfs_data_wait(inode, &dw);
 		if (ret == 0)
