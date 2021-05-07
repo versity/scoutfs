@@ -346,6 +346,7 @@ static int read_quorum_block(struct super_block *sb, u64 blkno,
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
+	char msg[150];
 	__le32 crc;
 	int ret;
 
@@ -356,25 +357,37 @@ static int read_quorum_block(struct super_block *sb, u64 blkno,
 
 	ret = scoutfs_block_read_sm(sb, sbi->meta_bdev, blkno,
 				     &blk->hdr, sizeof(*blk), &crc);
+	if (ret < 0) {
+		scoutfs_err(sb, "quorum block read error %d", ret);
+		goto out;
+	}
 
 	/* detect invalid blocks */
-	if (ret == 0 &&
-	    ((blk->hdr.crc != crc) ||
-	     (le32_to_cpu(blk->hdr.magic) != SCOUTFS_BLOCK_MAGIC_QUORUM) ||
-	     (blk->hdr.fsid != super->hdr.fsid) ||
-	     (le64_to_cpu(blk->hdr.blkno) != blkno))) {
-		scoutfs_inc_counter(sb, quorum_read_invalid_block);
+	if (blk->hdr.crc != crc)
+		snprintf(msg, sizeof(msg), "blk crc %08x != %08x",
+			 le32_to_cpu(blk->hdr.crc), le32_to_cpu(crc));
+	else if (le32_to_cpu(blk->hdr.magic) != SCOUTFS_BLOCK_MAGIC_QUORUM) 
+		snprintf(msg, sizeof(msg), "blk magic %08x != %08x",
+			 le32_to_cpu(blk->hdr.magic), SCOUTFS_BLOCK_MAGIC_QUORUM);
+	else if (blk->hdr.fsid != super->hdr.fsid)
+		snprintf(msg, sizeof(msg), "blk fsid %016llx != %016llx",
+			 le64_to_cpu(blk->hdr.fsid), le64_to_cpu(super->hdr.fsid));
+	else if (le64_to_cpu(blk->hdr.blkno) != blkno)
+		snprintf(msg, sizeof(msg), "blk blkno %llu != %llu",
+			 le64_to_cpu(blk->hdr.blkno), blkno);
+	else if (mark && *mark != 0 && blk->random_write_mark != *mark)
+		snprintf(msg, sizeof(msg), "blk mark %016llx != %016llx, are multiple mounts configured with the same slot?",
+			 le64_to_cpu(blk->random_write_mark), le64_to_cpu(*mark));
+	else
+		msg[0] = '\0';
+
+	if (msg[0] != '\0') {
+		scoutfs_err(sb, "read invalid quorum block, %s", msg);
 		ret = -EIO;
+		goto out;
 	}
 
-	if (mark && *mark != 0 && blk->random_write_mark != *mark) {
-		scoutfs_err(sb, "read unexpected quorum block write mark, are multiple mounts configured with the same slot?");
-		ret = -EIO;
-	}
-
-	if (ret < 0)
-		scoutfs_err(sb, "quorum block read error %d", ret);
-
+out:
 	return ret;
 }
 
