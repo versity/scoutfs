@@ -372,9 +372,13 @@ static int print_mounted_client_entry(struct scoutfs_key *key, void *val,
 				      unsigned val_len, void *arg)
 {
 	struct scoutfs_mounted_client_btree_val *mcv = val;
+	struct in_addr in;
 
-	printf("    rid %016llx flags 0x%x\n",
-	       le64_to_cpu(key->skmc_rid), mcv->flags);
+	memset(&in, 0, sizeof(in));
+	in.s_addr = htonl(le32_to_cpu(mcv->addr.v4.addr));
+
+	printf("    rid %016llx ipv4_addr %s flags 0x%x\n",
+	       le64_to_cpu(key->skmc_rid), inet_ntoa(in), mcv->flags);
 
 	return 0;
 }

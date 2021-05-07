@@ -327,7 +327,9 @@ struct scoutfs_alloc_root {
 #define SCOUTFS_ALLOC_OWNER_SRCH	3
 
 struct scoutfs_mounted_client_btree_val {
+	union scoutfs_inet_addr addr;
 	__u8 flags;
+	__u8 __pad[7];
 };
 
 #define SCOUTFS_MOUNTED_CLIENT_QUORUM	(1 << 0)

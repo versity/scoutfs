@@ -100,6 +100,16 @@ static inline void scoutfs_addr_to_sin(struct sockaddr_in *sin,
 	sin->sin_port = cpu_to_be16(le16_to_cpu(addr->v4.port));
 }
 
+static inline void scoutfs_sin_to_addr(union scoutfs_inet_addr *addr, struct sockaddr_in *sin)
+{
+	BUG_ON(sin->sin_family != AF_INET);
+
+	memset(addr, 0, sizeof(union scoutfs_inet_addr));
+	addr->v4.family = cpu_to_le16(SCOUTFS_AF_IPV4);
+	addr->v4.addr = be32_to_le32(sin->sin_addr.s_addr);
+	addr->v4.port = be16_to_le16(sin->sin_port);
+}
+
 struct scoutfs_net_connection *
 scoutfs_net_alloc_conn(struct super_block *sb,
 		       scoutfs_net_notify_t notify_up,

@@ -1453,14 +1453,19 @@ static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 	};
 }
 
+static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
+{
+	return (iref->val_len != sizeof(struct scoutfs_mounted_client_btree_val));
+}
+
 /*
  * Insert a new mounted client item for a client that is sending us a
  * greeting that hasn't yet seen a response.  The greeting can be
  * retransmitted to a new server after the previous inserted the item so
  * it's acceptable to see -EEXIST.
  */
-static int insert_mounted_client(struct super_block *sb, u64 rid,
-				 u64 gr_flags)
+static int insert_mounted_client(struct super_block *sb, u64 rid, u64 gr_flags,
+				 struct sockaddr_in *sin)
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
@@ -1469,6 +1474,7 @@ static int insert_mounted_client(struct super_block *sb, u64 rid,
 	int ret;
 
 	init_mounted_client_key(&key, rid);
+	scoutfs_sin_to_addr(&mcv.addr, sin);
 	mcv.flags = 0;
 	if (gr_flags & SCOUTFS_NET_GREETING_FLAG_QUORUM)
 		mcv.flags |= SCOUTFS_MOUNTED_CLIENT_QUORUM;
@@ -1479,6 +1485,34 @@ static int insert_mounted_client(struct super_block *sb, u64 rid,
 				   sizeof(mcv));
 	if (ret == -EEXIST)
 		ret = 0;
+	mutex_unlock(&server->mounted_clients_mutex);
+
+	return ret;
+}
+
+static int lookup_mounted_client_addr(struct super_block *sb, u64 rid,
+				      union scoutfs_inet_addr *addr)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_mounted_client_btree_val *mcv;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	int ret;
+
+	init_mounted_client_key(&key, rid);
+
+	mutex_lock(&server->mounted_clients_mutex);
+	ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key, &iref);
+	if (ret == 0) {
+		if (invalid_mounted_client_item(&iref)) {
+			ret = -EIO;
+		} else {
+			mcv = iref.val;
+			*addr = mcv->addr;
+		}
+		scoutfs_btree_put_iref(&iref);
+	}
 	mutex_unlock(&server->mounted_clients_mutex);
 
 	return ret;
@@ -1622,8 +1656,8 @@ static int server_greeting(struct super_block *sb,
 		if (ret < 0)
 			goto send_err;
 
-		ret = insert_mounted_client(sb, le64_to_cpu(gr->rid),
-					    le64_to_cpu(gr->flags));
+		ret = insert_mounted_client(sb, le64_to_cpu(gr->rid), le64_to_cpu(gr->flags),
+					    &conn->peername);
 
 		ret = scoutfs_server_apply_commit(sb, ret);
 		queue_work(server->wq, &server->farewell_work);
@@ -1680,11 +1714,6 @@ struct farewell_request {
 	u64 rid;
 };
 
-static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
-{
-	return (iref->val_len !=
-			sizeof(struct scoutfs_mounted_client_btree_val));
-}
 
 /*
  * Reclaim all the resources for a mount which has gone away.  It's sent
@@ -2040,20 +2069,30 @@ static void fence_pending_recov_worker(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  fence_pending_recov_work);
 	struct super_block *sb = server->sb;
+	union scoutfs_inet_addr addr;
 	u64 rid = 0;
-	int ret;
+	int ret = 0;
 
 	while ((rid = scoutfs_recov_next_pending(sb, rid, SCOUTFS_RECOV_ALL)) > 0) {
 		scoutfs_err(sb, "%lu ms recovery timeout expired for client rid %016llx, fencing",
 			    SERVER_RECOV_TIMEOUT_MS, rid);
 
-		ret = scoutfs_fence_start(sb, rid, 0, SCOUTFS_FENCE_CLIENT_RECOVERY);
-		if (ret) {
+		ret = lookup_mounted_client_addr(sb, rid, &addr);
+		if (ret < 0) {
+			scoutfs_err(sb, "client rid addr lookup err %d, shutting down server", ret);
+			break;
+		}
+
+		ret = scoutfs_fence_start(sb, rid, le32_to_be32(addr.v4.addr),
+					  SCOUTFS_FENCE_CLIENT_RECOVERY);
+		if (ret < 0) {
 			scoutfs_err(sb, "fence returned err %d, shutting down server", ret);
-			scoutfs_server_abort(sb);
 			break;
 		}
 	}
+
+	if (ret < 0)
+		scoutfs_server_abort(sb);
 }
 
 static void recovery_timeout(struct super_block *sb)
