@@ -14,7 +14,7 @@ int scoutfs_recov_begin(struct super_block *sb, void (*timeout_fn)(struct super_
 			unsigned int timeout_ms);
 int scoutfs_recov_finish(struct super_block *sb, u64 rid, int which);
 bool scoutfs_recov_is_pending(struct super_block *sb, u64 rid, int which);
-u64 scoutfs_recov_next_pending(struct super_block *sb, int which);
+u64 scoutfs_recov_next_pending(struct super_block *sb, u64 rid, int which);
 void scoutfs_recov_shutdown(struct super_block *sb);
 
 int scoutfs_recov_setup(struct super_block *sb);

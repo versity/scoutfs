@@ -619,7 +619,7 @@ static int handle_requests(struct super_block *sb)
 	int ret;
 	int err;
 
-	if (scoutfs_recov_next_pending(sb, SCOUTFS_RECOV_GREETING))
+	if (scoutfs_recov_next_pending(sb, 0, SCOUTFS_RECOV_GREETING))
 		return 0;
 
 	ret = 0;
