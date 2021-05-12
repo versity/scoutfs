@@ -900,6 +900,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->fs_root.ref.blkno),
 		le64_to_cpu(super->fs_root.ref.seq));
 
+	printf("  volume options:\n"
+	       "    set_bits: %016llx\n",
+		le64_to_cpu(super->volopt.set_bits));
+
 	printf("  quorum config version %llu\n",
 		le64_to_cpu(super->qconf.version));
 	for (i = 0; i < array_size(super->qconf.slots); i++) {

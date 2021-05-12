@@ -34,6 +34,26 @@ the server for the filesystem if it is elected leader.
 The assigned number must match one of the slots defined with \-Q options
 when the filesystem was created with mkfs.  If the number assigned
 doesn't match a number created during mkfs then the mount will fail.
+.SH VOLUME OPTIONS
+Volume options are persistent options which are stored in the super
+block in the metadata device and which apply to all mounts of the volume.
+.sp
+Volume options may be initially specified as the volume is created
+as described in the mkfs command in
+.BR scoutfs (8).
+.sp
+Volume options may be changed at runtime by writing to files in sysfs
+while the volume is mounted.  Volume options are found in the
+volume_options/ directory with a file for each option.  Reading the
+file provides the current setting of the option and an empty string
+is returned if the option is not set.  To set the option, write
+the new value ofthe option to the file.  To clear the option, write
+a blank line with a newline to the file.  The write syscall will
+return an error if the set operation fails and a message will be written
+to the console.
+.sp
+The following volume options are supported:
+.TP
 .SH FURTHER READING
 A
 .B scoutfs

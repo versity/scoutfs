@@ -42,6 +42,7 @@ scoutfs-y +=			\
 	trans.o			\
 	triggers.o		\
 	tseq.o			\
+	volopt.o		\
 	xattr.o
 
 #

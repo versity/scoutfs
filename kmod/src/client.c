@@ -249,6 +249,33 @@ int scoutfs_client_open_ino_map(struct super_block *sb, u64 group_nr,
 					&args, sizeof(args), map, sizeof(*map));
 }
 
+/* The client is asking the server for the current volume options */
+int scoutfs_client_get_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_GET_VOLOPT,
+					NULL, 0, volopt, sizeof(*volopt));
+}
+
+/* The client is asking the server to update volume options */
+int scoutfs_client_set_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_SET_VOLOPT,
+					volopt, sizeof(*volopt), NULL, 0);
+}
+
+/* The client is asking the server to clear volume options */
+int scoutfs_client_clear_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_CLEAR_VOLOPT,
+					volopt, sizeof(*volopt), NULL, 0);
+}
+
 /* The client is receiving a invalidation request from the server */
 static int client_lock(struct super_block *sb,
 		       struct scoutfs_net_connection *conn, u8 cmd, u64 id,

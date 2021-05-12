@@ -99,6 +99,11 @@ struct server_info {
 	seqcount_t roots_seqcount;
 	struct scoutfs_net_roots roots;
 
+	/* serializing and get and set volume options */
+	seqcount_t volopt_seqcount;
+	struct mutex volopt_mutex;
+	struct scoutfs_volume_options volopt;
+
 	/* recovery timeout fences from work */
 	struct work_struct fence_pending_recov_work;
 };
@@ -113,6 +118,38 @@ struct server_client_info {
 	u64 rid;
 	struct list_head head;
 };
+
+static __le64 *first_valopt(struct scoutfs_volume_options *valopt)
+{
+	return &valopt->set_bits + 1;
+}
+
+/*
+ * A server caller wants to know if a volume option is set and wants to
+ * know it's value.  This is quite early in the file to make it
+ * available to all of the server paths.
+ */
+static bool get_volopt_val(struct server_info *server, int nr, u64 *val)
+{
+	u64 bit = 1ULL << nr;
+	__le64 *opt = first_valopt(&server->volopt) + nr;
+	bool is_set = false;
+	unsigned seq;
+
+	do {
+		seq = read_seqcount_begin(&server->volopt_seqcount);
+		if ((le64_to_cpu(server->volopt.set_bits) & bit)) {
+			is_set = true;
+			*val = le64_to_cpup(opt);
+		} else {
+			is_set = false;
+			*val = 0;
+		};
+	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+
+	return is_set;
+}
+
 
 struct commit_waiter {
 	struct completion comp;
@@ -1075,6 +1112,125 @@ out:
 	return 0;
 }
 
+/* The server is receiving a request for the current volume options */
+static int server_get_volopt(struct super_block *sb, struct scoutfs_net_connection *conn,
+			     u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_volume_options volopt;
+	unsigned seq;
+	int ret = 0;
+
+	if (arg_len != 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	do {
+		seq = read_seqcount_begin(&server->volopt_seqcount);
+		volopt = server->volopt;
+	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, &volopt, sizeof(volopt));
+}
+
+/*
+ * The server is receiving a request to update volume options.
+ *
+ * The in-memory options that readers use is updated only once the
+ * updated options are written in the super block.
+ */
+static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connection *conn,
+			     u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_volume_options *volopt;
+	int ret = 0;
+
+	if (arg_len != sizeof(struct scoutfs_volume_options)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	volopt = arg;
+
+	if (le64_to_cpu(volopt->set_bits) & SCOUTFS_VOLOPT_EXPANSION_BITS) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&server->volopt_mutex);
+
+	ret = scoutfs_server_hold_commit(sb);
+	if (ret)
+		goto unlock;
+
+	ret = scoutfs_server_apply_commit(sb, ret);
+
+	write_seqcount_begin(&server->volopt_seqcount);
+	if (ret == 0)
+		server->volopt = super->volopt;
+	else
+		super->volopt = server->volopt;
+	write_seqcount_end(&server->volopt_seqcount);
+
+unlock:
+	mutex_unlock(&server->volopt_mutex);
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
+}
+
+static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connection *conn,
+			       u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_volume_options *volopt;
+	__le64 *opt;
+	u64 bit;
+	int ret = 0;
+	int i;
+
+	if (arg_len != sizeof(struct scoutfs_volume_options)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	volopt = arg;
+
+	if (le64_to_cpu(volopt->set_bits) & SCOUTFS_VOLOPT_EXPANSION_BITS) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&server->volopt_mutex);
+
+	ret = scoutfs_server_hold_commit(sb);
+	if (ret)
+		goto unlock;
+
+	for (i = 0, bit = 1, opt = first_valopt(&super->volopt); i < 64; i++, bit <<= 1, opt++) {
+		if (le64_to_cpu(volopt->set_bits) & bit) {
+			super->volopt.set_bits &= ~cpu_to_le64(bit);
+			*opt = 0;
+		}
+	}
+
+	ret = scoutfs_server_apply_commit(sb, ret);
+
+	write_seqcount_begin(&server->volopt_seqcount);
+	if (ret == 0)
+		server->volopt = super->volopt;
+	else
+		super->volopt = server->volopt;
+	write_seqcount_end(&server->volopt_seqcount);
+
+unlock:
+	mutex_unlock(&server->volopt_mutex);
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
+}
+
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 {
 	*key = (struct scoutfs_key) {
@@ -1565,6 +1721,9 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_SRCH_GET_COMPACT]	= server_srch_get_compact,
 	[SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT]	= server_srch_commit_compact,
 	[SCOUTFS_NET_CMD_OPEN_INO_MAP]		= server_open_ino_map,
+	[SCOUTFS_NET_CMD_GET_VOLOPT]		= server_get_volopt,
+	[SCOUTFS_NET_CMD_SET_VOLOPT]		= server_set_volopt,
+	[SCOUTFS_NET_CMD_CLEAR_VOLOPT]		= server_clear_volopt,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 
@@ -1784,6 +1943,11 @@ static void scoutfs_server_worker(struct work_struct *work)
 	if (ret < 0)
 		goto shutdown;
 
+	/* update volume options early, possibly for use during startup */
+	write_seqcount_begin(&server->volopt_seqcount);
+	server->volopt = super->volopt;
+	write_seqcount_end(&server->volopt_seqcount);
+
 	set_roots(server, &super->fs_root, &super->logs_root,
 		  &super->srch_root);
 	scoutfs_block_writer_init(sb, &server->wri);
@@ -1932,6 +2096,8 @@ int scoutfs_server_setup(struct super_block *sb)
 	mutex_init(&server->srch_mutex);
 	mutex_init(&server->mounted_clients_mutex);
 	seqcount_init(&server->roots_seqcount);
+	seqcount_init(&server->volopt_seqcount);
+	mutex_init(&server->volopt_mutex);
 	INIT_WORK(&server->fence_pending_recov_work, fence_pending_recov_worker);
 
 	server->wq = alloc_workqueue("scoutfs_server",

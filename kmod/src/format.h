@@ -626,6 +626,29 @@ struct scoutfs_quorum_block {
 
 #define SCOUTFS_QUORUM_BLOCK_LEADER (1 << 0)
 
+/*
+ * Tunable options that apply to the entire system.  They can be set in
+ * mkfs or in sysfs files which send an rpc to the server to make the
+ * change.  The super version defines the options that exist.
+ *
+ * @set_bits: bits for each 64bit starting offset after set_bits
+ * indicate which logical option is set.
+ */
+struct scoutfs_volume_options {
+	__le64 set_bits;
+	__le64 __future_expansion[64];
+};
+
+#define scoutfs_volopt_nr(field)							\
+	((offsetof(struct scoutfs_volume_options, field) -				\
+	  (offsetof(struct scoutfs_volume_options, set_bits) +				\
+	   member_sizeof(struct scoutfs_volume_options, set_bits))) / sizeof(__le64))
+#define scoutfs_volopt_bit(field)							\
+	(1ULL << scoutfs_volopt_nr(field))
+
+#define SCOUTFS_VOLOPT_EXPANSION_BITS \
+	(~(scoutfs_volopt_bit(__future_expansion) - 1))
+
 #define SCOUTFS_FLAG_IS_META_BDEV 0x01
 
 struct scoutfs_super_block {
@@ -652,6 +675,7 @@ struct scoutfs_super_block {
 	struct scoutfs_btree_root trans_seqs;
 	struct scoutfs_btree_root mounted_clients;
 	struct scoutfs_btree_root srch_root;
+	struct scoutfs_volume_options volopt;
 };
 
 #define SCOUTFS_ROOT_INO 1
@@ -841,6 +865,9 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
 	SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
 	SCOUTFS_NET_CMD_OPEN_INO_MAP,
+	SCOUTFS_NET_CMD_GET_VOLOPT,
+	SCOUTFS_NET_CMD_SET_VOLOPT,
+	SCOUTFS_NET_CMD_CLEAR_VOLOPT,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };

@@ -46,6 +46,7 @@
 #include "alloc.h"
 #include "recov.h"
 #include "omap.h"
+#include "volopt.h"
 #include "scoutfs_trace.h"
 
 static struct dentry *scoutfs_debugfs_root;
@@ -253,6 +254,7 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_lock_shutdown(sb);
 
 	scoutfs_shutdown_trans(sb);
+	scoutfs_volopt_destroy(sb);
 	scoutfs_client_destroy(sb);
 	scoutfs_inode_destroy(sb);
 	scoutfs_item_destroy(sb);
@@ -601,6 +603,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_server_setup(sb) ?:
 	      scoutfs_quorum_setup(sb) ?:
 	      scoutfs_client_setup(sb) ?:
+	      scoutfs_volopt_setup(sb) ?:
 	      scoutfs_lock_rid(sb, SCOUTFS_LOCK_WRITE, 0, sbi->rid,
 				   &sbi->rid_lock) ?:
 	      scoutfs_trans_get_log_trees(sb) ?:
