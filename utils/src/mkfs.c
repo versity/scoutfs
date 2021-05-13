@@ -58,6 +58,15 @@ static int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
 }
 
 /*
+ * Return the order of the length of a free extent, which we define as
+ * floor(log_8_(len)): 0..7 = 0, 8..63 = 1, etc.
+ */
+static u64 free_extent_order(u64 len)
+{
+	return (flsll(len | 1) - 1) / 3;
+}
+
+/*
  * Write the single btree block that contains the blkno and len indexed
  * items to store the given extent, and update the root to point to it.
  */
@@ -72,19 +81,16 @@ static int write_alloc_root(int fd, __le64 fsid,
 	root->total_len = cpu_to_le64(len);
 
 	memset(&key, 0, sizeof(key));
-	key.sk_zone = SCOUTFS_FREE_EXTENT_ZONE;
-	key.sk_type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
-	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	key.sk_zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 	key.skfb_end = cpu_to_le64(start + len - 1);
 	key.skfb_len = cpu_to_le64(len);
 	btree_append_item(bt, &key, NULL, 0);
 
 	memset(&key, 0, sizeof(key));
-	key.sk_zone = SCOUTFS_FREE_EXTENT_ZONE;
-	key.sk_type = SCOUTFS_FREE_EXTENT_LEN_TYPE;
-	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	key.skfl_neglen = cpu_to_le64(-len);
-	key.skfl_blkno = cpu_to_le64(start);
+	key.sk_zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE;
+	key.skfo_revord = cpu_to_le64(U64_MAX - free_extent_order(len));
+	key.skfo_end = cpu_to_le64(start + len - 1);
+	key.skfo_len = cpu_to_le64(len);
 	btree_append_item(bt, &key, NULL, 0);
 
 	return write_block(fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, seq, blkno,

@@ -203,11 +203,12 @@ struct scoutfs_key {
 #define skmc_rid	_sk_first
 
 /* free extents by blkno */
-#define skfb_end	_sk_second
-#define skfb_len	_sk_third
-/* free extents by len */
-#define skfl_neglen	_sk_second
-#define skfl_blkno	_sk_third
+#define skfb_end	_sk_first
+#define skfb_len	_sk_second
+/* free extents by order */
+#define skfo_revord	_sk_first
+#define skfo_end	_sk_second
+#define skfo_len	_sk_third
 
 struct scoutfs_avl_root {
 	__le16 node;
@@ -493,7 +494,8 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_TRANS_SEQ_ZONE			7
 #define SCOUTFS_MOUNTED_CLIENT_ZONE		8
 #define SCOUTFS_SRCH_ZONE			9
-#define SCOUTFS_FREE_EXTENT_ZONE		10
+#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		10
+#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		11
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -520,10 +522,6 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_SRCH_BLOCKS_TYPE	2
 #define SCOUTFS_SRCH_PENDING_TYPE	3
 #define SCOUTFS_SRCH_BUSY_TYPE		4
-
-/* free extents in allocator btrees in client and server, by blkno or len */
-#define SCOUTFS_FREE_EXTENT_BLKNO_TYPE	1
-#define SCOUTFS_FREE_EXTENT_LEN_TYPE	2
 
 /* file data extents have start and len in key */
 struct scoutfs_data_extent_val {

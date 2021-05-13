@@ -362,17 +362,17 @@ static int print_mounted_client_entry(struct scoutfs_key *key, void *val,
 static int print_alloc_item(struct scoutfs_key *key, void *val,
 			    unsigned val_len, void *arg)
 {
-	if (key->sk_type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE)
+	if (key->sk_zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE)
 		printf("    free extent: blkno %llu len %llu end %llu\n",
 		       le64_to_cpu(key->skfb_end) -
 		       le64_to_cpu(key->skfb_len) + 1,
 		       le64_to_cpu(key->skfb_len),
 		       le64_to_cpu(key->skfb_end));
 	else
-		printf("    free extent: blkno %llu len %llu neglen %lld\n",
-		       le64_to_cpu(key->skfl_blkno),
-		       -le64_to_cpu(key->skfl_neglen),
-		       (long long)le64_to_cpu(key->skfl_neglen));
+		printf("    free extent: blkno %llu len %llu order %llu\n",
+		       le64_to_cpu(key->skfo_end) - le64_to_cpu(key->skfo_len) + 1,
+		       le64_to_cpu(key->skfo_len),
+		       (long long)(U64_MAX - le64_to_cpu(key->skfo_revord)));
 
 	return 0;
 }

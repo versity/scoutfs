@@ -29,8 +29,8 @@
  * The core allocator uses extent items in btrees rooted in the super.
  * Each free extent is stored in two items.  The first item is indexed
  * by block location and is used to merge adjacent extents when freeing.
- * The second item is indexed by length and is used to find large
- * extents to allocate from.
+ * The second item is indexed by the order of the length and is used to
+ * find large extents to allocate from.
  *
  * Free extent always consumes the front of the largest extent.  This
  * attempts to discourage fragmentation by given smaller freed extents
@@ -67,25 +67,52 @@
  */
 
 /*
- * Free extents don't have flags and are stored in two indexes sorted by
- * block location and by length, largest first.  The block location key
- * is set to the final block in the extent so that we can find
- * intersections by calling _next() iterators starting with the block
- * we're searching for.
+ * Return the order of the length of a free extent, which we define as
+ * floor(log_8_(len)): 0..7 = 0, 8..63 = 1, etc.
  */
-static void init_ext_key(struct scoutfs_key *key, int type, u64 start, u64 len)
+static u64 free_extent_order(u64 len)
+{
+	return (fls64(len | 1) - 1) / 3;
+}
+
+/*
+ * The smallest (non-zero) length that will be mapped to the same order
+ * as the given length.
+ */
+static u64 smallest_order_length(u64 len)
+{
+	return 1ULL << (free_extent_order(len) * 3);
+}
+
+/*
+ * Free extents don't have flags and are stored in two indexes sorted by
+ * block location and by length order, largest first.  The location key
+ * field is set to the final block in the extent so that we can find
+ * intersections by calling _next() with the start of the range we're
+ * searching for.
+ *
+ * We never store 0 length extents but we do build keys for searching
+ * the order index from 0,0 without having to map it to a real extent.
+ */
+static void init_ext_key(struct scoutfs_key *key, int zone, u64 start, u64 len)
 {
 	*key = (struct scoutfs_key) {
-		.sk_zone = SCOUTFS_FREE_EXTENT_ZONE,
-		.sk_type = type,
+		.sk_zone = zone,
 	};
 
-	if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE) {
+	if (len == 0) {
+		/* we only use 0 len extents for magic 0,0 order lookups */
+		WARN_ON_ONCE(zone != SCOUTFS_FREE_EXTENT_ORDER_ZONE || start != 0);
+		return;
+	}
+
+	if (zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE) {
 		key->skfb_end = cpu_to_le64(start + len - 1);
 		key->skfb_len = cpu_to_le64(len);
-	} else if (type == SCOUTFS_FREE_EXTENT_LEN_TYPE) {
-		key->skfl_neglen = cpu_to_le64(-len);
-		key->skfl_blkno = cpu_to_le64(start);
+	} else if (zone == SCOUTFS_FREE_EXTENT_ORDER_ZONE) {
+		key->skfo_revord = cpu_to_le64(U64_MAX - free_extent_order(len));
+		key->skfo_end = cpu_to_le64(start + len - 1);
+		key->skfo_len = cpu_to_le64(len);
 	} else {
 		BUG();
 	}
@@ -93,23 +120,27 @@ static void init_ext_key(struct scoutfs_key *key, int type, u64 start, u64 len)
 
 static void ext_from_key(struct scoutfs_extent *ext, struct scoutfs_key *key)
 {
-	if (key->sk_type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE) {
+	if (key->sk_zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE) {
 		ext->start = le64_to_cpu(key->skfb_end) -
 			     le64_to_cpu(key->skfb_len) + 1;
 		ext->len = le64_to_cpu(key->skfb_len);
 	} else {
-		ext->start = le64_to_cpu(key->skfl_blkno);
-		ext->len = -le64_to_cpu(key->skfl_neglen);
+		ext->start = le64_to_cpu(key->skfo_end) -
+			     le64_to_cpu(key->skfo_len) + 1;
+		ext->len = le64_to_cpu(key->skfo_len);
 	}
 	ext->map = 0;
 	ext->flags = 0;
+
+	/* we never store 0 length extents */
+	WARN_ON_ONCE(ext->len == 0);
 }
 
 struct alloc_ext_args {
 	struct scoutfs_alloc *alloc;
 	struct scoutfs_block_writer *wri;
 	struct scoutfs_alloc_root *root;
-	int type;
+	int zone;
 };
 
 static int alloc_ext_next(struct super_block *sb, void *arg,
@@ -120,13 +151,13 @@ static int alloc_ext_next(struct super_block *sb, void *arg,
 	struct scoutfs_key key;
 	int ret;
 
-	init_ext_key(&key, args->type, start, len);
+	init_ext_key(&key, args->zone, start, len);
 
 	ret = scoutfs_btree_next(sb, &args->root->root, &key, &iref);
 	if (ret == 0) {
 		if (iref.val_len != 0)
 			ret = -EIO;
-		else if (iref.key->sk_type != args->type)
+		else if (iref.key->sk_zone != args->zone)
 			ret = -ENOENT;
 		else
 			ext_from_key(ext, iref.key);
@@ -139,19 +170,19 @@ static int alloc_ext_next(struct super_block *sb, void *arg,
 	return ret;
 }
 
-static int other_type(int type)
+static int other_zone(int zone)
 {
-	if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE)
-		return SCOUTFS_FREE_EXTENT_LEN_TYPE;
-	else if (type == SCOUTFS_FREE_EXTENT_LEN_TYPE)
-		return SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+	if (zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE)
+		return SCOUTFS_FREE_EXTENT_ORDER_ZONE;
+	else if (zone == SCOUTFS_FREE_EXTENT_ORDER_ZONE)
+		return SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 	else
 		BUG();
 }
 
 /*
  * Insert an extent along with its matching item which is indexed by
- * opposite of its len or blkno.  If we succeed we update the root's
+ * opposite of its order or blkno.  If we succeed we update the root's
  * record of the total length of all the stored extents.
  */
 static int alloc_ext_insert(struct super_block *sb, void *arg,
@@ -167,8 +198,8 @@ static int alloc_ext_insert(struct super_block *sb, void *arg,
 	if (WARN_ON_ONCE(map || flags))
 		return -EINVAL;
 
-	init_ext_key(&key, args->type, start, len);
-	init_ext_key(&other, other_type(args->type), start, len);
+	init_ext_key(&key, args->zone, start, len);
+	init_ext_key(&other, other_zone(args->zone), start, len);
 
 	ret = scoutfs_btree_insert(sb, args->alloc, args->wri,
 				   &args->root->root, &key, NULL, 0);
@@ -196,8 +227,8 @@ static int alloc_ext_remove(struct super_block *sb, void *arg,
 	int ret;
 	int err;
 
-	init_ext_key(&key, args->type, start, len);
-	init_ext_key(&other, other_type(args->type), start, len);
+	init_ext_key(&key, args->zone, start, len);
+	init_ext_key(&other, other_zone(args->zone), start, len);
 
 	ret = scoutfs_btree_delete(sb, args->alloc, args->wri,
 				   &args->root->root, &key);
@@ -619,7 +650,7 @@ int scoutfs_dalloc_return_cached(struct super_block *sb,
 		.alloc = alloc,
 		.wri = wri,
 		.root = &dalloc->root,
-		.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
 	};
 	int ret = 0;
 
@@ -655,7 +686,7 @@ int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		.alloc = alloc,
 		.wri = wri,
 		.root = &dalloc->root,
-		.type = SCOUTFS_FREE_EXTENT_LEN_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
 	};
 	struct scoutfs_extent ext;
 	u64 len;
@@ -728,7 +759,7 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		.alloc = alloc,
 		.wri = wri,
 		.root = root,
-		.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
 	};
 	int ret;
 
@@ -772,19 +803,19 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 
 	while (moved < total) {
 		args.root = src;
-		args.type = SCOUTFS_FREE_EXTENT_LEN_TYPE;
+		args.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE;
 		ret = scoutfs_ext_alloc(sb, &alloc_ext_ops, &args,
 					0, 0, total - moved, &ext);
 		if (ret < 0)
 			break;
 
 		args.root = dst;
-		args.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+		args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 		ret = scoutfs_ext_insert(sb, &alloc_ext_ops, &args, ext.start,
 					 ext.len, ext.map, ext.flags);
 		if (ret < 0) {
 			args.root = src;
-			args.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+			args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 			err = scoutfs_ext_insert(sb, &alloc_ext_ops, &args,
 						 ext.start, ext.len, ext.map,
 						 ext.flags);
@@ -852,7 +883,7 @@ out:
  * a list block and all the btree blocks that store extent items.
  *
  * At most, an extent operation can dirty down three paths of the tree
- * to modify a blkno item and two distant len items.  We can grow and
+ * to modify a blkno item and two distant order items.  We can grow and
  * split the root, and then those three paths could share blocks but each
  * modify two leaf blocks.
  */
@@ -901,7 +932,7 @@ int scoutfs_alloc_fill_list(struct super_block *sb,
 		.alloc = alloc,
 		.wri = wri,
 		.root = root,
-		.type = SCOUTFS_FREE_EXTENT_LEN_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
 	};
 	struct scoutfs_alloc_list_block *lblk;
 	struct scoutfs_block *bl = NULL;
@@ -958,7 +989,7 @@ int scoutfs_alloc_empty_list(struct super_block *sb,
 		.alloc = alloc,
 		.wri = wri,
 		.root = root,
-		.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
 	};
 	struct scoutfs_alloc_list_block *lblk = NULL;
 	struct scoutfs_block *bl = NULL;
