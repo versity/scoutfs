@@ -428,6 +428,10 @@ struct scoutfs_srch_compact {
 /* client -> server: compaction failed */
 #define SCOUTFS_SRCH_COMPACT_FLAG_ERROR		(1 << 5)
 
+#define SCOUTFS_DATA_ALLOC_MAX_ZONES	1024
+#define SCOUTFS_DATA_ALLOC_ZONE_BYTES	DIV_ROUND_UP(SCOUTFS_DATA_ALLOC_MAX_ZONES, 8)
+#define SCOUTFS_DATA_ALLOC_ZONE_LE64S	DIV_ROUND_UP(SCOUTFS_DATA_ALLOC_MAX_ZONES, 64)
+
 /*
  * XXX I imagine we should rename these now that they've evolved to track
  * all the btrees that clients use during a transaction.  It's not just
@@ -441,6 +445,8 @@ struct scoutfs_log_trees {
 	struct scoutfs_alloc_root data_avail;
 	struct scoutfs_alloc_root data_freed;
 	struct scoutfs_srch_file srch_file;
+	__le64 data_alloc_zone_blocks;
+	__le64 data_alloc_zones[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
 	__le64 max_item_vers;
 	__le64 rid;
 	__le64 nr;
@@ -631,10 +637,18 @@ struct scoutfs_quorum_block {
  *
  * @set_bits: bits for each 64bit starting offset after set_bits
  * indicate which logical option is set.
+ *
+ * @data_alloc_zone_blocks: if set, the data device is logically divided
+ * into contiguous zones of this many blocks.  Data allocation will try
+ * and isolate allocated extents for each mount to their own zone.  The
+ * zone size must be larger than the data alloc high water mark and
+ * large enough such that the number of zones is kept within its static
+ * limit.
  */
 struct scoutfs_volume_options {
 	__le64 set_bits;
-	__le64 __future_expansion[64];
+	__le64 data_alloc_zone_blocks;
+	__le64 __future_expansion[63];
 };
 
 #define scoutfs_volopt_nr(field)							\
@@ -643,6 +657,11 @@ struct scoutfs_volume_options {
 	   member_sizeof(struct scoutfs_volume_options, set_bits))) / sizeof(__le64))
 #define scoutfs_volopt_bit(field)							\
 	(1ULL << scoutfs_volopt_nr(field))
+
+#define SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR \
+	scoutfs_volopt_nr(data_alloc_zone_blocks)
+#define SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT \
+	scoutfs_volopt_bit(data_alloc_zone_blocks)
 
 #define SCOUTFS_VOLOPT_EXPANSION_BITS \
 	(~(scoutfs_volopt_bit(__future_expansion) - 1))

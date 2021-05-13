@@ -1,3 +1,4 @@
+#define _GNU_SOURCE /* ffsll for glibc < 2.27 */
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,6 +273,9 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 				unsigned val_len, void *arg)
 {
 	struct scoutfs_log_trees *lt = val;
+	u64 zones;
+	int bit;
+	int i;
 
 	printf("    rid %llu nr %llu\n",
 	       le64_to_cpu(key->sklt_rid), le64_to_cpu(key->sklt_nr));
@@ -287,7 +291,9 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      srch_file: "SRF_FMT"\n"
 		       "      max_item_vers: %llu\n"
 		       "      rid: %016llx\n"
-		       "      nr: %llu\n",
+		       "      nr: %llu\n"
+		       "      data_alloc_zone_blocks: %llu\n"
+		       "      data_alloc_zones: ",
 		       AL_HEAD_A(&lt->meta_avail),
 		       AL_HEAD_A(&lt->meta_freed),
 			lt->item_root.height,
@@ -300,7 +306,21 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       SRF_A(&lt->srch_file),
 		       le64_to_cpu(lt->max_item_vers),
 		       le64_to_cpu(lt->rid),
-		       le64_to_cpu(lt->nr));
+		       le64_to_cpu(lt->nr),
+		       le64_to_cpu(lt->data_alloc_zone_blocks));
+
+		for (i = 0; i < SCOUTFS_DATA_ALLOC_ZONE_LE64S; i++) {
+			if (lt->data_alloc_zones[i] == 0)
+				continue;
+
+			zones = le64_to_cpu(lt->data_alloc_zones[i]);
+			while (zones) {
+				bit = ffsll(zones) - 1;
+				printf("%u ", (i * 64) + bit);
+				zones ^= (1ULL << bit);
+			}
+		}
+		printf("\n");
 	}
 
 	return 0;
@@ -903,6 +923,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("  volume options:\n"
 	       "    set_bits: %016llx\n",
 		le64_to_cpu(super->volopt.set_bits));
+	if (le64_to_cpu(super->volopt.set_bits) & SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT) {
+		printf("    data_alloc_zone_blocks: %llu\n",
+			le64_to_cpu(super->volopt.data_alloc_zone_blocks));
+	}
 
 	printf("  quorum config version %llu\n",
 		le64_to_cpu(super->qconf.version));

@@ -46,6 +46,7 @@ static struct volopt_nr_name {
 	int nr;
 	char *name;
 } volopt_table[] = {
+	{ SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR, "data_alloc_zone_blocks" },
 };
 
 /* initialized by setup, pointer array is null terminated */
