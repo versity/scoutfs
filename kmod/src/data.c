@@ -1787,12 +1787,11 @@ static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
-	loff_t old_size = inode->i_size;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	DECLARE_DATA_WAIT(dw);
 	struct write_begin_data wbd;
-	bool i_size_changed = false;
 	u64 ind_seq;
+	loff_t size;
 	loff_t pos;
 	int ret;
 	int err;
@@ -1820,15 +1819,15 @@ retry:
 
 	file_update_time(vma->vm_file);
 	lock_page(page);
+	size = i_size_read(inode);
+	pos = page_offset(page);
 	ret = VM_FAULT_LOCKED;
-	if (page->mapping != inode->i_mapping) {
+	if (page->mapping != inode->i_mapping || pos >= size) {
 		unlock_page(page);
 		ret = VM_FAULT_NOPAGE;
 		goto out;
 	}
 
-	pos = vmf->pgoff;
-	pos <<= PAGE_CACHE_SHIFT;
 
 	/* scoutfs_write_begin */
 	memset(&wbd, 0, sizeof(wbd));
@@ -1861,17 +1860,6 @@ retry:
 	 */
 	set_page_dirty(page);
 	wait_for_stable_page(page);
-
-	/* start generic_write_end */
-	if (pos + PAGE_SIZE > inode->i_size) {
-		i_size_write(inode, pos + PAGE_SIZE);
-		i_size_changed = true;
-	}
-	if (old_size < pos)
-		pagecache_isize_extended(inode, old_size, pos);
-	if (i_size_changed)
-		mark_inode_dirty(inode);
-	/* end generic_write_end */
 
 	/* scoutfs_write_end */
 	if (!si->staging) {
