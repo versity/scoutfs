@@ -409,7 +409,7 @@ static int alloc_move_refill(struct super_block *sb,
 
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri, dst, src,
 				  min(target - le64_to_cpu(dst->total_len),
-				      le64_to_cpu(src->total_len)));
+				      le64_to_cpu(src->total_len)), NULL, NULL, 0);
 }
 
 static int alloc_move_empty(struct super_block *sb,

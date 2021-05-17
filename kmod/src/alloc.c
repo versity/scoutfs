@@ -772,6 +772,95 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 	return ret;
 }
 
+/*
+ * Return the first zone bit that the extent intersects with.
+ */
+static int first_extent_zone(struct scoutfs_extent *ext,  __le64 *zones, u64 zone_blocks)
+{
+	int first;
+	int last;
+	int nr;
+
+	first = div64_u64(ext->start, zone_blocks);
+	last = div64_u64(ext->start + ext->len - 1, zone_blocks);
+
+	nr = find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, first);
+	if (nr <= last)
+		return nr;
+
+	return SCOUTFS_DATA_ALLOC_MAX_ZONES;
+}
+
+/*
+ * Find an extent in specific zones to satisfy an allocation.  We use
+ * the order items to search for the largest extent that intersects with
+ * the zones whose bits are set in the caller's bitmap.
+ */
+static int find_zone_extent(struct super_block *sb, struct scoutfs_alloc_root *root,
+			    __le64 *zones, u64 zone_blocks,
+			    struct scoutfs_extent *found_ret, u64 count,
+			    struct scoutfs_extent *ext_ret)
+{
+	struct alloc_ext_args args = {
+		.root = root,
+		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
+	};
+	struct scoutfs_extent found;
+	struct scoutfs_extent ext;
+	u64 start;
+	u64 len;
+	int nr;
+	int ret;
+
+	/* don't bother when there are no bits set */
+	if (find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, 0) ==
+	    SCOUTFS_DATA_ALLOC_MAX_ZONES)
+		return -ENOENT;
+
+	/* start searching for largest extent from the first zone */
+	len = smallest_order_length(SCOUTFS_BLOCK_SM_MAX);
+	nr = 0;
+
+	for (;;) {
+		/* search for extents in the next zone at our order */
+		nr = find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, nr);
+		if (nr >= SCOUTFS_DATA_ALLOC_MAX_ZONES) {
+			/* wrap down to next smaller order if we run out of bits */
+			len >>= 3;
+			if (len == 0) {
+				ret = -ENOENT;
+				break;
+			}
+			nr = find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, 0);
+		}
+
+		start = (u64)nr * zone_blocks;
+
+		ret = scoutfs_ext_next(sb, &alloc_ext_ops, &args, start, len, &found);
+		if (ret < 0)
+			break;
+
+		/* see if the next extent intersects any zones */
+		nr = first_extent_zone(&found, zones, zone_blocks);
+		if (nr < SCOUTFS_DATA_ALLOC_MAX_ZONES) {
+			start = (u64)nr * zone_blocks;
+
+			ext.start = max(start, found.start);
+			ext.len = min(count, found.start + found.len - ext.start);
+
+			*found_ret = found;
+			*ext_ret = ext;
+			ret = 0;
+			break;
+		}
+
+		/* continue searching past extent */
+		nr = div64_u64(found.start + found.len - 1, zone_blocks) + 1;
+		len = smallest_order_length(found.len);
+	}
+
+	return ret;
+}
 
 /*
  * Move extent items adding up to the requested total length from the
@@ -782,6 +871,11 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
  * -ENOENT is returned if we run out of extents in the source tree
  * before moving the total.
  *
+ * The caller can specify that extents in the source tree should first
+ * be found based on their zone bitmaps.  We'll first try to find
+ * extents in the exclusive zones, then vacant zones, and then we'll
+ * fall back to normal allocation that ignores zones.
+ *
  * This first pass is not optimal because it performs full btree walks
  * per extent.  We could optimize this with more clever btree item
  * manipulation functions which can iterate through src and dst blocks
@@ -790,30 +884,75 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
-		       struct scoutfs_alloc_root *src, u64 total)
+		       struct scoutfs_alloc_root *src, u64 total,
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks)
 {
 	struct alloc_ext_args args = {
 		.alloc = alloc,
 		.wri = wri,
 	};
+	struct scoutfs_extent found;
 	struct scoutfs_extent ext;
 	u64 moved = 0;
+	u64 count;
 	int ret = 0;
 	int err;
 
+	if (zone_blocks == 0) {
+		exclusive = NULL;
+		vacant = NULL;
+	}
+
 	while (moved < total) {
-		args.root = src;
-		args.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE;
-		ret = scoutfs_ext_alloc(sb, &alloc_ext_ops, &args,
-					0, 0, total - moved, &ext);
+		count = total - moved;
+
+		if (exclusive) {
+			/* first try to find extents in our exclusive zones */
+			ret = find_zone_extent(sb, src, exclusive, zone_blocks,
+					       &found, count, &ext);
+			if (ret == -ENOENT) {
+				exclusive = NULL;
+				continue;
+			}
+		} else if (vacant) {
+			/* then try to find extents in vacant zones */
+			ret = find_zone_extent(sb, src, vacant, zone_blocks,
+					       &found, count, &ext);
+			if (ret == -ENOENT) {
+				vacant = NULL;
+				continue;
+			}
+		} else {
+			/* otherwise fall back to finding extents anywhere */
+			args.root = src;
+			args.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE;
+			ret = scoutfs_ext_next(sb, &alloc_ext_ops, &args, 0, 0, &found);
+			if (ret == 0) {
+				ext.start = found.start;
+				ext.len = min(count, found.len);
+			}
+		}
 		if (ret < 0)
 			break;
 
+		/* searching set start/len, finish initializing alloced extent */
+		ext.map = found.map ? ext.start - found.start + found.map : 0;
+		ext.flags = found.flags;
+
+		/* remove the allocation from the found extent */
+		args.root = src;
+		args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
+		ret = scoutfs_ext_remove(sb, &alloc_ext_ops, &args, ext.start, ext.len);
+		if (ret < 0)
+			break;
+
+		/* insert the allocated extent into the dest */
 		args.root = dst;
 		args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 		ret = scoutfs_ext_insert(sb, &alloc_ext_ops, &args, ext.start,
 					 ext.len, ext.map, ext.flags);
 		if (ret < 0) {
+			/* and put it back in src if insertion failed */
 			args.root = src;
 			args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 			err = scoutfs_ext_insert(sb, &alloc_ext_ops, &args,
