@@ -1258,3 +1258,63 @@ out:
 	kfree(sc);
 	return ret;
 }
+
+
+struct foreach_cb_args {
+	scoutfs_alloc_extent_cb_t cb;
+	void *cb_arg;
+};
+
+static int alloc_btree_extent_item_cb(struct super_block *sb, struct scoutfs_key *key,
+				      void *val, int val_len, void *arg)
+{
+	struct foreach_cb_args *cba = arg;
+	struct scoutfs_extent ext;
+
+	if (key->sk_zone != SCOUTFS_FREE_EXTENT_BLKNO_ZONE)
+		return -ENOENT;
+
+	ext_from_key(&ext, key);
+	cba->cb(sb, cba->cb_arg, &ext);
+
+	return 0;
+}
+
+/*
+ * Call the caller's callback on each extent stored in the allocator's
+ * btree.  The callback sees extents called in order by starting blkno.
+ */
+int scoutfs_alloc_extents_cb(struct super_block *sb, struct scoutfs_alloc_root *root,
+			     scoutfs_alloc_extent_cb_t cb, void *cb_arg)
+{
+	struct foreach_cb_args cba = {
+		.cb = cb,
+		.cb_arg = cb_arg,
+	};
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	struct scoutfs_key key;
+	int ret;
+
+	init_ext_key(&key, SCOUTFS_FREE_EXTENT_BLKNO_ZONE, 0, 1);
+
+	for (;;) {
+		/* will stop at order items before getting stuck in final block */
+		BUILD_BUG_ON(SCOUTFS_FREE_EXTENT_BLKNO_ZONE > SCOUTFS_FREE_EXTENT_ORDER_ZONE);
+		init_ext_key(&start, SCOUTFS_FREE_EXTENT_BLKNO_ZONE, 0, 1);
+		init_ext_key(&end, SCOUTFS_FREE_EXTENT_ORDER_ZONE, 0, 1);
+
+		ret = scoutfs_btree_read_items(sb, &root->root, &key, &start, &end,
+					       alloc_btree_extent_item_cb, &cba);
+		if (ret < 0 || end.sk_zone != SCOUTFS_FREE_EXTENT_BLKNO_ZONE) {
+			if (ret == -ENOENT)
+				ret = 0;
+			break;
+		}
+
+		key = end;
+		scoutfs_key_inc(&key);
+	}
+
+	return ret;
+}
