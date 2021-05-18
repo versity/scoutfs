@@ -32,7 +32,7 @@ A path within a ScoutFS filesystem.
 .PD
 
 .TP
-.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-slot} NR,ADDR,PORT [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-f|--force]"
+.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-slot} NR,ADDR,PORT [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-z|--data-alloc-zone-blocks BLOCKS] [-f|--force]"
 .sp
 Initialize a new ScoutFS filesystem on the target devices. Since ScoutFS uses
 separate block devices for its metadata and data storage, two are required.
@@ -80,6 +80,10 @@ kibibytes, mebibytes, etc.
 .TP
 .B "-d, --max-data-size SIZE"
 Same as previous, but for limiting the size of the data device.
+.TP
+.B "-z, --data-alloc-zone-blocks BLOCKS"
+Set the data_alloc_zone_blocks volume option, as described in
+.BR scoutfs (5).
 .TP
 .B "-f, --force"
 Ignore presence of existing data on the data and metadata devices.
