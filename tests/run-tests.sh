@@ -66,6 +66,7 @@ $(basename $0) options:
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
     -y        | xfstests ./check additional args
+    -z <nr>   | set data-alloc-zone-blocks in mkfs
 EOF
 }
 
@@ -167,6 +168,11 @@ while true; do
 	-y)
 		test -n "$2" || die "-x requires xfstests ./check args argument"
 		T_XFSTESTS_ARGS="$2"
+		shift
+		;;
+	-z)
+		test -n "$2" || die "-z must have nr mounts argument"
+		T_DATA_ALLOC_ZONE_BLOCKS="-z $2"
 		shift
 		;;
 	-h|-\?|--help)
@@ -319,7 +325,8 @@ if [ -n "$T_MKFS" ]; then
 	done
 
 	msg "making new filesystem with $T_QUORUM quorum members"
-	cmd scoutfs mkfs -f $quo "$T_META_DEVICE" "$T_DATA_DEVICE"
+	cmd scoutfs mkfs -f $quo $T_DATA_ALLOC_ZONE_BLOCKS \
+		"$T_META_DEVICE" "$T_DATA_DEVICE"
 fi
 
 if [ -n "$T_INSMOD" ]; then
