@@ -26,6 +26,9 @@ int scoutfs_client_send_omap_response(struct super_block *sb, u64 id,
 				      struct scoutfs_open_ino_map *map);
 int scoutfs_client_open_ino_map(struct super_block *sb, u64 group_nr,
 				struct scoutfs_open_ino_map *map);
+int scoutfs_client_get_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt);
+int scoutfs_client_set_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt);
+int scoutfs_client_clear_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt);
 
 int scoutfs_client_setup(struct super_block *sb);
 void scoutfs_client_destroy(struct super_block *sb);

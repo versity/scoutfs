@@ -203,11 +203,12 @@ struct scoutfs_key {
 #define skmc_rid	_sk_first
 
 /* free extents by blkno */
-#define skfb_end	_sk_second
-#define skfb_len	_sk_third
-/* free extents by len */
-#define skfl_neglen	_sk_second
-#define skfl_blkno	_sk_third
+#define skfb_end	_sk_first
+#define skfb_len	_sk_second
+/* free extents by order */
+#define skfo_revord	_sk_first
+#define skfo_end	_sk_second
+#define skfo_len	_sk_third
 
 struct scoutfs_avl_root {
 	__le16 node;
@@ -427,6 +428,10 @@ struct scoutfs_srch_compact {
 /* client -> server: compaction failed */
 #define SCOUTFS_SRCH_COMPACT_FLAG_ERROR		(1 << 5)
 
+#define SCOUTFS_DATA_ALLOC_MAX_ZONES	1024
+#define SCOUTFS_DATA_ALLOC_ZONE_BYTES	DIV_ROUND_UP(SCOUTFS_DATA_ALLOC_MAX_ZONES, 8)
+#define SCOUTFS_DATA_ALLOC_ZONE_LE64S	DIV_ROUND_UP(SCOUTFS_DATA_ALLOC_MAX_ZONES, 64)
+
 /*
  * XXX I imagine we should rename these now that they've evolved to track
  * all the btrees that clients use during a transaction.  It's not just
@@ -440,6 +445,8 @@ struct scoutfs_log_trees {
 	struct scoutfs_alloc_root data_avail;
 	struct scoutfs_alloc_root data_freed;
 	struct scoutfs_srch_file srch_file;
+	__le64 data_alloc_zone_blocks;
+	__le64 data_alloc_zones[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
 	__le64 max_item_vers;
 	__le64 rid;
 	__le64 nr;
@@ -493,7 +500,8 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_TRANS_SEQ_ZONE			7
 #define SCOUTFS_MOUNTED_CLIENT_ZONE		8
 #define SCOUTFS_SRCH_ZONE			9
-#define SCOUTFS_FREE_EXTENT_ZONE		10
+#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		10
+#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		11
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -520,10 +528,6 @@ struct scoutfs_bloom_block {
 #define SCOUTFS_SRCH_BLOCKS_TYPE	2
 #define SCOUTFS_SRCH_PENDING_TYPE	3
 #define SCOUTFS_SRCH_BUSY_TYPE		4
-
-/* free extents in allocator btrees in client and server, by blkno or len */
-#define SCOUTFS_FREE_EXTENT_BLKNO_TYPE	1
-#define SCOUTFS_FREE_EXTENT_LEN_TYPE	2
 
 /* file data extents have start and len in key */
 struct scoutfs_data_extent_val {
@@ -626,6 +630,42 @@ struct scoutfs_quorum_block {
 
 #define SCOUTFS_QUORUM_BLOCK_LEADER (1 << 0)
 
+/*
+ * Tunable options that apply to the entire system.  They can be set in
+ * mkfs or in sysfs files which send an rpc to the server to make the
+ * change.  The super version defines the options that exist.
+ *
+ * @set_bits: bits for each 64bit starting offset after set_bits
+ * indicate which logical option is set.
+ *
+ * @data_alloc_zone_blocks: if set, the data device is logically divided
+ * into contiguous zones of this many blocks.  Data allocation will try
+ * and isolate allocated extents for each mount to their own zone.  The
+ * zone size must be larger than the data alloc high water mark and
+ * large enough such that the number of zones is kept within its static
+ * limit.
+ */
+struct scoutfs_volume_options {
+	__le64 set_bits;
+	__le64 data_alloc_zone_blocks;
+	__le64 __future_expansion[63];
+};
+
+#define scoutfs_volopt_nr(field)							\
+	((offsetof(struct scoutfs_volume_options, field) -				\
+	  (offsetof(struct scoutfs_volume_options, set_bits) +				\
+	   member_sizeof(struct scoutfs_volume_options, set_bits))) / sizeof(__le64))
+#define scoutfs_volopt_bit(field)							\
+	(1ULL << scoutfs_volopt_nr(field))
+
+#define SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR \
+	scoutfs_volopt_nr(data_alloc_zone_blocks)
+#define SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT \
+	scoutfs_volopt_bit(data_alloc_zone_blocks)
+
+#define SCOUTFS_VOLOPT_EXPANSION_BITS \
+	(~(scoutfs_volopt_bit(__future_expansion) - 1))
+
 #define SCOUTFS_FLAG_IS_META_BDEV 0x01
 
 struct scoutfs_super_block {
@@ -652,6 +692,7 @@ struct scoutfs_super_block {
 	struct scoutfs_btree_root trans_seqs;
 	struct scoutfs_btree_root mounted_clients;
 	struct scoutfs_btree_root srch_root;
+	struct scoutfs_volume_options volopt;
 };
 
 #define SCOUTFS_ROOT_INO 1
@@ -841,6 +882,9 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
 	SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
 	SCOUTFS_NET_CMD_OPEN_INO_MAP,
+	SCOUTFS_NET_CMD_GET_VOLOPT,
+	SCOUTFS_NET_CMD_SET_VOLOPT,
+	SCOUTFS_NET_CMD_CLEAR_VOLOPT,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };

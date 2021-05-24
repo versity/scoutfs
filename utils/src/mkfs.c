@@ -58,6 +58,15 @@ static int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
 }
 
 /*
+ * Return the order of the length of a free extent, which we define as
+ * floor(log_8_(len)): 0..7 = 0, 8..63 = 1, etc.
+ */
+static u64 free_extent_order(u64 len)
+{
+	return (flsll(len | 1) - 1) / 3;
+}
+
+/*
  * Write the single btree block that contains the blkno and len indexed
  * items to store the given extent, and update the root to point to it.
  */
@@ -72,23 +81,51 @@ static int write_alloc_root(int fd, __le64 fsid,
 	root->total_len = cpu_to_le64(len);
 
 	memset(&key, 0, sizeof(key));
-	key.sk_zone = SCOUTFS_FREE_EXTENT_ZONE;
-	key.sk_type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
-	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
+	key.sk_zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 	key.skfb_end = cpu_to_le64(start + len - 1);
 	key.skfb_len = cpu_to_le64(len);
 	btree_append_item(bt, &key, NULL, 0);
 
 	memset(&key, 0, sizeof(key));
-	key.sk_zone = SCOUTFS_FREE_EXTENT_ZONE;
-	key.sk_type = SCOUTFS_FREE_EXTENT_LEN_TYPE;
-	key.skii_ino = cpu_to_le64(SCOUTFS_ROOT_INO);
-	key.skfl_neglen = cpu_to_le64(-len);
-	key.skfl_blkno = cpu_to_le64(start);
+	key.sk_zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE;
+	key.skfo_revord = cpu_to_le64(U64_MAX - free_extent_order(len));
+	key.skfo_end = cpu_to_le64(start + len - 1);
+	key.skfo_len = cpu_to_le64(len);
 	btree_append_item(bt, &key, NULL, 0);
 
 	return write_block(fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, seq, blkno,
 			   SCOUTFS_BLOCK_LG_SHIFT, &bt->hdr);
+}
+
+#define SCOUTFS_SERVER_DATA_FILL_TARGET \
+	((4ULL * 1024 * 1024 * 1024) >> SCOUTFS_BLOCK_SM_SHIFT)
+static bool invalid_data_alloc_zone_blocks(u64 total_data_blocks, u64 zone_blocks)
+{
+	u64 nr;
+
+	if (zone_blocks == 0)
+		return false;
+
+	if (zone_blocks < SCOUTFS_SERVER_DATA_FILL_TARGET) {
+		fprintf(stderr, "setting data_alloc_zone_blocks to '%llu' failed, must be at least %llu mount data allocation target blocks",
+		        zone_blocks, SCOUTFS_SERVER_DATA_FILL_TARGET);
+		return true;
+	}
+
+	nr = total_data_blocks / SCOUTFS_DATA_ALLOC_MAX_ZONES;
+	if (zone_blocks < nr) {
+		fprintf(stderr, "setting data_alloc_zone_blocks to '%llu' failed, must be greater than %llu blocks which results in max %u zones",
+			    zone_blocks, nr, SCOUTFS_DATA_ALLOC_MAX_ZONES);
+		return true;
+	}
+
+	if (zone_blocks > total_data_blocks) {
+		fprintf(stderr, "setting data_alloc_zone_blocks to '%llu' failed, must be at most %llu total data device blocks",
+			    zone_blocks, total_data_blocks);
+		return true;
+	}
+
+	return false;
 }
 
 struct mkfs_args {
@@ -96,6 +133,7 @@ struct mkfs_args {
 	char *data_device;
 	unsigned long long max_meta_size;
 	unsigned long long max_data_size;
+	u64 data_alloc_zone_blocks;
 	bool force;
 	int nr_slots;
 	struct scoutfs_quorum_slot slots[SCOUTFS_QUORUM_MAX_SLOTS];
@@ -209,6 +247,17 @@ static int do_mkfs(struct mkfs_args *args)
 	assert(sizeof(args->slots) ==
 		     member_sizeof(struct scoutfs_super_block, qconf.slots));
 	memcpy(super->qconf.slots, args->slots, sizeof(args->slots));
+
+	if (invalid_data_alloc_zone_blocks(le64_to_cpu(super->total_data_blocks),
+					   args->data_alloc_zone_blocks)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (args->data_alloc_zone_blocks) {
+		super->volopt.set_bits |= cpu_to_le64(SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT);
+		super->volopt.data_alloc_zone_blocks = cpu_to_le64(args->data_alloc_zone_blocks);
+	}
 
 	/* fs root starts with root inode and its index items */
 	blkno = next_meta++;
@@ -471,6 +520,17 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 				prev_val, args->max_data_size);
 		break;
 	}
+	case 'z': /* data-alloc-zone-blocks */
+	{
+		ret = parse_u64(arg, &args->data_alloc_zone_blocks);
+		if (ret)
+			return ret;
+
+		if (args->data_alloc_zone_blocks == 0)
+			argp_error(state, "must provide non-zero data-alloc-zone-blocks");
+
+		break;
+	}
 	case ARGP_KEY_ARG:
 		if (!args->meta_device)
 			args->meta_device = strdup_or_error(state, arg);
@@ -501,6 +561,7 @@ static struct argp_option options[] = {
 	{ "force", 'f', NULL, 0, "Overwrite existing data on block devices"},
 	{ "max-meta-size", 'm', "SIZE", 0, "Use a size less than the base metadata device size (bytes or KMGTP units)"},
 	{ "max-data-size", 'd', "SIZE", 0, "Use a size less than the base data device size (bytes or KMGTP units)"},
+	{ "data-alloc-zone-blocks", 'z', "BLOCKS", 0, "Divide data device into block zones so each mounts writes to a zone (4KB blocks)"},
 	{ NULL }
 };
 

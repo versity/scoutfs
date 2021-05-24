@@ -125,7 +125,8 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
-		       struct scoutfs_alloc_root *src, u64 total);
+		       struct scoutfs_alloc_root *src, u64 total,
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks);
 
 int scoutfs_alloc_fill_list(struct super_block *sb,
 			    struct scoutfs_alloc *alloc,
@@ -152,5 +153,10 @@ typedef int (*scoutfs_alloc_foreach_cb_t)(struct super_block *sb, void *arg,
 					  bool meta, bool avail, u64 blocks);
 int scoutfs_alloc_foreach(struct super_block *sb,
 			  scoutfs_alloc_foreach_cb_t cb, void *arg);
+
+typedef void (*scoutfs_alloc_extent_cb_t)(struct super_block *sb, void *cb_arg,
+					  struct scoutfs_extent *ext);
+int scoutfs_alloc_extents_cb(struct super_block *sb, struct scoutfs_alloc_root *root,
+			     scoutfs_alloc_extent_cb_t cb, void *cb_arg);
 
 #endif

@@ -99,6 +99,11 @@ struct server_info {
 	seqcount_t roots_seqcount;
 	struct scoutfs_net_roots roots;
 
+	/* serializing and get and set volume options */
+	seqcount_t volopt_seqcount;
+	struct mutex volopt_mutex;
+	struct scoutfs_volume_options volopt;
+
 	/* recovery timeout fences from work */
 	struct work_struct fence_pending_recov_work;
 };
@@ -113,6 +118,38 @@ struct server_client_info {
 	u64 rid;
 	struct list_head head;
 };
+
+static __le64 *first_valopt(struct scoutfs_volume_options *valopt)
+{
+	return &valopt->set_bits + 1;
+}
+
+/*
+ * A server caller wants to know if a volume option is set and wants to
+ * know it's value.  This is quite early in the file to make it
+ * available to all of the server paths.
+ */
+static bool get_volopt_val(struct server_info *server, int nr, u64 *val)
+{
+	u64 bit = 1ULL << nr;
+	__le64 *opt = first_valopt(&server->volopt) + nr;
+	bool is_set = false;
+	unsigned seq;
+
+	do {
+		seq = read_seqcount_begin(&server->volopt_seqcount);
+		if ((le64_to_cpu(server->volopt.set_bits) & bit)) {
+			is_set = true;
+			*val = le64_to_cpup(opt);
+		} else {
+			is_set = false;
+			*val = 0;
+		};
+	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+
+	return is_set;
+}
+
 
 struct commit_waiter {
 	struct completion comp;
@@ -361,9 +398,9 @@ out:
  * Refill the destination root if it's fallen below the lo threshold by
  * moving from the src root to bring it up to the target.
  */
-static int alloc_move_refill(struct super_block *sb,
-			     struct scoutfs_alloc_root *dst,
-			     struct scoutfs_alloc_root *src, u64 lo, u64 target)
+static int alloc_move_refill_zoned(struct super_block *sb, struct scoutfs_alloc_root *dst,
+				   struct scoutfs_alloc_root *src, u64 lo, u64 target,
+				   __le64 *exclusive, __le64 *vacant, u64 zone_blocks)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
@@ -372,7 +409,14 @@ static int alloc_move_refill(struct super_block *sb,
 
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri, dst, src,
 				  min(target - le64_to_cpu(dst->total_len),
-				      le64_to_cpu(src->total_len)));
+				      le64_to_cpu(src->total_len)),
+				  exclusive, vacant, zone_blocks);
+}
+
+static inline int alloc_move_refill(struct super_block *sb, struct scoutfs_alloc_root *dst,
+				    struct scoutfs_alloc_root *src, u64 lo, u64 target)
+{
+	return alloc_move_refill_zoned(sb, dst, src, lo, target, NULL, NULL, 0);
 }
 
 static int alloc_move_empty(struct super_block *sb,
@@ -382,7 +426,134 @@ static int alloc_move_empty(struct super_block *sb,
 	DECLARE_SERVER_INFO(sb, server);
 
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri,
-				  dst, src, le64_to_cpu(src->total_len));
+				  dst, src, le64_to_cpu(src->total_len), NULL, NULL, 0);
+}
+
+/*
+ * Set all the bits in the destination which overlap with the extent.
+ */
+static void mod_extent_bits(__le64 *bits, u64 zone_blocks, u64 blkno, u64 len, bool set)
+{
+	u64 nr = div64_u64(blkno, zone_blocks);
+	u64 last_nr = div64_u64(blkno + len - 1, zone_blocks);
+
+	if (WARN_ON_ONCE(len == 0))
+		return;
+
+	while (nr <= last_nr) {
+		if (set)
+			set_bit_le(nr, bits);
+		else
+			clear_bit_le(nr, bits);
+
+		nr++;
+	}
+}
+
+/*
+ * Translate the bits in the source bitmap into extents and modify bits
+ * in the destination that map those extents.
+ */
+static void mod_bitmap_bits(__le64 *dst, u64 dst_zone_blocks,
+			    __le64 *src, u64 src_zone_blocks, bool set)
+{
+	int nr = 0;
+
+	for (;;) {
+		nr = find_next_bit_le(src, SCOUTFS_DATA_ALLOC_MAX_ZONES, nr);
+		if (nr >= SCOUTFS_DATA_ALLOC_MAX_ZONES)
+			break;
+
+		mod_extent_bits(dst, dst_zone_blocks,
+				(u64)nr * src_zone_blocks, src_zone_blocks, set);
+		nr++;
+	}
+}
+
+/*
+ * Iterate over all the log_tree items and initialize the caller's zone
+ * bitmaps.  Exclusive bits are only found in the caller's items.
+ * Vacant bits are not found in any items.
+ *
+ * The log_tree item zone bitmaps could have been stored with different
+ * zone_blocks sizes.  We translate the bits into block extents and
+ * record overlaps with the current zone size.
+ *
+ * The caller has the log items locked.
+ */
+static int get_data_alloc_zone_bits(struct super_block *sb, u64 rid, __le64 *exclusive,
+				    __le64 *vacant, u64 zone_blocks)
+{
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_log_trees *lt;
+	struct scoutfs_key key;
+	int ret;
+
+	memset(exclusive, 0, SCOUTFS_DATA_ALLOC_ZONE_BYTES);
+	memset(vacant, 0, SCOUTFS_DATA_ALLOC_ZONE_BYTES);
+
+	mod_extent_bits(vacant, zone_blocks, 0, le64_to_cpu(super->total_data_blocks), true);
+
+	scoutfs_key_init_log_trees(&key, 0, 0);
+	for (;;) {
+		ret = scoutfs_btree_next(sb, &super->logs_root, &key, &iref);
+		if (ret == 0) {
+			if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
+				lt = iref.val;
+
+				/* vacant bits have no bits found in items */
+				mod_bitmap_bits(vacant, zone_blocks,
+						lt->data_alloc_zones,
+						le64_to_cpu(lt->data_alloc_zone_blocks),
+						false);
+
+				/* exclusive bits are only found in caller's items */
+				if (le64_to_cpu(iref.key->sklt_rid) == rid) {
+					mod_bitmap_bits(exclusive, zone_blocks,
+							lt->data_alloc_zones,
+							le64_to_cpu(lt->data_alloc_zone_blocks),
+							true);
+				} else {
+					mod_bitmap_bits(exclusive, zone_blocks,
+							lt->data_alloc_zones,
+							le64_to_cpu(lt->data_alloc_zone_blocks),
+							false);
+				}
+
+				key = *iref.key;
+				scoutfs_key_inc(&key);
+			} else {
+				ret = -EIO;
+			}
+			scoutfs_btree_put_iref(&iref);
+		}
+		if (ret < 0) {
+			if (ret == -ENOENT)
+				ret = 0;
+			break;
+		}
+	}
+
+	return ret;
+}
+
+static void zero_data_alloc_zone_bits(struct scoutfs_log_trees *lt)
+{
+	lt->data_alloc_zone_blocks = 0;
+	memset(lt->data_alloc_zones, 0, sizeof(lt->data_alloc_zones));
+}
+
+struct alloc_extent_cb_args {
+	__le64 *zones;
+	u64 zone_blocks;
+};
+
+static void set_extent_zone_bits(struct super_block *sb, void *cb_arg, struct scoutfs_extent *ext)
+{
+	struct alloc_extent_cb_args *cba = cb_arg;
+
+	mod_extent_bits(cba->zones, cba->zone_blocks, ext->start, ext->len, true);
 }
 
 /*
@@ -402,9 +573,13 @@ static int server_get_log_trees(struct super_block *sb,
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	u64 rid = scoutfs_net_client_rid(conn);
 	DECLARE_SERVER_INFO(sb, server);
+	__le64 exclusive[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
+	__le64 vacant[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
+	struct alloc_extent_cb_args cba;
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
+	u64 data_zone_blocks;
 	int ret;
 
 	if (arg_len != 0) {
@@ -446,6 +621,14 @@ static int server_get_log_trees(struct super_block *sb,
 		lt.nr = key.sklt_nr;
 	}
 
+	if (get_volopt_val(server, SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR, &data_zone_blocks)) {
+		ret = get_data_alloc_zone_bits(sb, rid, exclusive, vacant, data_zone_blocks);
+		if (ret < 0)
+			goto unlock;
+	} else {
+		data_zone_blocks = 0;
+	}
+
 	/* return freed to server for emptying, refill avail  */
 	mutex_lock(&server->alloc_mutex);
 	ret = scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
@@ -456,12 +639,27 @@ static int server_get_log_trees(struct super_block *sb,
 				      &lt.meta_avail, server->meta_avail,
 				      SCOUTFS_SERVER_META_FILL_LO,
 				      SCOUTFS_SERVER_META_FILL_TARGET) ?:
-	      alloc_move_refill(sb, &lt.data_avail, &super->data_alloc,
-				SCOUTFS_SERVER_DATA_FILL_LO,
-				SCOUTFS_SERVER_DATA_FILL_TARGET);
+	      alloc_move_refill_zoned(sb, &lt.data_avail, &super->data_alloc,
+				      SCOUTFS_SERVER_DATA_FILL_LO,
+				      SCOUTFS_SERVER_DATA_FILL_TARGET,
+				      exclusive, vacant, data_zone_blocks);
 	mutex_unlock(&server->alloc_mutex);
 	if (ret < 0)
 		goto unlock;
+
+	/* record data alloc zone bits */
+	zero_data_alloc_zone_bits(&lt);
+	if (data_zone_blocks != 0) {
+		cba.zones = lt.data_alloc_zones;
+		cba.zone_blocks = data_zone_blocks;
+		ret = scoutfs_alloc_extents_cb(sb, &lt.data_avail, set_extent_zone_bits, &cba);
+		if (ret < 0) {
+			zero_data_alloc_zone_bits(&lt);
+			goto unlock;
+		}
+
+		lt.data_alloc_zone_blocks = cpu_to_le64(data_zone_blocks);
+	}
 
 	/* update client's log tree's item */
 	ret = scoutfs_btree_force(sb, &server->alloc, &server->wri,
@@ -633,6 +831,9 @@ static int reclaim_log_trees(struct super_block *sb, u64 rid)
 	      alloc_move_empty(sb, &super->data_alloc, &lt.data_avail) ?:
 	      alloc_move_empty(sb, &super->data_alloc, &lt.data_freed);
 	mutex_unlock(&server->alloc_mutex);
+
+	/* the mount is no longer writing to the zones */
+	zero_data_alloc_zone_bits(&lt);
 
 	err = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
@@ -1073,6 +1274,156 @@ out:
 		return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 
 	return 0;
+}
+
+/* The server is receiving a request for the current volume options */
+static int server_get_volopt(struct super_block *sb, struct scoutfs_net_connection *conn,
+			     u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_volume_options volopt;
+	unsigned seq;
+	int ret = 0;
+
+	if (arg_len != 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	do {
+		seq = read_seqcount_begin(&server->volopt_seqcount);
+		volopt = server->volopt;
+	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, &volopt, sizeof(volopt));
+}
+
+/*
+ * The server is receiving a request to update volume options.
+ *
+ * The in-memory options that readers use is updated only once the
+ * updated options are written in the super block.
+ */
+static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connection *conn,
+			     u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_volume_options *volopt;
+	u64 opt;
+	u64 nr;
+	int ret = 0;
+
+	if (arg_len != sizeof(struct scoutfs_volume_options)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	volopt = arg;
+
+	if (le64_to_cpu(volopt->set_bits) & SCOUTFS_VOLOPT_EXPANSION_BITS) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&server->volopt_mutex);
+
+	ret = scoutfs_server_hold_commit(sb);
+	if (ret)
+		goto unlock;
+
+	if (le64_to_cpu(volopt->set_bits) & SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT) {
+		opt = le64_to_cpu(volopt->data_alloc_zone_blocks);
+		if (opt < SCOUTFS_SERVER_DATA_FILL_TARGET) {
+			scoutfs_err(sb, "setting data_alloc_zone_blocks to '%llu' failed, must be at least %llu mount data allocation target blocks",
+				    opt, SCOUTFS_SERVER_DATA_FILL_TARGET);
+			ret = -EINVAL;
+			goto apply;
+		}
+
+		nr = div_u64(le64_to_cpu(super->total_data_blocks), SCOUTFS_DATA_ALLOC_MAX_ZONES);
+		if (opt < nr) {
+			scoutfs_err(sb, "setting data_alloc_zone_blocks to '%llu' failed, must be greater than %llu blocks which results in max %u zones",
+				    opt, nr, SCOUTFS_DATA_ALLOC_MAX_ZONES);
+			ret = -EINVAL;
+			goto apply;
+		}
+
+		if (opt > le64_to_cpu(super->total_data_blocks)) {
+			scoutfs_err(sb, "setting data_alloc_zone_blocks to '%llu' failed, must be at most %llu total data device blocks",
+				    opt, le64_to_cpu(super->total_data_blocks));
+			ret = -EINVAL;
+			goto apply;
+		}
+
+		super->volopt.data_alloc_zone_blocks = volopt->data_alloc_zone_blocks;
+		super->volopt.set_bits |= cpu_to_le64(SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT);
+	}
+
+apply:
+	ret = scoutfs_server_apply_commit(sb, ret);
+
+	write_seqcount_begin(&server->volopt_seqcount);
+	if (ret == 0)
+		server->volopt = super->volopt;
+	else
+		super->volopt = server->volopt;
+	write_seqcount_end(&server->volopt_seqcount);
+
+unlock:
+	mutex_unlock(&server->volopt_mutex);
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
+}
+
+static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connection *conn,
+			       u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_volume_options *volopt;
+	__le64 *opt;
+	u64 bit;
+	int ret = 0;
+	int i;
+
+	if (arg_len != sizeof(struct scoutfs_volume_options)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	volopt = arg;
+
+	if (le64_to_cpu(volopt->set_bits) & SCOUTFS_VOLOPT_EXPANSION_BITS) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&server->volopt_mutex);
+
+	ret = scoutfs_server_hold_commit(sb);
+	if (ret)
+		goto unlock;
+
+	for (i = 0, bit = 1, opt = first_valopt(&super->volopt); i < 64; i++, bit <<= 1, opt++) {
+		if (le64_to_cpu(volopt->set_bits) & bit) {
+			super->volopt.set_bits &= ~cpu_to_le64(bit);
+			*opt = 0;
+		}
+	}
+
+	ret = scoutfs_server_apply_commit(sb, ret);
+
+	write_seqcount_begin(&server->volopt_seqcount);
+	if (ret == 0)
+		server->volopt = super->volopt;
+	else
+		super->volopt = server->volopt;
+	write_seqcount_end(&server->volopt_seqcount);
+
+unlock:
+	mutex_unlock(&server->volopt_mutex);
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
@@ -1565,6 +1916,9 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_SRCH_GET_COMPACT]	= server_srch_get_compact,
 	[SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT]	= server_srch_commit_compact,
 	[SCOUTFS_NET_CMD_OPEN_INO_MAP]		= server_open_ino_map,
+	[SCOUTFS_NET_CMD_GET_VOLOPT]		= server_get_volopt,
+	[SCOUTFS_NET_CMD_SET_VOLOPT]		= server_set_volopt,
+	[SCOUTFS_NET_CMD_CLEAR_VOLOPT]		= server_clear_volopt,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 
@@ -1784,6 +2138,11 @@ static void scoutfs_server_worker(struct work_struct *work)
 	if (ret < 0)
 		goto shutdown;
 
+	/* update volume options early, possibly for use during startup */
+	write_seqcount_begin(&server->volopt_seqcount);
+	server->volopt = super->volopt;
+	write_seqcount_end(&server->volopt_seqcount);
+
 	set_roots(server, &super->fs_root, &super->logs_root,
 		  &super->srch_root);
 	scoutfs_block_writer_init(sb, &server->wri);
@@ -1932,6 +2291,8 @@ int scoutfs_server_setup(struct super_block *sb)
 	mutex_init(&server->srch_mutex);
 	mutex_init(&server->mounted_clients_mutex);
 	seqcount_init(&server->roots_seqcount);
+	seqcount_init(&server->volopt_seqcount);
+	mutex_init(&server->volopt_mutex);
 	INIT_WORK(&server->fence_pending_recov_work, fence_pending_recov_worker);
 
 	server->wq = alloc_workqueue("scoutfs_server",

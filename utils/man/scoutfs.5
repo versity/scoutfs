@@ -34,6 +34,40 @@ the server for the filesystem if it is elected leader.
 The assigned number must match one of the slots defined with \-Q options
 when the filesystem was created with mkfs.  If the number assigned
 doesn't match a number created during mkfs then the mount will fail.
+.SH VOLUME OPTIONS
+Volume options are persistent options which are stored in the super
+block in the metadata device and which apply to all mounts of the volume.
+.sp
+Volume options may be initially specified as the volume is created
+as described in the mkfs command in
+.BR scoutfs (8).
+.sp
+Volume options may be changed at runtime by writing to files in sysfs
+while the volume is mounted.  Volume options are found in the
+volume_options/ directory with a file for each option.  Reading the
+file provides the current setting of the option and an empty string
+is returned if the option is not set.  To set the option, write
+the new value ofthe option to the file.  To clear the option, write
+a blank line with a newline to the file.  The write syscall will
+return an error if the set operation fails and a message will be written
+to the console.
+.sp
+The following volume options are supported:
+.TP
+.B data_alloc_zone_blocks=<zone size in 4KiB blocks>
+When the data_alloc_zone_blocks option is set the data device is
+logically divided into zones of equal length as specified by the value
+of the option.  The size of the zones must be greater than a minimum
+allocation pool size, large enough to result in no more than 1024 zones,
+and not more than the total number of blocks in the data device.
+.sp
+When set, the server will try to provide each mount with free data
+extents that don't share a zone with other mounts.  When a mount has free
+extents in a given zone the server will try and find more free extents
+in that zone.  When the mount is not in a zone, or its zone has no more
+free extents, the server will try and find free extents in a zone that
+no other mount currently occupies.  The result is to try and produce
+write streams where only one mount is writing into each zone.
 .SH FURTHER READING
 A
 .B scoutfs

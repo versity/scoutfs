@@ -29,8 +29,8 @@
  * The core allocator uses extent items in btrees rooted in the super.
  * Each free extent is stored in two items.  The first item is indexed
  * by block location and is used to merge adjacent extents when freeing.
- * The second item is indexed by length and is used to find large
- * extents to allocate from.
+ * The second item is indexed by the order of the length and is used to
+ * find large extents to allocate from.
  *
  * Free extent always consumes the front of the largest extent.  This
  * attempts to discourage fragmentation by given smaller freed extents
@@ -67,25 +67,52 @@
  */
 
 /*
- * Free extents don't have flags and are stored in two indexes sorted by
- * block location and by length, largest first.  The block location key
- * is set to the final block in the extent so that we can find
- * intersections by calling _next() iterators starting with the block
- * we're searching for.
+ * Return the order of the length of a free extent, which we define as
+ * floor(log_8_(len)): 0..7 = 0, 8..63 = 1, etc.
  */
-static void init_ext_key(struct scoutfs_key *key, int type, u64 start, u64 len)
+static u64 free_extent_order(u64 len)
+{
+	return (fls64(len | 1) - 1) / 3;
+}
+
+/*
+ * The smallest (non-zero) length that will be mapped to the same order
+ * as the given length.
+ */
+static u64 smallest_order_length(u64 len)
+{
+	return 1ULL << (free_extent_order(len) * 3);
+}
+
+/*
+ * Free extents don't have flags and are stored in two indexes sorted by
+ * block location and by length order, largest first.  The location key
+ * field is set to the final block in the extent so that we can find
+ * intersections by calling _next() with the start of the range we're
+ * searching for.
+ *
+ * We never store 0 length extents but we do build keys for searching
+ * the order index from 0,0 without having to map it to a real extent.
+ */
+static void init_ext_key(struct scoutfs_key *key, int zone, u64 start, u64 len)
 {
 	*key = (struct scoutfs_key) {
-		.sk_zone = SCOUTFS_FREE_EXTENT_ZONE,
-		.sk_type = type,
+		.sk_zone = zone,
 	};
 
-	if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE) {
+	if (len == 0) {
+		/* we only use 0 len extents for magic 0,0 order lookups */
+		WARN_ON_ONCE(zone != SCOUTFS_FREE_EXTENT_ORDER_ZONE || start != 0);
+		return;
+	}
+
+	if (zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE) {
 		key->skfb_end = cpu_to_le64(start + len - 1);
 		key->skfb_len = cpu_to_le64(len);
-	} else if (type == SCOUTFS_FREE_EXTENT_LEN_TYPE) {
-		key->skfl_neglen = cpu_to_le64(-len);
-		key->skfl_blkno = cpu_to_le64(start);
+	} else if (zone == SCOUTFS_FREE_EXTENT_ORDER_ZONE) {
+		key->skfo_revord = cpu_to_le64(U64_MAX - free_extent_order(len));
+		key->skfo_end = cpu_to_le64(start + len - 1);
+		key->skfo_len = cpu_to_le64(len);
 	} else {
 		BUG();
 	}
@@ -93,23 +120,27 @@ static void init_ext_key(struct scoutfs_key *key, int type, u64 start, u64 len)
 
 static void ext_from_key(struct scoutfs_extent *ext, struct scoutfs_key *key)
 {
-	if (key->sk_type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE) {
+	if (key->sk_zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE) {
 		ext->start = le64_to_cpu(key->skfb_end) -
 			     le64_to_cpu(key->skfb_len) + 1;
 		ext->len = le64_to_cpu(key->skfb_len);
 	} else {
-		ext->start = le64_to_cpu(key->skfl_blkno);
-		ext->len = -le64_to_cpu(key->skfl_neglen);
+		ext->start = le64_to_cpu(key->skfo_end) -
+			     le64_to_cpu(key->skfo_len) + 1;
+		ext->len = le64_to_cpu(key->skfo_len);
 	}
 	ext->map = 0;
 	ext->flags = 0;
+
+	/* we never store 0 length extents */
+	WARN_ON_ONCE(ext->len == 0);
 }
 
 struct alloc_ext_args {
 	struct scoutfs_alloc *alloc;
 	struct scoutfs_block_writer *wri;
 	struct scoutfs_alloc_root *root;
-	int type;
+	int zone;
 };
 
 static int alloc_ext_next(struct super_block *sb, void *arg,
@@ -120,13 +151,13 @@ static int alloc_ext_next(struct super_block *sb, void *arg,
 	struct scoutfs_key key;
 	int ret;
 
-	init_ext_key(&key, args->type, start, len);
+	init_ext_key(&key, args->zone, start, len);
 
 	ret = scoutfs_btree_next(sb, &args->root->root, &key, &iref);
 	if (ret == 0) {
 		if (iref.val_len != 0)
 			ret = -EIO;
-		else if (iref.key->sk_type != args->type)
+		else if (iref.key->sk_zone != args->zone)
 			ret = -ENOENT;
 		else
 			ext_from_key(ext, iref.key);
@@ -139,19 +170,19 @@ static int alloc_ext_next(struct super_block *sb, void *arg,
 	return ret;
 }
 
-static int other_type(int type)
+static int other_zone(int zone)
 {
-	if (type == SCOUTFS_FREE_EXTENT_BLKNO_TYPE)
-		return SCOUTFS_FREE_EXTENT_LEN_TYPE;
-	else if (type == SCOUTFS_FREE_EXTENT_LEN_TYPE)
-		return SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+	if (zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE)
+		return SCOUTFS_FREE_EXTENT_ORDER_ZONE;
+	else if (zone == SCOUTFS_FREE_EXTENT_ORDER_ZONE)
+		return SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 	else
 		BUG();
 }
 
 /*
  * Insert an extent along with its matching item which is indexed by
- * opposite of its len or blkno.  If we succeed we update the root's
+ * opposite of its order or blkno.  If we succeed we update the root's
  * record of the total length of all the stored extents.
  */
 static int alloc_ext_insert(struct super_block *sb, void *arg,
@@ -167,8 +198,8 @@ static int alloc_ext_insert(struct super_block *sb, void *arg,
 	if (WARN_ON_ONCE(map || flags))
 		return -EINVAL;
 
-	init_ext_key(&key, args->type, start, len);
-	init_ext_key(&other, other_type(args->type), start, len);
+	init_ext_key(&key, args->zone, start, len);
+	init_ext_key(&other, other_zone(args->zone), start, len);
 
 	ret = scoutfs_btree_insert(sb, args->alloc, args->wri,
 				   &args->root->root, &key, NULL, 0);
@@ -196,8 +227,8 @@ static int alloc_ext_remove(struct super_block *sb, void *arg,
 	int ret;
 	int err;
 
-	init_ext_key(&key, args->type, start, len);
-	init_ext_key(&other, other_type(args->type), start, len);
+	init_ext_key(&key, args->zone, start, len);
+	init_ext_key(&other, other_zone(args->zone), start, len);
 
 	ret = scoutfs_btree_delete(sb, args->alloc, args->wri,
 				   &args->root->root, &key);
@@ -619,7 +650,7 @@ int scoutfs_dalloc_return_cached(struct super_block *sb,
 		.alloc = alloc,
 		.wri = wri,
 		.root = &dalloc->root,
-		.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
 	};
 	int ret = 0;
 
@@ -655,7 +686,7 @@ int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		.alloc = alloc,
 		.wri = wri,
 		.root = &dalloc->root,
-		.type = SCOUTFS_FREE_EXTENT_LEN_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
 	};
 	struct scoutfs_extent ext;
 	u64 len;
@@ -728,7 +759,7 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		.alloc = alloc,
 		.wri = wri,
 		.root = root,
-		.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
 	};
 	int ret;
 
@@ -741,6 +772,95 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 	return ret;
 }
 
+/*
+ * Return the first zone bit that the extent intersects with.
+ */
+static int first_extent_zone(struct scoutfs_extent *ext,  __le64 *zones, u64 zone_blocks)
+{
+	int first;
+	int last;
+	int nr;
+
+	first = div64_u64(ext->start, zone_blocks);
+	last = div64_u64(ext->start + ext->len - 1, zone_blocks);
+
+	nr = find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, first);
+	if (nr <= last)
+		return nr;
+
+	return SCOUTFS_DATA_ALLOC_MAX_ZONES;
+}
+
+/*
+ * Find an extent in specific zones to satisfy an allocation.  We use
+ * the order items to search for the largest extent that intersects with
+ * the zones whose bits are set in the caller's bitmap.
+ */
+static int find_zone_extent(struct super_block *sb, struct scoutfs_alloc_root *root,
+			    __le64 *zones, u64 zone_blocks,
+			    struct scoutfs_extent *found_ret, u64 count,
+			    struct scoutfs_extent *ext_ret)
+{
+	struct alloc_ext_args args = {
+		.root = root,
+		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
+	};
+	struct scoutfs_extent found;
+	struct scoutfs_extent ext;
+	u64 start;
+	u64 len;
+	int nr;
+	int ret;
+
+	/* don't bother when there are no bits set */
+	if (find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, 0) ==
+	    SCOUTFS_DATA_ALLOC_MAX_ZONES)
+		return -ENOENT;
+
+	/* start searching for largest extent from the first zone */
+	len = smallest_order_length(SCOUTFS_BLOCK_SM_MAX);
+	nr = 0;
+
+	for (;;) {
+		/* search for extents in the next zone at our order */
+		nr = find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, nr);
+		if (nr >= SCOUTFS_DATA_ALLOC_MAX_ZONES) {
+			/* wrap down to next smaller order if we run out of bits */
+			len >>= 3;
+			if (len == 0) {
+				ret = -ENOENT;
+				break;
+			}
+			nr = find_next_bit_le(zones, SCOUTFS_DATA_ALLOC_MAX_ZONES, 0);
+		}
+
+		start = (u64)nr * zone_blocks;
+
+		ret = scoutfs_ext_next(sb, &alloc_ext_ops, &args, start, len, &found);
+		if (ret < 0)
+			break;
+
+		/* see if the next extent intersects any zones */
+		nr = first_extent_zone(&found, zones, zone_blocks);
+		if (nr < SCOUTFS_DATA_ALLOC_MAX_ZONES) {
+			start = (u64)nr * zone_blocks;
+
+			ext.start = max(start, found.start);
+			ext.len = min(count, found.start + found.len - ext.start);
+
+			*found_ret = found;
+			*ext_ret = ext;
+			ret = 0;
+			break;
+		}
+
+		/* continue searching past extent */
+		nr = div64_u64(found.start + found.len - 1, zone_blocks) + 1;
+		len = smallest_order_length(found.len);
+	}
+
+	return ret;
+}
 
 /*
  * Move extent items adding up to the requested total length from the
@@ -751,6 +871,11 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
  * -ENOENT is returned if we run out of extents in the source tree
  * before moving the total.
  *
+ * The caller can specify that extents in the source tree should first
+ * be found based on their zone bitmaps.  We'll first try to find
+ * extents in the exclusive zones, then vacant zones, and then we'll
+ * fall back to normal allocation that ignores zones.
+ *
  * This first pass is not optimal because it performs full btree walks
  * per extent.  We could optimize this with more clever btree item
  * manipulation functions which can iterate through src and dst blocks
@@ -759,32 +884,77 @@ int scoutfs_free_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
-		       struct scoutfs_alloc_root *src, u64 total)
+		       struct scoutfs_alloc_root *src, u64 total,
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks)
 {
 	struct alloc_ext_args args = {
 		.alloc = alloc,
 		.wri = wri,
 	};
+	struct scoutfs_extent found;
 	struct scoutfs_extent ext;
 	u64 moved = 0;
+	u64 count;
 	int ret = 0;
 	int err;
 
+	if (zone_blocks == 0) {
+		exclusive = NULL;
+		vacant = NULL;
+	}
+
 	while (moved < total) {
-		args.root = src;
-		args.type = SCOUTFS_FREE_EXTENT_LEN_TYPE;
-		ret = scoutfs_ext_alloc(sb, &alloc_ext_ops, &args,
-					0, 0, total - moved, &ext);
+		count = total - moved;
+
+		if (exclusive) {
+			/* first try to find extents in our exclusive zones */
+			ret = find_zone_extent(sb, src, exclusive, zone_blocks,
+					       &found, count, &ext);
+			if (ret == -ENOENT) {
+				exclusive = NULL;
+				continue;
+			}
+		} else if (vacant) {
+			/* then try to find extents in vacant zones */
+			ret = find_zone_extent(sb, src, vacant, zone_blocks,
+					       &found, count, &ext);
+			if (ret == -ENOENT) {
+				vacant = NULL;
+				continue;
+			}
+		} else {
+			/* otherwise fall back to finding extents anywhere */
+			args.root = src;
+			args.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE;
+			ret = scoutfs_ext_next(sb, &alloc_ext_ops, &args, 0, 0, &found);
+			if (ret == 0) {
+				ext.start = found.start;
+				ext.len = min(count, found.len);
+			}
+		}
 		if (ret < 0)
 			break;
 
+		/* searching set start/len, finish initializing alloced extent */
+		ext.map = found.map ? ext.start - found.start + found.map : 0;
+		ext.flags = found.flags;
+
+		/* remove the allocation from the found extent */
+		args.root = src;
+		args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
+		ret = scoutfs_ext_remove(sb, &alloc_ext_ops, &args, ext.start, ext.len);
+		if (ret < 0)
+			break;
+
+		/* insert the allocated extent into the dest */
 		args.root = dst;
-		args.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+		args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 		ret = scoutfs_ext_insert(sb, &alloc_ext_ops, &args, ext.start,
 					 ext.len, ext.map, ext.flags);
 		if (ret < 0) {
+			/* and put it back in src if insertion failed */
 			args.root = src;
-			args.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE;
+			args.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE;
 			err = scoutfs_ext_insert(sb, &alloc_ext_ops, &args,
 						 ext.start, ext.len, ext.map,
 						 ext.flags);
@@ -852,7 +1022,7 @@ out:
  * a list block and all the btree blocks that store extent items.
  *
  * At most, an extent operation can dirty down three paths of the tree
- * to modify a blkno item and two distant len items.  We can grow and
+ * to modify a blkno item and two distant order items.  We can grow and
  * split the root, and then those three paths could share blocks but each
  * modify two leaf blocks.
  */
@@ -901,7 +1071,7 @@ int scoutfs_alloc_fill_list(struct super_block *sb,
 		.alloc = alloc,
 		.wri = wri,
 		.root = root,
-		.type = SCOUTFS_FREE_EXTENT_LEN_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
 	};
 	struct scoutfs_alloc_list_block *lblk;
 	struct scoutfs_block *bl = NULL;
@@ -958,7 +1128,7 @@ int scoutfs_alloc_empty_list(struct super_block *sb,
 		.alloc = alloc,
 		.wri = wri,
 		.root = root,
-		.type = SCOUTFS_FREE_EXTENT_BLKNO_TYPE,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
 	};
 	struct scoutfs_alloc_list_block *lblk = NULL;
 	struct scoutfs_block *bl = NULL;
@@ -1225,5 +1395,65 @@ out:
 
 	kfree(super);
 	kfree(sc);
+	return ret;
+}
+
+
+struct foreach_cb_args {
+	scoutfs_alloc_extent_cb_t cb;
+	void *cb_arg;
+};
+
+static int alloc_btree_extent_item_cb(struct super_block *sb, struct scoutfs_key *key,
+				      void *val, int val_len, void *arg)
+{
+	struct foreach_cb_args *cba = arg;
+	struct scoutfs_extent ext;
+
+	if (key->sk_zone != SCOUTFS_FREE_EXTENT_BLKNO_ZONE)
+		return -ENOENT;
+
+	ext_from_key(&ext, key);
+	cba->cb(sb, cba->cb_arg, &ext);
+
+	return 0;
+}
+
+/*
+ * Call the caller's callback on each extent stored in the allocator's
+ * btree.  The callback sees extents called in order by starting blkno.
+ */
+int scoutfs_alloc_extents_cb(struct super_block *sb, struct scoutfs_alloc_root *root,
+			     scoutfs_alloc_extent_cb_t cb, void *cb_arg)
+{
+	struct foreach_cb_args cba = {
+		.cb = cb,
+		.cb_arg = cb_arg,
+	};
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	struct scoutfs_key key;
+	int ret;
+
+	init_ext_key(&key, SCOUTFS_FREE_EXTENT_BLKNO_ZONE, 0, 1);
+
+	for (;;) {
+		/* will stop at order items before getting stuck in final block */
+		BUILD_BUG_ON(SCOUTFS_FREE_EXTENT_BLKNO_ZONE > SCOUTFS_FREE_EXTENT_ORDER_ZONE);
+		init_ext_key(&start, SCOUTFS_FREE_EXTENT_BLKNO_ZONE, 0, 1);
+		init_ext_key(&end, SCOUTFS_FREE_EXTENT_ORDER_ZONE, 0, 1);
+
+		ret = scoutfs_btree_read_items(sb, &root->root, &key, &start, &end,
+					       alloc_btree_extent_item_cb, &cba);
+		if (ret < 0 || end.sk_zone != SCOUTFS_FREE_EXTENT_BLKNO_ZONE) {
+			if (ret == -ENOENT)
+				ret = 0;
+			break;
+		}
+
+		key = end;
+		scoutfs_key_inc(&key);
+	}
+
 	return ret;
 }
