@@ -909,6 +909,7 @@ enum scoutfs_lock_trace {
 	SLT_INVALIDATE,
 	SLT_REQUEST,
 	SLT_RESPONSE,
+	SLT_NR,
 };
 
 /*
