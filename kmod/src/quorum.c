@@ -813,15 +813,15 @@ out:
 }
 
 /*
- * Set a flag for the quorum work's next iteration to indicate that the
- * server has shutdown and that it should step down as leader, update
- * quorum blocks, and stop sending heartbeats.
+ * Clear the server flag for the quorum work's next iteration to
+ * indicate that the server has shutdown and that it should step down as
+ * leader, update quorum blocks, and stop sending heartbeats.
  */
 void scoutfs_quorum_server_shutdown(struct super_block *sb)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
 
-	set_bit(QINF_FLAG_SERVER, &qinf->flags);
+	clear_bit(QINF_FLAG_SERVER, &qinf->flags);
 }
 
 /*
