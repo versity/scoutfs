@@ -1,6 +1,6 @@
 .TH scoutfs 5
 .SH NAME
-scoutfs \- overview and mount options for the scoutfs filesystem
+scoutfs \- high level overview of the scoutfs filesystem
 .SH DESCRIPTION
 A scoutfs filesystem is stored on two block devices.  Multiple mounts of
 the filesystem are supported between hosts that share access to the
@@ -68,7 +68,82 @@ in that zone.  When the mount is not in a zone, or its zone has no more
 free extents, the server will try and find free extents in a zone that
 no other mount currently occupies.  The result is to try and produce
 write streams where only one mount is writing into each zone.
-.SH FURTHER READING
+.SH FENCING
+.B scoutfs
+mounts coordinate exclusive access to shared resources through
+comminication with the mount that was elected leader.
+A mount can malfunction and stop participating at which point it needs
+to be safely isolated ("fenced off") from shared resources before other mounts can
+have their turn at exclusive access.
+.sp
+Only the elected leader can fence mounts.  As the leader decides that a
+mount must be fenced, typically by timeouts expiring without
+comminication from the mount, it creates a fence request.   Fence
+requests are visible as directories in the leader mount's sysfs
+directory.  The fence request directory is named for the RID of the
+mount being fenced.  The directory contains the following files:
+
+.RS
+.TP
+.B elapsec_secs
+Reading this file gives the number of seconds that have passed since
+this fence request was created.
+.TP
+.B error
+This file contains 0 when the fence request is created.  Userspace
+fencing agents write 1 into this file if they are unable to fence the
+mount.  The volume can not make progress until the mount is fenced so
+this will cause the server to stop and another mount will be elected
+leader.
+.TP
+.B fenced
+This file contains 0 when the fence request is created.  Userspace
+fencing agents write 1 into this file once the mount has been fenced.
+.TP
+.B ipv4_addr
+This file contains the dotted quad IPv4 peer address of the last
+connected socket from the mount.  Userspace fencing agents can use this
+to find the host that contains the mount.
+.TP
+.B reason
+This file contains a text string that indicates the reason that the
+mount is being fenced:
+
+.B client_recovery
+- During startup the server found persistent items recording the presence
+of a mount that didn't reconnect to the server in time.
+.sp
+.B client_reconnect
+- A mount disconnected from the server and didn't reconnect in time.
+.sp
+.B quorum_block_leader
+- As a leader was elected it read persistent blocks that indicated that
+a previous leader had not shut down and cleared their quorum block.
+.TP
+.B rid
+This file contains the hex string of the RID of the mount to be fenced.
+.RE
+
+The request directories enable userspace processes to gather the
+information to find the host with the mount to fence, isolate the mount
+by whatever means are appropriate (f.e. cut off network and storage
+communication, force unmount the mount, isolate storage fabric ports,
+reboot the host) and write to the
+.I fenced
+file.
+.sp
+Once the 
+.I fenced
+file is written to the server reclaims the resources
+associated with the fenced mount and resumes normal operations.
+.sp
+If the 
+.I error
+file is written to then the server cannot make forward progress and
+shuts down.  The request can similarly enter an errored state if enough
+time passes before userspace completes the request.
+ 
+.SH CORRUPTION DETECTION
 A
 .B scoutfs
 filesystem can detect corruption at runtime.  A catalog of kernel log
