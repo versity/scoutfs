@@ -570,7 +570,7 @@ struct scoutfs_log_merge_freeing {
  * Keys are first sorted by major key zones.
  */
 #define SCOUTFS_INODE_INDEX_ZONE		1
-#define SCOUTFS_RID_ZONE			2
+#define SCOUTFS_ORPHAN_ZONE			2
 #define SCOUTFS_FS_ZONE				3
 #define SCOUTFS_LOCK_ZONE			4
 /* Items only stored in server btrees */
@@ -592,7 +592,7 @@ struct scoutfs_log_merge_freeing {
 #define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	2
 #define SCOUTFS_INODE_INDEX_NR			3 /* don't forget to update */
 
-/* rid zone (also used in server alloc btree) */
+/* orphan zone, redundant type used for clarity */
 #define SCOUTFS_ORPHAN_TYPE			1
 
 /* fs zone */

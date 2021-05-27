@@ -669,6 +669,7 @@ static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 				      umode_t mode, dev_t rdev,
 				      struct scoutfs_lock **dir_lock,
 				      struct scoutfs_lock **inode_lock,
+				      struct scoutfs_lock **orph_lock,
 				      struct list_head *ind_locks)
 {
 	struct super_block *sb = dir->i_sb;
@@ -701,6 +702,12 @@ static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 	if (ret)
 		goto out_unlock;
 
+	if (orph_lock) {
+		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, ino, orph_lock);
+		if (ret < 0)
+			goto out_unlock;
+	}
+
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, ind_locks, dir, true) ?:
@@ -725,9 +732,13 @@ out_unlock:
 	if (ret) {
 		scoutfs_inode_index_unlock(sb, ind_locks);
 		scoutfs_unlock(sb, *dir_lock, SCOUTFS_LOCK_WRITE);
-		scoutfs_unlock(sb, *inode_lock, SCOUTFS_LOCK_WRITE);
 		*dir_lock = NULL;
+		scoutfs_unlock(sb, *inode_lock, SCOUTFS_LOCK_WRITE);
 		*inode_lock = NULL;
+		if (orph_lock) {
+			scoutfs_unlock(sb, *orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
+			*orph_lock = NULL;
+		}
 
 		inode = ERR_PTR(ret);
 	}
@@ -752,7 +763,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 
 	hash = dirent_name_hash(dentry->d_name.name, dentry->d_name.len);
 	inode = lock_hold_create(dir, dentry, mode, rdev,
-				 &dir_lock, &inode_lock, &ind_locks);
+				 &dir_lock, &inode_lock, NULL, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -813,13 +824,15 @@ static int scoutfs_link(struct dentry *old_dentry,
 	struct super_block *sb = dir->i_sb;
 	struct scoutfs_lock *dir_lock;
 	struct scoutfs_lock *inode_lock = NULL;
+	struct scoutfs_lock *orph_lock = NULL;
 	LIST_HEAD(ind_locks);
-	bool del_orphan;
+	bool del_orphan = false;
 	u64 dir_size;
 	u64 ind_seq;
 	u64 hash;
 	u64 pos;
 	int ret;
+	int err;
 
 	hash = dirent_name_hash(dentry->d_name.name, dentry->d_name.len);
 
@@ -843,7 +856,14 @@ static int scoutfs_link(struct dentry *old_dentry,
 		goto out_unlock;
 
 	dir_size = i_size_read(dir) + dentry->d_name.len;
-	del_orphan = (inode->i_nlink == 0);
+
+	if (inode->i_nlink == 0) {
+		del_orphan = true;
+		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(inode),
+					  &orph_lock);
+		if (ret < 0)
+			goto out_unlock;
+	}
 
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
@@ -860,7 +880,7 @@ retry:
 		goto out;
 
 	if (del_orphan) {
-		ret = scoutfs_orphan_dirty(sb, scoutfs_ino(inode));
+		ret = scoutfs_inode_orphan_delete(sb, scoutfs_ino(inode), orph_lock);
 		if (ret)
 			goto out;
 	}
@@ -871,19 +891,17 @@ retry:
 			      dentry->d_name.name, dentry->d_name.len,
 			      scoutfs_ino(inode), inode->i_mode, dir_lock,
 			      inode_lock);
-	if (ret)
+	if (ret) {
+		err = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
+		WARN_ON_ONCE(err); /* no orphan, might not scan and delete after crash */
 		goto out;
+	}
 	update_dentry_info(sb, dentry, hash, pos, dir_lock);
 
 	i_size_write(dir, dir_size);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 	inode->i_ctime = dir->i_mtime;
 	inc_nlink(inode);
-
-	if (del_orphan) {
-		ret = scoutfs_orphan_delete(sb, scoutfs_ino(inode));
-		WARN_ON_ONCE(ret);
-	}
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
@@ -896,6 +914,8 @@ out_unlock:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
+
 	return ret;
 }
 
@@ -920,6 +940,7 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 	struct inode *inode = dentry->d_inode;
 	struct timespec ts = current_kernel_time();
 	struct scoutfs_lock *inode_lock = NULL;
+	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
 	LIST_HEAD(ind_locks);
 	u64 ind_seq;
@@ -937,6 +958,13 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 		goto unlock;
 	}
 
+	if (should_orphan(inode)) {
+		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(inode),
+					  &orph_lock);
+		if (ret < 0)
+			goto unlock;
+	}
+
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, dir, false) ?:
@@ -947,22 +975,19 @@ retry:
 	if (ret)
 		goto unlock;
 
+	if (should_orphan(inode)) {
+		ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
+		if (ret < 0)
+			goto out;
+	}
+
 	ret = del_entry_items(sb, scoutfs_ino(dir), dentry_info_hash(dentry),
 			      dentry_info_pos(dentry), scoutfs_ino(inode),
 			      dir_lock, inode_lock);
-	if (ret)
+	if (ret) {
+		ret = scoutfs_inode_orphan_delete(sb, scoutfs_ino(inode), orph_lock);
+		WARN_ON_ONCE(ret); /* should have been dirty */
 		goto out;
-
-	if (should_orphan(inode)) {
-		/*
-		 * Insert the orphan item before we modify any inode
-		 * metadata so we can gracefully exit should it
-		 * fail.
-		 */
-		ret = scoutfs_orphan_inode(inode);
-		WARN_ON_ONCE(ret); /* XXX returning error but items deleted */
-		if (ret)
-			goto out;
 	}
 
 	dir->i_ctime = ts;
@@ -984,6 +1009,7 @@ unlock:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
 
 	return ret;
 }
@@ -1176,7 +1202,7 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 		return ret;
 
 	inode = lock_hold_create(dir, dentry, S_IFLNK|S_IRWXUGO, 0,
-				 &dir_lock, &inode_lock, &ind_locks);
+				 &dir_lock, &inode_lock, NULL, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -1535,6 +1561,7 @@ static int scoutfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct scoutfs_lock *new_dir_lock = NULL;
 	struct scoutfs_lock *old_inode_lock = NULL;
 	struct scoutfs_lock *new_inode_lock = NULL;
+	struct scoutfs_lock *orph_lock = NULL;
 	struct timespec now;
 	bool ins_new = false;
 	bool del_new = false;
@@ -1599,6 +1626,13 @@ static int scoutfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	if (ret)
 		goto out_unlock;
 
+	if (should_orphan(new_inode)) {
+		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(new_inode),
+					  &orph_lock);
+		if (ret < 0)
+			goto out_unlock;
+	}
+
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, old_dir, false) ?:
@@ -1658,7 +1692,7 @@ retry:
 	ins_old = true;
 
 	if (should_orphan(new_inode)) {
-		ret = scoutfs_orphan_inode(new_inode);
+		ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(new_inode), orph_lock);
 		if (ret)
 			goto out;
 	}
@@ -1762,6 +1796,7 @@ out_unlock:
 	scoutfs_unlock(sb, old_dir_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, new_dir_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, rename_lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
 
 	return ret;
 }
@@ -1781,6 +1816,7 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	struct inode *inode = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
 	struct scoutfs_lock *inode_lock = NULL;
+	struct scoutfs_lock *orph_lock = NULL;
 	LIST_HEAD(ind_locks);
 	int ret;
 
@@ -1788,25 +1824,32 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 		return -ENAMETOOLONG;
 
 	inode = lock_hold_create(dir, dentry, mode, 0,
-				 &dir_lock, &inode_lock, &ind_locks);
+				 &dir_lock, &inode_lock, &orph_lock, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
+	ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
+	if (ret < 0) {
+		iput(inode);
+		goto out; /* XXX returning error but items created */
+	}
+
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	insert_inode_hash(inode);
+	ihold(inode); /* need to update inode modifications in d_tmpfile */
 	d_tmpfile(dentry, inode);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
+	iput(inode);
 
-	ret = scoutfs_orphan_inode(inode);
-	WARN_ON_ONCE(ret); /* XXX returning error but items deleted */
-
+out:
 	scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
 
 	return ret;
 }

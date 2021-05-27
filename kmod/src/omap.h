@@ -4,7 +4,7 @@
 int scoutfs_omap_inc(struct super_block *sb, u64 ino);
 void scoutfs_omap_dec(struct super_block *sb, u64 ino);
 int scoutfs_omap_should_delete(struct super_block *sb, struct inode *inode,
-			       struct scoutfs_lock **lock_ret);
+			       struct scoutfs_lock **lock_ret, struct scoutfs_lock **orph_lock_ret);
 void scoutfs_omap_free_lock_data(struct scoutfs_omap_lock_data *ldata);
 int scoutfs_omap_client_handle_request(struct super_block *sb, u64 id,
 				       struct scoutfs_open_ino_map_args *args);
