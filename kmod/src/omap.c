@@ -908,9 +908,9 @@ out:
 }
 
 /*
- * Return 1 and give the caller a write inode lock if it is safe to be
- * deleted.  It's safe to be deleted when it is no longer reachable and
- * nothing is referencing it.
+ * Return 1 and give the caller their locks when they should delete the
+ * inode items.  It's safe to delete the inode items when it is no
+ * longer reachable and nothing is referencing it.
  *
  * The inode is unreachable when nlink hits zero.  Cluster locks protect
  * modification and testing of nlink.  We use the ino_lock_cov covrage
@@ -925,15 +925,17 @@ out:
  * increase nlink from zero and let people get a reference to the inode.
  */
 int scoutfs_omap_should_delete(struct super_block *sb, struct inode *inode,
-			       struct scoutfs_lock **lock_ret)
+			       struct scoutfs_lock **lock_ret, struct scoutfs_lock **orph_lock_ret)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_lock *lock = NULL;
 	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_omap_lock_data *ldata;
 	u64 group_nr;
 	int bit_nr;
 	int ret;
+	int err;
 
 	/* lock group and omap constants are defined independently */
 	BUILD_BUG_ON(SCOUTFS_OPEN_INO_MAP_BITS != SCOUTFS_LOCK_INODE_GROUP_NR);
@@ -964,12 +966,19 @@ int scoutfs_omap_should_delete(struct super_block *sb, struct inode *inode,
 out:
 	trace_scoutfs_omap_should_delete(sb, ino, inode->i_nlink, ret);
 
+	if (ret > 0) {
+		err = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, ino, &orph_lock);
+		if (err < 0)
+			ret = err;
+	}
+
 	if (ret <= 0) {
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 		lock = NULL;
 	}
 
 	*lock_ret = lock;
+	*orph_lock_ret = orph_lock;
 	return ret;
 }
 

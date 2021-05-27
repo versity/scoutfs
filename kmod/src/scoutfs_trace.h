@@ -985,22 +985,6 @@ TRACE_EVENT(scoutfs_delete_inode,
 		  __entry->mode, __entry->size)
 );
 
-TRACE_EVENT(scoutfs_scan_orphans,
-	TP_PROTO(struct super_block *sb),
-
-	TP_ARGS(sb),
-
-	TP_STRUCT__entry(
-		__field(dev_t, dev)
-	),
-
-	TP_fast_assign(
-		__entry->dev = sb->s_dev;
-	),
-
-	TP_printk("dev %d,%d", MAJOR(__entry->dev), MINOR(__entry->dev))
-);
-
 DECLARE_EVENT_CLASS(scoutfs_key_class,
         TP_PROTO(struct super_block *sb, struct scoutfs_key *key),
         TP_ARGS(sb, key),

@@ -75,7 +75,6 @@ struct inode *scoutfs_alloc_inode(struct super_block *sb);
 void scoutfs_destroy_inode(struct inode *inode);
 int scoutfs_drop_inode(struct inode *inode);
 void scoutfs_evict_inode(struct inode *inode);
-int scoutfs_orphan_inode(struct inode *inode);
 
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino);
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
@@ -120,9 +119,8 @@ int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat);
 int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
 
-int scoutfs_scan_orphans(struct super_block *sb);
-int scoutfs_orphan_dirty(struct super_block *sb, u64 ino);
-int scoutfs_orphan_delete(struct super_block *sb, u64 ino);
+int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
+int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
 
 void scoutfs_inode_queue_writeback(struct inode *inode);
 int scoutfs_inode_walk_writeback(struct super_block *sb, bool write);
@@ -133,6 +131,8 @@ void scoutfs_inode_exit(void);
 int scoutfs_inode_init(void);
 
 int scoutfs_inode_setup(struct super_block *sb);
+int scoutfs_inode_start(struct super_block *sb);
+void scoutfs_inode_stop(struct super_block *sb);
 void scoutfs_inode_destroy(struct super_block *sb);
 
 #endif

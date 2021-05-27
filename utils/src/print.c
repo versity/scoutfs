@@ -158,7 +158,7 @@ static print_func_t find_printer(u8 zone, u8 type)
 	    type <= SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE)
 		return print_inode_index;
 
-	if (zone == SCOUTFS_RID_ZONE) {
+	if (zone == SCOUTFS_ORPHAN_ZONE) {
 		if (type == SCOUTFS_ORPHAN_TYPE)
 			return print_orphan;
 	}
