@@ -1593,9 +1593,15 @@ void scoutfs_evict_inode(struct inode *inode)
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 		scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
 	}
-	if (ret < 0)
+	if (ret == -ERESTARTSYS) {
+		/* can be in task with pending, could be found as orphan */
+		scoutfs_inc_counter(sb, inode_evict_intr);
+		ret = 0;
+	}
+	if (ret < 0) {
 		scoutfs_err(sb, "error %d while checking to delete inode nr %llu, it might linger.",
 			    ret, ino);
+	}
 
 	scoutfs_omap_dec(sb, ino);
 
