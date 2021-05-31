@@ -1723,7 +1723,7 @@ struct farewell_request {
  * individual action knows to recognize that it's already been performed
  * and return success.
  */
-static int reclaim_rid(struct super_block *sb, u64 rid, bool clear_leader)
+static int reclaim_rid(struct super_block *sb, u64 rid)
 {
 	int ret;
 
@@ -1737,7 +1737,6 @@ static int reclaim_rid(struct super_block *sb, u64 rid, bool clear_leader)
 	      reclaim_log_trees(sb, rid) ?:
 	      cancel_srch_compact(sb, rid) ?:
 	      scoutfs_omap_remove_rid(sb, rid) ?:
-	      (clear_leader ? scoutfs_quorum_clear_rid_leader(sb, rid) : 0) ?:
 	      delete_mounted_client(sb, rid);
 
 	return scoutfs_server_apply_commit(sb, ret);
@@ -1870,7 +1869,7 @@ static void farewell_worker(struct work_struct *work)
 
 	/* clean up resources for mounts before sending responses */
 	list_for_each_entry_safe(fw, tmp, &send, entry) {
-		ret = reclaim_rid(sb, fw->rid, false);
+		ret = reclaim_rid(sb, fw->rid);
 		if (ret)
 			goto out;
 	}
@@ -2204,7 +2203,7 @@ static void reclaim_worker(struct work_struct *work)
 		goto out;
 	}
 
-	ret = reclaim_rid(sb, rid, reason == SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
+	ret = reclaim_rid(sb, rid);
 	if (ret < 0) {
 		scoutfs_err(sb, "failure to reclaim fenced rid %016llx: err %d, shutting down server",
 			    rid, ret);
@@ -2215,6 +2214,15 @@ static void reclaim_worker(struct work_struct *work)
 	scoutfs_info(sb, "successfully reclaimed resources for fenced rid %016llx", rid);
 	scoutfs_fence_free(sb, rid);
 	scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_ALL);
+
+	/* tell quorum we've finished fencing all previous leaders */
+	if (reason == SCOUTFS_FENCE_QUORUM_BLOCK_LEADER &&
+	    !scoutfs_fence_reason_pending(sb, reason)) {
+		ret = scoutfs_quorum_fence_complete(sb, server->term);
+		if (ret < 0)
+			goto out;
+	}
+
 	ret = 0;
 
 out:
@@ -2242,7 +2250,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
 	/* first make sure no other servers are still running */
-	ret = scoutfs_quorum_fence_leader_blocks(sb, server->term);
+	ret = scoutfs_quorum_fence_leaders(sb, server->term);
 	if (ret < 0)
 		goto out;
 
@@ -2348,7 +2356,7 @@ out:
 	scoutfs_net_free_conn(sb, conn);
 
 	/* let quorum know that we've shutdown */
-	scoutfs_quorum_server_shutdown(sb);
+	scoutfs_quorum_server_shutdown(sb, server->term);
 
 	scoutfs_info(sb, "server stopped at "SIN_FMT, SIN_ARG(&sin));
 	trace_scoutfs_server_work_exit(sb, 0, ret);

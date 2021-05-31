@@ -300,6 +300,24 @@ int scoutfs_fence_next(struct super_block *sb, u64 *rid, int *reason, bool *erro
 	return ret;
 }
 
+int scoutfs_fence_reason_pending(struct super_block *sb, int reason)
+{
+	DECLARE_FENCE_INFO(sb, fi);
+	struct pending_fence *fence;
+	bool pending = false;
+
+	spin_lock(&fi->lock);
+	list_for_each_entry(fence, &fi->list, entry) {
+		if (fence->reason == reason) {
+			pending = true;
+			break;
+		}
+	}
+	spin_unlock(&fi->lock);
+
+	return pending;
+}
+
 int scoutfs_fence_free(struct super_block *sb, u64 rid)
 {
 	DECLARE_FENCE_INFO(sb, fi);

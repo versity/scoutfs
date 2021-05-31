@@ -816,16 +816,16 @@ static char *alloc_addr_str(union scoutfs_inet_addr *ia)
 
 static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 {
-	struct print_events {
-		size_t offset;
-		char *name;
-	} events[] = {
-		OFF_NAME(write), OFF_NAME(update_term), OFF_NAME(set_leader),
-		OFF_NAME(clear_leader), OFF_NAME(fenced),
+	const static char *event_names[] = {
+		[SCOUTFS_QUORUM_EVENT_BEGIN] = "begin",
+		[SCOUTFS_QUORUM_EVENT_TERM] = "term",
+		[SCOUTFS_QUORUM_EVENT_ELECT] = "elect",
+		[SCOUTFS_QUORUM_EVENT_FENCE] = "fence",
+		[SCOUTFS_QUORUM_EVENT_STOP] = "stop",
+		[SCOUTFS_QUORUM_EVENT_END] = "end",
 	};
 	struct scoutfs_quorum_block *blk = NULL;
 	struct scoutfs_quorum_block_event *ev;
-	char *log_addr = NULL;
 	u64 blkno;
 	int ret;
 	int i;
@@ -834,6 +834,7 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
 		blkno = SCOUTFS_QUORUM_BLKNO + i;
 		free(blk);
+		blk = NULL;
 		ret = read_block(fd, blkno, SCOUTFS_BLOCK_SM_SHIFT, (void **)&blk);
 		if (ret)
 			goto out;
@@ -841,24 +842,19 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 		printf("quorum blkno %llu (slot %llu)\n",
 		       blkno, blkno - SCOUTFS_QUORUM_BLKNO);
 		print_block_header(&blk->hdr, SCOUTFS_BLOCK_SM_SIZE);
-		printf("  term %llu random_write_mark 0x%llx flags 0x%llx\n",
-		       le64_to_cpu(blk->term),
-		       le64_to_cpu(blk->random_write_mark),
-		       le64_to_cpu(blk->flags));
 
-		for (e = 0; e < array_size(events); e++) {
-			ev = (void *)blk + events[e].offset;
+		for (e = 0; e < array_size(event_names); e++) {
+			ev = &blk->events[e];
 
-			printf("  %12s: rid %016llx ts %llu.%08u\n",
-			       events[e].name, le64_to_cpu(ev->rid),
-			       le64_to_cpu(ev->ts.sec),
-			       le32_to_cpu(ev->ts.nsec));
+			printf("  %12s: rid %016llx term %llu ts %llu.%08u\n",
+			       event_names[e], le64_to_cpu(ev->rid), le64_to_cpu(ev->term),
+			       le64_to_cpu(ev->ts.sec), le32_to_cpu(ev->ts.nsec));
 		}
 	}
 
 	ret = 0;
 out:
-	free(log_addr);
+	free(blk);
 
 	return ret;
 }

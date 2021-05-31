@@ -70,6 +70,7 @@ t_filter_dmesg()
 	re="$re|scoutfs .* reclaimed resources"
 	re="$re|scoutfs .* quorum .* error"
 	re="$re|scoutfs .* error reading quorum block"
+	re="$re|scoutfs .* error .* writing quorum block"
 
 	egrep -v "($re)" 
 }

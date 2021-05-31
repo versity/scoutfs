@@ -61,10 +61,9 @@
  * running (maybe they've deadlocked, or lost network communications).
  * In addition to a configuration slot in the super block, each quorum
  * member also has a known block location that represents their slot.
- * They set a flag in their block indicating that they've been elected
- * leader, then read slots for all the other blocks looking for
- * previously active leaders to fence.  After that it can start the
- * server.
+ * The block contains an array of events which are updated during the life
+ * time of the quorum agent.  The elected leader set its elected event
+ * and can then start the server.
  *
  * It's critical to raft elections that a participant's term not go
  * backwards in time so each mount also uses its quorum block to store
@@ -335,17 +334,17 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 }
 
 /*
- * The caller can provide a mark that they're using to track their
- * written blocks.  It's updated as they write the block and we can
- * compare it with what we read to see if there have been unexpected
- * intervening writes to the block -- the caller is supposed to have
- * exclusive access to the block (or was fenced).
+ * Read and verify block fields before giving it to the caller.  We
+ * should have exclusive write access to the block.  We know that
+ * something has gone horribly wrong if we don't see our rid in the
+ * begin event after we've written it as we started up.
  */
-static int read_quorum_block(struct super_block *sb, u64 blkno,
-			     struct scoutfs_quorum_block *blk, __le64 *mark)
+static int read_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_quorum_block *blk,
+			     bool check_rid)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
+	const u64 rid = sbi->rid;
 	char msg[150];
 	__le32 crc;
 	int ret;
@@ -375,9 +374,9 @@ static int read_quorum_block(struct super_block *sb, u64 blkno,
 	else if (le64_to_cpu(blk->hdr.blkno) != blkno)
 		snprintf(msg, sizeof(msg), "blk blkno %llu != %llu",
 			 le64_to_cpu(blk->hdr.blkno), blkno);
-	else if (mark && *mark != 0 && blk->random_write_mark != *mark)
-		snprintf(msg, sizeof(msg), "blk mark %016llx != %016llx, are multiple mounts configured with the same slot?",
-			 le64_to_cpu(blk->random_write_mark), le64_to_cpu(*mark));
+	else if (check_rid && le64_to_cpu(blk->events[SCOUTFS_QUORUM_EVENT_BEGIN].rid) != rid)
+		snprintf(msg, sizeof(msg), "quorum block begin rid %016llx != our rid %016llx, are multiple mounts configured with this slot?",
+		le64_to_cpu(blk->events[SCOUTFS_QUORUM_EVENT_BEGIN].rid), rid);
 	else
 		msg[0] = '\0';
 
@@ -391,184 +390,159 @@ out:
 	return ret;
 }
 
-static void set_quorum_block_event(struct super_block *sb,
-				   struct scoutfs_quorum_block *blk,
-				   struct scoutfs_quorum_block_event *ev)
+static void set_quorum_block_event(struct super_block *sb, struct scoutfs_quorum_block *blk,
+				   int event, u64 term)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_quorum_block_event *ev;
 	struct timespec64 ts;
+
+	if (WARN_ON_ONCE(event < 0 || event >= SCOUTFS_QUORUM_EVENT_NR))
+		return;
 
 	getnstimeofday64(&ts);
 
+	ev = &blk->events[event];
 	ev->rid = cpu_to_le64(sbi->rid);
+	ev->term = cpu_to_le64(term);
 	ev->ts.sec = cpu_to_le64(ts.tv_sec);
 	ev->ts.nsec = cpu_to_le32(ts.tv_nsec);
 }
 
-/*
- * Every time we write a block we update the write stamp and random
- * write mark so readers can see our write.
- */
-static int write_quorum_block(struct super_block *sb, u64 blkno,
-			      struct scoutfs_quorum_block *blk, __le64 *mark)
+static int write_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_quorum_block *blk)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	int ret;
 
 	if (WARN_ON_ONCE(blkno < SCOUTFS_QUORUM_BLKNO) ||
 	    WARN_ON_ONCE(blkno >= (SCOUTFS_QUORUM_BLKNO +
 				   SCOUTFS_QUORUM_BLOCKS)))
 		return -EINVAL;
 
-	do {
-		get_random_bytes(&blk->random_write_mark,
-				 sizeof(blk->random_write_mark));
-	} while (blk->random_write_mark == 0);
-
-	if (mark)
-		*mark = blk->random_write_mark;
-
-	set_quorum_block_event(sb, blk, &blk->write);
-
-	ret = scoutfs_block_write_sm(sb, sbi->meta_bdev, blkno,
-				      &blk->hdr, sizeof(*blk));
-	if (ret < 0)
-		scoutfs_err(sb, "quorum block write error %d", ret);
-
-	return ret;
+	return scoutfs_block_write_sm(sb, sbi->meta_bdev, blkno, &blk->hdr, sizeof(*blk));
 }
 
 /*
- * Read the caller's slot's current quorum block, make a change, and
- * write it back out.  If the caller provides a mark it can cause read
- * errors if we read a mark that doesn't match the last mark that the
- * caller wrote.
+ * Read the caller's slot's quorum block, make a change, and write it
+ * back out.
  */
-static int update_quorum_block(struct super_block *sb, u64 blkno,
-			       __le64 *mark, int role, u64 term)
+static int update_quorum_block(struct super_block *sb, int event, u64 term, bool check_rid)
 {
+	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
+	u64 blkno = SCOUTFS_QUORUM_BLKNO + opts->quorum_slot_nr;
 	struct scoutfs_quorum_block blk;
-	u64 flags;
-	u64 bits;
-	u64 set;
 	int ret;
 
-	ret = read_quorum_block(sb, blkno, &blk, mark);
+	ret = read_quorum_block(sb, blkno, &blk, check_rid);
 	if (ret == 0) {
-		if (blk.term != cpu_to_le64(term)) {
-			blk.term = cpu_to_le64(term);
-			set_quorum_block_event(sb, &blk, &blk.update_term);
-		}
-
-		flags = le64_to_cpu(blk.flags);
-		bits = SCOUTFS_QUORUM_BLOCK_LEADER;
-		set = role == LEADER ? SCOUTFS_QUORUM_BLOCK_LEADER : 0;
-		if ((flags & bits) != set)
-			set_quorum_block_event(sb, &blk,
-					       set ? &blk.set_leader :
-					             &blk.clear_leader);
-		blk.flags = cpu_to_le64((flags & ~bits) | set);
-
-		ret = write_quorum_block(sb, blkno, &blk, mark);
-	}
-
-	return ret;
-}
-
-/*
- * The calling server had fenced previous leaders before starting up,
- * now that it's up it has reclaimed their resources and can clear their
- * leader flags.
- */
-int scoutfs_quorum_clear_rid_leader(struct super_block *sb, u64 rid)
-{
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
-	struct mount_options *opts = &sbi->opts;
-	struct scoutfs_quorum_block blk;
-	int ret = 0;
-	u64 blkno;
-	int i;
-
-	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (i == opts->quorum_slot_nr || !quorum_slot_present(super, i))
-			continue;
-
-		blkno = SCOUTFS_QUORUM_BLKNO + i;
-		ret = read_quorum_block(sb, blkno, &blk, NULL);
+		set_quorum_block_event(sb, &blk, event, term);
+		ret = write_quorum_block(sb, blkno, &blk);
 		if (ret < 0)
-			break;
-
-		if (le64_to_cpu(blk.set_leader.rid) == rid) {
-			blk.flags &= ~cpu_to_le64(SCOUTFS_QUORUM_BLOCK_LEADER);
-			set_quorum_block_event(sb, &blk, &blk.fenced);
-
-			ret = write_quorum_block(sb, blkno, &blk, NULL);
-			break;
-		}
+			scoutfs_err(sb, "error %d reading quorum block %llu to update event %d term %llu",
+				    ret, blkno, event, term);
+	} else {
+		scoutfs_err(sb, "error %d writing quorum block %llu after updating event %d term %llu",
+			    ret, blkno, event, term);
 	}
-
-	if (ret < 0)
-		scoutfs_err(sb, "error %d clearing leader block for rid %016llx", ret, rid);
 
 	return ret;
 }
 
 /*
- * The calling server has been elected, had its block updated, and has
- * started running but can't yet assume that it has exclusive access to
- * the metadata device.  We read all the quorum blocks looking for
- * previously elected leaders to fence so that we're the only leader
- * running.
+ * The calling server has fenced previous leaders and reclaimed their
+ * resources.  We can now update our fence event with a greater term to
+ * stop future leaders from doing the same.
+ */
+int scoutfs_quorum_fence_complete(struct super_block *sb, u64 term)
+{
+	return update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_FENCE, term, true);
+}
+
+/*
+ * The calling server has been elected and has started running but can't
+ * yet assume that it has exclusive access to the metadata device.  We
+ * read all the quorum blocks looking for previously elected leaders to
+ * fence so that we're the only leader running.
  *
- * We only wait for the previous leaders to be fenced.  We don't clear
- * the leader bits because the server is going to reclaim their
- * resources once its up and running.  Only then will the leader bits be
- * cleared.
+ * We're relying on the invariant that there can't be two mounts running
+ * with the same slot nr at the same time.  With this constraint there
+ * can be at most two previous leaders per slot that need to be fenced:
+ * a persistent record of an old mount on the slot, and an active mount.
+ *
+ * If we start fence requests then we only wait for them to complete
+ * before returning.  The server will reclaim their resources once it is
+ * up and running and will call us to update the fence event.  If we
+ * don't start fence requests then we update the fence event
+ * immediately, the server has nothing more to do.
  *
  * Quorum will be sending heartbeats while we wait for fencing.  That
  * keeps us from being fenced while we allow userspace fencing to take a
  * reasonably long time.  We still want to timeout eventually.
  */
-int scoutfs_quorum_fence_leader_blocks(struct super_block *sb, u64 term)
+int scoutfs_quorum_fence_leaders(struct super_block *sb, u64 term)
 {
+#define NR_OLD 2
+	struct scoutfs_quorum_block_event old[SCOUTFS_QUORUM_MAX_SLOTS][NR_OLD] = {{{0,}}};
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
-	struct mount_options *opts = &sbi->opts;
 	struct scoutfs_quorum_block blk;
 	struct sockaddr_in sin;
+	const u64 rid = sbi->rid;
 	bool fence_started = false;
-	u64 blkno;
+	u64 fenced = 0;
+	__le64 fence_rid;
 	int ret = 0;
 	int err;
 	int i;
+	int j;
 
 	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (i == opts->quorum_slot_nr || !quorum_slot_present(super, i))
+		if (!quorum_slot_present(super, i))
 			continue;
 
-		blkno = SCOUTFS_QUORUM_BLKNO + i;
-		ret = read_quorum_block(sb, blkno, &blk, NULL);
+		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk, false);
 		if (ret < 0)
 			goto out;
 
-		if (!(le64_to_cpu(blk.flags) & SCOUTFS_QUORUM_BLOCK_LEADER) ||
-		    le64_to_cpu(blk.term) > term)
-			continue;
+		/* elected leader still running */
+		if (le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].term) >
+		    le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_STOP].term))
+			old[i][0] = blk.events[SCOUTFS_QUORUM_EVENT_ELECT];
 
-		scoutfs_inc_counter(sb, quorum_fence_leader);
-		scoutfs_quorum_slot_sin(super, i, &sin);
+		/* persistent record of previous server before elected */
+		if ((le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_FENCE].term) >
+		     le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_STOP].term)) &&
+		    (le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_FENCE].term) <
+		     le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].term)))
+			old[i][1] = blk.events[SCOUTFS_QUORUM_EVENT_FENCE];
 
-		scoutfs_info(sb, "fencing previous leader "SCSBF" in slot %u with address "SIN_FMT,
-			     SCSB_LEFR_ARGS(super->hdr.fsid, blk.set_leader.rid), i, SIN_ARG(&sin));
-		ret = scoutfs_fence_start(sb, le64_to_cpu(blk.set_leader.rid), sin.sin_addr.s_addr,
-					  SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
-		if (ret < 0)
-			goto out;
-		fence_started = true;
+		/* find greatest term that has fenced everything before it */
+		fenced = max(fenced, le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_FENCE].term));
+	}
 
+	/* now actually fence any old leaders which haven't been fenced yet */
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		for (j = 0; j < NR_OLD; j++) {
+			if (le64_to_cpu(old[i][j].term) == 0 ||		/* uninitialized */
+			    le64_to_cpu(old[i][j].term) < fenced ||	/* already fenced */
+			    le64_to_cpu(old[i][j].term) > term ||	/* newer than us */
+			    le64_to_cpu(old[i][j].rid) == rid)		/* us */
+				continue;
+
+			scoutfs_inc_counter(sb, quorum_fence_leader);
+			scoutfs_quorum_slot_sin(super, i, &sin);
+			fence_rid = old[i][j].rid;
+
+			scoutfs_info(sb, "fencing previous leader "SCSBF" at term %llu in slot %u with address "SIN_FMT,
+				     SCSB_LEFR_ARGS(super->hdr.fsid, fence_rid),
+				     le64_to_cpu(old[i][j].term), i, SIN_ARG(&sin));
+			ret = scoutfs_fence_start(sb, le64_to_cpu(fence_rid), sin.sin_addr.s_addr,
+						  SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
+			if (ret < 0)
+				goto out;
+			fence_started = true;
+		}
 	}
 
 out:
@@ -576,9 +550,14 @@ out:
 		err = scoutfs_fence_wait_fenced(sb, msecs_to_jiffies(SCOUTFS_QUORUM_FENCE_TO_MS));
 		if (ret == 0)
 			ret = err;
+	} else {
+		err = scoutfs_quorum_fence_complete(sb, term);
+		if (ret == 0)
+			ret = err;
 	}
+
 	if (ret < 0) {
-		scoutfs_err(sb, "error %d fencing leader blocks", ret);
+		scoutfs_err(sb, "error %d attempting to find and fence previous leaders", ret);
 		scoutfs_inc_counter(sb, quorum_fence_error);
 	}
 
@@ -601,23 +580,22 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
 	struct quorum_status qst;
-	__le64 mark;
 	u64 blkno;
 	int ret;
+	int err;
 
 	/* recording votes from slots as native single word bitmap */
 	BUILD_BUG_ON(SCOUTFS_QUORUM_MAX_SLOTS > BITS_PER_LONG);
 
 	/* get our starting term from our persistent block */
-	mark = 0;
 	blkno = SCOUTFS_QUORUM_BLKNO + opts->quorum_slot_nr;
-	ret = read_quorum_block(sb, blkno, &blk, &mark);
+	ret = read_quorum_block(sb, blkno, &blk, false);
 	if (ret < 0)
 		goto out;
 
 	/* start out as a follower */
 	qst.role = FOLLOWER;
-	qst.term = le64_to_cpu(blk.term);
+	qst.term = le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_TERM].term);
 	qst.vote_for = -1;
 	qst.vote_bits = 0;
 
@@ -626,6 +604,11 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		qst.timeout = heartbeat_timeout();
 	else
 		qst.timeout = election_timeout();
+
+	/* record that we're up and running, readers check that it isn't updated */
+	ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_BEGIN, qst.term, false);
+	if (ret < 0)
+		goto out;
 
 	while (!qinf->shutdown) {
 
@@ -657,11 +640,6 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
 					qst.term);
 			scoutfs_inc_counter(sb, quorum_send_resignation);
-
-			ret = update_quorum_block(sb, blkno, &mark,
-						  qst.role, qst.term);
-			if (ret < 0)
-				goto out;
 		}
 
 		spin_lock(&qinf->show_lock);
@@ -692,8 +670,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				qst.timeout = election_timeout();
 
 			/* store our increased term */
-			ret = update_quorum_block(sb, blkno, &mark,
-						  qst.role, qst.term);
+			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_TERM, qst.term, true);
 			if (ret < 0)
 				goto out;
 		}
@@ -710,6 +687,11 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 					qst.term);
 			qst.timeout = election_timeout();
 			scoutfs_inc_counter(sb, quorum_send_request);
+
+			/* store our increased term */
+			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_TERM, qst.term, true);
+			if (ret < 0)
+				goto out;
 		}
 
 		/* candidates count votes in their term */
@@ -738,8 +720,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 					qst.term);
 			qst.timeout = heartbeat_interval();
 
-			/* set our leader flag before starting server */
-			ret = update_quorum_block(sb, blkno, &mark, qst.role, qst.term);
+			/* record that we've been elected before starting up server */
+			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_ELECT, qst.term, true);
 			if (ret < 0)
 				goto out;
 
@@ -750,8 +732,13 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 			ret = scoutfs_server_start(sb, qst.term);
 			if (ret < 0) {
-				scoutfs_err(sb, "server startup failed with %d",
-					    ret);
+				clear_bit(QINF_FLAG_SERVER, &qinf->flags);
+				scoutfs_err(sb, "server startup failed with %d", ret);
+				/* store our increased term */
+				err = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP, qst.term,
+							  true);
+				if (err < 0 && ret == 0)
+					ret = err;
 				goto out;
 			}
 		}
@@ -798,13 +785,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				qst.term);
 	}
 
-	/* always try to clear leader block as we stop to avoid fencing */
-	if (qst.role == LEADER) {
-		ret = update_quorum_block(sb, blkno, &mark,
-					  FOLLOWER, qst.term);
-		if (ret < 0)
-			goto out;
-	}
+	/* informational event that we're shutting down, nothing relies on it */
+	update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_END, qst.term, true);
 out:
 	if (ret < 0) {
 		scoutfs_err(sb, "quorum service saw error %d, shutting down.  Cluster will be degraded until this slot is remounted to restart the quorum service",
@@ -813,58 +795,60 @@ out:
 }
 
 /*
- * Clear the server flag for the quorum work's next iteration to
- * indicate that the server has shutdown and that it should step down as
- * leader, update quorum blocks, and stop sending heartbeats.
+ * The calling server has shutdown and is no longer using shared
+ * resources.  Clear the bit so that we stop sending heartbeats and
+ * allow the next server to be elected.  Update the stop event so that
+ * it won't be considered available by clients or fenced by the next
+ * leader.
  */
-void scoutfs_quorum_server_shutdown(struct super_block *sb)
+void scoutfs_quorum_server_shutdown(struct super_block *sb, u64 term)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
 
 	clear_bit(QINF_FLAG_SERVER, &qinf->flags);
+	update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP, term, true);
 }
 
 /*
  * Clients read quorum blocks looking for the leader with a server whose
  * address it can try and connect to.
  *
- * There can be multiple running servers if a client checks before a
- * server has had a chance to fence any old servers.  We try to use the
- * block with the most recent timestamp.  If we get it wrong the
- * connection will timeout and the client will try again, presumably
- * finding a single server block.
+ * There can be records of multiple previous elected leaders if the
+ * current server hasn't yet fenced any old servers.  We use the elected
+ * leader with the greatest elected term.  If we get it wrong the
+ * connection will timeout and the client will try again.
  */
 int scoutfs_quorum_server_sin(struct super_block *sb, struct sockaddr_in *sin)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
 	struct scoutfs_quorum_block blk;
-	struct timespec64 recent = {0,};
-	struct timespec64 ts;
-	int ret;
+	u64 elect_term;
+	u64 term = 0;
+	int ret = 0;
 	int i;
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk,
-					NULL);
+		if (!quorum_slot_present(super, i))
+			continue;
+
+		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk, false);
 		if (ret < 0) {
 			scoutfs_err(sb, "error reading quorum block nr %u: %d",
 				    i, ret);
 			goto out;
 		}
 
-		ts.tv_sec = le64_to_cpu(blk.set_leader.ts.sec);
-		ts.tv_nsec = le32_to_cpu(blk.set_leader.ts.nsec);
-
-		if ((le64_to_cpu(blk.flags) & SCOUTFS_QUORUM_BLOCK_LEADER) &&
-		    (timespec64_to_ns(&ts) > timespec64_to_ns(&recent))) {
-			recent = ts;
+		elect_term = le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].term);
+		if (elect_term > term &&
+		    elect_term > le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_STOP].term)) {
+			term = elect_term;
 			scoutfs_quorum_slot_sin(super, i, sin);
 			continue;
 		}
 	}
 
-	if (timespec64_to_ns(&recent) == 0)
+	if (term == 0)
 		ret = -ENOENT;
 
 out:
