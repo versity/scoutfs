@@ -71,6 +71,7 @@ t_filter_dmesg()
 	re="$re|scoutfs .* quorum .* error"
 	re="$re|scoutfs .* error reading quorum block"
 	re="$re|scoutfs .* error .* writing quorum block"
+	re="$re|scoutfs .* error .* while checking to delete inode"
 
 	egrep -v "($re)" 
 }
