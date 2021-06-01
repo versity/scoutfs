@@ -54,12 +54,15 @@ cp man/*.8.gz $RPM_BUILD_ROOT%{_mandir}/man8/.
 install -m 755 -D src/scoutfs $RPM_BUILD_ROOT%{_sbindir}/scoutfs
 install -m 644 -D src/ioctl.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/ioctl.h
 install -m 644 -D src/format.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/format.h
+install -m 755 -D fenced/scoutfs-fenced $RPM_BUILD_ROOT%{_libexecdir}/scoutfs-fenced/scoutfs-fenced
+install -m 755 -D fenced/local-force-unmount $RPM_BUILD_ROOT%{_libexecdir}/scoutfs-fenced/run/local-force-unmount
 
 %files
 %defattr(644,root,root,755)
 %{_mandir}/man*/scoutfs*.gz
 %defattr(755,root,root,755)
 %{_sbindir}/scoutfs
+%{_libexecdir}/scoutfs-fenced
 
 %files -n scoutfs-devel
 %defattr(644,root,root,755)

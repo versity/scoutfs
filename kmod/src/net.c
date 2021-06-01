@@ -30,6 +30,7 @@
 #include "net.h"
 #include "endian_swap.h"
 #include "tseq.h"
+#include "fence.h"
 
 /*
  * scoutfs networking delivers requests and responses between nodes.
@@ -330,6 +331,9 @@ static int submit_send(struct super_block *sb,
 	    WARN_ON_ONCE(id == 0 && (flags & SCOUTFS_NET_FLAG_RESPONSE)))
 		return -EINVAL;
 
+	if (scoutfs_forcing_unmount(sb))
+		return -EIO;
+
 	msend = kmalloc(offsetof(struct message_send,
 				 nh.data[data_len]), GFP_NOFS);
 	if (!msend)
@@ -420,6 +424,16 @@ static int process_request(struct scoutfs_net_connection *conn,
 			mrecv->nh.data, le16_to_cpu(mrecv->nh.data_len));
 }
 
+static int call_resp_func(struct super_block *sb, struct scoutfs_net_connection *conn,
+			  scoutfs_net_response_t resp_func, void *resp_data,
+			  void *resp, unsigned int resp_len, int error)
+{
+	if (resp_func)
+		return resp_func(sb, conn, resp, resp_len, error, resp_data);
+	else
+		return 0;
+}
+
 /*
  * An incoming response finds the queued request and calls its response
  * function.  The response function for a given request will only be
@@ -434,7 +448,6 @@ static int process_response(struct scoutfs_net_connection *conn,
 	struct message_send *msend;
 	scoutfs_net_response_t resp_func = NULL;
 	void *resp_data;
-	int ret = 0;
 
 	spin_lock(&conn->lock);
 
@@ -449,11 +462,8 @@ static int process_response(struct scoutfs_net_connection *conn,
 
 	spin_unlock(&conn->lock);
 
-	if (resp_func)
-		ret = resp_func(sb, conn, mrecv->nh.data,
-				le16_to_cpu(mrecv->nh.data_len),
-				net_err_to_host(mrecv->nh.error), resp_data);
-	return ret;
+	return call_resp_func(sb, conn, resp_func, resp_data, mrecv->nh.data,
+			      le16_to_cpu(mrecv->nh.data_len), net_err_to_host(mrecv->nh.error));
 }
 
 /*
@@ -823,9 +833,15 @@ static void scoutfs_net_destroy_worker(struct work_struct *work)
 	if (conn->listening_conn && conn->notify_down)
 		conn->notify_down(sb, conn, conn->info, conn->rid);
 
-	/* free all messages, refactor and complete for forced unmount? */
+	/*
+	 * Usually networking is idle and we destroy pending sends, but when forcing unmount
+	 * we can have to wake up waiters by failing pending sends.
+	 */
 	list_splice_init(&conn->resend_queue, &conn->send_queue);
 	list_for_each_entry_safe(msend, tmp, &conn->send_queue, head) {
+		if (scoutfs_forcing_unmount(sb))
+			call_resp_func(sb, conn, msend->resp_func, msend->resp_data,
+				       NULL, 0, -ECONNABORTED);
 		free_msend(ninf, msend);
 	}
 
@@ -925,6 +941,8 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 		ret = -EAFNOSUPPORT;
 	if (ret)
 		goto out;
+
+	conn->last_peername = conn->peername;
 out:
 	return ret;
 }
@@ -1205,6 +1223,7 @@ static void scoutfs_net_reconn_free_worker(struct work_struct *work)
 	unsigned long now = jiffies;
 	unsigned long deadline = 0;
 	bool requeue = false;
+	int ret;
 
 	trace_scoutfs_net_reconn_free_work_enter(sb, 0, 0);
 
@@ -1218,10 +1237,18 @@ restart:
 		     time_after_eq(now, acc->reconn_deadline))) {
 			set_conn_fl(acc, reconn_freeing);
 			spin_unlock(&conn->lock);
-			if (!test_conn_fl(conn, shutting_down))
-				scoutfs_info(sb, "client timed out "SIN_FMT" -> "SIN_FMT", can not reconnect",
-					     SIN_ARG(&acc->sockname),
-					     SIN_ARG(&acc->peername));
+			if (!test_conn_fl(conn, shutting_down)) {
+				scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
+					     SIN_ARG(&acc->last_peername));
+				ret = scoutfs_fence_start(sb, acc->rid,
+						acc->last_peername.sin_addr.s_addr,
+						SCOUTFS_FENCE_CLIENT_RECONNECT);
+				if (ret) {
+					scoutfs_err(sb, "client fence returned err %d, shutting down server",
+						    ret);
+					scoutfs_server_abort(sb);
+				}
+			}
 			destroy_conn(acc);
 			goto restart;
 		}
@@ -1292,6 +1319,7 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 	init_waitqueue_head(&conn->waitq);
 	conn->sockname.sin_family = AF_INET;
 	conn->peername.sin_family = AF_INET;
+	conn->last_peername.sin_family = AF_INET;
 	INIT_LIST_HEAD(&conn->accepted_head);
 	INIT_LIST_HEAD(&conn->accepted_list);
 	conn->next_send_seq = 1;

@@ -18,10 +18,15 @@ die() {
 	exit 1
 }
 
+timestamp()
+{
+	date '+%F %T.%N'
+}
+
 # output a message with a timestamp to the run.log
 log()
 {
-	echo "[$(date '+%F %T.%N')] $*" >> "$T_RESULTS/run.log"
+	echo "[$(timestamp)] $*" >> "$T_RESULTS/run.log"
 }
 
 # run a logged command, exiting if it fails
@@ -366,6 +371,39 @@ fi
 cmd cat /sys/kernel/debug/tracing/set_event
 cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
 	    /proc/sys/kernel/ftrace_dump_on_oops
+
+#
+# Build a fenced config that runs scripts out of the repository rather
+# than the default system directory
+#
+conf="$T_RESULTS/scoutfs-fencd.conf"
+cat > $conf << EOF
+SCOUTFS_FENCED_DELAY=1
+SCOUTFS_FENCED_RUN=$T_UTILS/fenced/local-force-unmount
+SCOUTFS_FENCED_RUN_ARGS=""
+EOF
+export SCOUTFS_FENCED_CONFIG_FILE="$conf"
+
+#
+# Run the agent in the background, log its output, an kill it if we
+# exit
+#
+fenced_log()
+{
+	echo "[$(timestamp)] $*" >> "$T_RESULTS/fenced.stdout.log"
+}
+fenced_pid=""
+kill_fenced()
+{
+	if test -n "$fenced_pid" -a -d "/proc/$fenced_pid" ; then
+		fenced_log "killing fenced pid $fenced_pid"
+		kill "$fenced_pid"
+	fi
+}
+trap kill_fenced EXIT
+$T_UTILS/fenced/scoutfs-fenced > "$T_RESULTS/fenced.stdout.log" 2> "$T_RESULTS/fenced.stderr.log" &
+fenced_pid=$!
+fenced_log "started fenced pid $fenced_pid in the background"
 
 #
 # mount concurrently so that a quorum is present to elect the leader and

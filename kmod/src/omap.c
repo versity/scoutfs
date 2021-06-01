@@ -485,6 +485,10 @@ static int remove_rid_from_reqs(struct omap_info *ominf, u64 rid, u64 *resp_rid,
  * response if it was the last rid waiting for a response.
  *
  * If this returns an error then the server will shut down.
+ *
+ * This can be called multiple times by different servers if there are
+ * errors reclaiming an evicted mount, so we allow asking to remove a
+ * rid that hasn't been added.
  */
 int scoutfs_omap_remove_rid(struct super_block *sb, u64 rid)
 {
@@ -495,21 +499,20 @@ int scoutfs_omap_remove_rid(struct super_block *sb, u64 rid)
 	u64 resp_id = 0;
 	int ret;
 
-	map = kmalloc(sizeof(struct scoutfs_open_ino_map), GFP_NOFS);
-	if (!map) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
 	spin_lock(&ominf->lock);
 	entry = find_rid(&ominf->rids, rid);
 	if (entry)
 		free_rid(&ominf->rids, entry);
 	spin_unlock(&ominf->lock);
 
-	/* the server really shouldn't be removing a rid it never added */
-	if (WARN_ON_ONCE(!entry)) {
-		ret = -ENOENT;
+	if (!entry) {
+		ret = 0;
+		goto out;
+	}
+
+	map = kmalloc(sizeof(struct scoutfs_open_ino_map), GFP_NOFS);
+	if (!map) {
+		ret = -ENOMEM;
 		goto out;
 	}
 
@@ -616,7 +619,7 @@ static int handle_requests(struct super_block *sb)
 	int ret;
 	int err;
 
-	if (scoutfs_recov_next_pending(sb, SCOUTFS_RECOV_GREETING))
+	if (scoutfs_recov_next_pending(sb, 0, SCOUTFS_RECOV_GREETING))
 		return 0;
 
 	ret = 0;

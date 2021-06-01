@@ -1,0 +1,94 @@
+#!/usr/bin/bash
+
+message_output()
+{
+	printf "[%s] %s\n" "$(date '+%F %T.%N')" "$@"
+}
+
+error_message()
+{
+	message_output "$@" >> /dev/stderr
+}
+
+error_exit()
+{
+	error_message "$@, exiting"
+	exit 1
+}
+
+log_message()
+{
+	message_output "$@" >> /dev/stdout
+}
+
+# restart if we catch hup to re-read the config
+hup_restart()
+{
+	log_message "caught SIGHUP, restarting"
+	exec "$@"
+}
+trap hup_restart SIGHUP
+
+# defaults
+SCOUTFS_FENCED_CONFIG_FILE=${SCOUTFS_FENCED_CONFIG_FILE:-/etc/scoutfs/scoutfs-fenced.conf}
+SCOUTFS_FENCED_DELAY=2
+#SCOUTFS_FENCED_RUN
+#SCOUTFS_FENCED_RUN_ARGS
+
+test -n "$SCOUTFS_FENCED_CONFIG_FILE" || \
+	error_exit "SCOUTFS_FENCED_CONFIG_FILE isn't set"
+test -r "$SCOUTFS_FENCED_CONFIG_FILE" || \
+	error_exit "SCOUTFS_FENCED_CONFIG_FILE isn't readable file"
+
+log_message "reading config file $SCOUTFS_FENCED_CONFIG_FILE"
+
+. "$SCOUTFS_FENCED_CONFIG_FILE" || \
+	error_exit "error sourcing $SCOUTFS_FENCED_CONFIG_FILE as bash script"
+
+for conf in "${!SCOUTFS_FENCED_@}"; do
+	log_message "    config var $conf=${!conf}"
+done
+
+test -n "$SCOUTFS_FENCED_RUN" || \
+	error_exit "SCOUTFS_FENCED_RUN must be set"
+test -x "$SCOUTFS_FENCED_RUN" || \
+	error_exit "SCOUTFS_FENCED_RUN '$SCOUTFS_FENCED_RUN' isn't executable"
+
+#
+# main loop watching for fence request across all filesystems 
+#
+
+while sleep $SCOUTFS_FENCED_DELAY; do
+	for fence in /sys/fs/scoutfs/*/fence/*; do
+		# catches unmatched regex when no dirs
+		if [ ! -d "$fence" ]; then
+			continue
+		fi
+
+		# skip requests that have been handled
+		if [ $(cat "$fence/fenced") == 1 -o $(cat "$fence/error") == 1 ]; then
+			continue
+		fi
+
+		srv=$(basename $(dirname $(dirname $fence)))
+		rid="$(cat $fence/rid)"
+		ip="$(cat $fence/ipv4_addr)"
+		reason="$(cat $fence/reason)"
+
+		log_message "server $srv fencing rid $rid at IP $ip for $reason"
+
+		# export _REQ_ vars for run to use
+		export SCOUTFS_FENCED_REQ_RID="$rid"
+		export SCOUTFS_FENCED_REQ_IP="$ip"
+
+		$run $SCOUTFS_FENCED_RUN_ARGS
+		rc=$?
+		if [ "$rc" != 0 ]; then
+			log_message "server $srv fencing rid $rid saw error status $rc from $run"
+			echo 1 > "$fence/error"
+			continue
+		fi
+
+		echo 1 > "$fence/fenced"
+	done
+done

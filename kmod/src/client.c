@@ -48,6 +48,7 @@ struct client_info {
 
 	struct workqueue_struct *workq;
 	struct delayed_work connect_dwork;
+	unsigned long connect_delay_jiffies;
 
 	u64 server_term;
 
@@ -349,6 +350,7 @@ static int client_greeting(struct super_block *sb,
 	scoutfs_net_client_greeting(sb, conn, new_server);
 
 	client->server_term = le64_to_cpu(gr->server_term);
+	client->connect_delay_jiffies = 0;
 	ret = 0;
 out:
 	return ret;
@@ -399,6 +401,20 @@ out:
 }
 
 /*
+ * If we're not seeing successful connections we want to back off.  Each
+ * connection attempt starts by setting a long connection work delay.
+ * We only set a shorter delay if we see a greeting response from the
+ * server.  At that point we'll try to immediately reconnect if the
+ * connection is broken.
+ */
+static void queue_connect_dwork(struct super_block *sb, struct client_info *client)
+{
+	if (!atomic_read(&client->shutting_down) && !scoutfs_forcing_unmount(sb))
+		queue_delayed_work(client->workq, &client->connect_dwork,
+				   client->connect_delay_jiffies);
+}
+
+/*
  * This work is responsible for maintaining a connection from the client
  * to the server.  It's queued on mount and disconnect and we requeue
  * the work if the work fails and we're not shutting down.
@@ -437,6 +453,9 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 		goto out;
 	}
 
+	/* always wait a bit until a greeting response sets a lower delay */
+	client->connect_delay_jiffies = msecs_to_jiffies(CLIENT_CONNECT_DELAY_MS);
+
 	ret = scoutfs_quorum_server_sin(sb, &sin);
 	if (ret < 0)
 		goto out;
@@ -464,11 +483,8 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	if (ret)
 		scoutfs_net_shutdown(sb, client->conn);
 out:
-
-	/* always have a small delay before retrying to avoid storms */
-	if (ret && !atomic_read(&client->shutting_down))
-		queue_delayed_work(client->workq, &client->connect_dwork,
-				   msecs_to_jiffies(CLIENT_CONNECT_DELAY_MS));
+	if (ret)
+		queue_connect_dwork(sb, client);
 }
 
 static scoutfs_net_request_t client_req_funcs[] = {
@@ -487,8 +503,7 @@ static void client_notify_down(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	if (!atomic_read(&client->shutting_down))
-		queue_delayed_work(client->workq, &client->connect_dwork, 0);
+	queue_connect_dwork(sb, client);
 }
 
 int scoutfs_client_setup(struct super_block *sb)
@@ -523,7 +538,7 @@ int scoutfs_client_setup(struct super_block *sb)
 		goto out;
 	}
 
-	queue_delayed_work(client->workq, &client->connect_dwork, 0);
+	queue_connect_dwork(sb, client);
 	ret = 0;
 
 out:
@@ -580,7 +595,7 @@ void scoutfs_client_destroy(struct super_block *sb)
 	if (client == NULL)
 		return;
 
-	if (client->server_term != 0) {
+	if (client->server_term != 0 && !scoutfs_forcing_unmount(sb)) {
 		client->sending_farewell = true;
 		ret = scoutfs_net_submit_request(sb, client->conn,
 						 SCOUTFS_NET_CMD_FAREWELL,

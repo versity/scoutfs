@@ -327,7 +327,9 @@ struct scoutfs_alloc_root {
 #define SCOUTFS_ALLOC_OWNER_SRCH	3
 
 struct scoutfs_mounted_client_btree_val {
+	union scoutfs_inet_addr addr;
 	__u8 flags;
+	__u8 __pad[7];
 };
 
 #define SCOUTFS_MOUNTED_CLIENT_QUORUM	(1 << 0)
@@ -586,6 +588,12 @@ struct scoutfs_xattr {
 #define SCOUTFS_QUORUM_HB_IVAL_MS	100
 #define SCOUTFS_QUORUM_HB_TIMEO_MS	(5 * MSEC_PER_SEC)
 
+/*
+ * A newly elected leader will give fencing some time before giving up and
+ * shutting down.
+ */
+#define SCOUTFS_QUORUM_FENCE_TO_MS	(15 * MSEC_PER_SEC)
+
 struct scoutfs_quorum_message {
 	__le64 fsid;
 	__le64 version;
@@ -617,18 +625,24 @@ struct scoutfs_quorum_config {
 	} slots[SCOUTFS_QUORUM_MAX_SLOTS];
 };
 
-struct scoutfs_quorum_block {
-	struct scoutfs_block_header hdr;
-	__le64 term;
-	__le64 random_write_mark;
-	__le64 flags;
-	struct scoutfs_quorum_block_event {
-		__le64 rid;
-		struct scoutfs_timespec ts;
-	} write, update_term, set_leader, clear_leader, fenced;
+enum {
+	SCOUTFS_QUORUM_EVENT_BEGIN,		/* quorum service starting up */
+	SCOUTFS_QUORUM_EVENT_TERM,		/* updated persistent term */
+	SCOUTFS_QUORUM_EVENT_ELECT,		/* won election */
+	SCOUTFS_QUORUM_EVENT_FENCE,		/* server fenced others */
+	SCOUTFS_QUORUM_EVENT_STOP,		/* server stopped */
+	SCOUTFS_QUORUM_EVENT_END,		/* quorum service shutting down */
+	SCOUTFS_QUORUM_EVENT_NR,
 };
 
-#define SCOUTFS_QUORUM_BLOCK_LEADER (1 << 0)
+struct scoutfs_quorum_block {
+	struct scoutfs_block_header hdr;
+	struct scoutfs_quorum_block_event {
+		__le64 rid;
+		__le64 term;
+		struct scoutfs_timespec ts;
+	} events[SCOUTFS_QUORUM_EVENT_NR];
+};
 
 /*
  * Tunable options that apply to the entire system.  They can be set in

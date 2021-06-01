@@ -200,7 +200,9 @@ static void block_free(struct super_block *sb, struct block_private *bp)
 	else
 		BUG();
 
-	WARN_ON_ONCE(!list_empty(&bp->dirty_entry));
+	/* ok to tear down dirty blocks when forcing unmount */
+	WARN_ON_ONCE(!scoutfs_forcing_unmount(sb) && !list_empty(&bp->dirty_entry));
+
 	WARN_ON_ONCE(atomic_read(&bp->refcount));
 	WARN_ON_ONCE(atomic_read(&bp->io_count));
 	kfree(bp);
@@ -484,6 +486,9 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 	unsigned long off;
 	sector_t sector;
 	int ret = 0;
+
+	if (scoutfs_forcing_unmount(sb))
+		return -EIO;
 
 	sector = bp->bl.blkno << (SCOUTFS_BLOCK_LG_SHIFT - 9);
 
@@ -1148,7 +1153,7 @@ static void sm_block_bio_end_io(struct bio *bio, int err)
  * only layer that sees the full block buffer so we pass the calculated
  * crc to the caller for them to check in their context.
  */
-static int sm_block_io(struct block_device *bdev, int rw, u64 blkno,
+static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw, u64 blkno,
 		       struct scoutfs_block_header *hdr, size_t len,
 		       __le32 *blk_crc)
 {
@@ -1159,6 +1164,9 @@ static int sm_block_io(struct block_device *bdev, int rw, u64 blkno,
 	int ret;
 
 	BUILD_BUG_ON(PAGE_SIZE < SCOUTFS_BLOCK_SM_SIZE);
+
+	if (scoutfs_forcing_unmount(sb))
+		return -EIO;
 
 	if (WARN_ON_ONCE(len > SCOUTFS_BLOCK_SM_SIZE) ||
 	    WARN_ON_ONCE(!(rw & WRITE) && !blk_crc))
@@ -1212,14 +1220,14 @@ int scoutfs_block_read_sm(struct super_block *sb,
 			  struct scoutfs_block_header *hdr, size_t len,
 			  __le32 *blk_crc)
 {
-	return sm_block_io(bdev, READ, blkno, hdr, len, blk_crc);
+	return sm_block_io(sb, bdev, READ, blkno, hdr, len, blk_crc);
 }
 
 int scoutfs_block_write_sm(struct super_block *sb,
 			   struct block_device *bdev, u64 blkno,
 			   struct scoutfs_block_header *hdr, size_t len)
 {
-	return sm_block_io(bdev, WRITE, blkno, hdr, len, NULL);
+	return sm_block_io(sb, bdev, WRITE, blkno, hdr, len, NULL);
 }
 
 int scoutfs_block_setup(struct super_block *sb)

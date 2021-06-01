@@ -62,5 +62,15 @@ t_filter_dmesg()
 	# in debugging kernels we can slow things down a bit
 	re="$re|hrtimer: interrupt took .*"
 
+	# fencing tests force unmounts and trigger timeouts
+	re="$re|scoutfs .* forcing unmount"
+	re="$re|scoutfs .* reconnect timed out"
+	re="$re|scoutfs .* recovery timeout expired"
+	re="$re|scoutfs .* fencing previous leader"
+	re="$re|scoutfs .* reclaimed resources"
+	re="$re|scoutfs .* quorum .* error"
+	re="$re|scoutfs .* error reading quorum block"
+	re="$re|scoutfs .* error .* writing quorum block"
+
 	egrep -v "($re)" 
 }

@@ -29,6 +29,7 @@ struct srch_info;
 struct recov_info;
 struct omap_info;
 struct volopt_info;
+struct fence_info;
 
 struct scoutfs_sb_info {
 	struct super_block *sb;
@@ -54,6 +55,7 @@ struct scoutfs_sb_info {
 	struct omap_info *omap_info;
 	struct volopt_info *volopt_info;
 	struct item_cache_info *item_cache_info;
+	struct fence_info *fence_info;
 
 	wait_queue_head_t trans_hold_wq;
 	struct task_struct *trans_task;
@@ -87,6 +89,8 @@ struct scoutfs_sb_info {
 
 	struct dentry *debug_root;
 
+	bool forced_unmount;
+
 	unsigned long corruption_messages_once[SC_NR_LONGS];
 };
 
@@ -106,6 +110,13 @@ static inline bool SCOUTFS_IS_META_BDEV(struct scoutfs_super_block *super_block)
 }
 
 #define SCOUTFS_META_BDEV_MODE (FMODE_READ | FMODE_WRITE | FMODE_EXCL)
+
+static inline bool scoutfs_forcing_unmount(struct super_block *sb)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	return sbi->forced_unmount;
+}
 
 /*
  * A small string embedded in messages that's used to identify a

@@ -486,7 +486,7 @@ static int process_waiting_requests(struct super_block *sb,
 
 	/* processing waits for all invalidation responses or recovery */
 	if (!list_empty(&snode->invalidated) ||
-	    scoutfs_recov_next_pending(sb, SCOUTFS_RECOV_LOCKS) != 0) {
+	    scoutfs_recov_next_pending(sb, 0, SCOUTFS_RECOV_LOCKS) != 0) {
 		ret = 0;
 		goto out;
 	}

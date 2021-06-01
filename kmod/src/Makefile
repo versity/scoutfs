@@ -18,6 +18,7 @@ scoutfs-y +=			\
 	dir.o			\
 	export.o		\
 	ext.o			\
+	fence.o			\
 	file.o			\
 	forest.o		\
 	inode.o			\

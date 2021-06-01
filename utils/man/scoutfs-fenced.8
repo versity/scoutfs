@@ -1,0 +1,66 @@
+.TH scoutfs-fenced 8
+.SH NAME
+scoutfs-fenced \- scoutfs fence request monitoring and dispatch daemon
+.SH DESCRIPTION
+The
+.B scoutfs-fenced
+daemon runs on hosts with mounts that are configured as quorum members
+and could create fence requests.  It watches sysfs directories of
+mounted scoutfs volumes for the directories store requests
+to fence a mount.
+
+.SH ENVIRONMENT
+scoutfs-fenced reads the
+.I SCOUTFS_FENCED_CONFIG_FILE
+environment variable for the path to the config file that contains its
+configuration.  The file must be readable and is sourced as a bash
+script and is expected to set the following configuration variables.
+
+.SH CONFIGURATION
+
+.TP
+.B SCOUTFS_FENCED_DELAY
+The number of seconds to wait beteween checking for fence request
+directories in the sysfs directories of all mounts on the host.
+
+.TP
+.B SCOUTFS_FENCED_RUN
+The path to the command to execute for each fence request.  The file at
+the path must be executable.
+
+.TP
+.B SCOUTFS_FENCED_RUN_ARGS
+The arguments that are unconditionally passed through to the run
+command.
+
+.SH DAEMONIZING AND LOGGING
+
+scoutfs-fenced runs in the foreground and writes to stderr and stdout.
+Disconnecting it from parents and redirecting its output are the
+responsibility of the host environment.
+
+.SH RUN COMMAND INTERFACE
+
+scoutfs-fenced sets enviroment variables for the run command with
+information about the mount that must be fenced:
+
+.TP
+.B SCOUTFS_FENCED_REQ_RID
+The RID of the mount to be fenced.
+.TP
+.B SCOUTFS_FENCED_REQ_IP
+The dotted quad IPv4 address of the last connection from the mount.
+
+.RE
+The return status of the run command indicates if the mount was
+fenced, or not.  If the mount was successfully fenced then the command
+should return a 0 success status.  If the run command returns a non-zero
+failure status then the request will be set as errored and the server
+will shut down.  The next server that starts will create another fence
+request for the mount.
+
+.SH SEE ALSO
+.BR scoutfs (5),
+
+.SH AUTHORS
+Zach Brown <zab@versity.com>

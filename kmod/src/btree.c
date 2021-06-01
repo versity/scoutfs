@@ -1101,6 +1101,10 @@ static int btree_walk(struct super_block *sb,
 	if (WARN_ON_ONCE((flags & BTW_DIRTY) && (!alloc || !wri)))
 		return -EINVAL;
 
+	/* all ops come through walk and walk calls all reads */
+	if (scoutfs_forcing_unmount(sb))
+		return -EIO;
+
 	scoutfs_inc_counter(sb, btree_walk);
 
 restart:
