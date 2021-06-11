@@ -40,7 +40,7 @@ static void *alloc_val(struct scoutfs_btree_block *bt, int len)
 {
 	le16_add_cpu(&bt->mid_free_len, -len);
 	le16_add_cpu(&bt->total_item_bytes, len);
-	return (void *)bt + le16_to_cpu(bt->mid_free_len);
+	return (void *)&bt->items[le16_to_cpu(bt->nr_items)] + le16_to_cpu(bt->mid_free_len);
 }
 
 /*
