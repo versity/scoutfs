@@ -325,6 +325,7 @@ struct scoutfs_alloc_root {
 #define SCOUTFS_ALLOC_OWNER_SERVER	1
 #define SCOUTFS_ALLOC_OWNER_MOUNT	2
 #define SCOUTFS_ALLOC_OWNER_SRCH	3
+#define SCOUTFS_ALLOC_OWNER_LOG_MERGE	4
 
 struct scoutfs_mounted_client_btree_val {
 	union scoutfs_inet_addr addr;

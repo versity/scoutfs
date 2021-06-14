@@ -1272,9 +1272,15 @@ int scoutfs_alloc_foreach(struct super_block *sb,
 	struct scoutfs_block_ref refs[2] = {{0,}};
 	struct scoutfs_super_block *super = NULL;
 	struct scoutfs_srch_compact *sc;
+	struct scoutfs_log_merge_request *lmreq;
+	struct scoutfs_log_merge_complete *lmcomp;
 	struct scoutfs_log_trees lt;
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
+	int expected;
+	u64 avail_tot;
+	u64 freed_tot;
+	u64 id;
 	int ret;
 
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
@@ -1375,6 +1381,57 @@ retry:
 		      cb(sb, arg, SCOUTFS_ALLOC_OWNER_SRCH,
 			 le64_to_cpu(sc->id), true, false,
 			 le64_to_cpu(sc->meta_freed.total_nr));
+		if (ret < 0)
+			goto out;
+
+		scoutfs_key_inc(&key);
+	}
+
+	/* log merge allocators */
+	memset(&key, 0, sizeof(key));
+	key.sk_zone = SCOUTFS_LOG_MERGE_REQUEST_ZONE;
+	expected = sizeof(*lmreq);
+	id = 0;
+	avail_tot = 0;
+	freed_tot = 0;
+
+	for (;;) {
+		ret = scoutfs_btree_next(sb, &super->log_merge, &key, &iref);
+		if (ret == 0) {
+			if (iref.key->sk_zone != key.sk_zone) {
+				ret = -ENOENT;
+			} else if (iref.val_len == expected) {
+				key = *iref.key;
+				if (key.sk_zone == SCOUTFS_LOG_MERGE_REQUEST_ZONE) {
+					lmreq = iref.val;
+					id = le64_to_cpu(lmreq->rid);
+					avail_tot = le64_to_cpu(lmreq->meta_avail.total_nr);
+					freed_tot = le64_to_cpu(lmreq->meta_freed.total_nr);
+				} else {
+					lmcomp = iref.val;
+					id = le64_to_cpu(lmcomp->rid);
+					avail_tot = le64_to_cpu(lmcomp->meta_avail.total_nr);
+					freed_tot = le64_to_cpu(lmcomp->meta_freed.total_nr);
+				}
+			} else {
+				ret = -EIO;
+			}
+			scoutfs_btree_put_iref(&iref);
+		}
+		if (ret == -ENOENT) {
+			if (key.sk_zone == SCOUTFS_LOG_MERGE_REQUEST_ZONE) {
+				memset(&key, 0, sizeof(key));
+				key.sk_zone = SCOUTFS_LOG_MERGE_COMPLETE_ZONE;
+				expected = sizeof(*lmcomp);
+				continue;
+			}
+			break;
+		}
+		if (ret < 0)
+			goto out;
+
+		ret = cb(sb, arg, SCOUTFS_ALLOC_OWNER_LOG_MERGE, id, true, true, avail_tot) ?:
+		      cb(sb, arg, SCOUTFS_ALLOC_OWNER_LOG_MERGE, id, true, false, freed_tot);
 		if (ret < 0)
 			goto out;
 
