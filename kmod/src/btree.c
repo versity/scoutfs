@@ -1867,3 +1867,285 @@ int scoutfs_btree_set_parent(struct super_block *sb,
 	return btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_SET_PAR,
 			  key, 0, NULL, NULL, par_root);
 }
+
+struct merge_pos {
+	struct rb_node node;
+	struct scoutfs_btree_root *root;
+	struct scoutfs_key key;
+	unsigned int val_len;
+	u8 val[SCOUTFS_BTREE_MAX_VAL_LEN];
+};
+
+/*
+ * Find the next item in the mpos's root after its key and make sure
+ * that it's in its sorted position in the rbtree.  We're responsible
+ * for freeing the mpos if we don't put it back in the pos_root.  This
+ * happens naturally naturally when its item_root has no more items to
+ * merge.
+ */
+static int reset_mpos(struct super_block *sb, struct rb_root *pos_root,
+		      struct merge_pos *mpos, struct scoutfs_key *end,
+		      scoutfs_btree_merge_cmp_t merge_cmp)
+{
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct merge_pos *walk;
+	struct rb_node *parent;
+	struct rb_node **node;
+	int key_cmp;
+	int val_cmp;
+	int ret;
+
+restart:
+	if (!RB_EMPTY_NODE(&mpos->node)) {
+		rb_erase(&mpos->node, pos_root);
+		RB_CLEAR_NODE(&mpos->node);
+	}
+
+	/* find the next item in the root within end */
+	ret = scoutfs_btree_next(sb, mpos->root, &mpos->key, &iref);
+	if (ret == 0) {
+		if (scoutfs_key_compare(iref.key, end) > 0) {
+			ret = -ENOENT;
+		} else {
+			mpos->key = *iref.key;
+			mpos->val_len = iref.val_len;
+			memcpy(mpos->val, iref.val, iref.val_len);
+		}
+		scoutfs_btree_put_iref(&iref);
+	}
+	if (ret < 0) {
+		kfree(mpos);
+		if (ret == -ENOENT)
+			ret = 0;
+		goto out;
+	}
+
+rewalk:
+	/* sort merge items by key then oldest to newest */
+	node = &pos_root->rb_node;
+	parent = NULL;
+	while (*node) {
+		parent = *node;
+		walk = container_of(*node, struct merge_pos, node);
+
+		key_cmp = scoutfs_key_compare(&mpos->key, &walk->key);
+		val_cmp = merge_cmp(mpos->val, mpos->val_len,
+				    walk->val, walk->val_len);
+
+		/* drop old versions of logged keys as we discover them */
+		if (key_cmp == 0) {
+			scoutfs_inc_counter(sb, btree_merge_drop_old);
+			if (val_cmp < 0)  {
+				scoutfs_key_inc(&mpos->key);
+				goto restart;
+			} else {
+				BUG_ON(val_cmp == 0);
+				rb_erase(&walk->node, pos_root);
+				kfree(walk);
+				goto rewalk;
+			}
+		}
+
+		if ((key_cmp ?: val_cmp) < 0)
+			node = &(*node)->rb_left;
+		else
+			node = &(*node)->rb_right;
+	}
+
+	rb_link_node(&mpos->node, parent, node);
+	rb_insert_color(&mpos->node, pos_root);
+	ret = 0;
+out:
+	return ret;
+}
+
+static struct merge_pos *first_mpos(struct rb_root *root)
+{
+	struct rb_node *node = rb_first(root);
+	if (node)
+		 return container_of(node, struct merge_pos, node);
+	return NULL;
+}
+
+/*
+ * Merge items from a number of read-only input roots into a writable
+ * destination root.  The order of the input roots doesn't matter, the
+ * items are merged in sorted key order.
+ *
+ * The merge_cmp callback determines the order that the input items are
+ * merged in.  The is_del callback determines if a merging item should
+ * be removed from the destination.
+ *
+ * subtree indicates that the destination root is in fact one of many
+ * parent blocks and shouldn't be split or allowed to fall below the
+ * join low water mark.
+ *
+ * drop_val indicates the initial length of the value that should be
+ * dropped when merging items into destination items.
+ *
+ * -ERANGE is returned if the merge doesn't fully exhaust the range, due
+ * to allocators running low or needing to join/split the parent.
+ * *next_ret is set to the next key which hasn't been merged so that the
+ * caller can retry with a new allocator and subtree.
+ */
+int scoutfs_btree_merge(struct super_block *sb,
+			struct scoutfs_alloc *alloc,
+			struct scoutfs_block_writer *wri,
+			struct scoutfs_key *start,
+			struct scoutfs_key *end,
+			struct scoutfs_key *next_ret,
+			struct scoutfs_btree_root *root,
+			struct list_head *inputs,
+			scoutfs_btree_merge_cmp_t merge_cmp,
+			scoutfs_btree_merge_is_del_t merge_is_del, bool subtree,
+			int drop_val, int dirty_limit, int alloc_low)
+{
+	struct scoutfs_btree_root_head *rhead;
+	struct rb_root pos_root = RB_ROOT;
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_block *bl = NULL;
+	struct btree_walk_key_range kr;
+	struct scoutfs_avl_node *par;
+	struct merge_pos *mpos;
+	struct merge_pos *tmp;
+	int walk_val_len;
+	int walk_flags;
+	bool is_del;
+	int cmp;
+	int ret;
+
+	trace_scoutfs_btree_merge(sb, root, start, end);
+	scoutfs_inc_counter(sb, btree_merge);
+
+	list_for_each_entry(rhead, inputs, head) {
+		mpos = kmalloc(sizeof(*mpos), GFP_NOFS);
+		if (!mpos) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		RB_CLEAR_NODE(&mpos->node);
+		mpos->key = *start;
+		mpos->root = &rhead->root;
+
+		ret = reset_mpos(sb, &pos_root, mpos, end, merge_cmp);
+		if (ret < 0)
+			goto out;
+	}
+
+	walk_flags = BTW_DIRTY;
+	if (subtree)
+		walk_flags |= BTW_SUBTREE;
+	walk_val_len = 0;
+
+	while ((mpos = first_mpos(&pos_root))) {
+
+		if (scoutfs_block_writer_dirty_bytes(sb, wri) >= dirty_limit) {
+			scoutfs_inc_counter(sb, btree_merge_dirty_limit);
+			ret = -ERANGE;
+			*next_ret = mpos->key;
+			goto out;
+		}
+
+		if (scoutfs_alloc_meta_low(sb, alloc, alloc_low)) {
+			scoutfs_inc_counter(sb, btree_merge_alloc_low);
+			ret = -ERANGE;
+			*next_ret = mpos->key;
+			goto out;
+		}
+
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+		ret = btree_walk(sb, alloc, wri, root, walk_flags,
+				 &mpos->key, walk_val_len, &bl, &kr, NULL);
+		if (ret < 0) {
+			if (ret == -ERANGE)
+				*next_ret = mpos->key;
+			goto out;
+		}
+		bt = bl->data;
+		scoutfs_inc_counter(sb, btree_merge_walk);
+
+		for (; mpos; mpos = first_mpos(&pos_root)) {
+
+			/* val must have at least what we need to drop */
+			if (mpos->val_len < drop_val) {
+				ret = -EIO;
+				goto out;
+			}
+
+			/* walk to new leaf if we exceed parent ref key */
+			if (scoutfs_key_compare(&mpos->key, &kr.end) > 0)
+				break;
+
+			/* see if there's an existing item */
+			item = leaf_item_hash_search(sb, bt, &mpos->key);
+			is_del = merge_is_del(mpos->val, mpos->val_len);
+
+			trace_scoutfs_btree_merge_items(sb, mpos->root,
+					&mpos->key, mpos->val_len,
+					item ? root : NULL,
+					item ? item_key(item) : NULL,
+					item ? item_val_len(item) : 0, is_del);
+
+			/* rewalk and split if ins/update needs room */
+			if (!is_del && !mid_free_item_room(bt, mpos->val_len)) {
+				walk_flags |= BTW_INSERT;
+				walk_val_len = mpos->val_len;
+				break;
+			}
+
+			/* insert missing non-deletion merge items */
+			if (!item && !is_del) {
+				scoutfs_avl_search(&bt->item_root,
+						   cmp_key_item, &mpos->key,
+						   &cmp, &par, NULL, NULL);
+				create_item(bt, &mpos->key,
+					    mpos->val + drop_val,
+					    mpos->val_len - drop_val, par, cmp);
+				scoutfs_inc_counter(sb, btree_merge_insert);
+			}
+
+			/* update existing items */
+			if (item && !is_del) {
+				update_item_value(bt, item,
+						  mpos->val + drop_val,
+						  mpos->val_len - drop_val);
+				scoutfs_inc_counter(sb, btree_merge_update);
+			}
+
+			/* delete if merge item was deletion */
+			if (item && is_del) {
+				/* rewalk and join if non-root falls under low water mark */
+				if (root->ref.blkno != bt->hdr.blkno &&
+				    !total_above_join_low_water(bt)) {
+					walk_flags |= BTW_DELETE;
+					break;
+				}
+				delete_item(bt, item, NULL);
+				scoutfs_inc_counter(sb, btree_merge_delete);
+			}
+
+			/* reset walk args now that we're not split/join */
+			walk_flags &= ~(BTW_INSERT | BTW_DELETE);
+			walk_val_len = 0;
+
+			/* finished with this merge item */
+			scoutfs_key_inc(&mpos->key);
+			ret = reset_mpos(sb, &pos_root, mpos, end, merge_cmp);
+			if (ret < 0)
+				goto out;
+			mpos = NULL;
+		}
+	}
+
+	ret = 0;
+out:
+	scoutfs_block_put(sb, bl);
+	rbtree_postorder_for_each_entry_safe(mpos, tmp, &pos_root, node) {
+		kfree(mpos);
+	}
+
+	return ret;
+}

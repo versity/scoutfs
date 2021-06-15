@@ -44,6 +44,14 @@
 	EXPAND_COUNTER(btree_insert)				\
 	EXPAND_COUNTER(btree_leaf_item_hash_search)		\
 	EXPAND_COUNTER(btree_lookup)				\
+	EXPAND_COUNTER(btree_merge)				\
+	EXPAND_COUNTER(btree_merge_alloc_low)			\
+	EXPAND_COUNTER(btree_merge_delete)			\
+	EXPAND_COUNTER(btree_merge_dirty_limit)			\
+	EXPAND_COUNTER(btree_merge_drop_old)			\
+	EXPAND_COUNTER(btree_merge_insert)			\
+	EXPAND_COUNTER(btree_merge_update)			\
+	EXPAND_COUNTER(btree_merge_walk)			\
 	EXPAND_COUNTER(btree_next)				\
 	EXPAND_COUNTER(btree_prev)				\
 	EXPAND_COUNTER(btree_split)				\
