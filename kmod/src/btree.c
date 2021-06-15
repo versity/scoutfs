@@ -108,10 +108,11 @@ static inline unsigned int item_bytes(struct scoutfs_btree_item *item)
 }
 
 /*
- * Join blocks when they both are 1/4 full.  This puts some distance
- * between the join threshold and the full threshold for splitting.
- * Blocks that just split or joined need to undergo a reasonable amount
- * of item modification before they'll split or join again.
+ * Refill blocks from their siblings when they're under 1/4 full.  This
+ * puts some distance between the join threshold and the full threshold
+ * for splitting.  Blocks that just split or joined need to undergo a
+ * reasonable amount of item modification before they'll split or join
+ * again.
  */
 static unsigned int join_low_watermark(void)
 {
@@ -815,6 +816,7 @@ static int try_join(struct super_block *sb,
 	struct scoutfs_btree_block *sib;
 	struct scoutfs_block *sib_bl;
 	struct scoutfs_block_ref *ref;
+	const unsigned int lwm = join_low_watermark();
 	unsigned int sib_tot;
 	bool move_right;
 	int to_move;
@@ -840,18 +842,23 @@ static int try_join(struct super_block *sb,
 		return ret;
 	sib = sib_bl->data;
 
-	sib_tot = le16_to_cpu(bt->total_item_bytes);
-	if (sib_tot < join_low_watermark())
+	/* combine if resulting block would be up to 75% full, move big chunk otherwise */
+	sib_tot = le16_to_cpu(sib->total_item_bytes);
+	if (sib_tot <= lwm * 2)
 		to_move = sib_tot;
 	else
-		to_move = sib_tot - join_low_watermark();
+		to_move = lwm;
 
-	if (le16_to_cpu(bt->mid_free_len) < to_move) {
+	/* compact to make room for over-estimate of worst case move overrun */
+	if (le16_to_cpu(bt->mid_free_len) <
+	    (to_move + item_len_bytes(SCOUTFS_BTREE_MAX_VAL_LEN))) {
 		ret = compact_values(sb, bt);
-		if (ret < 0)
+		if (ret < 0) {
 			scoutfs_block_put(sb, sib_bl);
-		return ret;
+			return ret;
+		}
 	}
+
 	move_items(bt, sib, move_right, to_move);
 
 	/* update our parent's item */
