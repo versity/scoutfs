@@ -37,7 +37,7 @@ int scoutfs_srch_rotate_log(struct super_block *sb,
 			    struct scoutfs_alloc *alloc,
 			    struct scoutfs_block_writer *wri,
 			    struct scoutfs_btree_root *root,
-			    struct scoutfs_srch_file *sfl);
+			    struct scoutfs_srch_file *sfl, bool force);
 int scoutfs_srch_get_compact(struct super_block *sb,
 			     struct scoutfs_alloc *alloc,
 			     struct scoutfs_block_writer *wri,

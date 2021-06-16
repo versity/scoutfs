@@ -989,12 +989,13 @@ int scoutfs_srch_rotate_log(struct super_block *sb,
 			    struct scoutfs_alloc *alloc,
 			    struct scoutfs_block_writer *wri,
 			    struct scoutfs_btree_root *root,
-			    struct scoutfs_srch_file *sfl)
+			    struct scoutfs_srch_file *sfl, bool force)
 {
 	struct scoutfs_key key;
 	int ret;
 
-	if (le64_to_cpu(sfl->blocks) < SCOUTFS_SRCH_LOG_BLOCK_LIMIT)
+	if (sfl->ref.blkno == 0 ||
+	    (!force && le64_to_cpu(sfl->blocks) < SCOUTFS_SRCH_LOG_BLOCK_LIMIT))
 		return 0;
 
 	init_srch_key(&key, SCOUTFS_SRCH_LOG_TYPE,

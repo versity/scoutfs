@@ -823,7 +823,7 @@ static int server_commit_log_trees(struct super_block *sb,
 	/* try to rotate the srch log when big enough */
 	mutex_lock(&server->srch_mutex);
 	ret = scoutfs_srch_rotate_log(sb, &server->alloc, &server->wri,
-				      &super->srch_root, &lt.srch_file);
+				      &super->srch_root, &lt.srch_file, false);
 	mutex_unlock(&server->srch_mutex);
 	if (ret < 0) {
 		scoutfs_err(sb, "server error, rotating srch log: %d", ret);
@@ -922,6 +922,16 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 		goto out;
 	}
 
+	/* for srch log file rotation if it's populated */
+	mutex_lock(&server->srch_mutex);
+	ret = scoutfs_srch_rotate_log(sb, &server->alloc, &server->wri,
+				      &super->srch_root, &lt.srch_file, true);
+	mutex_unlock(&server->srch_mutex);
+	if (ret < 0) {
+		scoutfs_err(sb, "server error, reclaim rotating srch log: %d", ret);
+		goto out;
+	}
+
 	/*
 	 * All of these can return errors after having modified the
 	 * allocator trees.  We have to try and update the roots in the
@@ -944,7 +954,7 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 
 	err = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
-	BUG_ON(err != 0); /* alloc and log item roots out of sync */
+	BUG_ON(err != 0); /* alloc, log, srch items out of sync */
 
 out:
 	mutex_unlock(&server->logs_mutex);
