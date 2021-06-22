@@ -82,6 +82,58 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 			      struct scoutfs_btree_root *root,
 			      struct scoutfs_btree_item_list *lst);
 
+int scoutfs_btree_parent_range(struct super_block *sb,
+			       struct scoutfs_btree_root *root,
+			       struct scoutfs_key *key,
+			       struct scoutfs_key *start,
+			       struct scoutfs_key *end);
+int scoutfs_btree_get_parent(struct super_block *sb,
+			     struct scoutfs_btree_root *root,
+			     struct scoutfs_key *key,
+			     struct scoutfs_btree_root *par_root);
+int scoutfs_btree_set_parent(struct super_block *sb,
+			     struct scoutfs_alloc *alloc,
+			     struct scoutfs_block_writer *wri,
+			     struct scoutfs_btree_root *root,
+			     struct scoutfs_key *key,
+			     struct scoutfs_btree_root *par_root);
+int scoutfs_btree_rebalance(struct super_block *sb,
+			    struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri,
+			    struct scoutfs_btree_root *root,
+			    struct scoutfs_key *key);
+
+/* merge input is a list of roots */
+struct scoutfs_btree_root_head {
+	struct list_head head;
+	struct scoutfs_btree_root root;
+};
+/*
+ * Compare the values of merge input items whose keys are equal to
+ * determine their merge order.
+ */
+typedef int (*scoutfs_btree_merge_cmp_t)(void *a_val, int a_val_len,
+					 void *b_val, int b_val_len);
+/* whether merging item should be removed from destination */
+typedef bool (*scoutfs_btree_merge_is_del_t)(void *val, int val_len);
+int scoutfs_btree_merge(struct super_block *sb,
+			struct scoutfs_alloc *alloc,
+			struct scoutfs_block_writer *wri,
+			struct scoutfs_key *start,
+			struct scoutfs_key *end,
+			struct scoutfs_key *next_ret,
+			struct scoutfs_btree_root *root,
+			struct list_head *input_list,
+			scoutfs_btree_merge_cmp_t merge_cmp,
+			scoutfs_btree_merge_is_del_t merge_is_del, bool subtree,
+			int drop_val, int dirty_limit, int alloc_low);
+
+int scoutfs_btree_free_blocks(struct super_block *sb,
+			      struct scoutfs_alloc *alloc,
+			      struct scoutfs_block_writer *wri,
+			      struct scoutfs_key *key,
+			      struct scoutfs_btree_root *root, int alloc_low);
+
 void scoutfs_btree_put_iref(struct scoutfs_btree_item_ref *iref);
 
 #endif

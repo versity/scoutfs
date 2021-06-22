@@ -730,7 +730,7 @@ static void lock_grant_worker(struct work_struct *work)
 
 		lock->request_pending = 0;
 		lock->mode = nl->new_mode;
-		lock->write_version = le64_to_cpu(nl->write_version);
+		lock->write_seq = le64_to_cpu(nl->write_seq);
 
 		if (lock_count_match_exists(nl->new_mode, lock->waiters))
 			extend_grace(sb, lock);
@@ -988,7 +988,7 @@ int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
 	for (i = 0; lock && i < SCOUTFS_NET_LOCK_MAX_RECOVER_NR; i++) {
 
 		nlr->locks[i].key = lock->start;
-		nlr->locks[i].write_version = cpu_to_le64(lock->write_version);
+		nlr->locks[i].write_seq = cpu_to_le64(lock->write_seq);
 		nlr->locks[i].old_mode = lock->mode;
 		nlr->locks[i].new_mode = lock->mode;
 

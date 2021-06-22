@@ -236,7 +236,7 @@ static int do_mkfs(struct mkfs_args *args)
 	super->version = cpu_to_le64(SCOUTFS_INTEROP_VERSION);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
-	super->next_trans_seq = cpu_to_le64(1);
+	super->seq = cpu_to_le64(1);
 	super->total_meta_blocks = cpu_to_le64(last_meta + 1);
 	super->first_meta_blkno = cpu_to_le64(next_meta);
 	super->last_meta_blkno = cpu_to_le64(last_meta);

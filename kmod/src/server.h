@@ -62,7 +62,7 @@ int scoutfs_server_lock_response(struct super_block *sb, u64 rid, u64 id,
 				 struct scoutfs_net_lock *nl);
 int scoutfs_server_lock_recover_request(struct super_block *sb, u64 rid,
 					struct scoutfs_key *key);
-int scoutfs_server_hold_commit(struct super_block *sb);
+void scoutfs_server_hold_commit(struct super_block *sb);
 int scoutfs_server_apply_commit(struct super_block *sb, int err);
 void scoutfs_server_recov_finish(struct super_block *sb, u64 rid, int which);
 
@@ -70,6 +70,10 @@ int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
 				     struct scoutfs_open_ino_map_args *args);
 int scoutfs_server_send_omap_response(struct super_block *sb, u64 rid, u64 id,
 				      struct scoutfs_open_ino_map *map, int err);
+
+u64 scoutfs_server_seq(struct super_block *sb);
+u64 scoutfs_server_next_seq(struct super_block *sb);
+void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq);
 
 struct sockaddr_in;
 struct scoutfs_quorum_elected_info;

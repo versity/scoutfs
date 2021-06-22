@@ -22,6 +22,10 @@ int scoutfs_client_srch_get_compact(struct super_block *sb,
 				    struct scoutfs_srch_compact *sc);
 int scoutfs_client_srch_commit_compact(struct super_block *sb,
 				       struct scoutfs_srch_compact *res);
+int scoutfs_client_get_log_merge(struct super_block *sb,
+				 struct scoutfs_log_merge_request *req);
+int scoutfs_client_commit_log_merge(struct super_block *sb,
+				    struct scoutfs_log_merge_complete *comp);
 int scoutfs_client_send_omap_response(struct super_block *sb, u64 id,
 				      struct scoutfs_open_ino_map *map);
 int scoutfs_client_open_ino_map(struct super_block *sb, u64 group_nr,

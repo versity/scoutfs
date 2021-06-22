@@ -149,7 +149,8 @@ struct cached_item {
 
 static int item_val_bytes(int val_len)
 {
-	return round_up(offsetof(struct cached_item, val[val_len]), CACHED_ITEM_ALIGN);
+	return round_up(offsetof(struct cached_item, val[val_len]),
+			CACHED_ITEM_ALIGN);
 }
 
 /*
@@ -345,7 +346,8 @@ static struct cached_page *alloc_pg(struct super_block *sb, gfp_t gfp)
 	page = alloc_page(GFP_NOFS | gfp);
 	if (!page || !pg) {
 		kfree(pg);
-		__free_page(page);
+		if (page)
+			__free_page(page);
 		return NULL;
 	}
 
@@ -420,8 +422,7 @@ static struct cached_item *alloc_item(struct cached_page *pg,
 static void erase_item(struct cached_page *pg, struct cached_item *item)
 {
 	rbtree_erase(&item->node, &pg->item_root);
-	pg->erased_bytes += round_up(item_val_bytes(item->val_len),
-				     CACHED_ITEM_ALIGN);
+	pg->erased_bytes += item_val_bytes(item->val_len);
 }
 
 static void lru_add(struct super_block *sb, struct item_cache_info *cinf,
@@ -852,8 +853,7 @@ static void compact_page_items(struct super_block *sb,
 
 	for (from = first_item(&pg->item_root); from; from = next_item(from)) {
 		to = page_address(empty->page) + page_off;
-		page_off += round_up(item_val_bytes(from->val_len),
-				     CACHED_ITEM_ALIGN);
+		page_off += item_val_bytes(from->val_len);
 
 		/* copy the entire item, struct members and all */
 		memcpy(to, from, item_val_bytes(from->val_len));
@@ -1308,10 +1308,10 @@ static struct active_reader *active_rbtree_walk(struct rb_root *root,
  * on our root and aren't in dirty or lru lists.
  *
  * We need to store deletion items here as we read items from all the
- * btrees so that they can override older versions of the items.  The
- * deletion items will be deleted before we insert the pages into the
- * cache.  We don't insert old versions of items into the tree here so
- * that the trees don't have to compare versions.
+ * btrees so that they can override older items.  The deletion items
+ * will be deleted before we insert the pages into the cache.  We don't
+ * insert old versions of items into the tree here so that the trees
+ * don't have to compare seqs.
  */
 static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
 			  struct scoutfs_log_item_value *liv, void *val,
@@ -1331,7 +1331,7 @@ static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
 
 	pg = page_rbtree_walk(sb, root, key, key, NULL, NULL, &p_par, &p_pnode);
 	found = item_rbtree_walk(&pg->item_root, key, NULL, &par, &pnode);
-	if (found && (le64_to_cpu(found->liv.vers) >= le64_to_cpu(liv->vers)))
+	if (found && (le64_to_cpu(found->liv.seq) >= le64_to_cpu(liv->seq)))
 		return 0;
 
 	if (!page_has_room(pg, val_len)) {
@@ -1784,6 +1784,21 @@ out:
 }
 
 /*
+ * An item's seq is greater of the client transaction's seq and the
+ * lock's write_seq.  This ensures that multiple commits in one lock
+ * grant will have increasing seqs, and new locks in open commits will
+ * also increase the seqs.  It lets us limit the inputs of item merging
+ * to the last stable seq and ensure that all the items in open
+ * transactions and granted locks will have greater seqs.
+ */
+static __le64 item_seq(struct super_block *sb, struct scoutfs_lock *lock)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	return cpu_to_le64(max(sbi->trans_seq, lock->write_seq));
+}
+
+/*
  * Mark the item dirty.  Dirtying while holding a transaction pins the
  * page holding the item and guarantees that the item can be deleted or
  * updated (without increasing the value length) during the transaction
@@ -1816,7 +1831,7 @@ int scoutfs_item_dirty(struct super_block *sb, struct scoutfs_key *key,
 		ret = -ENOENT;
 	} else {
 		mark_item_dirty(sb, cinf, pg, NULL, item);
-		item->liv.vers = cpu_to_le64(lock->write_version);
+		item->liv.seq = item_seq(sb, lock);
 		ret = 0;
 	}
 
@@ -1836,7 +1851,7 @@ static int item_create(struct super_block *sb, struct scoutfs_key *key,
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct scoutfs_log_item_value liv = {
-		.vers = cpu_to_le64(lock->write_version),
+		.seq = item_seq(sb, lock),
 	};
 	struct cached_item *found;
 	struct cached_item *item;
@@ -1911,7 +1926,7 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct scoutfs_log_item_value liv = {
-		.vers = cpu_to_le64(lock->write_version),
+		.seq = item_seq(sb, lock),
 	};
 	struct cached_item *item;
 	struct cached_item *found;
@@ -1944,9 +1959,10 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 		if (val_len)
 			memcpy(found->val, val, val_len);
 		if (val_len < found->val_len)
-			pg->erased_bytes += found->val_len - val_len;
+			pg->erased_bytes += item_val_bytes(found->val_len) -
+					    item_val_bytes(val_len);
 		found->val_len = val_len;
-		found->liv.vers = liv.vers;
+		found->liv.seq = liv.seq;
 		mark_item_dirty(sb, cinf, pg, NULL, found);
 	} else {
 		item = alloc_item(pg, key, &liv, val, val_len);
@@ -1978,7 +1994,7 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct scoutfs_log_item_value liv = {
-		.vers = cpu_to_le64(lock->write_version),
+		.seq = item_seq(sb, lock),
 	};
 	struct cached_item *item;
 	struct cached_page *pg;
@@ -2020,10 +2036,11 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 		erase_item(pg, item);
 	} else {
 		/* must emit deletion to clobber old persistent item */
-		item->liv.vers = cpu_to_le64(lock->write_version);
+		item->liv.seq = liv.seq;
 		item->liv.flags |= SCOUTFS_LOG_ITEM_FLAG_DELETION;
 		item->deletion = 1;
-		pg->erased_bytes += item->val_len;
+		pg->erased_bytes += item_val_bytes(item->val_len) -
+				    item_val_bytes(0);
 		item->val_len = 0;
 		mark_item_dirty(sb, cinf, pg, NULL, item);
 	}
@@ -2106,7 +2123,7 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 	struct page *page;
 	LIST_HEAD(pages);
 	LIST_HEAD(pos);
-	u64 max_vers = 0;
+	u64 max_seq = 0;
 	int val_len;
 	int bytes;
 	int off;
@@ -2171,7 +2188,7 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 			val_len = sizeof(item->liv) + item->val_len;
 			bytes = offsetof(struct scoutfs_btree_item_list,
 					 val[val_len]);
-			max_vers = max(max_vers, le64_to_cpu(item->liv.vers));
+			max_seq = max(max_seq, le64_to_cpu(item->liv.seq));
 
 			if (off + bytes > PAGE_SIZE) {
 				page = second;
@@ -2201,8 +2218,8 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 		read_unlock(&pg->rwlock);
 	}
 
-	/* store max item vers in forest's log_trees */
-	scoutfs_forest_set_max_vers(sb, max_vers);
+	/* store max item seq in forest's log_trees */
+	scoutfs_forest_set_max_seq(sb, max_seq);
 
 	/* write all the dirty items into log btree blocks */
 	ret = scoutfs_forest_insert_list(sb, first);

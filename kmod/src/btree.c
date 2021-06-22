@@ -83,6 +83,10 @@ enum btree_walk_flags {
 	 BTW_ALLOC	= (1 <<  3), /* allocate a new block for 0 ref, requires dirty */
 	 BTW_INSERT	= (1 <<  4), /* walking to insert, try splitting */
 	 BTW_DELETE	= (1 <<  5), /* walking to delete, try joining */
+	 BTW_PAR_RNG	= (1 <<  6), /* return range through final parent */
+	 BTW_GET_PAR	= (1 <<  7), /* get reference to final parent */
+	 BTW_SET_PAR	= (1 <<  8), /* override reference to final parent */
+	 BTW_SUBTREE	= (1 <<  9), /* root is parent subtree, return -ERANGE if split/join */
 };
 
 /* total length of the value payload */
@@ -104,14 +108,20 @@ static inline unsigned int item_bytes(struct scoutfs_btree_item *item)
 }
 
 /*
- * Join blocks when they both are 1/4 full.  This puts some distance
- * between the join threshold and the full threshold for splitting.
- * Blocks that just split or joined need to undergo a reasonable amount
- * of item modification before they'll split or join again.
+ * Refill blocks from their siblings when they're under 1/4 full.  This
+ * puts some distance between the join threshold and the full threshold
+ * for splitting.  Blocks that just split or joined need to undergo a
+ * reasonable amount of item modification before they'll split or join
+ * again.
  */
 static unsigned int join_low_watermark(void)
 {
 	return (SCOUTFS_BLOCK_LG_SIZE - sizeof(struct scoutfs_btree_block)) / 4;
+}
+
+static bool total_above_join_low_water(struct scoutfs_btree_block *bt)
+{
+	return le16_to_cpu(bt->total_item_bytes) >= join_low_watermark();
 }
 
 /*
@@ -512,6 +522,7 @@ static void create_item(struct scoutfs_btree_block *bt,
 
 	item->val_off = insert_value(bt, ptr_off(bt, item), val, val_len);
 	item->val_len = cpu_to_le16(val_len);
+	memset(item->__pad, 0, sizeof(item->__pad));
 
 	le16_add_cpu(&bt->total_item_bytes, item_bytes(item));
 }
@@ -805,12 +816,13 @@ static int try_join(struct super_block *sb,
 	struct scoutfs_btree_block *sib;
 	struct scoutfs_block *sib_bl;
 	struct scoutfs_block_ref *ref;
+	const unsigned int lwm = join_low_watermark();
 	unsigned int sib_tot;
 	bool move_right;
 	int to_move;
 	int ret;
 
-	if (le16_to_cpu(bt->total_item_bytes) >= join_low_watermark())
+	if (total_above_join_low_water(bt))
 		return 0;
 
 	scoutfs_inc_counter(sb, btree_join);
@@ -830,18 +842,23 @@ static int try_join(struct super_block *sb,
 		return ret;
 	sib = sib_bl->data;
 
-	sib_tot = le16_to_cpu(bt->total_item_bytes);
-	if (sib_tot < join_low_watermark())
+	/* combine if resulting block would be up to 75% full, move big chunk otherwise */
+	sib_tot = le16_to_cpu(sib->total_item_bytes);
+	if (sib_tot <= lwm * 2)
 		to_move = sib_tot;
 	else
-		to_move = sib_tot - join_low_watermark();
+		to_move = lwm;
 
-	if (le16_to_cpu(bt->mid_free_len) < to_move) {
+	/* compact to make room for over-estimate of worst case move overrun */
+	if (le16_to_cpu(bt->mid_free_len) <
+	    (to_move + item_len_bytes(SCOUTFS_BTREE_MAX_VAL_LEN))) {
 		ret = compact_values(sb, bt);
-		if (ret < 0)
+		if (ret < 0) {
 			scoutfs_block_put(sb, sib_bl);
-		return ret;
+			return ret;
+		}
 	}
+
 	move_items(bt, sib, move_right, to_move);
 
 	/* update our parent's item */
@@ -904,20 +921,21 @@ static bool bad_avl_node_off(__le16 node_off, int nr)
  *  - call after leaf modification
  *  - padding is zero
  */
-static void verify_btree_block(struct super_block *sb,
+__attribute__((unused))
+static void verify_btree_block(struct super_block *sb, char *str,
 			       struct scoutfs_btree_block *bt, int level,
-			       struct scoutfs_key *start,
+			       bool last_ref, struct scoutfs_key *start,
 			       struct scoutfs_key *end)
 {
 	__le16 *buckets = leaf_item_hash_buckets(bt);
 	struct scoutfs_btree_item *item;
+	struct scoutfs_avl_node *node;
 	char *reason = NULL;
 	int first_val = 0;
 	int hashed = 0;
 	int end_off;
 	int tot = 0;
 	int i = 0;
-	int j = 0;
 	int nr;
 
 	if (bt->level != level) {
@@ -956,8 +974,9 @@ static void verify_btree_block(struct super_block *sb,
 			goto out;
 		}
 
-		for (j = 0; j < sizeof(item->__pad); j++) {
-			WARN_ON_ONCE(item->__pad[j] != 0);
+		if (memchr_inv(item->__pad, '\0', sizeof(item->__pad))) {
+			reason = "item struct __pad isn't zero";
+			goto out;
 		}
 
 		if (scoutfs_key_compare(&item->key, start) < 0 ||
@@ -972,8 +991,19 @@ static void verify_btree_block(struct super_block *sb,
 			goto out;
 		}
 
+		if (level > 0 && le16_to_cpu(item->val_len) !=
+				 sizeof(struct scoutfs_block_ref)) {
+			reason = "parent item val not sizeof ref";
+			goto out;
+		}
+
 		if (le16_to_cpu(item->val_len) > SCOUTFS_BTREE_MAX_VAL_LEN) {
 			reason = "bad item val len";
+			goto out;
+		}
+
+		if (le16_to_cpu(item->val_off) % SCOUTFS_BTREE_VALUE_ALIGN) {
+			reason = "item value not aligned";
 			goto out;
 		}
 
@@ -983,12 +1013,20 @@ static void verify_btree_block(struct super_block *sb,
 			goto out;
 		}
 
-		tot += sizeof(struct scoutfs_btree_item) +
-		       le16_to_cpu(item->val_len);
+		tot += item_len_bytes(le16_to_cpu(item->val_len));
 
 		if (item->val_len != 0) {
 			first_val = min_t(int, first_val,
 					  le16_to_cpu(item->val_off));
+		}
+	}
+
+	if (last_ref && level > 0 &&
+	    (node = scoutfs_avl_last(&bt->item_root)) != NULL) {
+		item = node_item(node);
+		if (scoutfs_key_compare(&item->key, end) != 0) {
+			reason = "final ref item key not range end";
+			goto out;
 		}
 	}
 
@@ -1024,17 +1062,18 @@ out:
 	if (!reason)
 		return;
 
-	printk("found btree block inconsistency: %s\n", reason);
-	printk("start "SK_FMT" end "SK_FMT"\n", SK_ARG(start), SK_ARG(end));
+	printk("verifying btree %s: %s\n", str, reason);
+	printk("args: level %u last_ref %u start "SK_FMT" end "SK_FMT"\n",
+		level, last_ref, SK_ARG(start), SK_ARG(end));
 	printk("calced: i %u tot %u hashed %u fv %u\n",
 	       i, tot, hashed, first_val);
 
-	printk("hdr: crc %x magic %x fsid %llx seq %llx blkno %llu\n", 
+	printk("bt hdr: crc %x magic %x fsid %llx seq %llx blkno %llu\n", 
 		le32_to_cpu(bt->hdr.crc), le32_to_cpu(bt->hdr.magic),
 		le64_to_cpu(bt->hdr.fsid), le64_to_cpu(bt->hdr.seq),
 		le64_to_cpu(bt->hdr.blkno));
 	printk("item_root: node %u\n", le16_to_cpu(bt->item_root.node));
-	printk("nr %u tib %u mfl %u lvl %u\n",
+	printk("bt: nr %u tib %u mfl %u lvl %u\n",
 		le16_to_cpu(bt->nr_items), le16_to_cpu(bt->total_item_bytes),
 		le16_to_cpu(bt->mid_free_len), bt->level);
 
@@ -1049,6 +1088,92 @@ out:
 	}
 
 	BUG();
+}
+
+/*
+ * Walk from the root to the leaf, verifying the blocks traversed.
+ */
+__attribute__((unused))
+static void verify_btree_walk(struct super_block *sb, char *str,
+			      struct scoutfs_btree_root *root,
+			      struct scoutfs_key *key)
+{
+	struct scoutfs_avl_node *next_node;
+	struct scoutfs_avl_node *node;
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_item *prev;
+	struct scoutfs_block *bl = NULL;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_block_ref ref;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	bool last_ref;
+	int level;
+	int ret;
+
+	if (root->height == 0 && root->ref.blkno != 0) {
+		WARN_ONCE(1, "invalid btree root height %u blkno %llu seq %016llx\n",
+			root->height, le64_to_cpu(root->ref.blkno),
+			le64_to_cpu(root->ref.seq));
+		return;
+	}
+
+	if (root->height == 0)
+		return;
+
+	scoutfs_key_set_zeros(&start);
+	scoutfs_key_set_ones(&end);
+	level = root->height;
+	ref = root->ref;
+	/* first parent last ref isn't all ones in subtrees */
+	last_ref = false;
+
+	while(level-- > 0) {
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+		ret = get_ref_block(sb, NULL, NULL, 0, &ref, &bl);
+		if (ret) {
+			printk("verifying  btree %s: read error %d\n",
+			       str, ret);
+			break;
+		}
+		bt = bl->data;
+
+		verify_btree_block(sb, str, bt, level, last_ref, &start, &end);
+
+		if (level == 0)
+			break;
+
+		node = scoutfs_avl_search(&bt->item_root, cmp_key_item, key,
+					  NULL, NULL, &next_node, NULL);
+		item = node_item(node ?: next_node);
+
+		if (item == NULL) {
+			printk("verifying btree %s: no ref item\n", str);
+			printk("root: height %u blkno %llu seq %016llx\n",
+			       root->height, le64_to_cpu(root->ref.blkno),
+			       le64_to_cpu(root->ref.seq));
+			printk("walk level %u start "SK_FMT" end "SK_FMT"\n",
+				level, SK_ARG(&start), SK_ARG(&end));
+
+			printk("block: level %u blkno %llu seq %016llx\n",
+			       bt->level, le64_to_cpu(bt->hdr.blkno),
+			       le64_to_cpu(bt->hdr.seq));
+			printk("key: "SK_FMT"\n", SK_ARG(key));
+			BUG();
+		}
+
+		if ((prev = prev_item(bt, item))) {
+			start = *item_key(prev);
+			scoutfs_key_inc(&start);
+		}
+		end = *item_key(item);
+
+		memcpy(&ref, item_val(bt, item), sizeof(ref));
+		last_ref = !next_item(bt, item);
+	}
+
+	scoutfs_block_put(sb, bl);
 }
 
 struct btree_walk_key_range {
@@ -1082,7 +1207,8 @@ static int btree_walk(struct super_block *sb,
 		      int flags, struct scoutfs_key *key,
 		      unsigned int val_len,
 		      struct scoutfs_block **bl_ret,
-		      struct btree_walk_key_range *kr)
+		      struct btree_walk_key_range *kr,
+		      struct scoutfs_btree_root *par_root)
 {
 	struct scoutfs_block *par_bl = NULL;
 	struct scoutfs_block *bl = NULL;
@@ -1098,7 +1224,9 @@ static int btree_walk(struct super_block *sb,
 	unsigned int nr;
 	int ret;
 
-	if (WARN_ON_ONCE((flags & BTW_DIRTY) && (!alloc || !wri)))
+	if (WARN_ON_ONCE((flags & BTW_DIRTY) && (!alloc || !wri)) ||
+	    WARN_ON_ONCE((flags & BTW_PAR_RNG) && !kr) ||
+	    WARN_ON_ONCE((flags & (BTW_GET_PAR|BTW_SET_PAR)) && !par_root))
 		return -EINVAL;
 
 	/* all ops come through walk and walk calls all reads */
@@ -1125,7 +1253,14 @@ restart:
 	ret = 0;
 
 	if (!root->height) {
-		if (!(flags & BTW_INSERT)) {
+		if (flags & BTW_GET_PAR) {
+			memset(par_root, 0, sizeof(*par_root));
+			*root = *par_root;
+			ret = 0;
+		} else if (flags & BTW_SET_PAR) {
+			*root = *par_root;
+			ret = 0;
+		} else if (!(flags & BTW_INSERT)) {
 			ret = -ENOENT;
 		} else {
 			ret = get_ref_block(sb, alloc, wri, BTW_ALLOC | BTW_DIRTY, &root->ref, &bl);
@@ -1144,13 +1279,39 @@ restart:
 
 		trace_scoutfs_btree_walk(sb, root, key, flags, level, ref);
 
+		/* par range set by ref to last parent block */
+		if (level < 2 && (flags & BTW_PAR_RNG)) {
+			ret = 0;
+			break;
+		}
+
+		if (level < 2 && (flags & BTW_GET_PAR)) {
+			par_root->ref = *ref;
+			par_root->height = level + 1;
+			ret = 0;
+			break;
+		}
+
+		if (level < 2 && (flags & BTW_SET_PAR)) {
+			if (ref == &root->ref) {
+				/* single parent block is replaced, can shrink/grow */
+				*root = *par_root;
+			} else {
+				/* subtree replacing one of parents must match height */
+				if (par_root->height != level + 1) {
+					ret = -EINVAL;
+					break;
+				}
+				*ref = par_root->ref;
+			}
+			ret = 0;
+			break;
+		}
+
 		ret = get_ref_block(sb, alloc, wri, flags, ref, &bl);
 		if (ret)
 			break;
 		bt = bl->data;
-
-		if (0 && kr)
-			verify_btree_block(sb, bt, level, &kr->start, &kr->end);
 
 		/* XXX more aggressive block verification, before ref updates? */
 		if (bt->level != level) {
@@ -1164,6 +1325,17 @@ restart:
 					   le64_to_cpu(bt->hdr.seq), bt->level,
 					   level);
 			ret = -EIO;
+			break;
+		}
+
+		/*
+		 * join/split won't check subtree parent root, let
+		 * caller know when it needs to be split/join.
+		 */
+		if ((flags & BTW_SUBTREE) && level == 1 &&
+		    (!total_above_join_low_water(bt) ||
+		     !mid_free_item_room(bt, sizeof(struct scoutfs_block_ref)))) {
+			ret = -ERANGE;
 			break;
 		}
 
@@ -1292,7 +1464,7 @@ int scoutfs_btree_lookup(struct super_block *sb,
 	if (WARN_ON_ONCE(iref->key))
 		return -EINVAL;
 
-	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, NULL);
+	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1344,7 +1516,7 @@ int scoutfs_btree_insert(struct super_block *sb,
 		return -EINVAL;
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT, key,
-			 val_len, &bl, NULL);
+			 val_len, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1406,7 +1578,7 @@ int scoutfs_btree_update(struct super_block *sb,
 		return -EINVAL;
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT, key,
-			 val_len, &bl, NULL);
+			 val_len, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1448,7 +1620,7 @@ int scoutfs_btree_force(struct super_block *sb,
 		return -EINVAL;
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT, key,
-			 val_len, &bl, NULL);
+			 val_len, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1486,7 +1658,7 @@ int scoutfs_btree_delete(struct super_block *sb,
 	scoutfs_inc_counter(sb, btree_delete);
 
 	ret = btree_walk(sb, alloc, wri, root, BTW_DELETE | BTW_DIRTY, key,
-			 0, &bl, NULL);
+			 0, &bl, NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1550,7 +1722,7 @@ static int btree_iter(struct super_block *sb,struct scoutfs_btree_root *root,
 
 	for (;;) {
 		ret = btree_walk(sb, NULL, NULL, root, flags, &walk_key,
-				 0, &bl, &kr);
+				 0, &bl, &kr, NULL);
 		if (ret < 0)
 			break;
 		bt = bl->data;
@@ -1623,7 +1795,8 @@ int scoutfs_btree_dirty(struct super_block *sb,
 
 	scoutfs_inc_counter(sb, btree_dirty);
 
-	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY, key, 0, &bl, NULL);
+	ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY, key, 0, &bl,
+			 NULL, NULL);
 	if (ret == 0) {
 		bt = bl->data;
 
@@ -1659,7 +1832,7 @@ int scoutfs_btree_read_items(struct super_block *sb,
 	struct scoutfs_block *bl;
 	int ret;
 
-	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, &kr);
+	ret = btree_walk(sb, NULL, NULL, root, 0, key, 0, &bl, &kr, NULL);
 	if (ret < 0)
 		goto out;
 	bt = bl->data;
@@ -1714,7 +1887,7 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 
 	while (lst) {
 		ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT,
-				 &lst->key, lst->val_len, &bl, &kr);
+				 &lst->key, lst->val_len, &bl, &kr, NULL);
 		if (ret < 0)
 			goto out;
 		bt = bl->data;
@@ -1740,5 +1913,544 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 	}
 
 out:
+	return ret;
+}
+
+/*
+ * Descend towards the leaf that would contain the key.  As we arrive at
+ * the last parent block, set start and end to the range of keys that
+ * could be found through traversal of that last parent.
+ *
+ * If the tree is too short for parent blocks then the max key range
+ * is returned.
+ */
+int scoutfs_btree_parent_range(struct super_block *sb,
+			       struct scoutfs_btree_root *root,
+			       struct scoutfs_key *key,
+			       struct scoutfs_key *start,
+			       struct scoutfs_key *end)
+{
+	struct btree_walk_key_range kr;
+	int ret;
+
+	ret = btree_walk(sb, NULL, NULL, root, BTW_PAR_RNG, key, 0, NULL,
+			 &kr, NULL);
+	if (ret == -ENOENT)
+		ret = 0;
+
+	*start = kr.start;
+	*end = kr.end;
+	return ret;
+}
+
+/*
+ * Initialize the caller's root as a subtree whose ref points to the
+ * last parent found as we traverse towards the leaf containing the key.
+ * If the tree is too small to have multiple blocks at the final parent
+ * level then the caller's root will be initialized to equal full input
+ * root.  If the tree is empty then the par root will also be empty.
+ */
+int scoutfs_btree_get_parent(struct super_block *sb,
+			     struct scoutfs_btree_root *root,
+			     struct scoutfs_key *key,
+			     struct scoutfs_btree_root *par_root)
+{
+	return btree_walk(sb, NULL, NULL, root, BTW_GET_PAR, key, 0, NULL,
+			  NULL, par_root);
+}
+
+/*
+ * Dirty a path towards the leaf block containing the key.  As we reach
+ * the reference to the final parent block override it with the ref in
+ * the caller's block.  If the tree only has a single block at the final
+ * parent level, or a single leaf block, then the entire tree is
+ * replaced with the caller's root.
+ *
+ * This manages allocs and frees while dirtying blocks in the path to
+ * the ref, but it doesn't account for allocating the blocks that are
+ * referenced by the ref nor freeing blocks referenced by the old ref
+ * that's overwritten.  Keeping allocators in sync with the result of
+ * the ref override is the responsibility of the caller.
+ */
+int scoutfs_btree_set_parent(struct super_block *sb,
+			     struct scoutfs_alloc *alloc,
+			     struct scoutfs_block_writer *wri,
+			     struct scoutfs_btree_root *root,
+			     struct scoutfs_key *key,
+			     struct scoutfs_btree_root *par_root)
+{
+
+	trace_scoutfs_btree_set_parent(sb, root, key, par_root);
+
+	return btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_SET_PAR,
+			  key, 0, NULL, NULL, par_root);
+}
+
+/*
+ * Descend to the leaf, making sure that all the blocks conform to the
+ * balance constraints.  Blocks below the low threshold will be joined.
+ * This is called to split blocks that were too large for insertions,
+ * but those insertions were in a distant context and we don't bother
+ * communicating the val_len back here.  We just try to insert a max
+ * value.
+ *
+ * This always dirties all the way to the leaf.  It could be made more
+ * efficient with more btree walk flags to walk and check for blocks
+ * that need balancing, and then walks that don't dirty unless they need
+ * to join/split.
+ */
+int scoutfs_btree_rebalance(struct super_block *sb,
+			    struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri,
+			    struct scoutfs_btree_root *root,
+			    struct scoutfs_key *key)
+{
+	return btree_walk(sb, alloc, wri, root,
+			  BTW_DIRTY | BTW_INSERT | BTW_DELETE,
+			  key, SCOUTFS_BTREE_MAX_VAL_LEN, NULL, NULL, NULL);
+}
+
+struct merge_pos {
+	struct rb_node node;
+	struct scoutfs_btree_root *root;
+	struct scoutfs_key key;
+	unsigned int val_len;
+	u8 val[SCOUTFS_BTREE_MAX_VAL_LEN];
+};
+
+/*
+ * Find the next item in the mpos's root after its key and make sure
+ * that it's in its sorted position in the rbtree.  We're responsible
+ * for freeing the mpos if we don't put it back in the pos_root.  This
+ * happens naturally naturally when its item_root has no more items to
+ * merge.
+ */
+static int reset_mpos(struct super_block *sb, struct rb_root *pos_root,
+		      struct merge_pos *mpos, struct scoutfs_key *end,
+		      scoutfs_btree_merge_cmp_t merge_cmp)
+{
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct merge_pos *walk;
+	struct rb_node *parent;
+	struct rb_node **node;
+	int key_cmp;
+	int val_cmp;
+	int ret;
+
+restart:
+	if (!RB_EMPTY_NODE(&mpos->node)) {
+		rb_erase(&mpos->node, pos_root);
+		RB_CLEAR_NODE(&mpos->node);
+	}
+
+	/* find the next item in the root within end */
+	ret = scoutfs_btree_next(sb, mpos->root, &mpos->key, &iref);
+	if (ret == 0) {
+		if (scoutfs_key_compare(iref.key, end) > 0) {
+			ret = -ENOENT;
+		} else {
+			mpos->key = *iref.key;
+			mpos->val_len = iref.val_len;
+			memcpy(mpos->val, iref.val, iref.val_len);
+		}
+		scoutfs_btree_put_iref(&iref);
+	}
+	if (ret < 0) {
+		kfree(mpos);
+		if (ret == -ENOENT)
+			ret = 0;
+		goto out;
+	}
+
+rewalk:
+	/* sort merge items by key then oldest to newest */
+	node = &pos_root->rb_node;
+	parent = NULL;
+	while (*node) {
+		parent = *node;
+		walk = container_of(*node, struct merge_pos, node);
+
+		key_cmp = scoutfs_key_compare(&mpos->key, &walk->key);
+		val_cmp = merge_cmp(mpos->val, mpos->val_len,
+				    walk->val, walk->val_len);
+
+		/* drop old versions of logged keys as we discover them */
+		if (key_cmp == 0) {
+			scoutfs_inc_counter(sb, btree_merge_drop_old);
+			if (val_cmp < 0)  {
+				scoutfs_key_inc(&mpos->key);
+				goto restart;
+			} else {
+				BUG_ON(val_cmp == 0);
+				rb_erase(&walk->node, pos_root);
+				kfree(walk);
+				goto rewalk;
+			}
+		}
+
+		if ((key_cmp ?: val_cmp) < 0)
+			node = &(*node)->rb_left;
+		else
+			node = &(*node)->rb_right;
+	}
+
+	rb_link_node(&mpos->node, parent, node);
+	rb_insert_color(&mpos->node, pos_root);
+	ret = 0;
+out:
+	return ret;
+}
+
+static struct merge_pos *first_mpos(struct rb_root *root)
+{
+	struct rb_node *node = rb_first(root);
+	if (node)
+		 return container_of(node, struct merge_pos, node);
+	return NULL;
+}
+
+/*
+ * Merge items from a number of read-only input roots into a writable
+ * destination root.  The order of the input roots doesn't matter, the
+ * items are merged in sorted key order.
+ *
+ * The merge_cmp callback determines the order that the input items are
+ * merged in.  The is_del callback determines if a merging item should
+ * be removed from the destination.
+ *
+ * subtree indicates that the destination root is in fact one of many
+ * parent blocks and shouldn't be split or allowed to fall below the
+ * join low water mark.
+ *
+ * drop_val indicates the initial length of the value that should be
+ * dropped when merging items into destination items.
+ *
+ * -ERANGE is returned if the merge doesn't fully exhaust the range, due
+ * to allocators running low or needing to join/split the parent.
+ * *next_ret is set to the next key which hasn't been merged so that the
+ * caller can retry with a new allocator and subtree.
+ */
+int scoutfs_btree_merge(struct super_block *sb,
+			struct scoutfs_alloc *alloc,
+			struct scoutfs_block_writer *wri,
+			struct scoutfs_key *start,
+			struct scoutfs_key *end,
+			struct scoutfs_key *next_ret,
+			struct scoutfs_btree_root *root,
+			struct list_head *inputs,
+			scoutfs_btree_merge_cmp_t merge_cmp,
+			scoutfs_btree_merge_is_del_t merge_is_del, bool subtree,
+			int drop_val, int dirty_limit, int alloc_low)
+{
+	struct scoutfs_btree_root_head *rhead;
+	struct rb_root pos_root = RB_ROOT;
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_block *bl = NULL;
+	struct btree_walk_key_range kr;
+	struct scoutfs_avl_node *par;
+	struct merge_pos *mpos;
+	struct merge_pos *tmp;
+	int walk_val_len;
+	int walk_flags;
+	bool is_del;
+	int cmp;
+	int ret;
+
+	trace_scoutfs_btree_merge(sb, root, start, end);
+	scoutfs_inc_counter(sb, btree_merge);
+
+	list_for_each_entry(rhead, inputs, head) {
+		mpos = kmalloc(sizeof(*mpos), GFP_NOFS);
+		if (!mpos) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		RB_CLEAR_NODE(&mpos->node);
+		mpos->key = *start;
+		mpos->root = &rhead->root;
+
+		ret = reset_mpos(sb, &pos_root, mpos, end, merge_cmp);
+		if (ret < 0)
+			goto out;
+	}
+
+	walk_flags = BTW_DIRTY;
+	if (subtree)
+		walk_flags |= BTW_SUBTREE;
+	walk_val_len = 0;
+
+	while ((mpos = first_mpos(&pos_root))) {
+
+		if (scoutfs_block_writer_dirty_bytes(sb, wri) >= dirty_limit) {
+			scoutfs_inc_counter(sb, btree_merge_dirty_limit);
+			ret = -ERANGE;
+			*next_ret = mpos->key;
+			goto out;
+		}
+
+		if (scoutfs_alloc_meta_low(sb, alloc, alloc_low)) {
+			scoutfs_inc_counter(sb, btree_merge_alloc_low);
+			ret = -ERANGE;
+			*next_ret = mpos->key;
+			goto out;
+		}
+
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+		ret = btree_walk(sb, alloc, wri, root, walk_flags,
+				 &mpos->key, walk_val_len, &bl, &kr, NULL);
+		if (ret < 0) {
+			if (ret == -ERANGE)
+				*next_ret = mpos->key;
+			goto out;
+		}
+		bt = bl->data;
+		scoutfs_inc_counter(sb, btree_merge_walk);
+
+		for (; mpos; mpos = first_mpos(&pos_root)) {
+
+			/* val must have at least what we need to drop */
+			if (mpos->val_len < drop_val) {
+				ret = -EIO;
+				goto out;
+			}
+
+			/* walk to new leaf if we exceed parent ref key */
+			if (scoutfs_key_compare(&mpos->key, &kr.end) > 0)
+				break;
+
+			/* see if there's an existing item */
+			item = leaf_item_hash_search(sb, bt, &mpos->key);
+			is_del = merge_is_del(mpos->val, mpos->val_len);
+
+			trace_scoutfs_btree_merge_items(sb, mpos->root,
+					&mpos->key, mpos->val_len,
+					item ? root : NULL,
+					item ? item_key(item) : NULL,
+					item ? item_val_len(item) : 0, is_del);
+
+			/* rewalk and split if ins/update needs room */
+			if (!is_del && !mid_free_item_room(bt, mpos->val_len)) {
+				walk_flags |= BTW_INSERT;
+				walk_val_len = mpos->val_len;
+				break;
+			}
+
+			/* insert missing non-deletion merge items */
+			if (!item && !is_del) {
+				scoutfs_avl_search(&bt->item_root,
+						   cmp_key_item, &mpos->key,
+						   &cmp, &par, NULL, NULL);
+				create_item(bt, &mpos->key,
+					    mpos->val + drop_val,
+					    mpos->val_len - drop_val, par, cmp);
+				scoutfs_inc_counter(sb, btree_merge_insert);
+			}
+
+			/* update existing items */
+			if (item && !is_del) {
+				update_item_value(bt, item,
+						  mpos->val + drop_val,
+						  mpos->val_len - drop_val);
+				scoutfs_inc_counter(sb, btree_merge_update);
+			}
+
+			/* delete if merge item was deletion */
+			if (item && is_del) {
+				/* rewalk and join if non-root falls under low water mark */
+				if (root->ref.blkno != bt->hdr.blkno &&
+				    !total_above_join_low_water(bt)) {
+					walk_flags |= BTW_DELETE;
+					break;
+				}
+				delete_item(bt, item, NULL);
+				scoutfs_inc_counter(sb, btree_merge_delete);
+			}
+
+			/* reset walk args now that we're not split/join */
+			walk_flags &= ~(BTW_INSERT | BTW_DELETE);
+			walk_val_len = 0;
+
+			/* finished with this merge item */
+			scoutfs_key_inc(&mpos->key);
+			ret = reset_mpos(sb, &pos_root, mpos, end, merge_cmp);
+			if (ret < 0)
+				goto out;
+			mpos = NULL;
+		}
+	}
+
+	ret = 0;
+out:
+	scoutfs_block_put(sb, bl);
+	rbtree_postorder_for_each_entry_safe(mpos, tmp, &pos_root, node) {
+		kfree(mpos);
+	}
+
+	return ret;
+}
+
+/*
+ * Free all the blocks referenced by a btree.  The btree is only read,
+ * this does not update the blocks as it frees.  The caller ensures that
+ * these btrees aren't been modified.
+ *
+ * The caller's key tracks which blocks have been freed.  It must be
+ * initialized to zeros before the first call to start freeing blocks.
+ * Once a block is freed the key is updated such that the freed block
+ * will not be read again.
+ *
+ * Returns 0 when progress has been made successfully, which includes
+ * partial progress.  The key is set to all ones once we've freed all
+ * the blocks.
+ *
+ * This works by descending to the last parent block and freeing all its
+ * leaf blocks without reading them.  As it descends it remembers the
+ * number of parent blocks which were traversed through their final
+ * child ref.  If we free all the leaf blocks then all these parent
+ * blocks are no longer needed and can be freed.  The caller's key is
+ * updated to past the subtree that we just freed and we retry the
+ * descent from the root through the next set of parents to the next set
+ * of leaf blocks to free.
+ */
+int scoutfs_btree_free_blocks(struct super_block *sb,
+			      struct scoutfs_alloc *alloc,
+			      struct scoutfs_block_writer *wri,
+			      struct scoutfs_key *key,
+			      struct scoutfs_btree_root *root, int alloc_low)
+{
+	u64 blknos[SCOUTFS_BTREE_MAX_HEIGHT];
+	struct scoutfs_block *bl = NULL;
+	struct scoutfs_btree_item *item;
+	struct scoutfs_btree_block *bt;
+	struct scoutfs_block_ref ref;
+	struct scoutfs_avl_node *node;
+	struct scoutfs_avl_node *next;
+	struct scoutfs_key par_next;
+	int nr_par;
+	int level;
+	int ret;
+	int i;
+
+	if (WARN_ON_ONCE(root->height > ARRAY_SIZE(blknos)))
+		return -EIO; /* XXX corruption */
+
+	if (root->height == 0) {
+		scoutfs_key_set_ones(key);
+		return 0;
+	}
+
+	if (scoutfs_key_is_ones(key))
+		return 0;
+
+	/* just free a single leaf block */
+	if (root->height == 1) {
+		ret = scoutfs_free_meta(sb, alloc, wri,
+					le64_to_cpu(root->ref.blkno));
+		if (ret == 0) {
+			trace_scoutfs_btree_free_blocks_single(sb, root,
+						le64_to_cpu(root->ref.blkno));
+			scoutfs_key_set_ones(key);
+		}
+		goto out;
+	}
+
+	for (;;) {
+		/* start the walk at the root block */
+		level = root->height - 1;
+		ref = root->ref;
+		scoutfs_key_set_ones(&par_next);
+		nr_par = 0;
+
+		/* read blocks until we read the last parent */
+		for (;;) {
+			scoutfs_block_put(sb, bl);
+			bl = NULL;
+			ret = get_ref_block(sb, alloc, wri, 0, &ref, &bl);
+			if (ret < 0)
+				goto out;
+			bt = bl->data;
+
+			node = scoutfs_avl_search(&bt->item_root, cmp_key_item,
+						  key, NULL, NULL, &next, NULL);
+			if (node == NULL)
+				node = next;
+
+			/* should never descend into parent with no more refs */
+			if (WARN_ON_ONCE(node == NULL)) {
+				ret = -EIO;
+				goto out;
+			}
+
+			/* we'll free refs in the last parent */
+			if (level == 1)
+				break;
+
+			item = node_item(node);
+			next = scoutfs_avl_next(&bt->item_root, node);
+			if (next) {
+				/* didn't take last ref, still need parents */
+				nr_par = 0;
+				par_next = *item_key(item);
+				scoutfs_key_inc(&par_next);
+			} else {
+				/* final ref, could free after all leaves */
+				blknos[nr_par++] = le64_to_cpu(bt->hdr.blkno);
+			}
+
+			memcpy(&ref, item_val(bt, item), sizeof(ref));
+			level--;
+		}
+
+		/* free all leaf block refs in last parent */
+		while (node) {
+
+			/* make sure we can always free parents after leaves */
+			if (scoutfs_alloc_meta_low(sb, alloc,
+						   alloc_low + nr_par + 1)) {
+				ret = 0;
+				goto out;
+			}
+
+			item = node_item(node);
+			memcpy(&ref, item_val(bt, item), sizeof(ref));
+
+			trace_scoutfs_btree_free_blocks_leaf(sb, root,
+							le64_to_cpu(ref.blkno));
+			ret = scoutfs_free_meta(sb, alloc, wri,
+						le64_to_cpu(ref.blkno));
+			if (ret < 0)
+				goto out;
+
+			node = scoutfs_avl_next(&bt->item_root, node);
+			if (node) {
+				/* done with keys in child we just freed */
+				*key = *item_key(item);
+				scoutfs_key_inc(key);
+			}
+		}
+
+		/* now that leaves are freed, free any empty parents */
+		for (i = 0; i < nr_par; i++) {
+			trace_scoutfs_btree_free_blocks_parent(sb, root,
+							       blknos[i]);
+			ret = scoutfs_free_meta(sb, alloc, wri, blknos[i]);
+			BUG_ON(ret); /* checked meta low, freed should fit */
+		}
+
+		/* restart walk past the subtree we just freed */
+		*key = par_next;
+
+		/* but done if we just freed all parents down right spine */
+		if (scoutfs_key_is_ones(&par_next)) {
+			ret = 0;
+			goto out;
+		}
+	}
+
+out:
+	scoutfs_block_put(sb, bl);
 	return ret;
 }
