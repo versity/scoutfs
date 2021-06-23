@@ -676,6 +676,14 @@ int scoutfs_dalloc_return_cached(struct super_block *sb,
  *
  * Unlike meta allocations, the caller is expected to serialize
  * allocations from the root.
+ *
+ * ENOBUFS is returned if the data allocator ran out of space and we can
+ * probably refill it from the server.  The caller is expected to back
+ * out, commit the transaction, and try again.
+ *
+ * ENOSPC is returned if the data allocator ran out of space but we have
+ * a flag from the server telling us that there's no more space
+ * available.  This is a hard error and should be returned.
  */
 int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
@@ -724,13 +732,13 @@ int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 	ret = 0;
 out:
 	if (ret < 0) {
-		/*
-		 * Special retval meaning there wasn't space to alloc from
-		 * this txn. Doesn't mean filesystem is completely full.
-		 * Maybe upper layers want to try again.
-		 */
-		if (ret == -ENOENT)
-			ret = -ENOBUFS;
+		if (ret == -ENOENT) {
+			if (le32_to_cpu(dalloc->root.flags) & SCOUTFS_ALLOC_FLAG_LOW)
+				ret = -ENOSPC;
+			else
+				ret = -ENOBUFS;
+		}
+
 		*blkno_ret = 0;
 		*count_ret = 0;
 	} else {
@@ -1259,6 +1267,20 @@ bool scoutfs_alloc_meta_low(struct super_block *sb,
 	} while (read_seqretry(&alloc->seqlock, seq));
 
 	return lo;
+}
+
+bool scoutfs_alloc_test_flag(struct super_block *sb,
+			    struct scoutfs_alloc *alloc, u32 flag)
+{
+	unsigned int seq;
+	bool set;
+
+	do {
+		seq = read_seqbegin(&alloc->seqlock);
+		set = !!(le32_to_cpu(alloc->avail.flags) & flag);
+	} while (read_seqretry(&alloc->seqlock, seq));
+
+	return set;
 }
 
 /*

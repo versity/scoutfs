@@ -371,6 +371,7 @@ struct scoutfs_ioctl_statfs_more {
 	__u64 committed_seq;
 	__u64 total_meta_blocks;
 	__u64 total_data_blocks;
+	__u64 reserved_meta_blocks;
 };
 
 #define SCOUTFS_IOC_STATFS_MORE _IOR(SCOUTFS_IOCTL_MAGIC, 10, \

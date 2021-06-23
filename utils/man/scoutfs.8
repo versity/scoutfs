@@ -36,6 +36,11 @@ A path within a ScoutFS filesystem.
 .sp
 Initialize a new ScoutFS filesystem on the target devices. Since ScoutFS uses
 separate block devices for its metadata and data storage, two are required.
+The internal structures and nature of metadata and data transactions
+lead to minimum viable device sizes.  
+.B mkfs
+will check both devices and fail with an error if either are under the
+minimum size. 
 .sp
 If
 .B --force

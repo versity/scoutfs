@@ -38,6 +38,10 @@
 #define SCOUTFS_ALLOC_DATA_LG_THRESH \
 	(8ULL * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
+/* the client will force commits if data allocators get too low */
+#define SCOUTFS_ALLOC_DATA_REFILL_THRESH \
+	((256ULL * 1024 * 1024) >> SCOUTFS_BLOCK_SM_SHIFT)
+
 /*
  * Fill client alloc roots to the target when they fall below the lo
  * threshold.
@@ -55,6 +59,7 @@
 #define SCOUTFS_SERVER_DATA_FILL_LO \
 	(1ULL * 1024 * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
+
 /*
  * Log merge meta allocations are only used for one request and will
  * never use more than the dirty limit.
@@ -64,16 +69,6 @@
 #define SCOUTFS_SERVER_MERGE_FILL_TARGET	\
 	((SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT >> SCOUTFS_BLOCK_LG_SHIFT) + 4)
 #define SCOUTFS_SERVER_MERGE_FILL_LO		SCOUTFS_SERVER_MERGE_FILL_TARGET
-
-/*
- * Each of the server meta_alloc roots will try to keep a minimum amount
- * of free blocks.  The server will swap roots when its current avail
- * falls below the threshold while the freed root is still above it.  It
- * must have room for all the largest allocation attempted in a
- * transaction on the server.
- */
-#define SCOUTFS_SERVER_META_ALLOC_MIN \
-	(SCOUTFS_SERVER_META_FILL_TARGET * 2)
 
 /*
  * A run-time use of a pair of persistent avail/freed roots as a
@@ -157,6 +152,8 @@ int scoutfs_alloc_splice_list(struct super_block *sb,
 
 bool scoutfs_alloc_meta_low(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 nr);
+bool scoutfs_alloc_test_flag(struct super_block *sb,
+			    struct scoutfs_alloc *alloc, u32 flag);
 
 typedef int (*scoutfs_alloc_foreach_cb_t)(struct super_block *sb, void *arg,
 					  int owner, u64 id,

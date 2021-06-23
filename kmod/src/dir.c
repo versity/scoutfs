@@ -712,7 +712,7 @@ retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, ind_locks, dir, true) ?:
 	      scoutfs_inode_index_prepare_ino(sb, ind_locks, ino, mode) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, ind_locks, ind_seq);
+	      scoutfs_inode_index_try_lock_hold(sb, ind_locks, ind_seq, true);
 	if (ret > 0)
 		goto retry;
 	if (ret)
@@ -869,7 +869,7 @@ retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, dir, false) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, inode, false) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq, true);
 	if (ret > 0)
 		goto retry;
 	if (ret)
@@ -969,7 +969,7 @@ retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, dir, false) ?:
 	      scoutfs_inode_index_prepare(sb, &ind_locks, inode, false) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq, false);
 	if (ret > 0)
 		goto retry;
 	if (ret)
@@ -1641,7 +1641,7 @@ retry:
 	       scoutfs_inode_index_prepare(sb, &ind_locks, new_dir, false)) ?:
 	      (new_inode == NULL ? 0 :
 	       scoutfs_inode_index_prepare(sb, &ind_locks, new_inode, false)) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq, true);
 	if (ret > 0)
 		goto retry;
 	if (ret)

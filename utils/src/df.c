@@ -86,6 +86,11 @@ static int do_df(struct df_args *args)
 			data_free += ade[i].blocks;
 	}
 
+	if (meta_free >= sfm.reserved_meta_blocks)
+		meta_free -= sfm.reserved_meta_blocks;
+	else
+		meta_free = 0;
+
 	snprintf(cells[0][0], CHARS, "Type");
 	snprintf(cells[0][1], CHARS, "Size");
 	snprintf(cells[0][2], CHARS, "Total");

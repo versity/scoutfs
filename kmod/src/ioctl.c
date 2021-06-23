@@ -38,6 +38,7 @@
 #include "hash.h"
 #include "srch.h"
 #include "alloc.h"
+#include "server.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -674,7 +675,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 
 	/* setting only so we don't see 0 data seq with nonzero data_version */
 	set_data_seq = sm.data_version != 0 ? true : false;
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, set_data_seq);
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, set_data_seq, false);
 	if (ret)
 		goto unlock;
 
@@ -879,6 +880,7 @@ static long scoutfs_ioc_statfs_more(struct file *file, unsigned long arg)
 	sfm.rid = sbi->rid;
 	sfm.total_meta_blocks = le64_to_cpu(super->total_meta_blocks);
 	sfm.total_data_blocks = le64_to_cpu(super->total_data_blocks);
+	sfm.reserved_meta_blocks = scoutfs_server_reserved_meta_blocks(sb);
 
 	ret = scoutfs_client_get_last_seq(sb, &sfm.committed_seq);
 	if (ret)

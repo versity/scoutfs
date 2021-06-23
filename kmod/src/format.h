@@ -286,8 +286,9 @@ struct scoutfs_alloc_list_head {
 	struct scoutfs_block_ref ref;
 	__le64 total_nr;
 	__le32 first_nr;
-	__u8 __pad[4];
+	__le32 flags;
 };
+
 
 /*
  * While the main allocator uses extent items in btree blocks, metadata
@@ -317,8 +318,13 @@ struct scoutfs_alloc_list_block {
  */
 struct scoutfs_alloc_root {
 	__le64 total_len;
+	__le32 flags;
+	__le32 _pad;
 	struct scoutfs_btree_root root;
 };
+
+/* Shared by _alloc_list_head and _alloc_root */
+#define SCOUTFS_ALLOC_FLAG_LOW	(1U << 0)
 
 /* types of allocators, exposed to alloc_detail ioctl */
 #define SCOUTFS_ALLOC_OWNER_NONE	0

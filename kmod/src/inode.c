@@ -358,7 +358,7 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 	if (!S_ISREG(inode->i_mode))
 		return 0;
 
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true);
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true, false);
 	if (ret)
 		return ret;
 
@@ -385,7 +385,7 @@ static int clear_truncate_flag(struct inode *inode, struct scoutfs_lock *lock)
 	LIST_HEAD(ind_locks);
 	int ret;
 
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false);
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, false);
 	if (ret)
 		return ret;
 
@@ -500,7 +500,7 @@ retry:
 		}
 	}
 
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false);
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, false);
 	if (ret)
 		goto out;
 
@@ -1213,7 +1213,7 @@ int scoutfs_inode_index_start(struct super_block *sb, u64 *seq)
  * Returns > 0 if the seq changed and the locks should be retried.
  */
 int scoutfs_inode_index_try_lock_hold(struct super_block *sb,
-				      struct list_head *list, u64 seq)
+				      struct list_head *list, u64 seq, bool allocing)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct index_lock *ind_lock;
@@ -1229,7 +1229,7 @@ int scoutfs_inode_index_try_lock_hold(struct super_block *sb,
 			goto out;
 	}
 
-	ret = scoutfs_hold_trans(sb);
+	ret = scoutfs_hold_trans(sb, allocing);
 	if (ret == 0 && seq != sbi->trans_seq) {
 		scoutfs_release_trans(sb);
 		ret = 1;
@@ -1243,7 +1243,7 @@ out:
 }
 
 int scoutfs_inode_index_lock_hold(struct inode *inode, struct list_head *list,
-				  bool set_data_seq)
+				  bool set_data_seq, bool allocing)
 {
 	struct super_block *sb = inode->i_sb;
 	int ret;
@@ -1253,7 +1253,7 @@ int scoutfs_inode_index_lock_hold(struct inode *inode, struct list_head *list,
 		ret = scoutfs_inode_index_start(sb, &seq) ?:
 		      scoutfs_inode_index_prepare(sb, list, inode,
 						  set_data_seq) ?:
-		      scoutfs_inode_index_try_lock_hold(sb, list, seq);
+		      scoutfs_inode_index_try_lock_hold(sb, list, seq, allocing);
 	} while (ret > 0);
 
 	return ret;
@@ -1533,7 +1533,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 	      prepare_index_deletion(sb, &ind_locks, ino, mode, &sinode) ?:
-	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq);
+	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq, false);
 	if (ret > 0)
 		goto retry;
 	if (ret)

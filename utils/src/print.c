@@ -245,15 +245,15 @@ static int print_logs_item(struct scoutfs_key *key, void *val,
 	le64_to_cpu((p)->blkno), le64_to_cpu((p)->seq)
 
 #define AL_HEAD_F \
-	AL_REF_F" total_nr %llu first_nr %u"
+	AL_REF_F" total_nr %llu first_nr %u flags 0x%x"
 #define AL_HEAD_A(p)					\
 	AL_REF_A(&(p)->ref), le64_to_cpu((p)->total_nr),\
-	le32_to_cpu((p)->first_nr)
+	le32_to_cpu((p)->first_nr), le32_to_cpu((p)->flags)
 
 #define ALCROOT_F \
-	BTROOT_F" total_len %llu"
+	BTROOT_F" total_len %llu flags 0x%x"
 #define ALCROOT_A(ar) \
-	BTROOT_A(&(ar)->root), le64_to_cpu((ar)->total_len)
+	BTROOT_A(&(ar)->root), le64_to_cpu((ar)->total_len), le32_to_cpu((ar)->flags)
 
 #define SRE_FMT "%016llx.%llu.%llu"
 #define SRE_A(sre)						\
