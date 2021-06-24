@@ -6,12 +6,13 @@
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #include "sparse.h"
 #include "dev.h"
 
 int device_size(char *path, int fd,
-		u64 min_size, u64 max_size,
+		u64 min_size, u64 max_size, bool allow_small_size,
 		char *use_type, u64 *size_ret)
 {
 	struct stat st;
@@ -63,10 +64,13 @@ int device_size(char *path, int fd,
 	if (size < min_size) {
 		fprintf(stderr,
 			BASE_SIZE_FMT" %s too small for min "
-			BASE_SIZE_FMT" %s device\n",
+			BASE_SIZE_FMT" %s device%s\n",
 			BASE_SIZE_ARGS(size), target_type,
-			BASE_SIZE_ARGS(min_size), use_type);
-		return -EINVAL;
+			BASE_SIZE_ARGS(min_size), use_type,
+			allow_small_size ? ", allowing with -A" : "");
+
+		if (!allow_small_size)
+			return -EINVAL;
 	}
 
 	*size_ret = size;

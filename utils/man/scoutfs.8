@@ -32,7 +32,7 @@ A path within a ScoutFS filesystem.
 .PD
 
 .TP
-.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-slot} NR,ADDR,PORT [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-z|--data-alloc-zone-blocks BLOCKS] [-f|--force]"
+.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-slot} NR,ADDR,PORT [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-z|--data-alloc-zone-blocks BLOCKS] [-f|--force] [-A|--allow-small-size]"
 .sp
 Initialize a new ScoutFS filesystem on the target devices. Since ScoutFS uses
 separate block devices for its metadata and data storage, two are required.
@@ -40,7 +40,10 @@ The internal structures and nature of metadata and data transactions
 lead to minimum viable device sizes.  
 .B mkfs
 will check both devices and fail with an error if either are under the
-minimum size. 
+minimum size.   If
+.B --allow-small-size
+is given then sizes under the minimum size will be
+allowed after printing an informational warning.
 .sp
 If
 .B --force
@@ -85,6 +88,10 @@ kibibytes, mebibytes, etc.
 .TP
 .B "-d, --max-data-size SIZE"
 Same as previous, but for limiting the size of the data device.
+.TP
+.B "-A, --allow-small-size"
+Allows use of specified device sizes less than the minimum.  This can
+result in bad behaviour and is only intended for testing.
 .TP
 .B "-z, --data-alloc-zone-blocks BLOCKS"
 Set the data_alloc_zone_blocks volume option, as described in
