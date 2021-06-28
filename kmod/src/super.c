@@ -248,6 +248,7 @@ static void scoutfs_put_super(struct super_block *sb)
 	trace_scoutfs_put_super(sb);
 
 	scoutfs_inode_stop(sb);
+	scoutfs_forest_stop(sb);
 	scoutfs_srch_destroy(sb);
 
 	scoutfs_lock_shutdown(sb);
