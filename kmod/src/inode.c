@@ -64,6 +64,10 @@ struct inode_sb_info {
 	struct inode_allocator ino_alloc;
 
 	struct delayed_work orphan_scan_dwork;
+
+	/* serialize multiple inode ->evict trying to delete same ino's items */
+	spinlock_t deleting_items_lock;
+	struct list_head deleting_items_list;
 };
 
 #define DECLARE_INODE_SB_INFO(sb, name) \
@@ -1475,6 +1479,44 @@ int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_
 	return scoutfs_item_delete_force(sb, &key, lock);
 }
 
+struct deleting_ino_entry {
+	struct list_head head;
+	u64 ino;
+};
+
+static bool added_deleting_ino(struct inode_sb_info *inf, struct deleting_ino_entry *del, u64 ino)
+{
+	struct deleting_ino_entry *tmp;
+	bool added = true;
+
+	spin_lock(&inf->deleting_items_lock);
+
+	list_for_each_entry(tmp, &inf->deleting_items_list, head) {
+		if (tmp->ino == ino) {
+			added = false;
+			break;
+		}
+	}
+
+	if (added) {
+		del->ino = ino;
+		list_add_tail(&del->head, &inf->deleting_items_list);
+	}
+
+	spin_unlock(&inf->deleting_items_lock);
+
+	return added;
+}
+
+static void del_deleting_ino(struct inode_sb_info *inf, struct deleting_ino_entry *del)
+{
+	if (del->ino) {
+		spin_lock(&inf->deleting_items_lock);
+		list_del_init(&del->head);
+		spin_unlock(&inf->deleting_items_lock);
+	}
+}
+
 /*
  * Remove all the items associated with a given inode.  This is only
  * called once nlink has dropped to zero and nothing has the inode open
@@ -1483,10 +1525,21 @@ int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_
  * orphan item will continue triggering attempts to finish previous
  * partial deletion until all deletion is complete and the orphan item
  * is removed.
+ *
+ * Currently this can be called multiple times for multiple cached
+ * inodes for a given ino number (ilookup avoids freeing inodes to avoid
+ * cluster lock<->inode flag waiting inversions).  Some items are not
+ * safe to delete concurrently, for example concurrent data truncation
+ * could free extents multiple times.  We use a very silly list of inos
+ * being deleted.  Duplicates just return success.  If the first
+ * deletion ends up failing orphan deletion will come back around later
+ * and retry.
  */
 static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
 			      struct scoutfs_lock *orph_lock)
 {
+	DECLARE_INODE_SB_INFO(sb, inf);
+	struct deleting_ino_entry del = {{NULL, }};
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
 	LIST_HEAD(ind_locks);
@@ -1495,6 +1548,11 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 	u64 ind_seq;
 	u64 size;
 	int ret;
+
+	if (!added_deleting_ino(inf, &del, ino)) {
+		ret = 0;
+		goto out;
+	}
 
 	init_inode_key(&key, ino);
 
@@ -1557,6 +1615,7 @@ retry:
 
 	ret = scoutfs_inode_orphan_delete(sb, ino, orph_lock);
 out:
+	del_deleting_ino(inf, &del);
 	if (release)
 		scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
@@ -1570,6 +1629,11 @@ out:
  * tear down.  We use locking and open inode number bitmaps to decide if
  * we should finally destroy an inode that is no longer open nor
  * reachable through directory entries.
+ *
+ * Because lookup ignores freeing inodes we can get here from multiple
+ * instances of an inode that is being deleted.  Orphan scanning in
+ * particular can race with deletion.   delete_inode_items() resolves
+ * concurrent attempts.
  */
 void scoutfs_evict_inode(struct inode *inode)
 {
@@ -1885,6 +1949,8 @@ int scoutfs_inode_setup(struct super_block *sb)
 	spin_lock_init(&inf->dir_ino_alloc.lock);
 	spin_lock_init(&inf->ino_alloc.lock);
 	INIT_DELAYED_WORK(&inf->orphan_scan_dwork, inode_orphan_scan_worker);
+	spin_lock_init(&inf->deleting_items_lock);
+	INIT_LIST_HEAD(&inf->deleting_items_list);
 
 	sbi->inode_sb_info = inf;
 
