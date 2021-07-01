@@ -1,0 +1,3 @@
+SCOUTFS_FENCED_DELAY=1
+SCOUTFS_FENCED_RUN=/usr/libexec/scoutfs-fenced/run/local-force-unmount
+SCOUTFS_FENCED_RUN_ARGS=""
