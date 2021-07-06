@@ -595,10 +595,6 @@ out:
 		free_req(req);
 	}
 
-	/* it's fine if we couldn't send to a client that left */
-	if (ret == -ENOTCONN)
-		ret = 0;
-
 	return ret;
 }
 

@@ -2366,15 +2366,27 @@ int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
 					      open_ino_map_response, NULL, NULL);
 }
 
-/* The server is sending an omap response to the client */
+/*
+ * The server is sending an omap response to the client that originated
+ * the request.  These responses are sent long after the incoming
+ * request has pinned the client connection and guaranteed that we'll be
+ * able to queue a response.  This can race with the client connection
+ * being torn down and it's OK if we drop the response.  Either the
+ * client is being evicted and we don't care about them anymore or we're
+ * tearing down in unmount and the client will resend to thee next
+ * server.
+ */
 int scoutfs_server_send_omap_response(struct super_block *sb, u64 rid, u64 id,
 				      struct scoutfs_open_ino_map *map, int err)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	int ret;
 
-	return scoutfs_net_response_node(sb, server->conn, rid,
-					 SCOUTFS_NET_CMD_OPEN_INO_MAP, id, err,
-					 map, sizeof(*map));
+	ret = scoutfs_net_response_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
+					id, err, map, sizeof(*map));
+	if (ret == -ENOTCONN)
+		ret = 0;
+	return ret;
 }
 
 /* The server is receiving an omap request from the client */
