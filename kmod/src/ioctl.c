@@ -541,6 +541,7 @@ out:
 static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct scoutfs_ioctl_stat_more stm;
 
 	if (get_user(stm.valid_bytes, (__u64 __user *)arg))
@@ -552,6 +553,8 @@ static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 	stm.data_seq = scoutfs_inode_data_seq(inode);
 	stm.data_version = scoutfs_inode_data_version(inode);
 	scoutfs_inode_get_onoff(inode, &stm.online_blocks, &stm.offline_blocks);
+	stm.crtime_sec = si->crtime.tv_sec;
+	stm.crtime_nsec = si->crtime.tv_nsec;
 
 	if (copy_to_user((void __user *)arg, &stm, stm.valid_bytes))
 		return -EFAULT;
@@ -617,6 +620,7 @@ static long scoutfs_ioc_data_waiting(struct file *file, unsigned long arg)
 static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file->f_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_ioctl_setattr_more __user *usm = (void __user *)arg;
 	struct scoutfs_ioctl_setattr_more sm;
@@ -685,6 +689,8 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 		i_size_write(inode, sm.i_size);
 	inode->i_ctime.tv_sec = sm.ctime_sec;
 	inode->i_ctime.tv_nsec = sm.ctime_nsec;
+	si->crtime.tv_sec = sm.crtime_sec;
+	si->crtime.tv_nsec = sm.crtime_nsec;
 
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 	ret = 0;

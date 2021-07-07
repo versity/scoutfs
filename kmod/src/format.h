@@ -817,7 +817,6 @@ struct scoutfs_super_block {
  * online by staging.
  *
  * XXX
- *	- otime?
  *	- compat flags?
  *	- version?
  *	- generation?
@@ -841,6 +840,7 @@ struct scoutfs_inode {
 	struct scoutfs_timespec atime;
 	struct scoutfs_timespec ctime;
 	struct scoutfs_timespec mtime;
+	struct scoutfs_timespec crtime;
 };
 
 #define SCOUTFS_INO_FLAG_TRUNCATE 0x1

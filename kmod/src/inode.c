@@ -232,6 +232,8 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	si->next_readdir_pos = le64_to_cpu(cinode->next_readdir_pos);
 	si->next_xattr_id = le64_to_cpu(cinode->next_xattr_id);
 	si->flags = le32_to_cpu(cinode->flags);
+	si->crtime.tv_sec = le64_to_cpu(cinode->crtime.sec);
+	si->crtime.tv_nsec = le32_to_cpu(cinode->crtime.nsec);
 
 	/*
 	 * i_blocks is initialized from online and offline and is then
@@ -734,6 +736,9 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	cinode->next_readdir_pos = cpu_to_le64(si->next_readdir_pos);
 	cinode->next_xattr_id = cpu_to_le64(si->next_xattr_id);
 	cinode->flags = cpu_to_le32(si->flags);
+	cinode->crtime.sec = cpu_to_le64(si->crtime.tv_sec);
+	cinode->crtime.nsec = cpu_to_le32(si->crtime.tv_nsec);
+	memset(cinode->crtime.__pad, 0, sizeof(cinode->crtime.__pad));
 }
 
 /*
