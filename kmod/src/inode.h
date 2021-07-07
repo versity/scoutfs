@@ -20,6 +20,7 @@ struct scoutfs_inode_info {
 	u64 online_blocks;
 	u64 offline_blocks;
 	u32 flags;
+	struct timespec crtime;
 
 	/*
 	 * Protects per-inode extent items, most particularly readers

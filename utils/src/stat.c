@@ -37,6 +37,7 @@ static struct stat_more_field inode_fields[] = {
 	INODE_FIELD(data_version),
 	INODE_FIELD(online_blocks),
 	INODE_FIELD(offline_blocks),
+	{ .name = "crtime", .offset = INODE_FIELD_OFF(crtime_sec) },
 	{ NULL, }
 };
 
@@ -59,6 +60,9 @@ static void print_inode_field(void *st, size_t off)
 			break;
 		case INODE_FIELD_OFF(offline_blocks):
 			printf("%llu", stm->offline_blocks);
+			break;
+		case INODE_FIELD_OFF(crtime_sec):
+			printf("%llu.%09u", stm->crtime_sec, stm->crtime_nsec);
 			break;
 	};
 }

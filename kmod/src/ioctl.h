@@ -232,6 +232,9 @@ struct scoutfs_ioctl_stat_more {
 	__u64 data_version;
 	__u64 online_blocks;
 	__u64 offline_blocks;
+	__u64 crtime_sec;
+	__u32 crtime_nsec;
+	__u8  _pad[4];
 };
 
 #define SCOUTFS_IOC_STAT_MORE _IOR(SCOUTFS_IOCTL_MAGIC, 5, \
@@ -275,7 +278,8 @@ struct scoutfs_ioctl_setattr_more {
 	__u64 flags;
 	__u64 ctime_sec;
 	__u32 ctime_nsec;
-	__u8 _pad[4];
+	__u32 crtime_nsec;
+	__u64 crtime_sec;
 };
 
 #define SCOUTFS_IOC_SETATTR_MORE_OFFLINE		(1 << 0)
