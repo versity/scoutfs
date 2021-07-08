@@ -1,0 +1,8 @@
+== prepare directories and files
+== fallocate until enospc
+== remove all the files and verify free data blocks
+== make small meta fs
+== create large xattrs until we fill up metadata
+== remove files with xattrs after enospc
+== make sure we can create again
+== cleanup small meta fs

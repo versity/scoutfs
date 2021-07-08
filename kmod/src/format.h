@@ -286,8 +286,9 @@ struct scoutfs_alloc_list_head {
 	struct scoutfs_block_ref ref;
 	__le64 total_nr;
 	__le32 first_nr;
-	__u8 __pad[4];
+	__le32 flags;
 };
+
 
 /*
  * While the main allocator uses extent items in btree blocks, metadata
@@ -317,8 +318,13 @@ struct scoutfs_alloc_list_block {
  */
 struct scoutfs_alloc_root {
 	__le64 total_len;
+	__le32 flags;
+	__le32 _pad;
 	struct scoutfs_btree_root root;
 };
+
+/* Shared by _alloc_list_head and _alloc_root */
+#define SCOUTFS_ALLOC_FLAG_LOW	(1U << 0)
 
 /* types of allocators, exposed to alloc_detail ioctl */
 #define SCOUTFS_ALLOC_OWNER_NONE	0
@@ -570,7 +576,7 @@ struct scoutfs_log_merge_freeing {
  * Keys are first sorted by major key zones.
  */
 #define SCOUTFS_INODE_INDEX_ZONE		1
-#define SCOUTFS_RID_ZONE			2
+#define SCOUTFS_ORPHAN_ZONE			2
 #define SCOUTFS_FS_ZONE				3
 #define SCOUTFS_LOCK_ZONE			4
 /* Items only stored in server btrees */
@@ -592,7 +598,7 @@ struct scoutfs_log_merge_freeing {
 #define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	2
 #define SCOUTFS_INODE_INDEX_NR			3 /* don't forget to update */
 
-/* rid zone (also used in server alloc btree) */
+/* orphan zone, redundant type used for clarity */
 #define SCOUTFS_ORPHAN_TYPE			1
 
 /* fs zone */

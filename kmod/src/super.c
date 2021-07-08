@@ -247,10 +247,9 @@ static void scoutfs_put_super(struct super_block *sb)
 
 	trace_scoutfs_put_super(sb);
 
+	scoutfs_inode_stop(sb);
+	scoutfs_forest_stop(sb);
 	scoutfs_srch_destroy(sb);
-
-	scoutfs_unlock(sb, sbi->rid_lock, SCOUTFS_LOCK_WRITE);
-	sbi->rid_lock = NULL;
 
 	scoutfs_lock_shutdown(sb);
 
@@ -623,10 +622,9 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_quorum_setup(sb) ?:
 	      scoutfs_client_setup(sb) ?:
 	      scoutfs_volopt_setup(sb) ?:
-	      scoutfs_lock_rid(sb, SCOUTFS_LOCK_WRITE, 0, sbi->rid,
-				   &sbi->rid_lock) ?:
 	      scoutfs_trans_get_log_trees(sb) ?:
-	      scoutfs_srch_setup(sb);
+	      scoutfs_srch_setup(sb) ?:
+	      scoutfs_inode_start(sb);
 	if (ret)
 		goto out;
 
@@ -647,7 +645,6 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 
 	scoutfs_trans_restart_sync_deadline(sb);
-//	scoutfs_scan_orphans(sb);
 	ret = 0;
 out:
 	/* on error, generic_shutdown_super calls put_super if s_root */

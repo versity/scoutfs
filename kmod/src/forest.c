@@ -758,6 +758,16 @@ out:
 	return 0;
 }
 
+void scoutfs_forest_stop(struct super_block *sb)
+{
+	DECLARE_FOREST_INFO(sb, finf);
+
+	if (finf && finf->workq) {
+		cancel_delayed_work_sync(&finf->log_merge_dwork);
+		destroy_workqueue(finf->workq);
+	}
+}
+
 void scoutfs_forest_destroy(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
@@ -765,11 +775,6 @@ void scoutfs_forest_destroy(struct super_block *sb)
 
 	if (finf) {
 		scoutfs_block_put(sb, finf->srch_bl);
-
-		if (finf->workq) {
-			cancel_delayed_work_sync(&finf->log_merge_dwork);
-			destroy_workqueue(finf->workq);
-		}
 
 		kfree(finf);
 		sbi->forest_info = NULL;

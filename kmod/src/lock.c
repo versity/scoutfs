@@ -1347,29 +1347,28 @@ int scoutfs_lock_inode_index(struct super_block *sb, enum scoutfs_lock_mode mode
 }
 
 /*
- * The rid lock protects a mount's private persistent items in the rid
- * zone.  It's held for the duration of the mount.  It lets the mount
- * modify the rid items at will and signals to other mounts that we're
- * still alive and our rid items shouldn't be reclaimed.
+ * Orphan items are stored in their own zone which are modified with
+ * shared write_only locks and are read inconsistently without locks by
+ * background scanning work.
  *
- * Being held for the entire mount prevents other nodes from reclaiming
- * our items, like free blocks, when it would make sense for them to be
- * able to.  Maybe we have a bunch free and they're trying to allocate
- * and are getting ENOSPC.
+ * Since we only use write_only locks we just lock the entire zone, but
+ * the api provides the inode in case we ever change the locking scheme.
  */
-int scoutfs_lock_rid(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
-		     u64 rid, struct scoutfs_lock **lock)
+int scoutfs_lock_orphan(struct super_block *sb, enum scoutfs_lock_mode mode, int flags, u64 ino,
+			struct scoutfs_lock **lock)
 {
 	struct scoutfs_key start;
 	struct scoutfs_key end;
 
 	scoutfs_key_set_zeros(&start);
-	start.sk_zone = SCOUTFS_RID_ZONE;
-	start.sko_rid = cpu_to_le64(rid);
+	start.sk_zone = SCOUTFS_ORPHAN_ZONE;
+	start.sko_ino = 0;
+	start.sk_type = SCOUTFS_ORPHAN_TYPE;
 
-	scoutfs_key_set_ones(&end);
-	end.sk_zone = SCOUTFS_RID_ZONE;
-	end.sko_rid = cpu_to_le64(rid);
+	scoutfs_key_set_zeros(&end);
+	end.sk_zone = SCOUTFS_ORPHAN_ZONE;
+	end.sko_ino = cpu_to_le64(U64_MAX);
+	end.sk_type = SCOUTFS_ORPHAN_TYPE;
 
 	return lock_key_range(sb, mode, flags, &start, &end, lock);
 }

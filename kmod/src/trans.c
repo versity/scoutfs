@@ -436,8 +436,8 @@ static bool commit_before_hold(struct super_block *sb, struct trans_info *tri)
 		return true;
 	}
 
-	/* Try to refill data allocator before premature enospc */
-	if (scoutfs_data_alloc_free_bytes(sb) <= SCOUTFS_TRANS_DATA_ALLOC_LWM) {
+	/* if we're low and can't refill then alloc could empty and return enospc */
+	if (scoutfs_data_alloc_should_refill(sb, SCOUTFS_ALLOC_DATA_REFILL_THRESH)) {
 		scoutfs_inc_counter(sb, trans_commit_data_alloc_low);
 		return true;
 	}
@@ -445,38 +445,15 @@ static bool commit_before_hold(struct super_block *sb, struct trans_info *tri)
 	return false;
 }
 
-static bool acquired_hold(struct super_block *sb)
+/*
+ * called as a wait_event condition, needs to be careful to not change
+ * task state and is racing with waking paths that sub_return, test, and
+ * wake.
+ */
+static bool holders_no_writer(struct trans_info *tri)
 {
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	DECLARE_TRANS_INFO(sb, tri);
-	bool acquired;
-
-	/* if a caller already has a hold we acquire unconditionally */
-	if (inc_journal_info_holders()) {
-		atomic_inc(&tri->holders);
-		acquired = true;
-		goto out;
-	}
-
-	/* wait if the writer is blocking holds */
-	if (!inc_holders_unless_writer(tri)) {
-		dec_journal_info_holders();
-		acquired = false;
-		goto out;
-	}
-
-	/* wait if we're triggering another commit */
-	if (commit_before_hold(sb, tri)) {
-		release_holders(sb);
-		queue_trans_work(sbi);
-		acquired = false;
-		goto out;
-	}
-
-	trace_scoutfs_trans_acquired_hold(sb, current->journal_info, atomic_read(&tri->holders));
-	acquired = true;
-out:
-	return acquired;
+	smp_mb(); /* make sure task in wait_event queue before atomic read */
+	return !(atomic_read(&tri->holders) & TRANS_HOLDERS_WRITE_FUNC_BIT);
 }
 
 /*
@@ -492,15 +469,64 @@ out:
  * The writing thread marks itself as a global trans_task which
  * short-circuits all the hold machinery so it can call code that would
  * otherwise try to hold transactions while it is writing.
+ *
+ * If the caller is adding metadata items that will eventually consume
+ * free space -- not dirtying existing items or adding deletion items --
+ * then we can return enospc if our metadata allocator indicates that
+ * we're low on space.
  */
-int scoutfs_hold_trans(struct super_block *sb)
+int scoutfs_hold_trans(struct super_block *sb, bool allocing)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	DECLARE_TRANS_INFO(sb, tri);
+	u64 seq;
+	int ret;
 
 	if (current == sbi->trans_task)
 		return 0;
 
-	return wait_event_interruptible(sbi->trans_hold_wq, acquired_hold(sb));
+	for (;;) {
+		/* if a caller already has a hold we acquire unconditionally */
+		if (inc_journal_info_holders()) {
+			atomic_inc(&tri->holders);
+			ret = 0;
+			break;
+		}
+
+		/* wait until the writer work is finished */
+		if (!inc_holders_unless_writer(tri)) {
+			dec_journal_info_holders();
+			ret = wait_event_interruptible(sbi->trans_hold_wq, holders_no_writer(tri));
+			if (ret < 0)
+				break;
+			continue;
+		}
+
+		/* return enospc if server is into reserved blocks and we're allocating */
+		if (allocing && scoutfs_alloc_test_flag(sb, &tri->alloc, SCOUTFS_ALLOC_FLAG_LOW)) {
+			release_holders(sb);
+			ret = -ENOSPC;
+			break;
+		}
+
+		/* see if we need to trigger and wait for a commit before holding */
+		if (commit_before_hold(sb, tri)) {
+			seq = scoutfs_trans_sample_seq(sb);
+			release_holders(sb);
+			queue_trans_work(sbi);
+			ret = wait_event_interruptible(sbi->trans_hold_wq,
+						       scoutfs_trans_sample_seq(sb) != seq);
+			if (ret < 0)
+				break;
+			continue;
+		}
+
+		ret = 0;
+		break;
+	}
+
+	trace_scoutfs_hold_trans(sb, current->journal_info, atomic_read(&tri->holders), ret);
+	return ret;
 }
 
 /*
@@ -525,7 +551,7 @@ void scoutfs_release_trans(struct super_block *sb)
 
 	release_holders(sb);
 
-	trace_scoutfs_release_trans(sb, current->journal_info, atomic_read(&tri->holders));
+	trace_scoutfs_release_trans(sb, current->journal_info, atomic_read(&tri->holders), 0);
 }
 
 /*

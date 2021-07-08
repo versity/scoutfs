@@ -424,14 +424,15 @@ TRACE_EVENT(scoutfs_trans_write_func,
 );
 
 DECLARE_EVENT_CLASS(scoutfs_trans_hold_release_class,
-	TP_PROTO(struct super_block *sb, void *journal_info, int holders),
+	TP_PROTO(struct super_block *sb, void *journal_info, int holders, int ret),
 
-	TP_ARGS(sb, journal_info, holders),
+	TP_ARGS(sb, journal_info, holders, ret),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(unsigned long, journal_info)
 		__field(int, holders)
+		__field(int, ret)
 	),
 
 	TP_fast_assign(
@@ -440,17 +441,17 @@ DECLARE_EVENT_CLASS(scoutfs_trans_hold_release_class,
 		__entry->holders = holders;
 	),
 
-	TP_printk(SCSBF" journal_info 0x%0lx holders %d",
-		  SCSB_TRACE_ARGS, __entry->journal_info, __entry->holders)
+	TP_printk(SCSBF" journal_info 0x%0lx holders %d ret %d",
+		  SCSB_TRACE_ARGS, __entry->journal_info, __entry->holders, __entry->ret)
 );
 
-DEFINE_EVENT(scoutfs_trans_hold_release_class, scoutfs_trans_acquired_hold,
-	TP_PROTO(struct super_block *sb, void *journal_info, int holders),
-	TP_ARGS(sb, journal_info, holders)
+DEFINE_EVENT(scoutfs_trans_hold_release_class, scoutfs_hold_trans,
+	TP_PROTO(struct super_block *sb, void *journal_info, int holders, int ret),
+	TP_ARGS(sb, journal_info, holders, ret)
 );
 DEFINE_EVENT(scoutfs_trans_hold_release_class, scoutfs_release_trans,
-	TP_PROTO(struct super_block *sb, void *journal_info, int holders),
-	TP_ARGS(sb, journal_info, holders)
+	TP_PROTO(struct super_block *sb, void *journal_info, int holders, int ret),
+	TP_ARGS(sb, journal_info, holders, ret)
 );
 
 TRACE_EVENT(scoutfs_ioc_release,
@@ -983,22 +984,6 @@ TRACE_EVENT(scoutfs_delete_inode,
 	TP_printk("dev %d,%d ino %llu, mode 0x%x size %llu",
 		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->ino,
 		  __entry->mode, __entry->size)
-);
-
-TRACE_EVENT(scoutfs_scan_orphans,
-	TP_PROTO(struct super_block *sb),
-
-	TP_ARGS(sb),
-
-	TP_STRUCT__entry(
-		__field(dev_t, dev)
-	),
-
-	TP_fast_assign(
-		__entry->dev = sb->s_dev;
-	),
-
-	TP_printk("dev %d,%d", MAJOR(__entry->dev), MINOR(__entry->dev))
 );
 
 DECLARE_EVENT_CLASS(scoutfs_key_class,

@@ -323,6 +323,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	struct commit_waiter *cw;
 	struct commit_waiter *pos;
 	struct llist_node *node;
+	u64 reserved;
 	int ret;
 
 	trace_scoutfs_server_commit_work_enter(sb, 0, 0);
@@ -387,11 +388,17 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	server->other_avail = &super->server_meta_avail[server->other_ind];
 	server->other_freed = &super->server_meta_freed[server->other_ind];
 
-	/* swap avail/free if avail gets low and freed is high */
-	if (le64_to_cpu(server->meta_avail->total_len) <=
-	    SCOUTFS_SERVER_META_ALLOC_MIN &&
-	    le64_to_cpu(server->meta_freed->total_len) >
-	    SCOUTFS_SERVER_META_ALLOC_MIN)
+	/*
+	 * The reserved metadata blocks includes the max size of
+	 * outstanding allocators and a server transaction could be
+	 * asked to refill all those allocators from meta_avail.  If our
+	 * meta_avail falls below the reserved count, and freed is still
+	 * above it, then swap so that we don't start returning enospc
+	 * until we're truly low.
+	 */
+	reserved = scoutfs_server_reserved_meta_blocks(sb);
+	if (le64_to_cpu(server->meta_avail->total_len) <= reserved &&
+	    le64_to_cpu(server->meta_freed->total_len) > reserved)
 		swap(server->meta_avail, server->meta_freed);
 
 	ret = 0;
@@ -477,6 +484,57 @@ static int alloc_move_empty(struct super_block *sb,
 
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri,
 				  dst, src, le64_to_cpu(src->total_len), NULL, NULL, 0);
+}
+
+/*
+ * Copy on write transactions need to allocate new dirty blocks as they
+ * make modifications to delete items and eventually free more blocks.
+ * The reserved blocks are meant to keep enough available blocks in
+ * flight to allow servers and clients to perform transactions that
+ * don't consume additional space.  We have quite a few allocators in
+ * flight across the server and various client mechanisms (posix items,
+ * srch compaction, and log merging).  We also want to include
+ * sufficient blocks for client log btrees to grow tall enough to be
+ * finalized and merges.
+ *
+ * The reserved blocks calculation is a policy of the server but it's
+ * exposed to the statfs_more interface so that df isn't misleading.
+ * Requiring this synchronization without explicit protocol
+ * communication isn't great.
+ */
+u64 scoutfs_server_reserved_meta_blocks(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	u64 server_blocks;
+	u64 client_blocks;
+	u64 log_blocks;
+	u64 nr_clients;
+
+	/* server has two meta_avail lists it swaps between */
+	server_blocks = SCOUTFS_SERVER_META_FILL_TARGET * 2;
+
+	/*
+	 * Log trees will be compacted once they hit a height of 3.
+	 * That'll be the grandparent, two parents resulting from a
+	 * split, and all their child blocks (roughly calculated,
+	 * overestimating).
+	 */
+	log_blocks = 3 + (SCOUTFS_BLOCK_LG_SIZE /
+		          (sizeof(struct scoutfs_btree_item) + sizeof(struct scoutfs_block_ref)));
+
+	/*
+	 * Each client can have a meta_avail list, srch compaction
+	 * request, log merge request, and a log btree it's building.
+	 */
+	client_blocks = SCOUTFS_SERVER_META_FILL_TARGET + SCOUTFS_SERVER_META_FILL_TARGET +
+			SCOUTFS_SERVER_MERGE_FILL_TARGET + log_blocks;
+
+	/* we should reserve for voting majority, too */
+	spin_lock(&server->lock);
+	nr_clients = server->nr_clients;
+	spin_unlock(&server->lock);
+
+	return server_blocks + (max(1ULL, nr_clients) * client_blocks);
 }
 
 /*
@@ -662,6 +720,7 @@ static int server_get_log_trees(struct super_block *sb,
 	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
 	bool have_fin = false;
+	bool unlock_alloc = false;
 	u64 data_zone_blocks;
 	u64 nr;
 	int ret;
@@ -701,8 +760,15 @@ static int server_get_log_trees(struct super_block *sb,
 		lt.nr = cpu_to_le64(nr);
 	}
 
-	/* finalize an existing root when large enough and don't have one */
-	if (lt.item_root.height > 2 && !have_fin) {
+	/*
+	 * Finalize the client log btree when it has enough leaf blocks
+	 * to allow some degree of merging concurrency.  Smaller btrees
+	 * are also finalized when meta was low so that deleted items
+	 * are merged promptly and freed blocks can bring the client out
+	 * of enospc.
+	 */
+	if (!have_fin && ((lt.item_root.height > 2) ||
+		          (le32_to_cpu(lt.meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW))) {
 		fin = lt;
 		memset(&fin.meta_avail, 0, sizeof(fin.meta_avail));
 		memset(&fin.meta_freed, 0, sizeof(fin.meta_freed));
@@ -734,23 +800,44 @@ static int server_get_log_trees(struct super_block *sb,
 		data_zone_blocks = 0;
 	}
 
-	/* return freed to server for emptying, refill avail  */
+	/*
+	 * Reclaim the freed meta and data allocators and refill the
+	 * avail allocators, setting low flags if they drop too low.
+	 */
 	mutex_lock(&server->alloc_mutex);
-	ret = scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
-					server->other_freed,
+	unlock_alloc = true;
+
+	ret = scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri, server->other_freed,
 					&lt.meta_freed) ?:
-	      alloc_move_empty(sb, &super->data_alloc, &lt.data_freed) ?:
-	      scoutfs_alloc_fill_list(sb, &server->alloc, &server->wri,
-				      &lt.meta_avail, server->meta_avail,
-				      SCOUTFS_SERVER_META_FILL_LO,
-				      SCOUTFS_SERVER_META_FILL_TARGET) ?:
-	      alloc_move_refill_zoned(sb, &lt.data_avail, &super->data_alloc,
-				      SCOUTFS_SERVER_DATA_FILL_LO,
-				      SCOUTFS_SERVER_DATA_FILL_TARGET,
-				      exclusive, vacant, data_zone_blocks);
-	mutex_unlock(&server->alloc_mutex);
+	      alloc_move_empty(sb, &super->data_alloc, &lt.data_freed);
 	if (ret < 0)
 		goto unlock;
+
+	ret = scoutfs_alloc_fill_list(sb, &server->alloc, &server->wri,
+				      &lt.meta_avail, server->meta_avail,
+				      SCOUTFS_SERVER_META_FILL_LO,
+				      SCOUTFS_SERVER_META_FILL_TARGET);
+	if (ret < 0)
+		goto unlock;
+
+	if (le64_to_cpu(server->meta_avail->total_len) <= scoutfs_server_reserved_meta_blocks(sb))
+		lt.meta_avail.flags |= cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
+	else
+		lt.meta_avail.flags &= ~cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
+
+	ret = alloc_move_refill_zoned(sb, &lt.data_avail, &super->data_alloc,
+				      SCOUTFS_SERVER_DATA_FILL_LO, SCOUTFS_SERVER_DATA_FILL_TARGET,
+				      exclusive, vacant, data_zone_blocks);
+	if (ret < 0)
+		goto unlock;
+
+	if (le64_to_cpu(lt.data_avail.total_len) < SCOUTFS_SERVER_DATA_FILL_LO)
+		lt.data_avail.flags |= cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
+	else
+		lt.data_avail.flags &= ~cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
+
+	mutex_unlock(&server->alloc_mutex);
+	unlock_alloc = false;
 
 	/* record data alloc zone bits */
 	zero_data_alloc_zone_bits(&lt);
@@ -772,6 +859,8 @@ static int server_get_log_trees(struct super_block *sb,
 	ret = scoutfs_btree_force(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
 unlock:
+	if (unlock_alloc)
+		mutex_unlock(&server->alloc_mutex);
 	mutex_unlock(&server->logs_mutex);
 
 	ret = scoutfs_server_apply_commit(sb, ret);
@@ -2277,15 +2366,27 @@ int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
 					      open_ino_map_response, NULL, NULL);
 }
 
-/* The server is sending an omap response to the client */
+/*
+ * The server is sending an omap response to the client that originated
+ * the request.  These responses are sent long after the incoming
+ * request has pinned the client connection and guaranteed that we'll be
+ * able to queue a response.  This can race with the client connection
+ * being torn down and it's OK if we drop the response.  Either the
+ * client is being evicted and we don't care about them anymore or we're
+ * tearing down in unmount and the client will resend to thee next
+ * server.
+ */
 int scoutfs_server_send_omap_response(struct super_block *sb, u64 rid, u64 id,
 				      struct scoutfs_open_ino_map *map, int err)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	int ret;
 
-	return scoutfs_net_response_node(sb, server->conn, rid,
-					 SCOUTFS_NET_CMD_OPEN_INO_MAP, id, err,
-					 map, sizeof(*map));
+	ret = scoutfs_net_response_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
+					id, err, map, sizeof(*map));
+	if (ret == -ENOTCONN)
+		ret = 0;
+	return ret;
 }
 
 /* The server is receiving an omap request from the client */

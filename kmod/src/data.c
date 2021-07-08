@@ -312,10 +312,9 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 
 	while (iblock <= last) {
 		if (inode)
-			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks,
-							    true);
+			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true, false);
 		else
-			ret = scoutfs_hold_trans(sb);
+			ret = scoutfs_hold_trans(sb, false);
 		if (ret)
 			break;
 
@@ -756,8 +755,7 @@ retry:
 		ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
 		      scoutfs_inode_index_prepare(sb, &wbd->ind_locks, inode,
 						  true) ?:
-		      scoutfs_inode_index_try_lock_hold(sb, &wbd->ind_locks,
-							ind_seq);
+		      scoutfs_inode_index_try_lock_hold(sb, &wbd->ind_locks, ind_seq, true);
 	} while (ret > 0);
 	if (ret < 0)
 		goto out;
@@ -1010,7 +1008,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 
 	while(iblock <= last) {
 
-		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false);
+		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, true);
 		if (ret)
 			goto out;
 
@@ -1086,7 +1084,7 @@ int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 	}
 
 	/* we're updating meta_seq with offline block count */
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false);
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, true);
 	if (ret < 0)
 		goto out;
 
@@ -1238,7 +1236,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		ret = scoutfs_inode_index_start(sb, &seq) ?:
 		      scoutfs_inode_index_prepare(sb, &locks, from, true) ?:
 		      scoutfs_inode_index_prepare(sb, &locks, to, true) ?:
-		      scoutfs_inode_index_try_lock_hold(sb, &locks, seq);
+		      scoutfs_inode_index_try_lock_hold(sb, &locks, seq, false);
 		if (ret > 0)
 			continue;
 		if (ret < 0)
@@ -1844,13 +1842,17 @@ int scoutfs_data_prepare_commit(struct super_block *sb)
 	return ret;
 }
 
-u64 scoutfs_data_alloc_free_bytes(struct super_block *sb)
+/*
+ * Return true if the data allocator is lower than the caller's
+ * requirement and we haven't been told by the server that we're out of
+ * free extents.
+ */
+bool scoutfs_data_alloc_should_refill(struct super_block *sb, u64 blocks)
 {
 	DECLARE_DATA_INFO(sb, datinf);
 
-	return scoutfs_dalloc_total_len(&datinf->dalloc) <<
-		SCOUTFS_BLOCK_SM_SHIFT;
-
+	return (scoutfs_dalloc_total_len(&datinf->dalloc) < blocks) &&
+	       !(le32_to_cpu(datinf->dalloc.root.flags) & SCOUTFS_ALLOC_FLAG_LOW);
 }
 
 int scoutfs_data_setup(struct super_block *sb)

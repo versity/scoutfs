@@ -7,7 +7,8 @@ BIN := src/createmany			\
 	src/handle_cat			\
 	src/bulk_create_paths		\
 	src/stage_tmpfile		\
-	src/find_xattrs
+	src/find_xattrs			\
+	src/create_xattr_loop
 
 DEPS := $(wildcard src/*.d)
 

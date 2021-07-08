@@ -5,3 +5,4 @@ src/handle_cat
 src/bulk_create_paths
 src/find_xattrs
 src/stage_tmpfile
+src/create_xattr_loop

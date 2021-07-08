@@ -56,6 +56,8 @@ do {								\
 	__entry->name##_data_len, __entry->name##_cmd, __entry->name##_flags, \
 	__entry->name##_error
 
+u64 scoutfs_server_reserved_meta_blocks(struct super_block *sb);
+
 int scoutfs_server_lock_request(struct super_block *sb, u64 rid,
 				struct scoutfs_net_lock *nl);
 int scoutfs_server_lock_response(struct super_block *sb, u64 rid, u64 id,
@@ -75,8 +77,6 @@ u64 scoutfs_server_seq(struct super_block *sb);
 u64 scoutfs_server_next_seq(struct super_block *sb);
 void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq);
 
-struct sockaddr_in;
-struct scoutfs_quorum_elected_info;
 int scoutfs_server_start(struct super_block *sb, u64 term);
 void scoutfs_server_abort(struct super_block *sb);
 void scoutfs_server_stop(struct super_block *sb);

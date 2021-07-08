@@ -86,7 +86,7 @@ void scoutfs_data_init_btrees(struct super_block *sb,
 void scoutfs_data_get_btrees(struct super_block *sb,
 			     struct scoutfs_log_trees *lt);
 int scoutfs_data_prepare_commit(struct super_block *sb);
-u64 scoutfs_data_alloc_free_bytes(struct super_block *sb);
+bool scoutfs_data_alloc_should_refill(struct super_block *sb, u64 blocks);
 
 int scoutfs_data_setup(struct super_block *sb);
 void scoutfs_data_destroy(struct super_block *sb);

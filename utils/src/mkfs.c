@@ -135,6 +135,7 @@ struct mkfs_args {
 	unsigned long long max_data_size;
 	u64 data_alloc_zone_blocks;
 	bool force;
+	bool allow_small_size;
 	int nr_slots;
 	struct scoutfs_quorum_slot slots[SCOUTFS_QUORUM_MAX_SLOTS];
 };
@@ -215,13 +216,15 @@ static int do_mkfs(struct mkfs_args *args)
 		goto out;
 	}
 
-	ret = device_size(args->meta_device, meta_fd, 2ULL * (1024 * 1024 * 1024),
-			  args->max_meta_size, "meta", &meta_size);
+	/* minumum meta device size to make reserved blocks reasonably large */
+	ret = device_size(args->meta_device, meta_fd, 64ULL * (1024 * 1024 * 1024),
+			  args->max_meta_size, args->allow_small_size, "meta", &meta_size);
 	if (ret)
 		goto out;
 
-	ret = device_size(args->data_device, data_fd, 8ULL * (1024 * 1024 * 1024),
-			  args->max_data_size, "data", &data_size);
+	/* .. then arbitrarily the same minimum data device size */
+	ret = device_size(args->data_device, data_fd, 64ULL * (1024 * 1024 * 1024),
+			  args->max_data_size, args->allow_small_size, "data", &data_size);
 	if (ret)
 		goto out;
 
@@ -520,6 +523,9 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 				prev_val, args->max_data_size);
 		break;
 	}
+	case 'A':
+		args->allow_small_size = true;
+		break;
 	case 'z': /* data-alloc-zone-blocks */
 	{
 		ret = parse_u64(arg, &args->data_alloc_zone_blocks);
@@ -559,6 +565,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 static struct argp_option options[] = {
 	{ "quorum-slot", 'Q', "NR,ADDR,PORT", 0, "Specify quorum slot addresses [Required]"},
 	{ "force", 'f', NULL, 0, "Overwrite existing data on block devices"},
+	{ "allow-small-size", 'A', NULL, 0, "Allow specified meta/data devices less than minimum, still warns"},
 	{ "max-meta-size", 'm', "SIZE", 0, "Use a size less than the base metadata device size (bytes or KMGTP units)"},
 	{ "max-data-size", 'd', "SIZE", 0, "Use a size less than the base data device size (bytes or KMGTP units)"},
 	{ "data-alloc-zone-blocks", 'z', "BLOCKS", 0, "Divide data device into block zones so each mounts writes to a zone (4KB blocks)"},
