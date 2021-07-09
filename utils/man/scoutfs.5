@@ -142,6 +142,62 @@ If the
 file is written to then the server cannot make forward progress and
 shuts down.  The request can similarly enter an errored state if enough
 time passes before userspace completes the request.
+
+.SH EXTENDED ATTRIBUTE TAGS
+
+.B scoutfs
+adds the
+.IB scoutfs.
+extended attribute namespace which uses a system of tags to extend the
+functionality of extended attributes.  Immediately following the
+scoutfs. prefix are a series of tag words seperated by dots.
+Any text starting after the last recognized tag is considered the xattr
+name and is not parsed.
+.sp
+Tags may be combined in any order.   Specifying a tag more than once
+will return an error.  There is no explicit boundary between the end of
+tags and the start of the name so unknown or incorrect tags will be
+successfully parsed as part of the name of the xattr.  Tags can only be
+created, updated, or removed with the CAP_SYS_ADMIN capability.
+
+The following tags are currently supported:
+
+.RS
+.TP
+.B .hide.
+Attributes with the .hide. tag are not visible to the
+.BR listxattr(2)
+system call.  They will instead be included in the output of the
+.IB LISTXATTR_HIDDEN
+ioctl.  This is meant to be used by archival management agents to store
+metadata that is bound to a specific volume and should not be
+transferred with the file by tools that read extended attributes, like
+.BR tar(1) .
+.TP
+.B .srch.
+Attributes with the .srch. tag are indexed so that they can be
+found by the
+.IB SEARCH_XATTRS
+ioctl.   The search ioctl takes an extended attribute name and returns
+the inode number of all the inodes which contain an extended attribute
+with that name.  The indexing structures behind .srch. tags are designed
+to efficiently handle a large number of .srch. attributes per file with
+no limits on the number of indexed files.
+.TP
+.B .totl.
+Attributes with the .totl. flag are used to efficiently maintain counts
+across all files in the system.  The attribute's name must end in three
+64bit values seperated by dots that specify the global total that the
+extended attribute will contribute to.   The value of the extended
+attribute is a string representation of the 64bit quantity which will be
+added to the total.   As attributes are added, updated, or removed (and
+particularly as a file is finally deleted), the corresponding global
+total is also updated by the file system.  All the totals with their
+name, total value, and a count of contributing attributes can be read
+with the
+.IB READ_XATTR_TOTALS
+ioctl.
+.RE
  
 .SH CORRUPTION DETECTION
 A

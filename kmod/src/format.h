@@ -168,6 +168,11 @@ struct scoutfs_key {
 #define sko_rid		_sk_first
 #define sko_ino		_sk_second
 
+/* xattr totl */
+#define skxt_a		_sk_first
+#define skxt_b		_sk_second
+#define skxt_c		_sk_third
+
 /* inode */
 #define ski_ino		_sk_first
 
@@ -568,8 +573,9 @@ struct scoutfs_log_merge_freeing {
  */
 #define SCOUTFS_INODE_INDEX_ZONE		1
 #define SCOUTFS_ORPHAN_ZONE			2
-#define SCOUTFS_FS_ZONE				3
-#define SCOUTFS_LOCK_ZONE			4
+#define SCOUTFS_XATTR_TOTL_ZONE			3
+#define SCOUTFS_FS_ZONE				4
+#define SCOUTFS_LOCK_ZONE			5
 /* Items only stored in server btrees */
 #define SCOUTFS_LOG_TREES_ZONE			6
 #define SCOUTFS_TRANS_SEQ_ZONE			7
@@ -633,6 +639,17 @@ struct scoutfs_xattr {
 	__u8 name[];
 };
 
+/*
+ * .totl. xattrs are mapped to items.  The dotted u64s in the xattr name
+ * map to the item key.  The item value total is the sum of all the
+ * xattr values.   The item value count records the number of xattrs
+ * contributing to the total and is used when combining logged items to
+ * determine if totals are being created or destroyed.
+ */
+struct scoutfs_xattr_totl_val {
+	__le64 total;
+	__le64 count;
+};
 
 /* XXX does this exist upstream somewhere? */
 #define member_sizeof(TYPE, MEMBER) (sizeof(((TYPE *)0)->MEMBER))
@@ -883,6 +900,7 @@ enum scoutfs_dentry_type {
 #define SCOUTFS_XATTR_MAX_NAME_LEN	255
 #define SCOUTFS_XATTR_MAX_VAL_LEN	65535
 #define SCOUTFS_XATTR_MAX_PART_SIZE	SCOUTFS_MAX_VAL_SIZE
+#define SCOUTFS_XATTR_MAX_TOTL_U64	23 /* octal U64_MAX */
 
 #define SCOUTFS_XATTR_NR_PARTS(name_len, val_len)			\
 	DIV_ROUND_UP(sizeof(struct scoutfs_xattr) + name_len + val_len, \

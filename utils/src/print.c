@@ -75,6 +75,17 @@ static void print_orphan(struct scoutfs_key *key, void *val, int val_len)
 	printf("    orphan: ino %llu\n", le64_to_cpu(key->sko_ino));
 }
 
+
+static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
+{
+	struct scoutfs_xattr_totl_val *tval = val;
+
+	printf("    xattr totl: %llu.%llu.%llu = %lld, %lld\n",
+	       le64_to_cpu(key->skxt_a), le64_to_cpu(key->skxt_b),
+	       le64_to_cpu(key->skxt_c), le64_to_cpu(tval->total),
+	       le64_to_cpu(tval->count));
+}
+
 static u8 *global_printable_name(u8 *name, int name_len)
 {
 	static u8 name_buf[SCOUTFS_NAME_LEN + 1];
@@ -162,6 +173,9 @@ static print_func_t find_printer(u8 zone, u8 type)
 		if (type == SCOUTFS_ORPHAN_TYPE)
 			return print_orphan;
 	}
+
+	if (zone == SCOUTFS_XATTR_TOTL_ZONE)
+		return print_xattr_totl;
 
 	if (zone == SCOUTFS_FS_ZONE) {
 		switch(type) {

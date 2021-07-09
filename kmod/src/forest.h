@@ -8,14 +8,18 @@ struct scoutfs_block;
 #include "btree.h"
 
 /* caller gives an item to the callback */
+enum {
+	FIC_FS_ROOT = (1 << 0),
+	FIC_FINALIZED = (1 << 1),
+};
 typedef int (*scoutfs_forest_item_cb)(struct super_block *sb, struct scoutfs_key *key, u64 seq,
-				      u8 flags, void *val, int val_len, void *arg);
+				      u8 flags, void *val, int val_len, int fic, void *arg);
 
 int scoutfs_forest_next_hint(struct super_block *sb, struct scoutfs_key *key,
 			     struct scoutfs_key *next);
 int scoutfs_forest_read_items(struct super_block *sb,
-			      struct scoutfs_lock *lock,
 			      struct scoutfs_key *key,
+			      struct scoutfs_key *bloom_key,
 			      struct scoutfs_key *start,
 			      struct scoutfs_key *end,
 			      scoutfs_forest_item_cb cb, void *arg);
@@ -35,6 +39,12 @@ void scoutfs_forest_init_btrees(struct super_block *sb,
 				struct scoutfs_log_trees *lt);
 void scoutfs_forest_get_btrees(struct super_block *sb,
 			       struct scoutfs_log_trees *lt);
+
+/* > 0 error codes */
+#define SCOUTFS_DELTA_COMBINED		1	/* src val was combined, drop src */
+#define SCOUTFS_DELTA_COMBINED_NULL	2	/* combined val has no data, drop both */
+int scoutfs_forest_combine_deltas(struct scoutfs_key *key, void *dst, int dst_len,
+				  void *src, int src_len);
 
 int scoutfs_forest_setup(struct super_block *sb);
 void scoutfs_forest_start(struct super_block *sb);

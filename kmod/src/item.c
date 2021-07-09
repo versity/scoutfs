@@ -139,7 +139,8 @@ struct cached_item {
 	struct list_head dirty_head;
 	unsigned int dirty:1,		/* needs to be written */
 		     persistent:1,	/* in btrees, needs deletion item */
-		     deletion:1;	/* negative del item for writing */
+		     deletion:1,	/* negative del item for writing */
+		     delta:1;		/* item vales are combined, freed after write */
 	unsigned int val_len;
 	struct scoutfs_key key;
 	u64 seq;
@@ -415,6 +416,7 @@ static struct cached_item *alloc_item(struct cached_page *pg,
 	item->dirty = 0;
 	item->persistent = 0;
 	item->deletion = !!deletion;
+	item->delta = 0;
 	item->val_len = val_len;
 	item->key = *key;
 	item->seq = seq;
@@ -720,6 +722,7 @@ static void move_page_items(struct super_block *sb,
 		}
 
 		to->persistent = from->persistent;
+		to->delta = from->delta;
 
 		erase_item(left, from);
 	}
@@ -1353,7 +1356,7 @@ static void del_active_reader(struct item_cache_info *cinf, struct active_reader
  * don't have to compare seqs.
  */
 static int read_page_item(struct super_block *sb, struct scoutfs_key *key, u64 seq, u8 flags,
-			  void *val, int val_len, void *arg)
+			  void *val, int val_len, int fic, void *arg)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	const bool deletion = !!(flags & SCOUTFS_ITEM_FLAG_DELETION);
@@ -1480,8 +1483,9 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 	/* set active reader seq before reading persistent roots */
 	add_active_reader(sb, &active);
 
-	ret = scoutfs_forest_read_items(sb, lock, key, &start, &end,
-				       read_page_item, &root);
+	start = lock->start;
+	end = lock->end;
+	ret = scoutfs_forest_read_items(sb, key, &lock->start, &start, &end, read_page_item, &root);
 	if (ret < 0)
 		goto out;
 
@@ -2007,6 +2011,77 @@ out:
 }
 
 /*
+ * Add a delta item.  Delta items are an incremental change relative to
+ * the current persistent delta items.  We never have to read the
+ * current items so the caller always writes with write only locks.  If
+ * combining the current delta item and the caller's item results in a
+ * null we can just drop it, we don't have to emit a deletion item.
+ */
+int scoutfs_item_delta(struct super_block *sb, struct scoutfs_key *key,
+		       void *val, int val_len, struct scoutfs_lock *lock)
+{
+	DECLARE_ITEM_CACHE_INFO(sb, cinf);
+	const u64 seq = item_seq(sb, lock);
+	struct cached_item *item;
+	struct cached_page *pg;
+	struct rb_node **pnode;
+	struct rb_node *par;
+	int ret;
+
+	scoutfs_inc_counter(sb, item_delta);
+
+	if ((ret = lock_safe(lock, key, SCOUTFS_LOCK_WRITE_ONLY)))
+		goto out;
+
+	ret = scoutfs_forest_set_bloom_bits(sb, lock);
+	if (ret < 0)
+		goto out;
+
+	ret = get_cached_page(sb, cinf, lock, key, true, true, val_len, &pg);
+	if (ret < 0)
+		goto out;
+	__acquire(pg->rwlock);
+
+	item = item_rbtree_walk(&pg->item_root, key, NULL, &par, &pnode);
+	if (item) {
+		if (!item->delta) {
+			ret = -EIO;
+			goto unlock;
+		}
+
+		ret = scoutfs_forest_combine_deltas(key, item->val, item->val_len, val, val_len);
+		if (ret <= 0) {
+			if (ret == 0)
+				ret = -EIO;
+			goto unlock;
+		}
+
+		if (ret == SCOUTFS_DELTA_COMBINED) {
+			item->seq = seq;
+			mark_item_dirty(sb, cinf, pg, NULL, item);
+		} else if (ret == SCOUTFS_DELTA_COMBINED_NULL) {
+			clear_item_dirty(sb, cinf, pg, item);
+			erase_item(pg, item);
+		} else {
+			ret = -EIO;
+			goto unlock;
+		}
+		ret = 0;
+	} else {
+		item = alloc_item(pg, key, seq, false, val, val_len);
+		rbtree_insert(&item->node, par, pnode, &pg->item_root);
+		mark_item_dirty(sb, cinf, pg, NULL, item);
+		item->delta = 1;
+		ret = 0;
+	}
+
+unlock:
+	write_unlock(&pg->rwlock);
+out:
+	return ret;
+}
+
+/*
  * Delete an item from the cache.  We can leave behind a dirty deletion
  * item if there is a persistent item that needs to be overwritten.
  * This can't fail if the caller knows that the item exists and it has
@@ -2280,8 +2355,11 @@ retry:
 					 dirty_head) {
 			clear_item_dirty(sb, cinf, pg, item);
 
+			if (item->delta)
+				scoutfs_inc_counter(sb, item_delta_written);
+
 			/* free deletion items */
-			if (item->deletion)
+			if (item->deletion || item->delta)
 				erase_item(pg, item);
 			else
 				item->persistent = 1;

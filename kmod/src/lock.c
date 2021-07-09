@@ -1237,6 +1237,20 @@ int scoutfs_lock_orphan(struct super_block *sb, enum scoutfs_lock_mode mode, int
 	return lock_key_range(sb, mode, flags, &start, &end, lock);
 }
 
+int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+			    struct scoutfs_lock **lock)
+{
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+
+	scoutfs_key_set_zeros(&start);
+	start.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
+	scoutfs_key_set_ones(&end);
+	end.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
+
+	return lock_key_range(sb, mode, flags, &start, &end, lock);
+}
+
 void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock, enum scoutfs_lock_mode mode)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
