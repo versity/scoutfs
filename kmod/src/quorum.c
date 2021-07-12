@@ -608,7 +608,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	if (ret < 0)
 		goto out;
 
-	while (!qinf->shutdown) {
+	while (!(qinf->shutdown || scoutfs_forcing_unmount(sb))) {
 
 		ret = recv_msg(sb, &msg, qst.timeout);
 		if (ret < 0) {
