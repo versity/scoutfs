@@ -3463,13 +3463,15 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
+	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
+	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
+
 	/* first make sure no other servers are still running */
 	ret = scoutfs_quorum_fence_leaders(sb, server->term);
-	if (ret < 0)
+	if (ret < 0) {
+		scoutfs_err(sb, "server error %d attempting to fence previous leaders", ret);
 		goto out;
-
-	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
-	scoutfs_info(sb, "server setting up at "SIN_FMT, SIN_ARG(&sin));
+	}
 
 	conn = scoutfs_net_alloc_conn(sb, server_notify_up, server_notify_down,
 				      sizeof(struct server_client_info),
@@ -3490,8 +3492,10 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	/* start up the server subsystems before accepting */
 	ret = scoutfs_read_super(sb, super);
-	if (ret < 0)
+	if (ret < 0) {
+		scoutfs_err(sb, "server error %d reading super block", ret);
 		goto shutdown;
+	}
 
 	/* update volume options early, possibly for use during startup */
 	write_seqcount_begin(&server->volopt_seqcount);
@@ -3529,10 +3533,17 @@ static void scoutfs_server_worker(struct work_struct *work)
 	}
 	scoutfs_server_set_seq_if_greater(sb, max_seq);
 
-	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri) ?:
-	      start_recovery(sb);
-	if (ret)
+	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri);
+	if (ret) {
+		scoutfs_err(sb, "server error %d starting lock server", ret);
 		goto shutdown;
+	}
+
+	ret = start_recovery(sb);
+	if (ret) {
+		scoutfs_err(sb, "server error %d starting client recovery", ret);
+		goto shutdown;
+	}
 
 	/* start accepting connections and processing work */
 	server->conn = conn;

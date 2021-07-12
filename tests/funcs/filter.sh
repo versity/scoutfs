@@ -40,7 +40,7 @@ t_filter_dmesg()
 	# mount and unmount spew a bunch
 	re="$re|scoutfs.*client connected"
 	re="$re|scoutfs.*client disconnected"
-	re="$re|scoutfs.*server setting up"
+	re="$re|scoutfs.*server starting"
 	re="$re|scoutfs.*server ready"
 	re="$re|scoutfs.*server accepted"
 	re="$re|scoutfs.*server closing"

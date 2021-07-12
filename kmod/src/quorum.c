@@ -556,10 +556,8 @@ out:
 			ret = err;
 	}
 
-	if (ret < 0) {
-		scoutfs_err(sb, "error %d attempting to find and fence previous leaders", ret);
+	if (ret < 0)
 		scoutfs_inc_counter(sb, quorum_fence_error);
-	}
 
 	return ret;
 }
@@ -733,13 +731,15 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			ret = scoutfs_server_start(sb, qst.term);
 			if (ret < 0) {
 				clear_bit(QINF_FLAG_SERVER, &qinf->flags);
-				scoutfs_err(sb, "server startup failed with %d", ret);
 				/* store our increased term */
 				err = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP, qst.term,
 							  true);
-				if (err < 0 && ret == 0)
+				if (err < 0) {
 					ret = err;
-				goto out;
+					goto out;
+				}
+				ret = 0;
+				continue;
 			}
 		}
 
@@ -789,7 +789,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_END, qst.term, true);
 out:
 	if (ret < 0) {
-		scoutfs_err(sb, "quorum service saw error %d, shutting down.  Cluster will be degraded until this slot is remounted to restart the quorum service",
+		scoutfs_err(sb, "quorum service saw error %d, shutting down.  This mount is no longer participating in quorum.  It should be remounted to restore service.",
 			    ret);
 	}
 }
