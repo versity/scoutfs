@@ -2355,15 +2355,25 @@ static int open_ino_map_response(struct super_block *sb, struct scoutfs_net_conn
 	return scoutfs_omap_server_handle_response(sb, rid, resp);
 }
 
-/* The server is sending an omap request to the client */
+/*
+ * The server is sending an omap requests to all the clients it thought
+ * were connected when it received a request from another client.
+ * This send can race with the client's connection being removed.  We
+ * can drop those sends on the floor and mask ENOTCONN.  The client's rid
+ * will soon be removed from the request which will be correctly handled.
+ */
 int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
 				     struct scoutfs_open_ino_map_args *args)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	int ret;
 
-	return scoutfs_net_submit_request_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
+	ret = scoutfs_net_submit_request_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
 					      args, sizeof(*args),
 					      open_ino_map_response, NULL, NULL);
+	if (ret == -ENOTCONN)
+		ret = 0;
+	return ret;
 }
 
 /*
