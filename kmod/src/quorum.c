@@ -97,7 +97,7 @@ struct quorum_host_msg {
 
 struct last_msg {
 	struct quorum_host_msg msg;
-	struct timespec64 ts;
+	ktime_t ts;
 };
 
 enum quorum_role { FOLLOWER, CANDIDATE, LEADER };
@@ -209,7 +209,7 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 	DECLARE_QUORUM_INFO(sb, qinf);
 	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct timespec64 ts;
+	ktime_t now;
 	int i;
 
 	struct scoutfs_quorum_message qmes = {
@@ -235,7 +235,6 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 
 	qmes.crc = quorum_message_crc(&qmes);
 
-	ts = ktime_to_timespec64(ktime_get());
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(super, i) ||
@@ -243,12 +242,13 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 			continue;
 
 		scoutfs_quorum_slot_sin(super, i, &sin);
+		now = ktime_get();
 		kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
 
 		spin_lock(&qinf->show_lock);
 		qinf->last_send[i].msg.term = term;
 		qinf->last_send[i].msg.type = type;
-		qinf->last_send[i].ts = ts;
+		qinf->last_send[i].ts = now;
 		spin_unlock(&qinf->show_lock);
 
 		if (i == only)
@@ -308,6 +308,8 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	if (ret < 0)
 		return ret;
 
+	now = ktime_get();
+
 	if (ret != sizeof(qmes) ||
 	    qmes.crc != quorum_message_crc(&qmes) ||
 	    qmes.fsid != super->hdr.fsid ||
@@ -327,7 +329,7 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 
 	spin_lock(&qinf->show_lock);
 	qinf->last_recv[msg->from].msg = *msg;
-	qinf->last_recv[msg->from].ts = ktime_to_timespec64(ktime_get());
+	qinf->last_recv[msg->from].ts = now;
 	spin_unlock(&qinf->show_lock);
 
 	return 0;
@@ -915,6 +917,7 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 	struct quorum_status qst;
 	struct last_msg last;
 	struct timespec64 ts;
+	const ktime_t now = ktime_get();
 	size_t size;
 	int ret;
 	int i;
@@ -936,9 +939,9 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 		     qst.vote_for);
 	snprintf_ret(buf, size, &ret, "vote_bits 0x%lx (count %lu)\n",
 		     qst.vote_bits, hweight_long(qst.vote_bits));
-	ts = ktime_to_timespec64(qst.timeout);
-	snprintf_ret(buf, size, &ret, "timeout %llu.%u\n",
-		     (u64)ts.tv_sec, (int)ts.tv_nsec);
+	ts = ktime_to_timespec64(ktime_sub(qst.timeout, now));
+	snprintf_ret(buf, size, &ret, "timeout_in_secs %lld.%09u\n",
+		     (s64)ts.tv_sec, (int)ts.tv_nsec);
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		spin_lock(&qinf->show_lock);
@@ -948,10 +951,11 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 		if (last.msg.term == 0)
 			continue;
 
+		ts = ktime_to_timespec64(ktime_sub(now, last.ts));
 		snprintf_ret(buf, size, &ret,
-			     "last_send to %u term %llu type %u ts %llu.%u\n",
+			     "last_send to %u term %llu type %u secs_since %lld.%09u\n",
 			     i, last.msg.term, last.msg.type,
-			     (u64)last.ts.tv_sec, (int)last.ts.tv_nsec);
+			     (s64)ts.tv_sec, (int)ts.tv_nsec);
 	}
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
@@ -961,10 +965,12 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 
 		if (last.msg.term == 0)
 			continue;
+
+		ts = ktime_to_timespec64(ktime_sub(now, last.ts));
 		snprintf_ret(buf, size, &ret,
-			     "last_recv from %u term %llu type %u ts %llu.%u\n",
+			     "last_recv from %u term %llu type %u secs_since %lld.%09u\n",
 			     i, last.msg.term, last.msg.type,
-			     (u64)last.ts.tv_sec, (int)last.ts.tv_nsec);
+			     (s64)ts.tv_sec, (int)ts.tv_nsec);
 	}
 
 	return ret;
