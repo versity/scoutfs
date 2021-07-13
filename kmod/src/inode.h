@@ -49,7 +49,7 @@ struct scoutfs_inode_info {
 	struct scoutfs_per_task pt_data_lock;
 	struct scoutfs_data_waitq data_waitq;
 	struct rw_semaphore xattr_rwsem;
-	struct rb_node writeback_node;
+	struct list_head writeback_entry;
 
 	struct scoutfs_lock_coverage ino_lock_cov;
 
