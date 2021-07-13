@@ -7,7 +7,7 @@ message_output()
 
 error_message()
 {
-	message_output "$@" >> /dev/stderr
+	message_output "$@" >&2
 }
 
 error_exit()
@@ -18,7 +18,7 @@ error_exit()
 
 log_message()
 {
-	message_output "$@" >> /dev/stdout
+	message_output "$@"
 }
 
 # restart if we catch hup to re-read the config
