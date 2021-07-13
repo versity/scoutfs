@@ -1,13 +1,10 @@
 [Unit]
 Description=ScoutFS fenced
 
-StartLimitIntervalSec=500
-StartLimitBurst=5
-
 [Service]
 Restart=on-failure
 RestartSec=5s
-
+StartLimitBurst=5
 ExecStart=/usr/libexec/scoutfs-fenced/scoutfs-fenced
 
 [Install]
