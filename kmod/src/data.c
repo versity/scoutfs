@@ -207,6 +207,7 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
 	u64 offset;
 	s64 ret;
 	u8 flags;
+	int err;
 	int i;
 
 	flags = offline ? SEF_OFFLINE : 0;
@@ -246,6 +247,18 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
 		tr.len = min(ext.len - offset, last - iblock + 1);
 		tr.flags = ext.flags;
 
+		trace_scoutfs_data_extent_truncated(sb, ino, &tr);
+
+		ret = scoutfs_ext_set(sb, &data_ext_ops, &args,
+				      tr.start, tr.len, 0, flags);
+		if (ret < 0) {
+			if (WARN_ON_ONCE(ret == -EINVAL)) {
+				scoutfs_err(sb, "unexpected truncate inconsistency: ino %llu iblock %llu last %llu, start %llu len %llu",
+					    ino, iblock, last, tr.start, tr.len);
+			}
+			break;
+		}
+
 		if (tr.map) {
 			mutex_lock(&datinf->mutex);
 			ret = scoutfs_free_data(sb, datinf->alloc,
@@ -253,15 +266,15 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
 						&datinf->data_freed,
 						tr.map, tr.len);
 			mutex_unlock(&datinf->mutex);
-			if (ret < 0)
+			if (ret < 0) {
+				err = scoutfs_ext_set(sb, &data_ext_ops, &args,
+						      tr.start, tr.len, tr.map, tr.flags);
+				if (err < 0)
+					scoutfs_err(sb, "truncate err %d restoring extent after error %lld: ino %llu start %llu len %llu",
+						    err, ret, ino, tr.start, tr.len);
 				break;
+			}
 		}
-
-		trace_scoutfs_data_extent_truncated(sb, ino, &tr);
-
-		ret = scoutfs_ext_set(sb, &data_ext_ops, &args,
-				      tr.start, tr.len, 0, flags);
-		BUG_ON(ret);  /* inconsistent, could prealloc items */
 
 		iblock += tr.len;
 	}
