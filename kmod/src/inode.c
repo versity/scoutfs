@@ -68,6 +68,9 @@ struct inode_sb_info {
 	/* serialize multiple inode ->evict trying to delete same ino's items */
 	spinlock_t deleting_items_lock;
 	struct list_head deleting_items_list;
+
+	struct work_struct iput_work;
+	struct llist_head iput_llist;
 };
 
 #define DECLARE_INODE_SB_INFO(sb, name) \
@@ -94,7 +97,7 @@ static void scoutfs_inode_ctor(void *obj)
 	init_rwsem(&si->xattr_rwsem);
 	RB_CLEAR_NODE(&si->writeback_node);
 	scoutfs_lock_init_coverage(&si->ino_lock_cov);
-	atomic_set(&si->inv_iput_count, 0);
+	atomic_set(&si->iput_count, 0);
 
 	inode_init_once(&si->inode);
 }
@@ -1699,6 +1702,49 @@ int scoutfs_drop_inode(struct inode *inode)
 	       generic_drop_inode(inode);
 }
 
+static void iput_worker(struct work_struct *work)
+{
+	struct inode_sb_info *inf = container_of(work, struct inode_sb_info, iput_work);
+	struct scoutfs_inode_info *si;
+	struct scoutfs_inode_info *tmp;
+	struct llist_node *inodes;
+	bool more;
+
+	inodes = llist_del_all(&inf->iput_llist);
+
+	llist_for_each_entry_safe(si, tmp, inodes, iput_llnode) {
+		do {
+			more = atomic_dec_return(&si->iput_count) > 0;
+			iput(&si->inode);
+		} while (more);
+	}
+}
+
+/*
+ * Final iput can get into evict and perform final inode deletion which
+ * can delete a lot of items spanning multiple cluster locks and
+ * transactions.  It should be understood as a heavy high level
+ * operation, more like file writing and less like dropping a refcount.
+ *
+ * Unfortunately we also have incentives to use igrab/iput from internal
+ * contexts that have no business doing that work, like lock
+ * invalidation or dirty inode writeback during transaction commit.
+ *
+ * In those cases we can kick iput off to background work context.
+ * Nothing stops multiple puts of an inode before the work runs so we
+ * can track multiple puts in flight.
+ */
+void scoutfs_inode_queue_iput(struct inode *inode)
+{
+	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	if (atomic_inc_return(&si->iput_count) == 1)
+		llist_add(&si->iput_llnode, &inf->iput_llist);
+	smp_wmb(); /* count and list visible before work executes */
+	schedule_work(&inf->iput_work);
+}
+
 /*
  * All mounts are performing this work concurrently.  We introduce
  * significant jitter between them to try and keep them from all
@@ -1951,6 +1997,8 @@ int scoutfs_inode_setup(struct super_block *sb)
 	INIT_DELAYED_WORK(&inf->orphan_scan_dwork, inode_orphan_scan_worker);
 	spin_lock_init(&inf->deleting_items_lock);
 	INIT_LIST_HEAD(&inf->deleting_items_list);
+	INIT_WORK(&inf->iput_work, iput_worker);
+	init_llist_head(&inf->iput_llist);
 
 	sbi->inode_sb_info = inf;
 

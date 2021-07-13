@@ -55,8 +55,8 @@ struct scoutfs_inode_info {
 
 	/* drop if i_count hits 0, allows drop while invalidate holds coverage */
 	bool drop_invalidated;
-	struct llist_node inv_iput_llnode;
-	atomic_t inv_iput_count;
+	struct llist_node iput_llnode;
+	atomic_t iput_count;
 
 	struct inode inode;
 };
@@ -75,6 +75,7 @@ struct inode *scoutfs_alloc_inode(struct super_block *sb);
 void scoutfs_destroy_inode(struct inode *inode);
 int scoutfs_drop_inode(struct inode *inode);
 void scoutfs_evict_inode(struct inode *inode);
+void scoutfs_inode_queue_iput(struct inode *inode);
 
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino);
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
