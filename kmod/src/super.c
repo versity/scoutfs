@@ -230,7 +230,15 @@ static void scoutfs_metadev_close(struct super_block *sb)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
 	if (sbi->meta_bdev) {
+		/*
+		 * Some kernels have blkdev_reread_part which calls
+		 * fsync_bdev while holding the bd_mutex which inverts
+		 * the s_umount hold in deactivate_super and blkdev_put
+		 * from kill_sb->put_super.
+		 */
+		lockdep_off();
 		blkdev_put(sbi->meta_bdev, SCOUTFS_META_BDEV_MODE);
+		lockdep_on();
 		sbi->meta_bdev = NULL;
 	}
 }
