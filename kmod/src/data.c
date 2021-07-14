@@ -1031,8 +1031,10 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 			end = (iblock + ret) << SCOUTFS_BLOCK_SM_SHIFT;
 			if (end > offset + len)
 				end = offset + len;
-			if (end > i_size_read(inode))
+			if (end > i_size_read(inode)) {
 				i_size_write(inode, end);
+				scoutfs_inode_inc_data_version(inode);
+			}
 		}
 		if (ret >= 0)
 			scoutfs_update_inode_item(inode, lock, &ind_locks);
