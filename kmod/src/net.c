@@ -1801,11 +1801,13 @@ int scoutfs_net_sync_request(struct super_block *sb,
 	ret = scoutfs_net_submit_request(sb, conn, cmd, arg, arg_len,
 					 sync_response, &sreq, &id);
 
-	ret = wait_for_completion_interruptible(&sreq.comp);
-	if (ret == -ERESTARTSYS)
-		scoutfs_net_cancel_request(sb, conn, cmd, id);
-	else
-		ret = sreq.error;
+	if (ret == 0) {
+		ret = wait_for_completion_interruptible(&sreq.comp);
+		if (ret == -ERESTARTSYS)
+			scoutfs_net_cancel_request(sb, conn, cmd, id);
+		else
+			ret = sreq.error;
+	}
 
 	return ret;
 }
