@@ -645,9 +645,11 @@ static struct block_private *block_read(struct super_block *sb, u64 blkno)
 			goto out;
 	}
 
-	ret = wait_event_interruptible(binf->waitq, uptodate_or_error(bp));
-	if (ret == 0 && test_bit(BLOCK_BIT_ERROR, &bp->bits))
+	wait_event(binf->waitq, uptodate_or_error(bp));
+	if (test_bit(BLOCK_BIT_ERROR, &bp->bits))
 		ret = -EIO;
+	else
+		ret = 0;
 
 out:
 	if (ret < 0) {

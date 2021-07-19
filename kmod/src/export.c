@@ -81,7 +81,7 @@ static struct dentry *scoutfs_fh_to_dentry(struct super_block *sb,
 	trace_scoutfs_fh_to_dentry(sb, fh_type, sfid);
 
 	if (scoutfs_valid_fileid(fh_type))
-		inode = scoutfs_iget(sb, le64_to_cpu(sfid->ino));
+		inode = scoutfs_iget(sb, le64_to_cpu(sfid->ino), 0);
 
 	return d_obtain_alias(inode);
 }
@@ -100,7 +100,7 @@ static struct dentry *scoutfs_fh_to_parent(struct super_block *sb,
 
 	if (scoutfs_valid_fileid(fh_type) &&
 	    fh_type == FILEID_SCOUTFS_WITH_PARENT)
-		inode = scoutfs_iget(sb, le64_to_cpu(sfid->parent_ino));
+		inode = scoutfs_iget(sb, le64_to_cpu(sfid->parent_ino), 0);
 
 	return d_obtain_alias(inode);
 }
@@ -123,7 +123,7 @@ static struct dentry *scoutfs_get_parent(struct dentry *child)
 	scoutfs_dir_free_backref_path(sb, &list);
 	trace_scoutfs_get_parent(sb, inode, ino);
 
-	inode = scoutfs_iget(sb, ino);
+	inode = scoutfs_iget(sb, ino, 0);
 
 	return d_obtain_alias(inode);
 }

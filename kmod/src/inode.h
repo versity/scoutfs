@@ -77,7 +77,7 @@ int scoutfs_drop_inode(struct inode *inode);
 void scoutfs_evict_inode(struct inode *inode);
 void scoutfs_inode_queue_iput(struct inode *inode);
 
-struct inode *scoutfs_iget(struct super_block *sb, u64 ino);
+struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf);
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
 
 void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
@@ -132,7 +132,7 @@ void scoutfs_inode_exit(void);
 int scoutfs_inode_init(void);
 
 int scoutfs_inode_setup(struct super_block *sb);
-int scoutfs_inode_start(struct super_block *sb);
+void scoutfs_inode_start(struct super_block *sb);
 void scoutfs_inode_stop(struct super_block *sb);
 void scoutfs_inode_destroy(struct super_block *sb);
 

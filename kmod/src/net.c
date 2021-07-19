@@ -1486,8 +1486,7 @@ int scoutfs_net_connect(struct super_block *sb,
 			struct scoutfs_net_connection *conn,
 			struct sockaddr_in *sin, unsigned long timeout_ms)
 {
-	int error = 0;
-	int ret;
+	int ret = 0;
 
 	spin_lock(&conn->lock);
 	conn->connect_sin = *sin;
@@ -1495,10 +1494,8 @@ int scoutfs_net_connect(struct super_block *sb,
 	spin_unlock(&conn->lock);
 
 	queue_work(conn->workq, &conn->connect_work);
-
-	ret = wait_event_interruptible(conn->waitq,
-				       connect_result(conn, &error));
-	return ret ?: error;
+	wait_event(conn->waitq, connect_result(conn, &ret));
+	return ret;
 }
 
 static void set_valid_greeting(struct scoutfs_net_connection *conn)
@@ -1802,11 +1799,8 @@ int scoutfs_net_sync_request(struct super_block *sb,
 					 sync_response, &sreq, &id);
 
 	if (ret == 0) {
-		ret = wait_for_completion_interruptible(&sreq.comp);
-		if (ret == -ERESTARTSYS)
-			scoutfs_net_cancel_request(sb, conn, cmd, id);
-		else
-			ret = sreq.error;
+		wait_for_completion(&sreq.comp);
+		ret = sreq.error;
 	}
 
 	return ret;

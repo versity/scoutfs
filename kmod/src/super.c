@@ -630,15 +630,16 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_quorum_setup(sb) ?:
 	      scoutfs_client_setup(sb) ?:
 	      scoutfs_volopt_setup(sb) ?:
-	      scoutfs_trans_get_log_trees(sb) ?:
-	      scoutfs_srch_setup(sb) ?:
-	      scoutfs_inode_start(sb);
+	      scoutfs_srch_setup(sb);
 	if (ret)
 		goto out;
 
-	inode = scoutfs_iget(sb, SCOUTFS_ROOT_INO);
+	/* this interruptible iget lets hung mount be aborted with ctl-c */
+	inode = scoutfs_iget(sb, SCOUTFS_ROOT_INO, SCOUTFS_LKF_INTERRUPTIBLE);
 	if (IS_ERR(inode)) {
 		ret = PTR_ERR(inode);
+		if (ret == -ERESTARTSYS)
+			ret = -EINTR;
 		goto out;
 	}
 
@@ -648,10 +649,15 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 
-	ret = scoutfs_client_advance_seq(sb, &sbi->trans_seq);
+	/* send requests once iget progress shows we had a server */
+	ret = scoutfs_trans_get_log_trees(sb) ?:
+	      scoutfs_client_advance_seq(sb, &sbi->trans_seq);
 	if (ret)
 		goto out;
 
+	/* start up background services that use everything else */
+	scoutfs_inode_start(sb);
+	scoutfs_forest_start(sb);
 	scoutfs_trans_restart_sync_deadline(sb);
 	ret = 0;
 out:

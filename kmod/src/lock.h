@@ -6,7 +6,8 @@
 
 #define SCOUTFS_LKF_REFRESH_INODE	0x01 /* update stale inode from item */
 #define SCOUTFS_LKF_NONBLOCK		0x02 /* only use already held locks */
-#define SCOUTFS_LKF_INVALID		(~((SCOUTFS_LKF_NONBLOCK << 1) - 1))
+#define SCOUTFS_LKF_INTERRUPTIBLE	0x04 /* pending signals return -ERESTARTSYS */
+#define SCOUTFS_LKF_INVALID		(~((SCOUTFS_LKF_INTERRUPTIBLE << 1) - 1))
 
 #define SCOUTFS_LOCK_NR_MODES		SCOUTFS_LOCK_INVALID
 

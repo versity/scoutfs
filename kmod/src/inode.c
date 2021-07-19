@@ -662,14 +662,14 @@ struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
 	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
 }
 
-struct inode *scoutfs_iget(struct super_block *sb, u64 ino)
+struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
 {
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode_info *si;
 	struct inode *inode;
 	int ret;
 
-	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, ino, &lock);
+	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, lkf, ino, &lock);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -1627,11 +1627,6 @@ void scoutfs_evict_inode(struct inode *inode)
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 		scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
 	}
-	if (ret == -ERESTARTSYS) {
-		/* can be in task with pending, could be found as orphan */
-		scoutfs_inc_counter(sb, inode_evict_intr);
-		ret = 0;
-	}
 	if (ret < 0) {
 		scoutfs_err(sb, "error %d while checking to delete inode nr %llu, it might linger.",
 			    ret, ino);
@@ -1827,7 +1822,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		}
 
 		/* try to cached and evict unused inode to delete, can be racing */
-		inode = scoutfs_iget(sb, ino);
+		inode = scoutfs_iget(sb, ino, 0);
 		if (IS_ERR(inode)) {
 			ret = PTR_ERR(inode);
 			if (ret == -ENOENT)
@@ -1970,12 +1965,11 @@ int scoutfs_inode_setup(struct super_block *sb)
  * many other subsystems like networking and the server.  We only kick
  * it off once everything is ready.
  */
-int scoutfs_inode_start(struct super_block *sb)
+void scoutfs_inode_start(struct super_block *sb)
 {
 	DECLARE_INODE_SB_INFO(sb, inf);
 
 	schedule_orphan_dwork(inf);
-	return 0;
 }
 
 void scoutfs_inode_stop(struct super_block *sb)

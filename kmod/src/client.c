@@ -623,10 +623,8 @@ void scoutfs_client_destroy(struct super_block *sb)
 						 client_farewell_response,
 						 NULL, NULL);
 		if (ret == 0) {
-			ret = wait_for_completion_interruptible(
-							&client->farewell_comp);
-			if (ret == 0)
-				ret = client->farewell_error;
+			wait_for_completion(&client->farewell_comp);
+			ret = client->farewell_error;
 		}
 		if (ret) {
 			scoutfs_inc_counter(sb, client_farewell_error);

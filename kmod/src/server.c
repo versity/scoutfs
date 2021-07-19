@@ -3564,7 +3564,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	queue_reclaim_work(server, 0);
 
-	/* wait_event/wake_up provide barriers */
+	/* interruptible mostly to avoid stuck messages */
 	wait_event_interruptible(server->waitq, test_shutting_down(server));
 
 shutdown:

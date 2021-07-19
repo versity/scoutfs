@@ -462,7 +462,7 @@ out:
 	else if (ino == 0)
 		inode = NULL;
 	else
-		inode = scoutfs_iget(sb, ino);
+		inode = scoutfs_iget(sb, ino, 0);
 
 	/*
 	 * We can't splice dir aliases into the dcache.  dir entries

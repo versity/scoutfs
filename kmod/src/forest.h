@@ -39,6 +39,7 @@ void scoutfs_forest_get_btrees(struct super_block *sb,
 			       struct scoutfs_log_trees *lt);
 
 int scoutfs_forest_setup(struct super_block *sb);
+void scoutfs_forest_start(struct super_block *sb);
 void scoutfs_forest_stop(struct super_block *sb);
 void scoutfs_forest_destroy(struct super_block *sb);
 

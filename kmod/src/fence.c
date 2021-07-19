@@ -376,7 +376,7 @@ int scoutfs_fence_wait_fenced(struct super_block *sb, long timeout_jiffies)
 	bool error;
 	long ret;
 
-	ret = wait_event_interruptible_timeout(fi->waitq, all_fenced(fi, &error), timeout_jiffies);
+	ret = wait_event_timeout(fi->waitq, all_fenced(fi, &error), timeout_jiffies);
 	if (ret == 0)
 		ret = -ETIMEDOUT;
 	else if (ret > 0)

@@ -1095,8 +1095,14 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 
 		trace_scoutfs_lock_wait(sb, lock);
 
-		ret = wait_event_interruptible(lock->waitq,
-					       lock_wait_cond(sb, lock, mode));
+		if (flags & SCOUTFS_LKF_INTERRUPTIBLE) {
+			ret = wait_event_interruptible(lock->waitq,
+						       lock_wait_cond(sb, lock, mode));
+		} else {
+			wait_event(lock->waitq, lock_wait_cond(sb, lock, mode));
+			ret = 0;
+		}
+
 		spin_lock(&linfo->lock);
 		if (ret)
 			break;
