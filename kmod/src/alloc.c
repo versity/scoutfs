@@ -261,20 +261,17 @@ static bool invalid_extent(u64 start, u64 end, u64 first, u64 last)
 
 static bool invalid_meta_blkno(struct super_block *sb, u64 blkno)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	u64 last_meta = (i_size_read(sbi->meta_bdev->bd_inode) >> SCOUTFS_BLOCK_LG_SHIFT) - 1;
 
-	return invalid_extent(blkno, blkno,
-			      le64_to_cpu(super->first_meta_blkno),
-			      le64_to_cpu(super->last_meta_blkno));
+	return invalid_extent(blkno, blkno, SCOUTFS_META_DEV_START_BLKNO, last_meta);
 }
 
 static bool invalid_data_extent(struct super_block *sb, u64 start, u64 len)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	u64 last_data = (i_size_read(sb->s_bdev->bd_inode) >> SCOUTFS_BLOCK_SM_SHIFT) - 1;
 
-	return invalid_extent(start, start + len - 1,
-			      le64_to_cpu(super->first_data_blkno),
-			      le64_to_cpu(super->last_data_blkno));
+	return invalid_extent(start, start + len - 1, SCOUTFS_DATA_DEV_START_BLKNO, last_data);
 }
 
 void scoutfs_alloc_init(struct scoutfs_alloc *alloc,

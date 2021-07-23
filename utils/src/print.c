@@ -951,8 +951,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	/* XXX these are all in a crazy order */
 	printf("  next_ino %llu seq %llu\n"
-	       "  total_meta_blocks %llu first_meta_blkno %llu last_meta_blkno %llu\n"
-	       "  total_data_blocks %llu first_data_blkno %llu last_data_blkno %llu\n"
+	       "  total_meta_blocks %llu total_data_blocks %llu\n"
 	       "  meta_alloc[0]: "ALCROOT_F"\n"
 	       "  meta_alloc[1]: "ALCROOT_F"\n"
 	       "  data_alloc: "ALCROOT_F"\n"
@@ -969,11 +968,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		le64_to_cpu(super->next_ino),
 		le64_to_cpu(super->seq),
 		le64_to_cpu(super->total_meta_blocks),
-		le64_to_cpu(super->first_meta_blkno),
-		le64_to_cpu(super->last_meta_blkno),
 		le64_to_cpu(super->total_data_blocks),
-		le64_to_cpu(super->first_data_blkno),
-		le64_to_cpu(super->last_data_blkno),
 		ALCROOT_A(&super->meta_alloc[0]),
 		ALCROOT_A(&super->meta_alloc[1]),
 		ALCROOT_A(&super->data_alloc),

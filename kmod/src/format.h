@@ -779,11 +779,7 @@ struct scoutfs_super_block {
 	__le64 seq;
 	__le64 next_ino;
 	__le64 total_meta_blocks;	/* both static and dynamic */
-	__le64 first_meta_blkno;	/* first dynamically allocated */
-	__le64 last_meta_blkno;
 	__le64 total_data_blocks;
-	__le64 first_data_blkno;
-	__le64 last_data_blkno;
 	struct scoutfs_quorum_config qconf;
 	struct scoutfs_alloc_root meta_alloc[2];
 	struct scoutfs_alloc_root data_alloc;
