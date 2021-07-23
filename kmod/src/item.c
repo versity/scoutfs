@@ -127,7 +127,7 @@ struct cached_page {
 	unsigned long lru_time;
 	struct list_head dirty_list;
 	struct list_head dirty_head;
-	u64 max_liv_seq;
+	u64 max_seq;
 	struct page *page;
 	unsigned int page_off;
 	unsigned int erased_bytes;
@@ -142,7 +142,7 @@ struct cached_item {
 		     deletion:1;	/* negative del item for writing */
 	unsigned int val_len;
 	struct scoutfs_key key;
-	struct scoutfs_log_item_value liv;
+	u64 seq;
 	char val[0];
 };
 
@@ -386,12 +386,10 @@ static void put_pg(struct super_block *sb, struct cached_page *pg)
 	}
 }
 
-static void update_pg_max_liv_seq(struct cached_page *pg, struct cached_item *item)
+static void update_pg_max_seq(struct cached_page *pg, struct cached_item *item)
 {
-	u64 liv_seq = le64_to_cpu(item->liv.seq);
-
-	if (liv_seq > pg->max_liv_seq)
-		pg->max_liv_seq = liv_seq;
+	if (item->seq > pg->max_seq)
+		pg->max_seq = item->seq;
 }
 
 /*
@@ -401,8 +399,7 @@ static void update_pg_max_liv_seq(struct cached_page *pg, struct cached_item *it
  * page or checking the free space first.
  */
 static struct cached_item *alloc_item(struct cached_page *pg,
-				      struct scoutfs_key *key,
-				      struct scoutfs_log_item_value *liv,
+				      struct scoutfs_key *key, u64 seq, bool deletion,
 				      void *val, int val_len)
 {
 	struct cached_item *item;
@@ -417,15 +414,15 @@ static struct cached_item *alloc_item(struct cached_page *pg,
 	INIT_LIST_HEAD(&item->dirty_head);
 	item->dirty = 0;
 	item->persistent = 0;
-	item->deletion = !!(liv->flags & SCOUTFS_LOG_ITEM_FLAG_DELETION);
+	item->deletion = !!deletion;
 	item->val_len = val_len;
 	item->key = *key;
-	item->liv = *liv;
+	item->seq = seq;
 
 	if (val_len)
 		memcpy(item->val, val, val_len);
 
-	update_pg_max_liv_seq(pg, item);
+	update_pg_max_seq(pg, item);
 
 	return item;
 }
@@ -634,7 +631,7 @@ static void mark_item_dirty(struct super_block *sb,
 		item->dirty = 1;
 	}
 
-	update_pg_max_liv_seq(pg, item);
+	update_pg_max_seq(pg, item);
 }
 
 static void clear_item_dirty(struct super_block *sb,
@@ -711,7 +708,7 @@ static void move_page_items(struct super_block *sb,
 		if (stop && scoutfs_key_compare(&from->key, stop) >= 0)
 			break;
 
-		to = alloc_item(right, &from->key, &from->liv, from->val,
+		to = alloc_item(right, &from->key, from->seq, from->deletion, from->val,
 				from->val_len);
 		rbtree_insert(&to->node, par, pnode, &right->item_root);
 		par = &to->node;
@@ -723,7 +720,6 @@ static void move_page_items(struct super_block *sb,
 		}
 
 		to->persistent = from->persistent;
-		to->deletion = from->deletion;
 
 		erase_item(left, from);
 	}
@@ -1356,11 +1352,11 @@ static void del_active_reader(struct item_cache_info *cinf, struct active_reader
  * insert old versions of items into the tree here so that the trees
  * don't have to compare seqs.
  */
-static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
-			  struct scoutfs_log_item_value *liv, void *val,
-			  int val_len, void *arg)
+static int read_page_item(struct super_block *sb, struct scoutfs_key *key, u64 seq, u8 flags,
+			  void *val, int val_len, void *arg)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
+	const bool deletion = !!(flags & SCOUTFS_ITEM_FLAG_DELETION);
 	struct rb_root *root = arg;
 	struct cached_page *right = NULL;
 	struct cached_page *left = NULL;
@@ -1374,7 +1370,7 @@ static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
 
 	pg = page_rbtree_walk(sb, root, key, key, NULL, NULL, &p_par, &p_pnode);
 	found = item_rbtree_walk(&pg->item_root, key, NULL, &par, &pnode);
-	if (found && (le64_to_cpu(found->liv.seq) >= le64_to_cpu(liv->seq)))
+	if (found && (found->seq >= seq))
 		return 0;
 
 	if (!page_has_room(pg, val_len)) {
@@ -1388,7 +1384,7 @@ static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
 					 &pnode);
 	}
 
-	item = alloc_item(pg, key, liv, val, val_len);
+	item = alloc_item(pg, key, seq, deletion, val, val_len);
 	if (!item) {
 		/* simpler split of private pages, no locking/dirty/lru */
 		if (!left)
@@ -1411,7 +1407,7 @@ static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
 		put_pg(sb, pg);
 
 		pg = scoutfs_key_compare(key, &left->end) <= 0 ? left : right;
-		item = alloc_item(pg, key, liv, val, val_len);
+		item = alloc_item(pg, key, seq, deletion, val, val_len);
 		found = item_rbtree_walk(&pg->item_root, key, NULL, &par,
 					 &pnode);
 
@@ -1824,11 +1820,11 @@ out:
  * to the last stable seq and ensure that all the items in open
  * transactions and granted locks will have greater seqs.
  */
-static __le64 item_seq(struct super_block *sb, struct scoutfs_lock *lock)
+static u64 item_seq(struct super_block *sb, struct scoutfs_lock *lock)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
-	return cpu_to_le64(max(sbi->trans_seq, lock->write_seq));
+	return max(sbi->trans_seq, lock->write_seq);
 }
 
 /*
@@ -1863,7 +1859,7 @@ int scoutfs_item_dirty(struct super_block *sb, struct scoutfs_key *key,
 	if (!item || item->deletion) {
 		ret = -ENOENT;
 	} else {
-		item->liv.seq = item_seq(sb, lock);
+		item->seq = item_seq(sb, lock);
 		mark_item_dirty(sb, cinf, pg, NULL, item);
 		ret = 0;
 	}
@@ -1883,9 +1879,7 @@ static int item_create(struct super_block *sb, struct scoutfs_key *key,
 		       int mode, bool force)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-	struct scoutfs_log_item_value liv = {
-		.seq = item_seq(sb, lock),
-	};
+	const u64 seq = item_seq(sb, lock);
 	struct cached_item *found;
 	struct cached_item *item;
 	struct cached_page *pg;
@@ -1913,7 +1907,7 @@ static int item_create(struct super_block *sb, struct scoutfs_key *key,
 		goto unlock;
 	}
 
-	item = alloc_item(pg, key, &liv, val, val_len);
+	item = alloc_item(pg, key, seq, false, val, val_len);
 	rbtree_insert(&item->node, par, pnode, &pg->item_root);
 	mark_item_dirty(sb, cinf, pg, NULL, item);
 
@@ -1958,9 +1952,7 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-	struct scoutfs_log_item_value liv = {
-		.seq = item_seq(sb, lock),
-	};
+	const u64 seq = item_seq(sb, lock);
 	struct cached_item *item;
 	struct cached_item *found;
 	struct cached_page *pg;
@@ -1995,10 +1987,10 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 			pg->erased_bytes += item_val_bytes(found->val_len) -
 					    item_val_bytes(val_len);
 		found->val_len = val_len;
-		found->liv.seq = liv.seq;
+		found->seq = seq;
 		mark_item_dirty(sb, cinf, pg, NULL, found);
 	} else {
-		item = alloc_item(pg, key, &liv, val, val_len);
+		item = alloc_item(pg, key, seq, false, val, val_len);
 		item->persistent = found->persistent;
 		rbtree_insert(&item->node, par, pnode, &pg->item_root);
 		mark_item_dirty(sb, cinf, pg, NULL, item);
@@ -2026,9 +2018,7 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 		       struct scoutfs_lock *lock, int mode, bool force)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-	struct scoutfs_log_item_value liv = {
-		.seq = item_seq(sb, lock),
-	};
+	const u64 seq = item_seq(sb, lock);
 	struct cached_item *item;
 	struct cached_page *pg;
 	struct rb_node **pnode;
@@ -2056,7 +2046,7 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 	}
 
 	if (!item) {
-		item = alloc_item(pg, key, &liv, NULL, 0);
+		item = alloc_item(pg, key, seq, false, NULL, 0);
 		rbtree_insert(&item->node, par, pnode, &pg->item_root);
 	}
 
@@ -2069,8 +2059,7 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 		erase_item(pg, item);
 	} else {
 		/* must emit deletion to clobber old persistent item */
-		item->liv.seq = liv.seq;
-		item->liv.flags |= SCOUTFS_LOG_ITEM_FLAG_DELETION;
+		item->seq = seq;
 		item->deletion = 1;
 		pg->erased_bytes += item_val_bytes(item->val_len) -
 				    item_val_bytes(0);
@@ -2157,15 +2146,9 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 	LIST_HEAD(pages);
 	LIST_HEAD(pos);
 	u64 max_seq = 0;
-	int val_len;
 	int bytes;
 	int off;
 	int ret;
-
-	/* we're relying on struct layout to prepend item value headers */
-	BUILD_BUG_ON(offsetof(struct cached_item, val) !=
-		     (offsetof(struct cached_item, liv) +
-		      member_sizeof(struct cached_item, liv)));
 
 	if (atomic_read(&cinf->dirty_pages) == 0)
 		return 0;
@@ -2218,10 +2201,9 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 		list_sort(NULL, &pg->dirty_list, cmp_item_key);
 
 		list_for_each_entry(item, &pg->dirty_list, dirty_head) {
-			val_len = sizeof(item->liv) + item->val_len;
 			bytes = offsetof(struct scoutfs_btree_item_list,
-					 val[val_len]);
-			max_seq = max(max_seq, le64_to_cpu(item->liv.seq));
+					 val[item->val_len]);
+			max_seq = max(max_seq, item->seq);
 
 			if (off + bytes > PAGE_SIZE) {
 				page = second;
@@ -2237,8 +2219,10 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 			prev = &lst->next;
 
 			lst->key = item->key;
-			lst->val_len = val_len;
-			memcpy(lst->val, &item->liv, val_len);
+			lst->seq = item->seq;
+			lst->flags = item->deletion ? SCOUTFS_ITEM_FLAG_DELETION : 0;
+			lst->val_len = item->val_len;
+			memcpy(lst->val, item->val, item->val_len);
 		}
 
 		spin_lock(&cinf->dirty_lock);
@@ -2467,7 +2451,7 @@ static int item_lru_shrink(struct shrinker *shrink,
 
 	list_for_each_entry_safe(pg, tmp, &cinf->lru_list, lru_head) {
 
-		if (first_reader_seq <= pg->max_liv_seq) {
+		if (first_reader_seq <= pg->max_seq) {
 			scoutfs_inc_counter(sb, item_shrink_page_reader);
 			continue;
 		}

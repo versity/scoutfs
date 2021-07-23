@@ -244,10 +244,14 @@ struct scoutfs_btree_root {
 struct scoutfs_btree_item {
 	struct scoutfs_avl_node node;
 	struct scoutfs_key key;
+	__le64 seq;
 	__le16 val_off;
 	__le16 val_len;
-	__u8 __pad[4];
+	__u8 flags;
+	__u8 __pad[3];
 };
+
+#define SCOUTFS_ITEM_FLAG_DELETION (1 << 0)
 
 struct scoutfs_btree_block {
 	struct scoutfs_block_header hdr;
@@ -465,21 +469,8 @@ struct scoutfs_log_trees {
 
 #define SCOUTFS_LOG_TREES_FINALIZED	(1ULL << 0)
 
-struct scoutfs_log_item_value {
-	__le64 seq;
-	__u8 flags;
-	__u8 __pad[7];
-	__u8 data[];
-};
-
-/*
- * FS items are limited by the max btree value length with the log item
- * value header.
- */
-#define SCOUTFS_MAX_VAL_SIZE \
-	(SCOUTFS_BTREE_MAX_VAL_LEN - sizeof(struct scoutfs_log_item_value))
-
-#define SCOUTFS_LOG_ITEM_FLAG_DELETION		(1 << 0)
+/* FS items are limited by the max btree value length */
+#define SCOUTFS_MAX_VAL_SIZE	SCOUTFS_BTREE_MAX_VAL_LEN
 
 struct scoutfs_bloom_block {
 	struct scoutfs_block_header hdr;

@@ -8,10 +8,8 @@ struct scoutfs_block;
 #include "btree.h"
 
 /* caller gives an item to the callback */
-typedef int (*scoutfs_forest_item_cb)(struct super_block *sb,
-				      struct scoutfs_key *key,
-				      struct scoutfs_log_item_value *liv,
-				      void *val, int val_len, void *arg);
+typedef int (*scoutfs_forest_item_cb)(struct super_block *sb, struct scoutfs_key *key, u64 seq,
+				      u8 flags, void *val, int val_len, void *arg);
 
 int scoutfs_forest_next_hint(struct super_block *sb, struct scoutfs_key *key,
 			     struct scoutfs_key *next);

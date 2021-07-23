@@ -1526,8 +1526,8 @@ struct foreach_cb_args {
 	void *cb_arg;
 };
 
-static int alloc_btree_extent_item_cb(struct super_block *sb, struct scoutfs_key *key,
-				      void *val, int val_len, void *arg)
+static int alloc_btree_extent_item_cb(struct super_block *sb, struct scoutfs_key *key, u64 seq,
+				      u8 flags, void *val, int val_len, void *arg)
 {
 	struct foreach_cb_args *cba = arg;
 	struct scoutfs_extent ext;
