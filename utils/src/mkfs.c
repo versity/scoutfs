@@ -241,7 +241,7 @@ static int do_mkfs(struct mkfs_args *args)
 	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
 	super->seq = cpu_to_le64(1);
 	super->total_meta_blocks = cpu_to_le64(last_meta + 1);
-	super->total_data_blocks = cpu_to_le64(last_data - first_data + 1);
+	super->total_data_blocks = cpu_to_le64(last_data + 1);
 
 	assert(sizeof(args->slots) ==
 		     member_sizeof(struct scoutfs_super_block, qconf.slots));
@@ -316,7 +316,7 @@ static int do_mkfs(struct mkfs_args *args)
 	blkno = next_meta++;
 	ret = write_alloc_root(meta_fd, fsid, &super->data_alloc, bt,
 			       1, blkno, first_data,
-			       le64_to_cpu(super->total_data_blocks));
+			       last_data - first_data + 1);
 	if (ret < 0)
 		goto out;
 
