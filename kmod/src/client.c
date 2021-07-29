@@ -297,6 +297,14 @@ int scoutfs_client_clear_volopt(struct super_block *sb, struct scoutfs_volume_op
 					volopt, sizeof(*volopt), NULL, 0);
 }
 
+int scoutfs_client_resize_devices(struct super_block *sb, struct scoutfs_net_resize_devices *nrd)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_RESIZE_DEVICES,
+					nrd, sizeof(*nrd), NULL, 0);
+}
+
 /* The client is receiving a invalidation request from the server */
 static int client_lock(struct super_block *sb,
 		       struct scoutfs_net_connection *conn, u8 cmd, u64 id,

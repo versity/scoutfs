@@ -2563,6 +2563,103 @@ out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 
+static u64 device_blocks(struct block_device *bdev, int shift)
+{
+	return i_size_read(bdev->bd_inode) >> shift;
+}
+
+static int server_resize_devices(struct super_block *sb, struct scoutfs_net_connection *conn,
+				 u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_net_resize_devices *nrd;
+	u64 meta_tot;
+	u64 meta_start;
+	u64 meta_len;
+	u64 data_tot;
+	u64 data_start;
+	u64 data_len;
+	int ret;
+	int err;
+
+	if (arg_len != sizeof(struct scoutfs_net_resize_devices)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	nrd = arg;
+
+	meta_tot = le64_to_cpu(nrd->new_total_meta_blocks);
+	data_tot = le64_to_cpu(nrd->new_total_data_blocks);
+
+	scoutfs_server_hold_commit(sb);
+	mutex_lock(&server->alloc_mutex);
+
+	if (meta_tot == le64_to_cpu(super->total_meta_blocks))
+		meta_tot = 0;
+	if (data_tot == le64_to_cpu(super->total_data_blocks))
+		data_tot = 0;
+
+	if (!meta_tot && !data_tot) {
+		ret = 0;
+		goto unlock;
+	}
+
+	/* we don't support shrinking */
+	if ((meta_tot && (meta_tot < le64_to_cpu(super->total_meta_blocks))) ||
+	    (data_tot && (data_tot < le64_to_cpu(super->total_data_blocks)))) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	/* must be within devices */
+	if ((meta_tot > device_blocks(sbi->meta_bdev, SCOUTFS_BLOCK_LG_SHIFT)) ||
+	    (data_tot > device_blocks(sb->s_bdev, SCOUTFS_BLOCK_SM_SHIFT))) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	/* extents are only used if _tot is set */
+	meta_start = le64_to_cpu(super->total_meta_blocks);
+	meta_len = meta_tot - meta_start;
+	data_start = le64_to_cpu(super->total_data_blocks);
+	data_len = data_tot - data_start;
+
+	if (meta_tot) {
+		ret = scoutfs_alloc_insert(sb, &server->alloc, &server->wri,
+					   server->meta_avail, meta_start, meta_len);
+		if (ret < 0)
+			goto unlock;
+	}
+
+	if (data_tot) {
+		ret = scoutfs_alloc_insert(sb, &server->alloc, &server->wri,
+					   &super->data_alloc, data_start, data_len);
+		if (ret < 0) {
+			if (meta_tot) {
+				err = scoutfs_alloc_remove(sb, &server->alloc, &server->wri,
+							   server->meta_avail, meta_start,
+							   meta_len);
+				WARN_ON_ONCE(err); /* btree blocks are dirty.. really unlikely? */
+			}
+			goto unlock;
+		}
+	}
+
+	if (meta_tot)
+		super->total_meta_blocks = cpu_to_le64(meta_tot);
+	if (data_tot)
+		super->total_data_blocks = cpu_to_le64(data_tot);
+
+	ret = 0;
+unlock:
+	mutex_unlock(&server->alloc_mutex);
+	ret = scoutfs_server_apply_commit(sb, ret);
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
+};
+
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 {
 	*key = (struct scoutfs_key) {
@@ -3199,6 +3296,7 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_GET_VOLOPT]		= server_get_volopt,
 	[SCOUTFS_NET_CMD_SET_VOLOPT]		= server_set_volopt,
 	[SCOUTFS_NET_CMD_CLEAR_VOLOPT]		= server_clear_volopt,
+	[SCOUTFS_NET_CMD_RESIZE_DEVICES]	= server_resize_devices,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 

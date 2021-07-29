@@ -986,6 +986,7 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_GET_VOLOPT,
 	SCOUTFS_NET_CMD_SET_VOLOPT,
 	SCOUTFS_NET_CMD_CLEAR_VOLOPT,
+	SCOUTFS_NET_CMD_RESIZE_DEVICES,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };
@@ -1026,6 +1027,11 @@ struct scoutfs_net_roots {
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
 	struct scoutfs_btree_root srch_root;
+};
+
+struct scoutfs_net_resize_devices {
+	__le64 new_total_meta_blocks;
+	__le64 new_total_data_blocks;
 };
 
 struct scoutfs_net_lock {

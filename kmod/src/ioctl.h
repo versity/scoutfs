@@ -477,4 +477,12 @@ struct scoutfs_ioctl_move_blocks {
 #define SCOUTFS_IOC_MOVE_BLOCKS _IOR(SCOUTFS_IOCTL_MAGIC, 13, \
 				     struct scoutfs_ioctl_move_blocks)
 
+struct scoutfs_ioctl_resize_devices {
+	__u64 new_total_meta_blocks;
+	__u64 new_total_data_blocks;
+};
+
+#define SCOUTFS_IOC_RESIZE_DEVICES \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 14, struct scoutfs_ioctl_resize_devices)
+
 #endif

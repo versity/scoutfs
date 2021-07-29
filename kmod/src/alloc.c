@@ -978,6 +978,39 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 }
 
 /*
+ * Add new free space to an allocator.  _ext_insert will make sure that it doesn't
+ * overlap with any existing extents.  This is done by the server in a transaction that
+ * also updates total_*_blocks in the super so we don't verify.
+ */
+int scoutfs_alloc_insert(struct super_block *sb, struct scoutfs_alloc *alloc,
+			 struct scoutfs_block_writer *wri, struct scoutfs_alloc_root *root,
+			 u64 start, u64 len)
+{
+	struct alloc_ext_args args = {
+		.alloc = alloc,
+		.wri = wri,
+		.root = root,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
+	};
+
+	return scoutfs_ext_insert(sb, &alloc_ext_ops, &args, start, len, 0, 0);
+}
+
+int scoutfs_alloc_remove(struct super_block *sb, struct scoutfs_alloc *alloc,
+			 struct scoutfs_block_writer *wri, struct scoutfs_alloc_root *root,
+			 u64 start, u64 len)
+{
+	struct alloc_ext_args args = {
+		.alloc = alloc,
+		.wri = wri,
+		.root = root,
+		.zone = SCOUTFS_FREE_EXTENT_BLKNO_ZONE,
+	};
+
+	return scoutfs_ext_remove(sb, &alloc_ext_ops, &args, start, len);
+}
+
+/*
  * We only trim one block, instead of looping trimming all, because the
  * caller is assuming that we do a fixed amount of work when they check
  * that their allocator has enough remaining free blocks for us.

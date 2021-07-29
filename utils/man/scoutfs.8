@@ -103,6 +103,63 @@ Ignore presence of existing data on the data and metadata devices.
 .PD
 
 .TP
+.BI "resize-devices [-p|--path PATH] [-m|--meta-size SIZE] [-d|--data-size SIZE]"
+.sp
+Resize the metadata or data devices of a mounted ScoutFS filesystem.
+.sp
+ScoutFS metadata has free extent records and fields in the super block
+that reflect the size of the devices in use.  This command sends a
+request to the server to change the size of the device that can be used
+by updating free extents and setting the super block fields.
+.sp
+The specified sizes are in bytes and are translated into block counts.
+If the specified sizes are not a multiple of the metadata or data block
+sizes then a message is output and the resized size is truncated down to
+the next whole block.  Specifying either a size of 0 or the current
+device size makes no change.    The current size of the devices can be
+seen, in units of their respective block sizes, in the total_meta_blocks
+and total_data_blocks fields returned by the scoutfs statfs command (via
+the statfs_more ioctl).
+.sp
+Shrinking is not supported.  Specifying a smaller size for either device
+will return an error and neither device will be resized.
+.sp
+Specifying a larger size will expand the initial size of the device that
+will be used.  Free space records are added for the expanded region and
+can be used once the resizing transaction is complete.
+.sp
+The resizing action is performed in a transaction on the server.  This
+command will hang until a server is elected and running and can service
+the reqeust.  The server serializes any concurrent requests to resize.
+.sp
+The new sizes must fit within the current sizes of the mounted devices.
+Presumably this command is being performed as part of a larger
+coordinated resize of the underlying devices.  The device must be
+expanded before ScoutFS can use the larger device and ScoutFS must stop
+using a region to shrink before it could be removed from the device
+(which is not currently supported).
+.sp
+The resize will be committed by the server before the response is sent
+to the client.  The system can be using the new device size before the
+result is communicated through the client and this command completes.
+The client could crash and the server could still have performed the
+resize.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-p, --path PATH"
+A path in the mounted ScoutFS filesystem which will have its devices
+resized.
+.TP
+.B "-m, --meta-size SIZE"
+.B "-d, --data-size SIZE"
+The new size of the metadata or data device to use, in bytes.  Size is given as
+an integer followed by a units digit: "K", "M", "G", "T", "P", to denote
+kibibytes, mebibytes, etc.
+.RE
+.PD
+
 .BI "stat FILE [-s|--single-field FIELD-NAME]"
 .sp
 Display ScoutFS-specific metadata fields for the given file.

@@ -1,0 +1,27 @@
+== make initial small fs
+== 0s do nothing
+== shrinking fails
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+== existing sizes do nothing
+== growing outside device fails
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+== resizing meta works
+== resizing data works
+== shrinking back fails
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+resize_devices ioctl failed: Invalid argument (22)
+scoutfs: resize-devices failed: Invalid argument (22)
+== resizing again does nothing
+== resizing to full works
+== cleanup extra fs
