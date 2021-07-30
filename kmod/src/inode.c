@@ -34,7 +34,7 @@
 #include "client.h"
 #include "cmp.h"
 #include "omap.h"
-#include "forest.h"
+#include "btree.h"
 
 /*
  * XXX
@@ -1735,15 +1735,20 @@ static void schedule_orphan_dwork(struct inode_sb_info *inf)
  * the cached inodes pinning the inode fail to delete as they are
  * evicted from the cache -- either through crashing or errors.
  *
- * This work runs in all mounts in the background looking for orphaned
- * inodes that should be deleted.
+ * This work runs in all mounts in the background looking for those
+ * orphaned inodes that weren't fully deleted.
  *
- * We use the forest hint call to read the persistent forest trees
- * looking for orphan items without creating lock contention.  Orphan
- * items exist for O_TMPFILE users and we don't want to force them to
- * commit by trying to acquire a conflicting read lock the orphan zone.
- * There's no rush to reclaim deleted items, eventually they will be
- * found in the persistent item btrees.
+ * First, we search for items in the current persistent fs root.  We'll
+ * only find orphan items that made it to the fs root after being merged
+ * from a mount's log btree.  This naturally avoids orphan items that
+ * exist while inodes have been unlinked but are still cached, including
+ * O_TMPFILE inodes that are actively used during normal operations.
+ * Scanning the read-only persistent fs root uses cached blocks and
+ * avoids the lock contention we'd cause if we tried to use the
+ * consistent item cache.  The downside is that it adds a bit of
+ * latency.  If an orphan was created in error it'll take until the
+ * mount's log btree is finalized and merged.  A crash will have the log
+ * btree merged after it is fenced.
  *
  * Once we find candidate orphan items we can first check our local
  * inode cache for inodes that are already on their way to eviction and
@@ -1751,10 +1756,6 @@ static void schedule_orphan_dwork(struct inode_sb_info *inf)
  * the inode.  Only if we don't have it cached, and no one else does, do
  * we try and read it into our cache and evict it to trigger the final
  * inode deletion process.
- *
- * Orphaned items that make it that far should be very rare.  They can
- * only exist if all the mounts that were using an inode after it had
- * been unlinked (or created with o_tmpfile) didn't unmount cleanly.
  */
 static void inode_orphan_scan_worker(struct work_struct *work)
 {
@@ -1762,8 +1763,9 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 						 orphan_scan_dwork.work);
 	struct super_block *sb = inf->sb;
 	struct scoutfs_open_ino_map omap;
+	struct scoutfs_net_roots roots;
+	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key last;
-	struct scoutfs_key next;
 	struct scoutfs_key key;
 	struct inode *inode;
 	u64 group_nr;
@@ -1776,6 +1778,10 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 	init_orphan_key(&last, U64_MAX);
 	omap.args.group_nr = cpu_to_le64(U64_MAX);
 
+	ret = scoutfs_client_get_roots(sb, &roots);
+	if (ret)
+		goto out;
+
 	for (ino = SCOUTFS_ROOT_INO + 1; ino != 0; ino++) {
 		if (inf->stopped) {
 			ret = 0;
@@ -1784,18 +1790,21 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 
 		/* find the next orphan item */
 		init_orphan_key(&key, ino);
-		ret = scoutfs_forest_next_hint(sb, &key, &next);
+		ret = scoutfs_btree_next(sb, &roots.fs_root, &key, &iref);
 		if (ret < 0) {
 			if (ret == -ENOENT)
 				break;
 			goto out;
 		}
 
-		if (scoutfs_key_compare(&next, &last) > 0)
+		key = *iref.key;
+		scoutfs_btree_put_iref(&iref);
+
+		if (scoutfs_key_compare(&key, &last) > 0)
 			break;
 
 		scoutfs_inc_counter(sb, orphan_scan_item);
-		ino = le64_to_cpu(next.sko_ino);
+		ino = le64_to_cpu(key.sko_ino);
 
 		/* locally cached inodes will already be deleted */
 		inode = scoutfs_ilookup(sb, ino);
