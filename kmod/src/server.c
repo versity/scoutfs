@@ -323,7 +323,6 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	struct commit_waiter *cw;
 	struct commit_waiter *pos;
 	struct llist_node *node;
-	u64 reserved;
 	int ret;
 
 	trace_scoutfs_server_commit_work_enter(sb, 0, 0);
@@ -389,16 +388,19 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	server->other_freed = &super->server_meta_freed[server->other_ind];
 
 	/*
-	 * The reserved metadata blocks includes the max size of
-	 * outstanding allocators and a server transaction could be
-	 * asked to refill all those allocators from meta_avail.  If our
-	 * meta_avail falls below the reserved count, and freed is still
-	 * above it, then swap so that we don't start returning enospc
-	 * until we're truly low.
+	 * get_log_trees sets ALLOC_LOW when its allocator drops below
+	 * the reserved blocks after having filled the log trees's avail
+	 * allocator during its transaction.  To avoid prematurely
+	 * setting the low flag and causing enospc we make sure that the
+	 * next transaction's meta_avail has 2x the reserved blocks so
+	 * that it can consume a full reserved amount and still have
+	 * enough to avoid enospc.  We swap to freed if avail is under
+	 * the buffer and freed is larger.
 	 */
-	reserved = scoutfs_server_reserved_meta_blocks(sb);
-	if (le64_to_cpu(server->meta_avail->total_len) <= reserved &&
-	    le64_to_cpu(server->meta_freed->total_len) > reserved)
+	if ((le64_to_cpu(server->meta_avail->total_len) <
+	     (scoutfs_server_reserved_meta_blocks(sb) * 2)) &&
+	    (le64_to_cpu(server->meta_freed->total_len) >
+	     le64_to_cpu(server->meta_avail->total_len)))
 		swap(server->meta_avail, server->meta_freed);
 
 	ret = 0;
