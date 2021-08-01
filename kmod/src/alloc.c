@@ -1056,18 +1056,31 @@ out:
 }
 
 /*
- * True if the allocator has enough free blocks to cow (alloc and free)
- * a list block and all the btree blocks that store extent items.
+ * True if the allocator has enough blocks in the avail list and space
+ * in the freed list to be able to perform the callers operations.  If
+ * false the caller should back off and return partial progress rather
+ * than completely exhausting the avail list or overflowing the freed
+ * list.
  *
- * At most, an extent operation can dirty down three paths of the tree
- * to modify a blkno item and two distant order items.  We can grow and
- * split the root, and then those three paths could share blocks but each
- * modify two leaf blocks.
+ * An extent modification dirties three distinct leaves of an allocator
+ * btree as it adds and removes the blkno and size sorted items for the
+ * old and new lengths of the extent.  Dirtying the paths to these
+ * leaves can grow the tree and grow/shrink neighbours at each level.
+ * We over-estimate the number of blocks allocated and freed (the paths
+ * share a root, growth doesn't free) to err on the simpler and safer
+ * side.  The overhead is minimal given the relatively large list blocks
+ * and relatively short allocator trees.
+ *
+ * The caller tells us how many extents they're about to modify and how
+ * many other additional blocks they may cow manually.  And finally, the
+ * caller could be the first to dirty the avail and freed blocks in the
+ * allocator,
  */
-static bool list_can_cow(struct super_block *sb, struct scoutfs_alloc *alloc,
-			 struct scoutfs_alloc_root *root)
+static bool list_has_blocks(struct super_block *sb, struct scoutfs_alloc *alloc,
+			    struct scoutfs_alloc_root *root, u32 extents, u32 addl_blocks)
 {
-	u32 most = 1 + (1 + 1 + (3 * (1 - root->root.height + 1)));
+	u32 tree_blocks = (((1 + root->root.height) * 2) * 3) * extents;
+	u32 most = 1 + tree_blocks + addl_blocks;
 
 	if (le32_to_cpu(alloc->avail.first_nr) < most) {
 		scoutfs_inc_counter(sb, alloc_list_avail_lo);
@@ -1131,8 +1144,7 @@ int scoutfs_alloc_fill_list(struct super_block *sb,
 		goto out;
 	lblk = bl->data;
 
-	while (le32_to_cpu(lblk->nr) < target &&
-	       list_can_cow(sb, alloc, root)) {
+	while (le32_to_cpu(lblk->nr) < target && list_has_blocks(sb, alloc, root, 1, 0)) {
 
 		ret = scoutfs_ext_alloc(sb, &alloc_ext_ops, &args, 0, 0,
 					target - le32_to_cpu(lblk->nr), &ext);
@@ -1176,7 +1188,7 @@ int scoutfs_alloc_empty_list(struct super_block *sb,
 	if (WARN_ON_ONCE(lhead_in_alloc(alloc, lhead)))
 		return -EINVAL;
 
-	while (lhead->ref.blkno && list_can_cow(sb, alloc, args.root)) {
+	while (lhead->ref.blkno && list_has_blocks(sb, alloc, args.root, 1, 1)) {
 
 		if (lhead->first_nr == 0) {
 			ret = trim_empty_first_block(sb, alloc, wri, lhead);
