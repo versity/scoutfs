@@ -1631,10 +1631,10 @@ restart:
 		conn->next_send_id = reconn->next_send_id;
 		atomic64_set(&conn->recv_seq, atomic64_read(&reconn->recv_seq));
 
-		/* greeting response/ack will be on conn send queue */
+		/* reconn should be idle while in reconn_wait  */
 		BUG_ON(!list_empty(&reconn->send_queue));
-		BUG_ON(!list_empty(&conn->resend_queue));
-		list_splice_init(&reconn->resend_queue, &conn->resend_queue);
+		/* queued greeting response is racing, can be in send or resend queue */
+		list_splice_tail_init(&reconn->resend_queue, &conn->resend_queue);
 
 		/* new conn info is unused, swap, old won't call down */
 		swap(conn->info, reconn->info);
