@@ -212,6 +212,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
 	i_size_write(inode, le64_to_cpu(cinode->size));
+	inode->i_version = le64_to_cpu(cinode->version);
 	set_nlink(inode, le32_to_cpu(cinode->nlink));
 	i_uid_write(inode, le32_to_cpu(cinode->uid));
 	i_gid_write(inode, le32_to_cpu(cinode->gid));
@@ -346,6 +347,7 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 	if (truncate)
 		si->flags |= SCOUTFS_INO_FLAG_TRUNCATE;
 	scoutfs_inode_set_data_seq(inode);
+	inode_inc_iversion(inode);
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 
 	scoutfs_release_trans(sb);
@@ -481,6 +483,7 @@ retry:
 		goto out;
 
 	setattr_copy(inode, attr);
+	inode_inc_iversion(inode);
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 
 	scoutfs_release_trans(sb);
@@ -686,6 +689,7 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
 		/* XXX ensure refresh, instead clear in drop_inode? */
 		si = SCOUTFS_I(inode);
 		atomic64_set(&si->last_refreshed, 0);
+		inode->i_version = 0;
 
 		ret = scoutfs_inode_refresh(inode, lock, 0);
 		if (ret == 0)
@@ -713,6 +717,7 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	scoutfs_inode_get_onoff(inode, &online_blocks, &offline_blocks);
 
 	cinode->size = cpu_to_le64(i_size_read(inode));
+	cinode->version = cpu_to_le64(inode->i_version);
 	cinode->nlink = cpu_to_le32(inode->i_nlink);
 	cinode->uid = cpu_to_le32(i_uid_read(inode));
 	cinode->gid = cpu_to_le32(i_gid_read(inode));

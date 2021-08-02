@@ -823,12 +823,6 @@ struct scoutfs_super_block {
  *
  * @offline_blocks: The number of fixed 4k blocks that could be made
  * online by staging.
- *
- * XXX
- *	- compat flags?
- *	- version?
- *	- generation?
- *	- be more careful with rdev?
  */
 struct scoutfs_inode {
 	__le64 size;
@@ -839,6 +833,7 @@ struct scoutfs_inode {
 	__le64 offline_blocks;
 	__le64 next_readdir_pos;
 	__le64 next_xattr_id;
+	__le64 version;
 	__le32 nlink;
 	__le32 uid;
 	__le32 gid;

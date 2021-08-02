@@ -830,6 +830,7 @@ static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 			scoutfs_inode_inc_data_version(inode);
 		}
 
+		inode_inc_iversion(inode);
 		scoutfs_update_inode_item(inode, wbd->lock, &wbd->ind_locks);
 		scoutfs_inode_queue_writeback(inode);
 	}
@@ -1033,6 +1034,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 				end = offset + len;
 			if (end > i_size_read(inode)) {
 				i_size_write(inode, end);
+				inode_inc_iversion(inode);
 				scoutfs_inode_inc_data_version(inode);
 			}
 		}
@@ -1366,10 +1368,12 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		cur_time = CURRENT_TIME;
 		if (!is_stage) {
 			to->i_ctime = to->i_mtime = cur_time;
+			inode_inc_iversion(to);
 			scoutfs_inode_inc_data_version(to);
 			scoutfs_inode_set_data_seq(to);
 		}
 		from->i_ctime = from->i_mtime = cur_time;
+		inode_inc_iversion(from);
 		scoutfs_inode_inc_data_version(from);
 		scoutfs_inode_set_data_seq(from);
 

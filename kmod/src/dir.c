@@ -836,6 +836,8 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = dir->i_mtime;
 	si->crtime = inode->i_mtime;
+	inode_inc_iversion(dir);
+	inode_inc_iversion(inode);
 
 	if (S_ISDIR(mode)) {
 		inc_nlink(inode);
@@ -961,6 +963,8 @@ retry:
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 	inode->i_ctime = dir->i_mtime;
 	inc_nlink(inode);
+	inode_inc_iversion(dir);
+	inode_inc_iversion(inode);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
@@ -1058,6 +1062,8 @@ retry:
 	dir->i_ctime = ts;
 	dir->i_mtime = ts;
 	i_size_write(dir, i_size_read(dir) - dentry->d_name.len);
+	inode_inc_iversion(dir);
+	inode_inc_iversion(inode);
 
 	inode->i_ctime = ts;
 	drop_nlink(inode);
@@ -1295,10 +1301,12 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
+	inode_inc_iversion(dir);
 
 	inode->i_ctime = dir->i_mtime;
 	si->crtime = inode->i_ctime;
 	i_size_write(inode, name_len);
+	inode_inc_iversion(inode);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
@@ -1779,6 +1787,13 @@ retry:
 	if (new_inode)
 		old_inode->i_ctime = now;
 
+	inode_inc_iversion(old_dir);
+	inode_inc_iversion(old_inode);
+	if (new_dir != old_dir)
+		inode_inc_iversion(new_dir);
+	if (new_inode)
+		inode_inc_iversion(new_inode);
+
 	scoutfs_update_inode_item(old_dir, old_dir_lock, &ind_locks);
 	scoutfs_update_inode_item(old_inode, old_inode_lock, &ind_locks);
 	if (new_dir != old_dir)
@@ -1888,6 +1903,7 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	insert_inode_hash(inode);
 	ihold(inode); /* need to update inode modifications in d_tmpfile */
 	d_tmpfile(dentry, inode);
+	inode_inc_iversion(inode);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
