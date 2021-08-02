@@ -59,7 +59,7 @@ struct inode_sb_info {
 	bool stopped;
 
 	spinlock_t writeback_lock;
-	struct rb_root writeback_inodes;
+	struct list_head writeback_list;
 	struct inode_allocator dir_ino_alloc;
 	struct inode_allocator ino_alloc;
 
@@ -68,6 +68,9 @@ struct inode_sb_info {
 	/* serialize multiple inode ->evict trying to delete same ino's items */
 	spinlock_t deleting_items_lock;
 	struct list_head deleting_items_list;
+
+	struct work_struct iput_work;
+	struct llist_head iput_llist;
 };
 
 #define DECLARE_INODE_SB_INFO(sb, name) \
@@ -92,9 +95,9 @@ static void scoutfs_inode_ctor(void *obj)
 	atomic64_set(&si->data_waitq.changed, 0);
 	init_waitqueue_head(&si->data_waitq.waitq);
 	init_rwsem(&si->xattr_rwsem);
-	RB_CLEAR_NODE(&si->writeback_node);
+	INIT_LIST_HEAD(&si->writeback_entry);
 	scoutfs_lock_init_coverage(&si->ino_lock_cov);
-	atomic_set(&si->inv_iput_count, 0);
+	atomic_set(&si->iput_count, 0);
 
 	inode_init_once(&si->inode);
 }
@@ -118,47 +121,14 @@ static void scoutfs_i_callback(struct rcu_head *head)
 	kmem_cache_free(scoutfs_inode_cachep, SCOUTFS_I(inode));
 }
 
-static void insert_writeback_inode(struct inode_sb_info *inf,
-				   struct scoutfs_inode_info *ins)
-{
-	struct rb_root *root = &inf->writeback_inodes;
-	struct rb_node **node = &root->rb_node;
-	struct rb_node *parent = NULL;
-	struct scoutfs_inode_info *si;
-
-	while (*node) {
-		parent = *node;
-		si = container_of(*node, struct scoutfs_inode_info,
-				  writeback_node);
-
-		if (ins->ino < si->ino)
-			node = &(*node)->rb_left;
-		else if (ins->ino > si->ino)
-			node = &(*node)->rb_right;
-		else
-			BUG();
-	}
-
-	rb_link_node(&ins->writeback_node, parent, node);
-	rb_insert_color(&ins->writeback_node, root);
-}
-
-static void remove_writeback_inode(struct inode_sb_info *inf,
-			       struct scoutfs_inode_info *si)
-{
-	if (!RB_EMPTY_NODE(&si->writeback_node)) {
-		rb_erase(&si->writeback_node, &inf->writeback_inodes);
-		RB_CLEAR_NODE(&si->writeback_node);
-	}
-}
-
 void scoutfs_destroy_inode(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
 
 	spin_lock(&inf->writeback_lock);
-	remove_writeback_inode(inf, SCOUTFS_I(inode));
+	if (!list_empty(&si->writeback_entry))
+		list_del_init(&si->writeback_entry);
 	spin_unlock(&inf->writeback_lock);
 
 	scoutfs_lock_del_coverage(inode->i_sb, &si->ino_lock_cov);
@@ -692,14 +662,14 @@ struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
 	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
 }
 
-struct inode *scoutfs_iget(struct super_block *sb, u64 ino)
+struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
 {
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode_info *si;
 	struct inode *inode;
 	int ret;
 
-	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, ino, &lock);
+	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, lkf, ino, &lock);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -1657,11 +1627,6 @@ void scoutfs_evict_inode(struct inode *inode)
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 		scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
 	}
-	if (ret == -ERESTARTSYS) {
-		/* can be in task with pending, could be found as orphan */
-		scoutfs_inc_counter(sb, inode_evict_intr);
-		ret = 0;
-	}
 	if (ret < 0) {
 		scoutfs_err(sb, "error %d while checking to delete inode nr %llu, it might linger.",
 			    ret, ino);
@@ -1697,6 +1662,49 @@ int scoutfs_drop_inode(struct inode *inode)
 
 	return si->drop_invalidated || !scoutfs_lock_is_covered(sb, &si->ino_lock_cov) ||
 	       generic_drop_inode(inode);
+}
+
+static void iput_worker(struct work_struct *work)
+{
+	struct inode_sb_info *inf = container_of(work, struct inode_sb_info, iput_work);
+	struct scoutfs_inode_info *si;
+	struct scoutfs_inode_info *tmp;
+	struct llist_node *inodes;
+	bool more;
+
+	inodes = llist_del_all(&inf->iput_llist);
+
+	llist_for_each_entry_safe(si, tmp, inodes, iput_llnode) {
+		do {
+			more = atomic_dec_return(&si->iput_count) > 0;
+			iput(&si->inode);
+		} while (more);
+	}
+}
+
+/*
+ * Final iput can get into evict and perform final inode deletion which
+ * can delete a lot of items spanning multiple cluster locks and
+ * transactions.  It should be understood as a heavy high level
+ * operation, more like file writing and less like dropping a refcount.
+ *
+ * Unfortunately we also have incentives to use igrab/iput from internal
+ * contexts that have no business doing that work, like lock
+ * invalidation or dirty inode writeback during transaction commit.
+ *
+ * In those cases we can kick iput off to background work context.
+ * Nothing stops multiple puts of an inode before the work runs so we
+ * can track multiple puts in flight.
+ */
+void scoutfs_inode_queue_iput(struct inode *inode)
+{
+	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	if (atomic_inc_return(&si->iput_count) == 1)
+		llist_add(&si->iput_llnode, &inf->iput_llist);
+	smp_wmb(); /* count and list visible before work executes */
+	schedule_work(&inf->iput_work);
 }
 
 /*
@@ -1814,7 +1822,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		}
 
 		/* try to cached and evict unused inode to delete, can be racing */
-		inode = scoutfs_iget(sb, ino);
+		inode = scoutfs_iget(sb, ino, 0);
 		if (IS_ERR(inode)) {
 			ret = PTR_ERR(inode);
 			if (ret == -ENOENT)
@@ -1843,30 +1851,33 @@ out:
  * ourselves in knots trying to call through the high level vfs sync
  * methods.
  *
+ * File data block allocations tend to advance through free space so we
+ * add the inode to the end of the list to roughly encourage sequential
+ * IO.
+ *
  * This is called by writers who hold the inode and transaction.  The
- * inode's presence in the rbtree is removed by destroy_inode, prevented
- * by the inode hold, and by committing the transaction, which is
- * prevented by holding the transaction.  The inode can only go from
- * empty to on the rbtree while we're here.
+ * inode is removed from the list by evict->destroy if it's unlinked
+ * during the transaction or by committing the transaction.  Pruning the
+ * icache won't try to evict the inode as long as it has dirty buffers.
  */
 void scoutfs_inode_queue_writeback(struct inode *inode)
 {
 	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	if (RB_EMPTY_NODE(&si->writeback_node)) {
+	if (list_empty(&si->writeback_entry)) {
 		spin_lock(&inf->writeback_lock);
-		if (RB_EMPTY_NODE(&si->writeback_node))
-			insert_writeback_inode(inf, si);
+		if (list_empty(&si->writeback_entry))
+			list_add_tail(&si->writeback_entry, &inf->writeback_list);
 		spin_unlock(&inf->writeback_lock);
 	}
 }
 
 /*
- * Walk our dirty inodes in ino order and either start dirty page
- * writeback or wait for writeback to complete.
+ * Walk our dirty inodes and either start dirty page writeback or wait
+ * for writeback to complete.
  *
- * This is called by transaction commiting so other writers are
+ * This is called by transaction committing so other writers are
  * excluded.  We're still very careful to iterate over the tree while it
  * and the inodes could be changing.
  *
@@ -1879,28 +1890,18 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 {
 	DECLARE_INODE_SB_INFO(sb, inf);
 	struct scoutfs_inode_info *si;
-	struct rb_node *node;
+	struct scoutfs_inode_info *tmp;
 	struct inode *inode;
-	struct inode *defer_iput = NULL;
 	int ret;
 
 	spin_lock(&inf->writeback_lock);
 
-	node = rb_first(&inf->writeback_inodes);
-	while (node) {
-		si = container_of(node, struct scoutfs_inode_info,
-				  writeback_node);
-		node = rb_next(node);
+	list_for_each_entry_safe(si, tmp, &inf->writeback_list, writeback_entry) {
 		inode = igrab(&si->inode);
 		if (!inode)
 			continue;
 
 		spin_unlock(&inf->writeback_lock);
-
-		if (defer_iput) {
-			iput(defer_iput);
-			defer_iput = NULL;
-		}
 
 		if (write)
 			ret = filemap_fdatawrite(inode->i_mapping);
@@ -1909,28 +1910,28 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 		trace_scoutfs_inode_walk_writeback(sb, scoutfs_ino(inode),
 						   write, ret);
 		if (ret) {
-			iput(inode);
+			scoutfs_inode_queue_iput(inode);
 			goto out;
 		}
 
 		spin_lock(&inf->writeback_lock);
 
-		if (WARN_ON_ONCE(RB_EMPTY_NODE(&si->writeback_node)))
-			node = rb_first(&inf->writeback_inodes);
+		/* restore tmp after reacquiring lock */
+		if (WARN_ON_ONCE(list_empty(&si->writeback_entry)))
+			tmp = list_first_entry(&inf->writeback_list, struct scoutfs_inode_info,
+					       writeback_entry);
 		else
-			node = rb_next(&si->writeback_node);
+			tmp = list_next_entry(si, writeback_entry);
 
 		if (!write)
-			remove_writeback_inode(inf, si);
+			list_del_init(&si->writeback_entry);
 
-		/* avoid iput->destroy lock deadlock */
-		defer_iput = inode;
+		scoutfs_inode_queue_iput(inode);
 	}
 
 	spin_unlock(&inf->writeback_lock);
 out:
-	if (defer_iput)
-		iput(defer_iput);
+
 	return ret;
 }
 
@@ -1945,12 +1946,14 @@ int scoutfs_inode_setup(struct super_block *sb)
 
 	inf->sb = sb;
 	spin_lock_init(&inf->writeback_lock);
-	inf->writeback_inodes = RB_ROOT;
+	INIT_LIST_HEAD(&inf->writeback_list);
 	spin_lock_init(&inf->dir_ino_alloc.lock);
 	spin_lock_init(&inf->ino_alloc.lock);
 	INIT_DELAYED_WORK(&inf->orphan_scan_dwork, inode_orphan_scan_worker);
 	spin_lock_init(&inf->deleting_items_lock);
 	INIT_LIST_HEAD(&inf->deleting_items_list);
+	INIT_WORK(&inf->iput_work, iput_worker);
+	init_llist_head(&inf->iput_llist);
 
 	sbi->inode_sb_info = inf;
 
@@ -1962,12 +1965,11 @@ int scoutfs_inode_setup(struct super_block *sb)
  * many other subsystems like networking and the server.  We only kick
  * it off once everything is ready.
  */
-int scoutfs_inode_start(struct super_block *sb)
+void scoutfs_inode_start(struct super_block *sb)
 {
 	DECLARE_INODE_SB_INFO(sb, inf);
 
 	schedule_orphan_dwork(inf);
-	return 0;
 }
 
 void scoutfs_inode_stop(struct super_block *sb)

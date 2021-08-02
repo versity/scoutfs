@@ -867,12 +867,20 @@ static long scoutfs_ioc_statfs_more(struct file *file, unsigned long arg)
 {
 	struct super_block *sb = file_inode(file)->i_sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super;
 	struct scoutfs_ioctl_statfs_more sfm;
 	int ret;
 
 	if (get_user(sfm.valid_bytes, (__u64 __user *)arg))
 		return -EFAULT;
+
+	super = kzalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
+	if (!super)
+		return -ENOMEM;
+
+	ret = scoutfs_read_super(sb, super);
+	if (ret)
+		goto out;
 
 	sfm.valid_bytes = min_t(u64, sfm.valid_bytes,
 				sizeof(struct scoutfs_ioctl_statfs_more));
@@ -884,12 +892,15 @@ static long scoutfs_ioc_statfs_more(struct file *file, unsigned long arg)
 
 	ret = scoutfs_client_get_last_seq(sb, &sfm.committed_seq);
 	if (ret)
-		return ret;
+		goto out;
 
 	if (copy_to_user((void __user *)arg, &sfm, sfm.valid_bytes))
-		return -EFAULT;
-
-	return 0;
+		ret = -EFAULT;
+	else
+		ret = 0;
+out:
+	kfree(super);
+	return ret;
 }
 
 struct copy_alloc_detail_args {
@@ -993,6 +1004,37 @@ out:
 	return ret;
 }
 
+static long scoutfs_ioc_resize_devices(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_resize_devices __user *urd = (void __user *)arg;
+	struct scoutfs_ioctl_resize_devices rd;
+	struct scoutfs_net_resize_devices nrd;
+	int ret;
+
+	if (!(file->f_mode & FMODE_READ)) {
+		ret = -EBADF;
+		goto out;
+	}
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&rd, urd, sizeof(rd))) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	nrd.new_total_meta_blocks = cpu_to_le64(rd.new_total_meta_blocks);
+	nrd.new_total_data_blocks = cpu_to_le64(rd.new_total_data_blocks);
+
+	ret = scoutfs_client_resize_devices(sb, &nrd);
+out:
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1022,6 +1064,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_alloc_detail(file, arg);
 	case SCOUTFS_IOC_MOVE_BLOCKS:
 		return scoutfs_ioc_move_blocks(file, arg);
+	case SCOUTFS_IOC_RESIZE_DEVICES:
+		return scoutfs_ioc_resize_devices(file, arg);
 	}
 
 	return -ENOTTY;

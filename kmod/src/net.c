@@ -1486,8 +1486,7 @@ int scoutfs_net_connect(struct super_block *sb,
 			struct scoutfs_net_connection *conn,
 			struct sockaddr_in *sin, unsigned long timeout_ms)
 {
-	int error = 0;
-	int ret;
+	int ret = 0;
 
 	spin_lock(&conn->lock);
 	conn->connect_sin = *sin;
@@ -1495,10 +1494,8 @@ int scoutfs_net_connect(struct super_block *sb,
 	spin_unlock(&conn->lock);
 
 	queue_work(conn->workq, &conn->connect_work);
-
-	ret = wait_event_interruptible(conn->waitq,
-				       connect_result(conn, &error));
-	return ret ?: error;
+	wait_event(conn->waitq, connect_result(conn, &ret));
+	return ret;
 }
 
 static void set_valid_greeting(struct scoutfs_net_connection *conn)
@@ -1634,10 +1631,10 @@ restart:
 		conn->next_send_id = reconn->next_send_id;
 		atomic64_set(&conn->recv_seq, atomic64_read(&reconn->recv_seq));
 
-		/* greeting response/ack will be on conn send queue */
+		/* reconn should be idle while in reconn_wait  */
 		BUG_ON(!list_empty(&reconn->send_queue));
-		BUG_ON(!list_empty(&conn->resend_queue));
-		list_splice_init(&reconn->resend_queue, &conn->resend_queue);
+		/* queued greeting response is racing, can be in send or resend queue */
+		list_splice_tail_init(&reconn->resend_queue, &conn->resend_queue);
 
 		/* new conn info is unused, swap, old won't call down */
 		swap(conn->info, reconn->info);
@@ -1801,11 +1798,10 @@ int scoutfs_net_sync_request(struct super_block *sb,
 	ret = scoutfs_net_submit_request(sb, conn, cmd, arg, arg_len,
 					 sync_response, &sreq, &id);
 
-	ret = wait_for_completion_interruptible(&sreq.comp);
-	if (ret == -ERESTARTSYS)
-		scoutfs_net_cancel_request(sb, conn, cmd, id);
-	else
+	if (ret == 0) {
+		wait_for_completion(&sreq.comp);
 		ret = sreq.error;
+	}
 
 	return ret;
 }

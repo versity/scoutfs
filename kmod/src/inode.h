@@ -49,14 +49,14 @@ struct scoutfs_inode_info {
 	struct scoutfs_per_task pt_data_lock;
 	struct scoutfs_data_waitq data_waitq;
 	struct rw_semaphore xattr_rwsem;
-	struct rb_node writeback_node;
+	struct list_head writeback_entry;
 
 	struct scoutfs_lock_coverage ino_lock_cov;
 
 	/* drop if i_count hits 0, allows drop while invalidate holds coverage */
 	bool drop_invalidated;
-	struct llist_node inv_iput_llnode;
-	atomic_t inv_iput_count;
+	struct llist_node iput_llnode;
+	atomic_t iput_count;
 
 	struct inode inode;
 };
@@ -75,8 +75,9 @@ struct inode *scoutfs_alloc_inode(struct super_block *sb);
 void scoutfs_destroy_inode(struct inode *inode);
 int scoutfs_drop_inode(struct inode *inode);
 void scoutfs_evict_inode(struct inode *inode);
+void scoutfs_inode_queue_iput(struct inode *inode);
 
-struct inode *scoutfs_iget(struct super_block *sb, u64 ino);
+struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf);
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
 
 void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
@@ -131,7 +132,7 @@ void scoutfs_inode_exit(void);
 int scoutfs_inode_init(void);
 
 int scoutfs_inode_setup(struct super_block *sb);
-int scoutfs_inode_start(struct super_block *sb);
+void scoutfs_inode_start(struct super_block *sb);
 void scoutfs_inode_stop(struct super_block *sb);
 void scoutfs_inode_destroy(struct super_block *sb);
 

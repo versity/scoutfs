@@ -323,7 +323,6 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	struct commit_waiter *cw;
 	struct commit_waiter *pos;
 	struct llist_node *node;
-	u64 reserved;
 	int ret;
 
 	trace_scoutfs_server_commit_work_enter(sb, 0, 0);
@@ -389,16 +388,19 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	server->other_freed = &super->server_meta_freed[server->other_ind];
 
 	/*
-	 * The reserved metadata blocks includes the max size of
-	 * outstanding allocators and a server transaction could be
-	 * asked to refill all those allocators from meta_avail.  If our
-	 * meta_avail falls below the reserved count, and freed is still
-	 * above it, then swap so that we don't start returning enospc
-	 * until we're truly low.
+	 * get_log_trees sets ALLOC_LOW when its allocator drops below
+	 * the reserved blocks after having filled the log trees's avail
+	 * allocator during its transaction.  To avoid prematurely
+	 * setting the low flag and causing enospc we make sure that the
+	 * next transaction's meta_avail has 2x the reserved blocks so
+	 * that it can consume a full reserved amount and still have
+	 * enough to avoid enospc.  We swap to freed if avail is under
+	 * the buffer and freed is larger.
 	 */
-	reserved = scoutfs_server_reserved_meta_blocks(sb);
-	if (le64_to_cpu(server->meta_avail->total_len) <= reserved &&
-	    le64_to_cpu(server->meta_freed->total_len) > reserved)
+	if ((le64_to_cpu(server->meta_avail->total_len) <
+	     (scoutfs_server_reserved_meta_blocks(sb) * 2)) &&
+	    (le64_to_cpu(server->meta_freed->total_len) >
+	     le64_to_cpu(server->meta_avail->total_len)))
 		swap(server->meta_avail, server->meta_freed);
 
 	ret = 0;
@@ -2355,15 +2357,25 @@ static int open_ino_map_response(struct super_block *sb, struct scoutfs_net_conn
 	return scoutfs_omap_server_handle_response(sb, rid, resp);
 }
 
-/* The server is sending an omap request to the client */
+/*
+ * The server is sending an omap requests to all the clients it thought
+ * were connected when it received a request from another client.
+ * This send can race with the client's connection being removed.  We
+ * can drop those sends on the floor and mask ENOTCONN.  The client's rid
+ * will soon be removed from the request which will be correctly handled.
+ */
 int scoutfs_server_send_omap_request(struct super_block *sb, u64 rid,
 				     struct scoutfs_open_ino_map_args *args)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	int ret;
 
-	return scoutfs_net_submit_request_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
+	ret = scoutfs_net_submit_request_node(sb, server->conn, rid, SCOUTFS_NET_CMD_OPEN_INO_MAP,
 					      args, sizeof(*args),
 					      open_ino_map_response, NULL, NULL);
+	if (ret == -ENOTCONN)
+		ret = 0;
+	return ret;
 }
 
 /*
@@ -2552,6 +2564,103 @@ static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connec
 out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
+
+static u64 device_blocks(struct block_device *bdev, int shift)
+{
+	return i_size_read(bdev->bd_inode) >> shift;
+}
+
+static int server_resize_devices(struct super_block *sb, struct scoutfs_net_connection *conn,
+				 u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_net_resize_devices *nrd;
+	u64 meta_tot;
+	u64 meta_start;
+	u64 meta_len;
+	u64 data_tot;
+	u64 data_start;
+	u64 data_len;
+	int ret;
+	int err;
+
+	if (arg_len != sizeof(struct scoutfs_net_resize_devices)) {
+		ret = -EINVAL;
+		goto out;
+	}
+	nrd = arg;
+
+	meta_tot = le64_to_cpu(nrd->new_total_meta_blocks);
+	data_tot = le64_to_cpu(nrd->new_total_data_blocks);
+
+	scoutfs_server_hold_commit(sb);
+	mutex_lock(&server->alloc_mutex);
+
+	if (meta_tot == le64_to_cpu(super->total_meta_blocks))
+		meta_tot = 0;
+	if (data_tot == le64_to_cpu(super->total_data_blocks))
+		data_tot = 0;
+
+	if (!meta_tot && !data_tot) {
+		ret = 0;
+		goto unlock;
+	}
+
+	/* we don't support shrinking */
+	if ((meta_tot && (meta_tot < le64_to_cpu(super->total_meta_blocks))) ||
+	    (data_tot && (data_tot < le64_to_cpu(super->total_data_blocks)))) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	/* must be within devices */
+	if ((meta_tot > device_blocks(sbi->meta_bdev, SCOUTFS_BLOCK_LG_SHIFT)) ||
+	    (data_tot > device_blocks(sb->s_bdev, SCOUTFS_BLOCK_SM_SHIFT))) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	/* extents are only used if _tot is set */
+	meta_start = le64_to_cpu(super->total_meta_blocks);
+	meta_len = meta_tot - meta_start;
+	data_start = le64_to_cpu(super->total_data_blocks);
+	data_len = data_tot - data_start;
+
+	if (meta_tot) {
+		ret = scoutfs_alloc_insert(sb, &server->alloc, &server->wri,
+					   server->meta_avail, meta_start, meta_len);
+		if (ret < 0)
+			goto unlock;
+	}
+
+	if (data_tot) {
+		ret = scoutfs_alloc_insert(sb, &server->alloc, &server->wri,
+					   &super->data_alloc, data_start, data_len);
+		if (ret < 0) {
+			if (meta_tot) {
+				err = scoutfs_alloc_remove(sb, &server->alloc, &server->wri,
+							   server->meta_avail, meta_start,
+							   meta_len);
+				WARN_ON_ONCE(err); /* btree blocks are dirty.. really unlikely? */
+			}
+			goto unlock;
+		}
+	}
+
+	if (meta_tot)
+		super->total_meta_blocks = cpu_to_le64(meta_tot);
+	if (data_tot)
+		super->total_data_blocks = cpu_to_le64(data_tot);
+
+	ret = 0;
+unlock:
+	mutex_unlock(&server->alloc_mutex);
+	ret = scoutfs_server_apply_commit(sb, ret);
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
+};
 
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 {
@@ -3189,6 +3298,7 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_GET_VOLOPT]		= server_get_volopt,
 	[SCOUTFS_NET_CMD_SET_VOLOPT]		= server_set_volopt,
 	[SCOUTFS_NET_CMD_CLEAR_VOLOPT]		= server_clear_volopt,
+	[SCOUTFS_NET_CMD_RESIZE_DEVICES]	= server_resize_devices,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 
@@ -3463,13 +3573,15 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
+	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
+	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
+
 	/* first make sure no other servers are still running */
 	ret = scoutfs_quorum_fence_leaders(sb, server->term);
-	if (ret < 0)
+	if (ret < 0) {
+		scoutfs_err(sb, "server error %d attempting to fence previous leaders", ret);
 		goto out;
-
-	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
-	scoutfs_info(sb, "server setting up at "SIN_FMT, SIN_ARG(&sin));
+	}
 
 	conn = scoutfs_net_alloc_conn(sb, server_notify_up, server_notify_down,
 				      sizeof(struct server_client_info),
@@ -3490,8 +3602,10 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	/* start up the server subsystems before accepting */
 	ret = scoutfs_read_super(sb, super);
-	if (ret < 0)
+	if (ret < 0) {
+		scoutfs_err(sb, "server error %d reading super block", ret);
 		goto shutdown;
+	}
 
 	/* update volume options early, possibly for use during startup */
 	write_seqcount_begin(&server->volopt_seqcount);
@@ -3529,10 +3643,17 @@ static void scoutfs_server_worker(struct work_struct *work)
 	}
 	scoutfs_server_set_seq_if_greater(sb, max_seq);
 
-	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri) ?:
-	      start_recovery(sb);
-	if (ret)
+	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri);
+	if (ret) {
+		scoutfs_err(sb, "server error %d starting lock server", ret);
 		goto shutdown;
+	}
+
+	ret = start_recovery(sb);
+	if (ret) {
+		scoutfs_err(sb, "server error %d starting client recovery", ret);
+		goto shutdown;
+	}
 
 	/* start accepting connections and processing work */
 	server->conn = conn;
@@ -3543,7 +3664,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	queue_reclaim_work(server, 0);
 
-	/* wait_event/wake_up provide barriers */
+	/* interruptible mostly to avoid stuck messages */
 	wait_event_interruptible(server->waitq, test_shutting_down(server));
 
 shutdown:

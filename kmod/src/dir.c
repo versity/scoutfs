@@ -253,7 +253,7 @@ static u64 dirent_name_hash(const char *name, unsigned int name_len)
               ((u64)dirent_name_fingerprint(name, name_len) << 32);
 }
 
-static u64 dirent_names_equal(const char *a_name, unsigned int a_len,
+static bool dirent_names_equal(const char *a_name, unsigned int a_len,
 			      const char *b_name, unsigned int b_len)
 {
 	return a_len == b_len && memcmp(a_name, b_name, a_len) == 0;
@@ -462,7 +462,7 @@ out:
 	else if (ino == 0)
 		inode = NULL;
 	else
-		inode = scoutfs_iget(sb, ino);
+		inode = scoutfs_iget(sb, ino, 0);
 
 	/*
 	 * We can't splice dir aliases into the dcache.  dir entries

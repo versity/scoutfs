@@ -48,8 +48,9 @@ char buf[SZ];
 
 int main(int argc, char **argv)
 {
-	struct scoutfs_ioctl_release ioctl_args = {0};
+	struct scoutfs_ioctl_release rel = {0};
 	struct scoutfs_ioctl_move_blocks mb;
+	struct scoutfs_ioctl_stat_more stm;
 	struct sub_tmp_info sub_tmps[8];
 	int tot_size = 0;
 	char *dest_file;
@@ -111,12 +112,20 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	// release everything in dest file
-	ioctl_args.offset = 0;
-	ioctl_args.length = tot_size;
-	ioctl_args.data_version = 0;
+	// get current data_version after fallocate's size extensions
+	stm.valid_bytes = sizeof(struct scoutfs_ioctl_stat_more);
+	ret = ioctl(dest_fd, SCOUTFS_IOC_STAT_MORE, &stm);
+	if (ret < 0) {
+		perror("stat_more ioctl error");
+		exit(1);
+	}
 
-	ret = ioctl(dest_fd, SCOUTFS_IOC_RELEASE, &ioctl_args);
+	// release everything in dest file
+	rel.offset = 0;
+	rel.length = tot_size;
+	rel.data_version = stm.data_version;
+
+	ret = ioctl(dest_fd, SCOUTFS_IOC_RELEASE, &rel);
 	if (ret < 0) {
 		perror("error");
 		exit(1);
@@ -130,7 +139,7 @@ int main(int argc, char **argv)
 		mb.from_off = 0;
 		mb.len = sub_tmp->length;
 		mb.to_off = sub_tmp->offset;
-		mb.data_version = 0;
+		mb.data_version = stm.data_version;
 		mb.flags = SCOUTFS_IOC_MB_STAGE;
 
 		ret = ioctl(dest_fd, SCOUTFS_IOC_MOVE_BLOCKS, &mb);

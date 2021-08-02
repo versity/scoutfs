@@ -230,7 +230,15 @@ static void scoutfs_metadev_close(struct super_block *sb)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
 	if (sbi->meta_bdev) {
+		/*
+		 * Some kernels have blkdev_reread_part which calls
+		 * fsync_bdev while holding the bd_mutex which inverts
+		 * the s_umount hold in deactivate_super and blkdev_put
+		 * from kill_sb->put_super.
+		 */
+		lockdep_off();
 		blkdev_put(sbi->meta_bdev, SCOUTFS_META_BDEV_MODE);
+		lockdep_on();
 		sbi->meta_bdev = NULL;
 	}
 }
@@ -328,28 +336,16 @@ int scoutfs_write_super(struct super_block *sb,
 				      sizeof(struct scoutfs_super_block));
 }
 
-static bool invalid_blkno_limits(struct super_block *sb, char *which,
-				 u64 start, __le64 first, __le64 last,
-				 struct block_device *bdev, int shift)
+static bool small_bdev(struct super_block *sb, char *which, u64 blocks,
+		       struct block_device *bdev, int shift)
 {
-	u64 blkno;
+	u64 size = (u64)i_size_read(bdev->bd_inode);
+	u64 count = size >> shift;
 
-	if (le64_to_cpu(first) < start) {
-		scoutfs_err(sb, "super block first %s blkno %llu is within first valid blkno %llu",
-			which, le64_to_cpu(first), start);
-		return true;
-	}
+	if (blocks > count) {
+		scoutfs_err(sb, "super block records %llu %s blocks, but device %u:%u size %llu only allows %llu blocks",
+			blocks, which, MAJOR(bdev->bd_dev), MINOR(bdev->bd_dev), size, count);
 
-	if (le64_to_cpu(first) > le64_to_cpu(last)) {
-		scoutfs_err(sb, "super block first %s blkno %llu is greater than last %s blkno %llu",
-			which, le64_to_cpu(first), which, le64_to_cpu(last));
-		return true;
-	}
-
-	blkno = (i_size_read(bdev->bd_inode) >> shift) - 1;
-	if (le64_to_cpu(last) > blkno) {
-		scoutfs_err(sb, "super block last %s blkno %llu is beyond device size last blkno %llu",
-			which, le64_to_cpu(last), blkno);
 		return true;
 	}
 
@@ -409,16 +405,10 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 
 	/* XXX do we want more rigorous invalid super checking? */
 
-	if (invalid_blkno_limits(sb, "meta",
-			         SCOUTFS_META_DEV_START_BLKNO,
-				 super->first_meta_blkno,
-				 super->last_meta_blkno, sbi->meta_bdev,
-				 SCOUTFS_BLOCK_LG_SHIFT) ||
-	    invalid_blkno_limits(sb, "data",
-			         SCOUTFS_DATA_DEV_START_BLKNO,
-				 super->first_data_blkno,
-				 super->last_data_blkno, sb->s_bdev,
-				 SCOUTFS_BLOCK_SM_SHIFT)) {
+	if (small_bdev(sb, "metadata", le64_to_cpu(super->total_meta_blocks), sbi->meta_bdev,
+		       SCOUTFS_BLOCK_LG_SHIFT) ||
+	    small_bdev(sb, "data", le64_to_cpu(super->total_data_blocks), sb->s_bdev,
+		       SCOUTFS_BLOCK_SM_SHIFT)) {
 		ret = -EINVAL;
 	}
 
@@ -622,15 +612,16 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_quorum_setup(sb) ?:
 	      scoutfs_client_setup(sb) ?:
 	      scoutfs_volopt_setup(sb) ?:
-	      scoutfs_trans_get_log_trees(sb) ?:
-	      scoutfs_srch_setup(sb) ?:
-	      scoutfs_inode_start(sb);
+	      scoutfs_srch_setup(sb);
 	if (ret)
 		goto out;
 
-	inode = scoutfs_iget(sb, SCOUTFS_ROOT_INO);
+	/* this interruptible iget lets hung mount be aborted with ctl-c */
+	inode = scoutfs_iget(sb, SCOUTFS_ROOT_INO, SCOUTFS_LKF_INTERRUPTIBLE);
 	if (IS_ERR(inode)) {
 		ret = PTR_ERR(inode);
+		if (ret == -ERESTARTSYS)
+			ret = -EINTR;
 		goto out;
 	}
 
@@ -640,10 +631,15 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 
-	ret = scoutfs_client_advance_seq(sb, &sbi->trans_seq);
+	/* send requests once iget progress shows we had a server */
+	ret = scoutfs_trans_get_log_trees(sb) ?:
+	      scoutfs_client_advance_seq(sb, &sbi->trans_seq);
 	if (ret)
 		goto out;
 
+	/* start up background services that use everything else */
+	scoutfs_inode_start(sb);
+	scoutfs_forest_start(sb);
 	scoutfs_trans_restart_sync_deadline(sb);
 	ret = 0;
 out:

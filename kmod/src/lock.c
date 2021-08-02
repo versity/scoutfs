@@ -89,8 +89,6 @@ struct lock_info {
 	struct work_struct shrink_work;
 	struct list_head shrink_list;
 	atomic64_t next_refresh_gen;
-	struct work_struct inv_iput_work;
-	struct llist_head inv_iput_llist;
 
 	struct dentry *tseq_dentry;
 	struct scoutfs_tseq_tree tseq_tree;
@@ -124,34 +122,6 @@ static bool lock_modes_match(int granted, int requested)
 	return (granted == requested) ||
 	       (granted == SCOUTFS_LOCK_WRITE &&
 		requested == SCOUTFS_LOCK_READ);
-}
-
-/*
- * Final iput can get into evict and perform final inode deletion which
- * can delete a lot of items under locks and transactions.  We really
- * don't want to be doing all that in an iput during invalidation.  When
- * invalidation sees that iput might perform final deletion it puts them
- * on a list and queues this work.
- *
- * Nothing stops multiple puts for multiple invalidations of an inode
- * before the work runs so we can track multiple puts in flight.
- */
-static void lock_inv_iput_worker(struct work_struct *work)
-{
-	struct lock_info *linfo = container_of(work, struct lock_info, inv_iput_work);
-	struct scoutfs_inode_info *si;
-	struct scoutfs_inode_info *tmp;
-	struct llist_node *inodes;
-	bool more;
-
-	inodes = llist_del_all(&linfo->inv_iput_llist);
-
-	llist_for_each_entry_safe(si, tmp, inodes, inv_iput_llnode) {
-		do {
-			more = atomic_dec_return(&si->inv_iput_count) > 0;
-			iput(&si->inode);
-		} while (more);
-	}
 }
 
 /*
@@ -194,11 +164,8 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink > 0) {
 			iput(inode);
 		} else {
-			/* defer iput to work context so we don't evict inodes from invalidation */ 
-			if (atomic_inc_return(&si->inv_iput_count) == 1)
-				llist_add(&si->inv_iput_llnode, &linfo->inv_iput_llist);
-			smp_wmb(); /* count and list visible before work executes */
-			queue_work(linfo->workq, &linfo->inv_iput_work);
+			/* defer iput to work context so we don't evict inodes from invalidation */
+			scoutfs_inode_queue_iput(inode);
 		}
 	}
 }
@@ -1128,8 +1095,14 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 
 		trace_scoutfs_lock_wait(sb, lock);
 
-		ret = wait_event_interruptible(lock->waitq,
-					       lock_wait_cond(sb, lock, mode));
+		if (flags & SCOUTFS_LKF_INTERRUPTIBLE) {
+			ret = wait_event_interruptible(lock->waitq,
+						       lock_wait_cond(sb, lock, mode));
+		} else {
+			wait_event(lock->waitq, lock_wait_cond(sb, lock, mode));
+			ret = 0;
+		}
+
 		spin_lock(&linfo->lock);
 		if (ret)
 			break;
@@ -1789,8 +1762,6 @@ int scoutfs_lock_setup(struct super_block *sb)
 	INIT_WORK(&linfo->shrink_work, lock_shrink_worker);
 	INIT_LIST_HEAD(&linfo->shrink_list);
 	atomic64_set(&linfo->next_refresh_gen, 0);
-	INIT_WORK(&linfo->inv_iput_work, lock_inv_iput_worker);
-	init_llist_head(&linfo->inv_iput_llist);
 	scoutfs_tseq_tree_init(&linfo->tseq_tree, lock_tseq_show);
 
 	sbi->lock_info = linfo;

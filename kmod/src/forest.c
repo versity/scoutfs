@@ -747,15 +747,20 @@ int scoutfs_forest_setup(struct super_block *sb)
 		goto out;
 	}
 
-	queue_delayed_work(finf->workq, &finf->log_merge_dwork,
-			   msecs_to_jiffies(LOG_MERGE_DELAY_MS));
-
 	ret = 0;
 out:
 	if (ret)
 		scoutfs_forest_destroy(sb);
 
 	return 0;
+}
+
+void scoutfs_forest_start(struct super_block *sb)
+{
+	DECLARE_FOREST_INFO(sb, finf);
+
+	queue_delayed_work(finf->workq, &finf->log_merge_dwork,
+			   msecs_to_jiffies(LOG_MERGE_DELAY_MS));
 }
 
 void scoutfs_forest_stop(struct super_block *sb)

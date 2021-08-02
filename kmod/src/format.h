@@ -779,11 +779,7 @@ struct scoutfs_super_block {
 	__le64 seq;
 	__le64 next_ino;
 	__le64 total_meta_blocks;	/* both static and dynamic */
-	__le64 first_meta_blkno;	/* first dynamically allocated */
-	__le64 last_meta_blkno;
 	__le64 total_data_blocks;
-	__le64 first_data_blkno;
-	__le64 last_data_blkno;
 	struct scoutfs_quorum_config qconf;
 	struct scoutfs_alloc_root meta_alloc[2];
 	struct scoutfs_alloc_root data_alloc;
@@ -990,6 +986,7 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_GET_VOLOPT,
 	SCOUTFS_NET_CMD_SET_VOLOPT,
 	SCOUTFS_NET_CMD_CLEAR_VOLOPT,
+	SCOUTFS_NET_CMD_RESIZE_DEVICES,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };
@@ -1030,6 +1027,11 @@ struct scoutfs_net_roots {
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
 	struct scoutfs_btree_root srch_root;
+};
+
+struct scoutfs_net_resize_devices {
+	__le64 new_total_meta_blocks;
+	__le64 new_total_data_blocks;
 };
 
 struct scoutfs_net_lock {

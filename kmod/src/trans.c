@@ -291,7 +291,7 @@ static void queue_trans_work(struct scoutfs_sb_info *sbi)
 int scoutfs_trans_sync(struct super_block *sb, int wait)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct write_attempt attempt;
+	struct write_attempt attempt = { .ret = 0 };
 	int ret;
 
 
@@ -306,10 +306,8 @@ int scoutfs_trans_sync(struct super_block *sb, int wait)
 
 	queue_trans_work(sbi);
 
-	ret = wait_event_interruptible(sbi->trans_write_wq,
-				       write_attempted(sbi, &attempt));
-	if (ret == 0)
-		ret = attempt.ret;
+	wait_event(sbi->trans_write_wq, write_attempted(sbi, &attempt));
+	ret = attempt.ret;
 
 	return ret;
 }
@@ -496,9 +494,7 @@ int scoutfs_hold_trans(struct super_block *sb, bool allocing)
 		/* wait until the writer work is finished */
 		if (!inc_holders_unless_writer(tri)) {
 			dec_journal_info_holders();
-			ret = wait_event_interruptible(sbi->trans_hold_wq, holders_no_writer(tri));
-			if (ret < 0)
-				break;
+			wait_event(sbi->trans_hold_wq, holders_no_writer(tri));
 			continue;
 		}
 
@@ -514,10 +510,7 @@ int scoutfs_hold_trans(struct super_block *sb, bool allocing)
 			seq = scoutfs_trans_sample_seq(sb);
 			release_holders(sb);
 			queue_trans_work(sbi);
-			ret = wait_event_interruptible(sbi->trans_hold_wq,
-						       scoutfs_trans_sample_seq(sb) != seq);
-			if (ret < 0)
-				break;
+			wait_event(sbi->trans_hold_wq, scoutfs_trans_sample_seq(sb) != seq);
 			continue;
 		}
 
