@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 
+#include "msg.h"
 #include "ext.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
@@ -191,6 +192,9 @@ int scoutfs_ext_insert(struct super_block *sb, struct scoutfs_ext_ops *ops,
 
 	/* inserting extent must not overlap */
 	if (found.len && ext_overlap(&ins, found.start, found.len)) {
+		if (ops->insert_overlap_warn)
+			scoutfs_err(sb, "inserting extent %llu.%llu overlaps existing %llu.%llu",
+					start, len, found.start, found.len);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -242,6 +246,8 @@ int scoutfs_ext_remove(struct super_block *sb, struct scoutfs_ext_ops *ops,
 
 	/* removed extent must be entirely within found */
 	if (!scoutfs_ext_inside(start, len, &found)) {
+		scoutfs_err(sb, "error removing extent %llu.%llu, isn't inside existing %llu.%llu",
+				start, len, found.start, found.len);
 		ret = -EINVAL;
 		goto out;
 	}

@@ -252,6 +252,7 @@ static struct scoutfs_ext_ops alloc_ext_ops = {
 	.next = alloc_ext_next,
 	.insert = alloc_ext_insert,
 	.remove = alloc_ext_remove,
+	.insert_overlap_warn = true,
 };
 
 static bool invalid_extent(u64 start, u64 end, u64 first, u64 last)
