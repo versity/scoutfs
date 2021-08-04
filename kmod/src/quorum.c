@@ -697,11 +697,10 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		/* candidates count votes in their term */
 		if (qst.role == CANDIDATE &&
 		    msg.type == SCOUTFS_QUORUM_MSG_VOTE) {
-			if (test_bit(msg.from, &qst.vote_bits)) {
+			if (test_and_set_bit(msg.from, &qst.vote_bits)) {
 				scoutfs_warn(sb, "already received vote from %u in term %llu, are there multiple mounts with quorum_slot_nr=%u?",
 					     msg.from, qst.term, msg.from);
 			}
-			set_bit(msg.from, &qst.vote_bits);
 			scoutfs_inc_counter(sb, quorum_recv_vote);
 		}
 
