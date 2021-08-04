@@ -724,6 +724,7 @@ static int server_get_log_trees(struct super_block *sb,
 	bool have_fin = false;
 	bool unlock_alloc = false;
 	u64 data_zone_blocks;
+	char *err_str = NULL;
 	u64 nr;
 	int ret;
 
@@ -738,16 +739,20 @@ static int server_get_log_trees(struct super_block *sb,
 
 	/* see if we have already have a finalized root from the rid */
 	ret = find_log_trees_item(sb, &super->logs_root, true, rid, 0, &lt);
-	if (ret < 0 && ret != -ENOENT)
+	if (ret < 0 && ret != -ENOENT) {
+		err_str = "finding first log trees";
 		goto unlock;
+	}
 	if (ret == 0 && le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED)
 		have_fin = true;
 
 	/* use the last non-finalized root, or start a new one */
 	ret = find_log_trees_item(sb, &super->logs_root, false, rid, U64_MAX,
 				  &lt);
-	if (ret < 0 && ret != -ENOENT)
+	if (ret < 0 && ret != -ENOENT) {
+		err_str = "finding last log trees";
 		goto unlock;
+	}
 	if (ret == 0 && le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) {
 		ret = -ENOENT;
 		nr = le64_to_cpu(lt.nr) + 1;
@@ -784,8 +789,10 @@ static int server_get_log_trees(struct super_block *sb,
 		ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 					   &super->logs_root, &key, &fin,
 					   sizeof(fin));
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "updating finalized log trees";
 			goto unlock;
+		}
 
 		memset(&lt.item_root, 0, sizeof(lt.item_root));
 		memset(&lt.bloom_ref, 0, sizeof(lt.bloom_ref));
@@ -796,8 +803,10 @@ static int server_get_log_trees(struct super_block *sb,
 
 	if (get_volopt_val(server, SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR, &data_zone_blocks)) {
 		ret = get_data_alloc_zone_bits(sb, rid, exclusive, vacant, data_zone_blocks);
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "getting alloc zone bits";
 			goto unlock;
+		}
 	} else {
 		data_zone_blocks = 0;
 	}
@@ -810,17 +819,26 @@ static int server_get_log_trees(struct super_block *sb,
 	unlock_alloc = true;
 
 	ret = scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri, server->other_freed,
-					&lt.meta_freed) ?:
-	      alloc_move_empty(sb, &super->data_alloc, &lt.data_freed);
-	if (ret < 0)
+					&lt.meta_freed);
+	if (ret < 0) {
+		err_str = "splicing committed meta_freed";
 		goto unlock;
+	}
+
+	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed);
+	if (ret < 0) {
+		err_str = "emptying committed data_freed";
+		goto unlock;
+	}
 
 	ret = scoutfs_alloc_fill_list(sb, &server->alloc, &server->wri,
 				      &lt.meta_avail, server->meta_avail,
 				      SCOUTFS_SERVER_META_FILL_LO,
 				      SCOUTFS_SERVER_META_FILL_TARGET);
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "filling meta_avail";
 		goto unlock;
+	}
 
 	if (le64_to_cpu(server->meta_avail->total_len) <= scoutfs_server_reserved_meta_blocks(sb))
 		lt.meta_avail.flags |= cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
@@ -830,8 +848,10 @@ static int server_get_log_trees(struct super_block *sb,
 	ret = alloc_move_refill_zoned(sb, &lt.data_avail, &super->data_alloc,
 				      SCOUTFS_SERVER_DATA_FILL_LO, SCOUTFS_SERVER_DATA_FILL_TARGET,
 				      exclusive, vacant, data_zone_blocks);
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "refilling data_avail";
 		goto unlock;
+	}
 
 	if (le64_to_cpu(lt.data_avail.total_len) < SCOUTFS_SERVER_DATA_FILL_LO)
 		lt.data_avail.flags |= cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
@@ -849,6 +869,7 @@ static int server_get_log_trees(struct super_block *sb,
 		ret = scoutfs_alloc_extents_cb(sb, &lt.data_avail, set_extent_zone_bits, &cba);
 		if (ret < 0) {
 			zero_data_alloc_zone_bits(&lt);
+			err_str = "setting data_avail zone bits";
 			goto unlock;
 		}
 
@@ -860,6 +881,9 @@ static int server_get_log_trees(struct super_block *sb,
 				   le64_to_cpu(lt.nr));
 	ret = scoutfs_btree_force(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
+	if (ret < 0)
+		err_str = "updating log trees";
+
 unlock:
 	if (unlock_alloc)
 		mutex_unlock(&server->alloc_mutex);
@@ -867,7 +891,10 @@ unlock:
 
 	ret = scoutfs_server_apply_commit(sb, ret);
 out:
-	WARN_ON_ONCE(ret < 0);
+	if (ret < 0)
+		scoutfs_err(sb, "error %d getting log trees for rid %016llx: %s",
+			    ret, rid, err_str);
+
 	return scoutfs_net_response(sb, conn, cmd, id, ret, &lt, sizeof(lt));
 }
 
@@ -887,6 +914,7 @@ static int server_commit_log_trees(struct super_block *sb,
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
+	char *err_str = NULL;
 	int ret;
 
 	if (arg_len != sizeof(struct scoutfs_log_trees)) {
@@ -898,6 +926,7 @@ static int server_commit_log_trees(struct super_block *sb,
 	memcpy(&lt, arg, sizeof(struct scoutfs_log_trees));
 
 	if (le64_to_cpu(lt.rid) != rid) {
+		err_str = "received rid is not connection rid";
 		ret = -EIO;
 		goto out;
 	}
@@ -911,7 +940,7 @@ static int server_commit_log_trees(struct super_block *sb,
 				   le64_to_cpu(lt.nr));
 	ret = scoutfs_btree_lookup(sb, &super->logs_root, &key, &iref);
 	if (ret < 0) {
-		scoutfs_err(sb, "server error finding client logs: %d", ret);
+		err_str = "finding log trees item";
 		goto unlock;
 	}
 	if (ret == 0)
@@ -923,21 +952,22 @@ static int server_commit_log_trees(struct super_block *sb,
 				      &super->srch_root, &lt.srch_file, false);
 	mutex_unlock(&server->srch_mutex);
 	if (ret < 0) {
-		scoutfs_err(sb, "server error, rotating srch log: %d", ret);
+		err_str = "rotating srch log file";
 		goto unlock;
 	}
 
 	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				   &super->logs_root, &key, &lt, sizeof(lt));
 	if (ret < 0)
-		scoutfs_err(sb, "server error updating client logs: %d", ret);
+		err_str = "updating log trees item";
 
 unlock:
 	mutex_unlock(&server->logs_mutex);
 
 	ret = scoutfs_server_apply_commit(sb, ret);
 	if (ret < 0)
-		scoutfs_err(sb, "server error commiting client logs: %d", ret);
+		scoutfs_err(sb, "server error %d committing client logs for rid %016llx: %s",
+			    ret, rid, err_str);
 out:
 	WARN_ON_ONCE(ret < 0);
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
@@ -992,6 +1022,7 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
+	char *err_str = NULL;
 	int ret;
 	int err;
 
@@ -1000,6 +1031,8 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	/* find the client's last open log_tree */
 	scoutfs_key_init_log_trees(&key, rid, U64_MAX);
 	ret = scoutfs_btree_prev(sb, &super->logs_root, &key, &iref);
+	if (ret < 0)
+		err_str = "log trees btree prev";
 	if (ret == 0) {
 		if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
 			key = *iref.key;
@@ -1009,6 +1042,7 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 			     SCOUTFS_LOG_TREES_FINALIZED))
 				ret = -ENOENT;
 		} else {
+			err_str = "invalid log trees item length";
 			ret = -EIO;
 		}
 		scoutfs_btree_put_iref(&iref);
@@ -1025,7 +1059,8 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 				      &super->srch_root, &lt.srch_file, true);
 	mutex_unlock(&server->srch_mutex);
 	if (ret < 0) {
-		scoutfs_err(sb, "server error, reclaim rotating srch log: %d", ret);
+		scoutfs_err(sb, "error rotating srch log for rid %016llx: %d", rid, ret);
+		err_str = "rotating srch file";
 		goto out;
 	}
 
@@ -1035,14 +1070,16 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	 * log item.
 	 */
 	mutex_lock(&server->alloc_mutex);
-	ret = scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
-					server->other_freed,
-					&lt.meta_freed) ?:
-	      scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
-					server->other_freed,
-					&lt.meta_avail) ?:
-	      alloc_move_empty(sb, &super->data_alloc, &lt.data_avail) ?:
-	      alloc_move_empty(sb, &super->data_alloc, &lt.data_freed);
+	ret = (err_str = "splice meta_freed to other_freed",
+	       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri, server->other_freed,
+					 &lt.meta_freed)) ?:
+	      (err_str = "splice meta_avail", 
+	       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri, server->other_freed,
+					 &lt.meta_avail)) ?:
+	      (err_str = "empty data_avail",
+	       alloc_move_empty(sb, &super->data_alloc, &lt.data_avail)) ?:
+	      (err_str = "empty data_freed",
+	       alloc_move_empty(sb, &super->data_alloc, &lt.data_freed));
 	mutex_unlock(&server->alloc_mutex);
 
 	/* the mount is no longer writing to the zones */
@@ -1055,6 +1092,10 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 
 out:
 	mutex_unlock(&server->logs_mutex);
+
+	if (ret < 0)
+		scoutfs_err(sb, "server error %d reclaiming log trees for rid %016llx: %s",
+			    ret, rid, err_str);
 
 	return ret;
 }
@@ -1632,6 +1673,7 @@ static int splice_log_merge_completions(struct super_block *sb,
 	struct scoutfs_log_trees lt = {{{0,}}};
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
+	char *err_str = NULL;
 	u64 seq;
 	int ret;
 
@@ -1652,6 +1694,8 @@ static int splice_log_merge_completions(struct super_block *sb,
 			if (ret == -ENOENT) {
 				ret = 0;
 				break;
+			} else {
+				err_str = "finding next completion for splice";
 			}
 			goto out;
 		}
@@ -1661,18 +1705,18 @@ static int splice_log_merge_completions(struct super_block *sb,
 		ret = scoutfs_btree_set_parent(sb, &server->alloc, &server->wri,
 					       &super->fs_root, &comp.start,
 					       &comp.root);
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "btree set parent";
 			goto out;
+		}
 
 		mutex_lock(&server->alloc_mutex);
-		ret = scoutfs_alloc_splice_list(sb, &server->alloc,
-						&server->wri,
-						server->other_freed,
-						&comp.meta_avail) ?:
-		      scoutfs_alloc_splice_list(sb, &server->alloc,
-						&server->wri,
-						server->other_freed,
-						&comp.meta_freed);
+		ret = (err_str = "splice meta_avail",
+		       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
+						 server->other_freed, &comp.meta_avail)) ?:
+		      (err_str = "splice other_freed",
+		       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
+						 server->other_freed, &comp.meta_freed));
 		mutex_unlock(&server->alloc_mutex);
 		if (ret < 0)
 			goto out;
@@ -1686,8 +1730,10 @@ static int splice_log_merge_completions(struct super_block *sb,
 		ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 					   &super->log_merge, &key,
 					   &comp, sizeof(comp));
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "updating completion";
 			goto out;
+		}
 	}
 
 	/*
@@ -1703,6 +1749,8 @@ static int splice_log_merge_completions(struct super_block *sb,
 			if (ret == -ENOENT) {
 				ret = 0;
 				break;
+			} else {
+				err_str = "finding next completion for rebalance";
 			}
 			goto out;
 		}
@@ -1715,8 +1763,10 @@ static int splice_log_merge_completions(struct super_block *sb,
 						      &server->wri,
 						      &super->fs_root,
 						      &comp.start);
-			if (ret < 0)
+			if (ret < 0) {
+				err_str = "btree rebalance";
 				goto out;
+			}
 
 			rng.start = comp.remain;
 			rng.end = comp.end;
@@ -1727,8 +1777,10 @@ static int splice_log_merge_completions(struct super_block *sb,
 						   &server->wri,
 						   &super->log_merge, &key,
 						   &rng, sizeof(rng));
-			if (ret < 0)
+			if (ret < 0) {
+				err_str = "insert remaining range";
 				goto out;
+			}
 			no_ranges = false;
 		}
 
@@ -1738,8 +1790,10 @@ static int splice_log_merge_completions(struct super_block *sb,
 		ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
 					   &super->log_merge,
 					   &key);
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "delete completion item";
 			goto out;
+		}
 	}
 
 	/* update the status once all completes are processed */
@@ -1752,6 +1806,8 @@ static int splice_log_merge_completions(struct super_block *sb,
 		ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 					   &super->log_merge, &key,
 					   stat, sizeof(*stat));
+		if (ret < 0)
+			err_str = "update status";
 		goto out;
 	}
 
@@ -1767,6 +1823,7 @@ static int splice_log_merge_completions(struct super_block *sb,
 				key = *iref.key;
 				memcpy(&lt, iref.val, sizeof(lt));
 			} else {
+				err_str = "invalid next log trees val len";
 				ret = -EIO;
 			}
 			scoutfs_btree_put_iref(&iref);
@@ -1775,6 +1832,8 @@ static int splice_log_merge_completions(struct super_block *sb,
 			if (ret == -ENOENT) {
 				ret = 0;
 				break;
+			} else {
+				err_str = "finding next log trees item";
 			}
 			goto out;
 		}
@@ -1793,23 +1852,29 @@ static int splice_log_merge_completions(struct super_block *sb,
 		ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
 					   &super->log_merge, &key,
 					   &fr, sizeof(fr));
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "inserting freeing";
 			goto out;
+		}
 
 		if (lt.bloom_ref.blkno) {
 			ret = scoutfs_free_meta(sb, &server->alloc,
 						&server->wri,
 					le64_to_cpu(lt.bloom_ref.blkno));
-			if (ret < 0)
+			if (ret < 0) {
+				err_str = "freeing bloom block";
 				goto out;
+			}
 		}
 
 		scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid),
 					   le64_to_cpu(lt.nr));
 		ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
 					   &super->logs_root, &key);
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "deleting log trees item";
 			goto out;
+		}
 	}
 
 	init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
@@ -1817,7 +1882,12 @@ static int splice_log_merge_completions(struct super_block *sb,
 				   &super->log_merge, &key);
 	if (ret == 0)
 		queue_work(server->wq, &server->log_merge_free_work);
+	else
+		err_str = "deleting merge status item";
 out:
+	if (ret < 0)
+		scoutfs_err(sb, "server error %d splicing log merge completion: %s", ret, err_str);
+
 	BUG_ON(ret); /* inconsistent */
 
 	return ret;
@@ -1915,6 +1985,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct scoutfs_log_merge_freeing fr;
 	struct scoutfs_key key;
+	char *err_str = NULL;
 	bool commit = false;
 	int ret = 0;
 
@@ -1930,14 +2001,18 @@ static void server_log_merge_free_work(struct work_struct *work)
 		if (ret < 0) {
 			if (ret == -ENOENT)
 				ret = 0;
+			else
+				err_str = "finding next freeing item";
 			break;
 		}
 
 		ret = scoutfs_btree_free_blocks(sb, &server->alloc,
 						&server->wri, &fr.key,
 						&fr.root, 10);
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "freeing log btree";
 			break;
+		}
 
 		/* freed blocks are in allocator, we *have* to update key */
 		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_FREEING_ZONE,
@@ -1957,18 +2032,21 @@ static void server_log_merge_free_work(struct work_struct *work)
 		mutex_unlock(&server->logs_mutex);
 		ret = scoutfs_server_apply_commit(sb, ret);
 		commit = false;
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "looping commit del/upd freeing item";
 			break;
+		}
 	}
 
 	if (commit) {
 		mutex_unlock(&server->logs_mutex);
 		ret = scoutfs_server_apply_commit(sb, ret);
+		if (ret < 0)
+			err_str = "final commit del/upd freeing item";
 	}
 
 	if (ret < 0) {
-		scoutfs_err(sb, "server error freeing merged btree blocks: %d",
-			    ret);
+		scoutfs_err(sb, "server error %d freeing merged btree blocks: %s", ret, err_str);
 		stop_server(server);
 	}
 
@@ -1994,6 +2072,7 @@ static int server_get_log_merge(struct super_block *sb,
 	struct scoutfs_key par_end;
 	struct scoutfs_key next_key;
 	struct scoutfs_key key;
+	char *err_str = NULL;
 	bool ins_rng;
 	bool del_remain;
 	bool del_req;
@@ -2022,8 +2101,10 @@ restart:
 				  &stat, sizeof(stat));
 	if (ret == -ENOENT)
 		ret = start_log_merge(sb, super, &stat);
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "finding merge status item";
 		goto out;
+	}
 
 	trace_scoutfs_get_log_merge_status(sb, rid, &stat.next_range_key,
 					   le64_to_cpu(stat.nr_requests),
@@ -2037,8 +2118,10 @@ restart:
 		key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
 		ret = next_log_merge_item_key(sb, &super->log_merge, SCOUTFS_LOG_MERGE_RANGE_ZONE,
 					      &key, &rng, sizeof(rng));
-		if (ret < 0 && ret != -ENOENT)
+		if (ret < 0 && ret != -ENOENT) {
+			err_str = "finding merge range item";
 			goto out;
+		}
 
 		/* maybe splice now that we know if there's ranges */
 		no_next = ret == -ENOENT;
@@ -2069,18 +2152,23 @@ restart:
 		ret = next_least_log_item(sb, &super->logs_root,
 					  le64_to_cpu(stat.last_seq),
 					  &rng.start, &rng.end, &next_key);
-		if (ret == 0)
+		if (ret == 0) {
 			break;
-		/* drop the range if it contained no logged items */
-		if (ret == -ENOENT) {
+		} else if (ret == -ENOENT) {
+			/* drop the range if it contained no logged items */
 			key = rng.start;
 			key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
 			ret = scoutfs_btree_delete(sb, &server->alloc,
 						   &server->wri,
 						   &super->log_merge, &key);
-		}
-		if (ret < 0)
+			if (ret < 0) {
+				err_str = "deleting unused range item";
+				goto out;
+			}
+		} else {
+			err_str = "finding next logged item";
 			goto out;
+		}
 	}
 
 	/* start to build the request that's saved and sent to the client */
@@ -2093,12 +2181,17 @@ restart:
 		req.flags |= cpu_to_le64(SCOUTFS_LOG_MERGE_REQUEST_SUBTREE);
 
 	/* find the fs_root parent block and its key range */
-	ret = scoutfs_btree_get_parent(sb, &super->fs_root, &next_key,
-					 &req.root) ?:
-	      scoutfs_btree_parent_range(sb, &super->fs_root, &next_key,
-					 &par_start, &par_end);
-	if (ret < 0)
+	ret = scoutfs_btree_get_parent(sb, &super->fs_root, &next_key, &req.root);
+	if (ret < 0) {
+		err_str = "getting fs root parent";
 		goto out;
+	}
+
+	ret = scoutfs_btree_parent_range(sb, &super->fs_root, &next_key, &par_start, &par_end);
+	if (ret < 0) {
+		err_str = "getting fs root parent range";
+		goto out;
+	}
 
 	/* start from next item, don't exceed parent key range */
 	req.start = next_key;
@@ -2111,8 +2204,10 @@ restart:
 	key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
 	ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
 				   &super->log_merge, &key);
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "deleting old merge range item";
 		goto out;
+	}
 	ins_rng = true;
 
 	/* add remaining range if we have to */
@@ -2126,8 +2221,10 @@ restart:
 		ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
 					   &super->log_merge, &key,
 					   &remain, sizeof(remain));
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "inserting remaining range item";
 			goto out;
+		}
 		del_remain = true;
 	}
 
@@ -2138,8 +2235,10 @@ restart:
 				      SCOUTFS_SERVER_MERGE_FILL_LO,
 				      SCOUTFS_SERVER_MERGE_FILL_TARGET);
 	mutex_unlock(&server->alloc_mutex);
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "filling merge req meta_avail";
 		goto out;
+	}
 
 	/* save the request that will be sent to the client */
 	init_log_merge_key(&key, SCOUTFS_LOG_MERGE_REQUEST_ZONE, rid,
@@ -2147,8 +2246,10 @@ restart:
 	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
 				   &super->log_merge, &key,
 				   &req, sizeof(req));
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "inserting merge req item";
 		goto out;
+	}
 	del_req = true;
 
 	trace_scoutfs_get_log_merge_request(sb, rid, &req.root,
@@ -2167,8 +2268,10 @@ restart:
 	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				   &super->log_merge, &key,
 				   &stat, sizeof(stat));
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "updating merge status item";
 		goto out;
+	}
 	upd_stat = true;
 
 out:
@@ -2221,6 +2324,10 @@ out:
 						&req.meta_avail);
 		mutex_unlock(&server->alloc_mutex);
 		BUG_ON(err); /* inconsistent */
+
+		if (ret < 0 && ret != -ENOENT)
+			scoutfs_err(sb, "error %d getting merge req rid %016llx: %s",
+				    ret, rid, err_str);
 	}
 
 	mutex_unlock(&server->logs_mutex);
@@ -2248,6 +2355,7 @@ static int server_commit_log_merge(struct super_block *sb,
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_key key;
+	char *err_str = NULL;
 	int ret;
 
 	scoutfs_key_set_zeros(&rng.end);
@@ -2270,7 +2378,7 @@ static int server_commit_log_merge(struct super_block *sb,
 				  SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0,
 				  &stat, sizeof(stat));
 	if (ret < 0) {
-		WARN_ON_ONCE(ret == -ENOENT); /* inconsistent */
+		err_str = "getting merge status item";
 		goto out;
 	}
 
@@ -2283,7 +2391,7 @@ static int server_commit_log_merge(struct super_block *sb,
 				      comp->seq != orig_req.seq)))
 		ret = -ENOENT; /* inconsistency */
 	if (ret < 0) {
-		WARN_ON_ONCE(ret == -ENOENT); /* inconsistency */
+		err_str = "finding orig request";
 		goto out;
 	}
 
@@ -2292,8 +2400,10 @@ static int server_commit_log_merge(struct super_block *sb,
 			   le64_to_cpu(orig_req.seq));
 	ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
 				   &super->log_merge, &key);
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "deleting orig request";
 		goto out;
+	}
 
 	if (le64_to_cpu(comp->flags) & SCOUTFS_LOG_MERGE_COMP_ERROR) {
 		/* restore the range and reclaim the allocator if it failed */
@@ -2305,18 +2415,18 @@ static int server_commit_log_merge(struct super_block *sb,
 		ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
 					   &super->log_merge, &key,
 					   &rng, sizeof(rng));
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "inserting remaining range";
 			goto out;
+		}
 
 		mutex_lock(&server->alloc_mutex);
-		ret = scoutfs_alloc_splice_list(sb, &server->alloc,
-						&server->wri,
-						server->other_freed,
-						&orig_req.meta_avail) ?:
-		      scoutfs_alloc_splice_list(sb, &server->alloc,
-						&server->wri,
-						server->other_freed,
-						&orig_req.meta_freed);
+		ret = (err_str = "splicing orig meta_avail",
+		       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
+						 server->other_freed, &orig_req.meta_avail)) ?:
+		      (err_str = "splicing orig meta_freed",
+		       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
+						 server->other_freed, &orig_req.meta_freed));
 		mutex_unlock(&server->alloc_mutex);
 		if (ret < 0)
 			goto out;
@@ -2328,8 +2438,10 @@ static int server_commit_log_merge(struct super_block *sb,
 		ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
 					   &super->log_merge, &key,
 					   comp, sizeof(*comp));
-		if (ret < 0)
+		if (ret < 0) {
+			err_str = "inserting completion";
 			goto out;
+		}
 
 		le64_add_cpu(&stat.nr_complete, 1ULL);
 	}
@@ -2340,11 +2452,17 @@ static int server_commit_log_merge(struct super_block *sb,
 	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				   &super->log_merge, &key,
 				   &stat, sizeof(stat));
-	if (ret < 0)
+	if (ret < 0) {
+		err_str = "updating status";
 		goto out;
+	}
 
 out:
 	mutex_unlock(&server->logs_mutex);
+
+	if (ret < 0)
+		scoutfs_err(sb, "error %d committing log merge: %s", ret, err_str);
+
 	ret = scoutfs_server_apply_commit(sb, ret);
 	BUG_ON(ret < 0); /* inconsistent */
 
