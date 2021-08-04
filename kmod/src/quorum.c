@@ -392,6 +392,51 @@ out:
 	return ret;
 }
 
+/*
+ * It's really important in raft elections that the term not go
+ * backwards in time.  We achieve this by having each participant record
+ * the greatest term they've seen in their quorum block.  It's also
+ * important that participants agree on the greatest term.  It can
+ * happen that one gets ahead of the rest, perhaps by being forcefully
+ * shutdown after having just been elected.  As everyone starts up it's
+ * possible to have N-1 have term T-1 while just one participant thinks
+ * the term is T.   That single participant will ignore all messages
+ * from older terms.  If its timeout is greater then the others it can
+ * immediately override the election of the majority and request votes
+ * and become elected.
+ *
+ * A best-effort work around is to have everyone try and start from the
+ * greatest term that they can find in everyone's blocks.  If it works
+ * then you avoid having those with greater terms ignore others.  If it
+ * doesn't work the elections will eventually stabilize after rocky
+ * periods of fencing from what looks like concurrent elections.
+ */
+static void read_greatest_term(struct super_block *sb, u64 *term)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_quorum_block blk;
+	int ret;
+	int e;
+	int s;
+
+	*term = 0;
+
+	for (s = 0; s < SCOUTFS_QUORUM_MAX_SLOTS; s++) {
+		if (!quorum_slot_present(super, s))
+			continue;
+
+		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + s, &blk, false);
+		if (ret < 0)
+			continue;
+
+		for (e = 0; e < ARRAY_SIZE(blk.events); e++) {
+			if (blk.events[e].rid)
+				*term = max(*term, le64_to_cpu(blk.events[e].term));
+		}
+	}
+}
+
 static void set_quorum_block_event(struct super_block *sb, struct scoutfs_quorum_block *blk,
 				   int event, u64 term)
 {
@@ -576,28 +621,23 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	struct quorum_info *qinf = container_of(work, struct quorum_info, work);
 	struct super_block *sb = qinf->sb;
 	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
-	struct scoutfs_quorum_block blk;
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
 	struct quorum_status qst;
-	u64 blkno;
 	int ret;
 	int err;
 
 	/* recording votes from slots as native single word bitmap */
 	BUILD_BUG_ON(SCOUTFS_QUORUM_MAX_SLOTS > BITS_PER_LONG);
 
-	/* get our starting term from our persistent block */
-	blkno = SCOUTFS_QUORUM_BLKNO + opts->quorum_slot_nr;
-	ret = read_quorum_block(sb, blkno, &blk, false);
-	if (ret < 0)
-		goto out;
-
 	/* start out as a follower */
 	qst.role = FOLLOWER;
-	qst.term = le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_TERM].term);
+	qst.term = 0;
 	qst.vote_for = -1;
 	qst.vote_bits = 0;
+
+	/* read our starting term from greatest in all events in all slots */
+	read_greatest_term(sb, &qst.term);
 
 	/* see if there's a server to chose heartbeat or election timeout */
 	if (scoutfs_quorum_server_sin(sb, &unused) == 0)
