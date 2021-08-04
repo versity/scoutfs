@@ -882,6 +882,7 @@ static int server_commit_log_trees(struct super_block *sb,
 				   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	const u64 rid = scoutfs_net_client_rid(conn);
 	DECLARE_SERVER_INFO(sb, server);
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees lt;
@@ -895,6 +896,11 @@ static int server_commit_log_trees(struct super_block *sb,
 
 	/* don't modify the caller's log_trees */
 	memcpy(&lt, arg, sizeof(struct scoutfs_log_trees));
+
+	if (le64_to_cpu(lt.rid) != rid) {
+		ret = -EIO;
+		goto out;
+	}
 
 	scoutfs_server_hold_commit(sb);
 
