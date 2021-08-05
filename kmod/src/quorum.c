@@ -1046,12 +1046,16 @@ static inline bool valid_ipv4_port(__be16 port)
 static int verify_quorum_slots(struct super_block *sb)
 {
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
+	char slots[(SCOUTFS_QUORUM_MAX_SLOTS * 3) + 1];
 	DECLARE_QUORUM_INFO(sb, qinf);
 	struct sockaddr_in other;
 	struct sockaddr_in sin;
 	int found = 0;
+	int ret;
 	int i;
 	int j;
+
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(super, i))
@@ -1090,6 +1094,25 @@ static int verify_quorum_slots(struct super_block *sb)
 
 	if (found == 0)  {
 		scoutfs_err(sb, "no populated quorum slots in superblock");
+		return -EINVAL;
+	}
+
+	if (!quorum_slot_present(super, opts->quorum_slot_nr)) {
+		char *str = slots;
+		*str = '\0';
+		for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+			if (quorum_slot_present(super, i)) {
+				ret = snprintf(str, &slots[ARRAY_SIZE(slots)] - str, "%c%u",
+					       str == slots ? ' ' : ',', i);
+				if (ret < 2 || ret > 3) {
+					scoutfs_err(sb, "error gathering populated slots");
+					return -EINVAL;
+				}
+				str += ret;
+			}
+		}
+		scoutfs_err(sb, "quorum_slot_nr=%u option references unused slot, must be one of the following configured slots:%s",
+			    opts->quorum_slot_nr, slots);
 		return -EINVAL;
 	}
 
