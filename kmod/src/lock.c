@@ -862,8 +862,9 @@ static void lock_invalidate_worker(struct work_struct *work)
 			lock->invalidate_pending = 0;
 			wake_up(&lock->waitq);
 		} else {
-			/* another request filled nl/net_id, put it back on the list */
+			/* another request filled nl/net_id, back on the list and requeue */
 			list_move_tail(&lock->inv_head, &linfo->inv_list);
+			queue_inv_work(linfo);
 		}
 		put_lock(linfo, lock);
 	}
@@ -910,9 +911,10 @@ int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 		if (list_empty(&lock->inv_head)) {
 			list_add_tail(&lock->inv_head, &linfo->inv_list);
 			lock->invalidate_pending = 1;
+			queue_inv_work(linfo);
+			/* otherwise inv work queues itself when it sees inv_net_id */
 		}
 		trace_scoutfs_lock_invalidate_request(sb, lock);
-		queue_inv_work(linfo);
 	}
 	spin_unlock(&linfo->lock);
 
