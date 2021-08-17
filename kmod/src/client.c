@@ -32,6 +32,7 @@
 #include "endian_swap.h"
 #include "quorum.h"
 #include "omap.h"
+#include "trans.h"
 
 /*
  * The client is responsible for maintaining a connection to the server.
@@ -305,6 +306,24 @@ int scoutfs_client_resize_devices(struct super_block *sb, struct scoutfs_net_res
 					nrd, sizeof(*nrd), NULL, 0);
 }
 
+/*
+ * The server is asking that we trigger a commit of the current log
+ * trees so that they can ensure an item seq discontinuity between
+ * finalized log btrees and the next set of open log btrees.  If we're
+ * shutting down then we're already going to perform a final commit.
+ */
+static int sync_log_trees(struct super_block *sb, struct scoutfs_net_connection *conn,
+			  u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	if (arg_len != 0)
+		return -EINVAL;
+
+	if (!scoutfs_unmounting(sb))
+		scoutfs_trans_sync(sb, 0);
+
+	return scoutfs_net_response(sb, conn, cmd, id, 0, NULL, 0);
+}
+
 /* The client is receiving a invalidation request from the server */
 static int client_lock(struct super_block *sb,
 		       struct scoutfs_net_connection *conn, u8 cmd, u64 id,
@@ -516,6 +535,7 @@ out:
 }
 
 static scoutfs_net_request_t client_req_funcs[] = {
+	[SCOUTFS_NET_CMD_SYNC_LOG_TREES]	= sync_log_trees,
 	[SCOUTFS_NET_CMD_LOCK]			= client_lock,
 	[SCOUTFS_NET_CMD_LOCK_RECOVER]		= client_lock_recover,
 	[SCOUTFS_NET_CMD_OPEN_INO_MAP]		= client_open_ino_map,
