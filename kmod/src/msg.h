@@ -4,6 +4,7 @@
 #include <linux/bitops.h>
 #include "key.h"
 #include "counters.h"
+#include "super.h"
 
 void __printf(4, 5) scoutfs_msg(struct super_block *sb, const char *prefix,
 				const char *str, const char *fmt, ...);
@@ -22,6 +23,9 @@ do {							\
 
 #define scoutfs_info(sb, fmt, args...) \
 	scoutfs_msg_check(sb, KERN_INFO, "", fmt, ##args)
+
+#define scoutfs_tprintk(sb, fmt, args...) \
+	trace_printk(SCSBF " " fmt "\n", SCSB_ARGS(sb), ##args);
 
 #define scoutfs_bug_on(sb, cond, fmt, args...)				\
 do {									\
