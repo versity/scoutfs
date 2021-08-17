@@ -642,7 +642,7 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 	scoutfs_alloc_init(&alloc, &req.meta_avail, &req.meta_freed);
 	scoutfs_block_writer_init(sb, &wri);
 
-	/* find finalized input log trees up to last_seq */
+	/* find finalized input log trees within the input seq */
 	for (scoutfs_key_init_log_trees(&key, 0, 0); ; scoutfs_key_inc(&key)) {
 
 		if (!rhead) {
@@ -658,10 +658,9 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 			if (iref.val_len == sizeof(*lt)) {
 				key = *iref.key;
 				lt = iref.val;
-				if ((le64_to_cpu(lt->flags) &
-				     SCOUTFS_LOG_TREES_FINALIZED) &&
-				    (le64_to_cpu(lt->max_item_seq) <=
-				     le64_to_cpu(req.last_seq))) {
+				if (lt->item_root.ref.blkno != 0 &&
+				    (le64_to_cpu(lt->flags) & SCOUTFS_LOG_TREES_FINALIZED) &&
+				    (le64_to_cpu(lt->finalize_seq) < le64_to_cpu(req.input_seq))) {
 					rhead->root = lt->item_root;
 					list_add_tail(&rhead->head, &inputs);
 					rhead = NULL;

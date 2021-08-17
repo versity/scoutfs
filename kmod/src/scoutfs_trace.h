@@ -406,21 +406,24 @@ TRACE_EVENT(scoutfs_sync_fs,
 );
 
 TRACE_EVENT(scoutfs_trans_write_func,
-	TP_PROTO(struct super_block *sb, unsigned long dirty),
+	TP_PROTO(struct super_block *sb, u64 dirty_block_bytes, u64 dirty_item_pages),
 
-	TP_ARGS(sb, dirty),
+	TP_ARGS(sb, dirty_block_bytes, dirty_item_pages),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
-		__field(unsigned long, dirty)
+		__field(__u64, dirty_block_bytes)
+		__field(__u64, dirty_item_pages)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
-		__entry->dirty = dirty;
+		__entry->dirty_block_bytes = dirty_block_bytes;
+		__entry->dirty_item_pages = dirty_item_pages;
 	),
 
-	TP_printk(SCSBF" dirty %lu", SCSB_TRACE_ARGS, __entry->dirty)
+	TP_printk(SCSBF" dirty_block_bytes %llu dirty_item_pages %llu",
+		  SCSB_TRACE_ARGS, __entry->dirty_block_bytes, __entry->dirty_item_pages)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_trans_hold_release_class,
@@ -2045,9 +2048,9 @@ TRACE_EVENT(scoutfs_trans_seq_last,
 
 TRACE_EVENT(scoutfs_get_log_merge_status,
 	TP_PROTO(struct super_block *sb, u64 rid, struct scoutfs_key *next_range_key,
-		 u64 nr_requests, u64 nr_complete, u64 last_seq, u64 seq),
+		 u64 nr_requests, u64 nr_complete, u64 seq),
 
-	TP_ARGS(sb, rid, next_range_key, nr_requests, nr_complete, last_seq, seq),
+	TP_ARGS(sb, rid, next_range_key, nr_requests, nr_complete, seq),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
@@ -2055,7 +2058,6 @@ TRACE_EVENT(scoutfs_get_log_merge_status,
 		sk_trace_define(next_range_key)
 		__field(__u64, nr_requests)
 		__field(__u64, nr_complete)
-		__field(__u64, last_seq)
 		__field(__u64, seq)
 	),
 
@@ -2065,21 +2067,20 @@ TRACE_EVENT(scoutfs_get_log_merge_status,
 		sk_trace_assign(next_range_key, next_range_key);
 		__entry->nr_requests = nr_requests;
 		__entry->nr_complete = nr_complete;
-		__entry->last_seq = last_seq;
 		__entry->seq = seq;
 	),
 
-	TP_printk(SCSBF" rid %016llx next_range_key "SK_FMT" nr_requests %llu nr_complete %llu last_seq %llu seq %llu",
+	TP_printk(SCSBF" rid %016llx next_range_key "SK_FMT" nr_requests %llu nr_complete %llu seq %llu",
 		  SCSB_TRACE_ARGS, __entry->s_rid, sk_trace_args(next_range_key),
-		  __entry->nr_requests, __entry->nr_complete, __entry->last_seq, __entry->seq)
+		  __entry->nr_requests, __entry->nr_complete, __entry->seq)
 );
 
 TRACE_EVENT(scoutfs_get_log_merge_request,
 	TP_PROTO(struct super_block *sb, u64 rid,
 		 struct scoutfs_btree_root *root, struct scoutfs_key *start,
-		 struct scoutfs_key *end, u64 last_seq, u64 seq),
+		 struct scoutfs_key *end, u64 input_seq, u64 seq),
 
-	TP_ARGS(sb, rid, root, start, end, last_seq, seq),
+	TP_ARGS(sb, rid, root, start, end, input_seq, seq),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
@@ -2089,7 +2090,7 @@ TRACE_EVENT(scoutfs_get_log_merge_request,
 		__field(__u8, root_height)
 		sk_trace_define(start)
 		sk_trace_define(end)
-		__field(__u64, last_seq)
+		__field(__u64, input_seq)
 		__field(__u64, seq)
 	),
 
@@ -2101,14 +2102,14 @@ TRACE_EVENT(scoutfs_get_log_merge_request,
 		__entry->root_height = root->height;
 		sk_trace_assign(start, start);
 		sk_trace_assign(end, end);
-		__entry->last_seq = last_seq;
+		__entry->input_seq = input_seq;
 		__entry->seq = seq;
 	),
 
-	TP_printk(SCSBF" rid %016llx root blkno %llu seq %llu height %u start "SK_FMT" end "SK_FMT" last_seq %llu seq %llu",
+	TP_printk(SCSBF" rid %016llx root blkno %llu seq %llu height %u start "SK_FMT" end "SK_FMT" input_seq %llu seq %llu",
 		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->root_blkno,
 		  __entry->root_seq, __entry->root_height,
-		  sk_trace_args(start), sk_trace_args(end), __entry->last_seq,
+		  sk_trace_args(start), sk_trace_args(end), __entry->input_seq,
 		  __entry->seq)
 );
 

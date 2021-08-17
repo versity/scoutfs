@@ -696,6 +696,321 @@ static int find_log_trees_item(struct super_block *sb,
 }
 
 /*
+ * Find the next log_trees item from the key.  Fills the caller's log_trees and sets
+ * the key past the returned log_trees for iteration.  Returns 0 when done, > 0 for each
+ * item, and -errno on fatal errors.
+ */
+static int for_each_lt(struct super_block *sb, struct scoutfs_btree_root *root,
+		       struct scoutfs_key *key, struct scoutfs_log_trees *lt)
+{
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	int ret;
+
+	ret = scoutfs_btree_next(sb, root, key, &iref);
+	if (ret == 0) {
+		if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
+			memcpy(lt, iref.val, iref.val_len);
+			*key = *iref.key;
+			scoutfs_key_inc(key);
+			ret = 1;
+		} else {
+			ret = -EIO;
+		}
+		scoutfs_btree_put_iref(&iref);
+	} else if (ret == -ENOENT) {
+		ret = 0;
+	}
+
+	return ret;
+}
+
+/*
+ * Log merge range items are stored at the starting fs key of the range.
+ * The only fs key field that doesn't hold information is the zone, so
+ * we use the zone to differentiate all types that we store in the log
+ * merge tree.
+ */
+static void init_log_merge_key(struct scoutfs_key *key, u8 zone, u64 first,
+			       u64 second)
+{
+	*key = (struct scoutfs_key) {
+		.sk_zone = zone,
+		._sk_first = cpu_to_le64(first),
+		._sk_second = cpu_to_le64(second),
+	};
+}
+
+static int next_log_merge_item_key(struct super_block *sb, struct scoutfs_btree_root *root,
+				   u8 zone, struct scoutfs_key *key, void *val, size_t val_len)
+{
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	int ret;
+
+	ret = scoutfs_btree_next(sb, root, key, &iref);
+	if (ret == 0) {
+		if (iref.key->sk_zone != zone)
+			ret = -ENOENT;
+		else if (iref.val_len != val_len)
+			ret = -EIO;
+		else
+			memcpy(val, iref.val, val_len);
+		scoutfs_btree_put_iref(&iref);
+	}
+
+	return ret;
+}
+
+static int next_log_merge_item(struct super_block *sb,
+			       struct scoutfs_btree_root *root,
+			       u8 zone, u64 first, u64 second,
+			       void *val, size_t val_len)
+{
+	struct scoutfs_key key;
+
+	init_log_merge_key(&key, zone, first, second);
+	return next_log_merge_item_key(sb, root, zone, &key, val, val_len);
+}
+
+/*
+ * Finalizing the log btrees for merging needs to be done carefully so
+ * that items don't appear to go backwards in time.
+ *
+ * This can happen if an older version of an item happens to be present
+ * in a log btree that is seeing activity without growing.  It will
+ * never be merged, while another growing tree with an older version
+ * gets finalized and merged.  The older version in the active log btree
+ * will take precedent over the new item in the fs root.
+ *
+ * To avoid this without examining the overlapping of all item key
+ * ranges in all log btrees we need to create a strict discontinuity in
+ * item versions between all the finalized log btrees and all the active
+ * log btrees.  Since active log btrees can get new item versions from
+ * new locks, we can't naively finalize individual log btrees as they
+ * grow.   It's almost guaranteed that some existing tree will have
+ * older items than the finalizing tree, and will get new locks with
+ * seqs greater.  Existing log btrees always naturally have seq ranges
+ * that overlap with individually finalized log btrees.
+ *
+ * So we have the server perform a hard coordinated finalization of all
+ * client log btrees once any of them is naturally finalized -- either
+ * by growing or being cleaned up (via unmount or fencing).  Each
+ * client's get_log_trees waits for everyone else to arrive and finalize
+ * before any of them return the new next log btree.  This ensures that
+ * the trans seq and all lock seqs of all the new log btrees will be
+ * greater than all the items in all the previous and finalized log
+ * btrees.
+ *
+ * This creates a bubble in pipeline.  We don't wait forever for an
+ * active log btree to be finalized because we could be waiting for a
+ * series of timeouts before a missing client is fenced and has its
+ * abandoned log btree finalized.  If it takes too long each client has
+ * a change to make forward progress before being asked to commit again.
+ *
+ * We're waiting on heavy state that is protected by mutexes and
+ * transaction machinery.  It's tricky to recreate that state for
+ * lightweight condition tests that don't change task state.  Instead of
+ * trying to get that right, particularly as we unwind after success or
+ * after timeouts, waiters use an unsatisfying poll.   Short enough to
+ * not add terrible latency, given how heavy and infrequent this already
+ * is, and long enough to not melt the cpu.  This could be tuned if it
+ * becomes a problem.
+ *
+ * This can end up finalizing a new empty log btree if a new mount
+ * happens to arrive at just the right time.  That's fine, merging will
+ * ignore and tear down the empty input.
+ */
+#define FINALIZE_POLL_MS	(11)
+#define FINALIZE_TIMEOUT_MS	(MSEC_PER_SEC / 2)
+static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_log_trees *lt,
+					u64 rid)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_log_merge_status stat;
+	struct scoutfs_log_merge_range rng;
+	struct scoutfs_log_trees each_lt;
+	struct scoutfs_log_trees fin;
+	unsigned long timeo;
+	bool saw_finalized;
+	bool others_active;
+	bool finalize_ours;
+	bool ours_visible;
+	struct scoutfs_key key;
+	char *err_str = NULL;
+	int ret;
+	int err;
+
+	timeo = jiffies + msecs_to_jiffies(FINALIZE_TIMEOUT_MS);
+
+	for (;;) {
+		/* nothing to do if there's already a merge in flight */
+		ret = next_log_merge_item(sb, &super->log_merge,
+					  SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0,
+					  &stat, sizeof(stat));
+		if (ret != -ENOENT) {
+			if (ret < 0)
+				err_str = "checking merge status item to finalize";
+			break;
+		}
+
+		/* look for finalized and other active log btrees */
+		saw_finalized = false;
+		others_active = false;
+		ours_visible = false;
+		scoutfs_key_init_log_trees(&key, 0, 0);
+		while ((ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+
+			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
+				saw_finalized = true;
+			else if (le64_to_cpu(each_lt.rid) != rid)
+				others_active = true;
+			else if (each_lt.nr == lt->nr)
+				ours_visible = true;
+		}
+		if (ret < 0) {
+			err_str = "searching finalized flags in log_trees items";
+			break;
+		}
+
+		/*
+		 * We'll first finalize our log btree when it has enough
+		 * leaf blocks to allow some degree of merging
+		 * concurrency.  Smaller btrees are also finalized when
+		 * meta was low so that deleted items are merged
+		 * promptly and freed blocks can bring the client out of
+		 * enospc.
+		 */
+		finalize_ours = (lt->item_root.height > 2) ||
+				(le32_to_cpu(lt->meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW);
+
+		/* done if we're not finalizing and there's no finalized */
+		if (!finalize_ours && !saw_finalized) {
+			ret = 0;
+			break;
+		}
+
+		/* send sync requests soon to give time to commit */
+		scoutfs_key_init_log_trees(&key, 0, 0);
+		while (others_active &&
+		       (ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+
+			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) ||
+			    (le64_to_cpu(each_lt.rid) == rid))
+				continue;
+
+			ret = scoutfs_net_submit_request_node(sb, server->conn,
+							      le64_to_cpu(each_lt.rid),
+							      SCOUTFS_NET_CMD_SYNC_LOG_TREES,
+							      NULL, 0, NULL, NULL, NULL);
+			if (ret < 0) {
+				/* fine if they're not here, they'll reconnect or be fenced */
+				if (ret == -ENOTCONN)
+					ret = 0;
+				else
+					err_str = "sending sync log tree request";
+			}
+		}
+		if (ret < 0) {
+			err_str = "sending sync log tree request";
+			break;
+		}
+
+		/* Finalize ours if it's visible to others */
+		if (ours_visible) {
+			fin = *lt;
+			memset(&fin.meta_avail, 0, sizeof(fin.meta_avail));
+			memset(&fin.meta_freed, 0, sizeof(fin.meta_freed));
+			memset(&fin.data_avail, 0, sizeof(fin.data_avail));
+			memset(&fin.data_freed, 0, sizeof(fin.data_freed));
+			memset(&fin.srch_file, 0, sizeof(fin.srch_file));
+			le64_add_cpu(&fin.flags, SCOUTFS_LOG_TREES_FINALIZED);
+			fin.finalize_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
+
+			scoutfs_key_init_log_trees(&key, le64_to_cpu(fin.rid),
+						   le64_to_cpu(fin.nr));
+			ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
+						   &super->logs_root, &key, &fin,
+						   sizeof(fin));
+			if (ret < 0) {
+				err_str = "updating finalized log_trees";
+				break;
+			}
+
+			memset(&lt->item_root, 0, sizeof(lt->item_root));
+			memset(&lt->bloom_ref, 0, sizeof(lt->bloom_ref));
+			lt->max_item_seq = 0;
+			lt->finalize_seq = 0;
+			le64_add_cpu(&lt->nr, 1);
+			lt->flags = 0;
+		}
+
+		/* wait a bit for mounts to arrive */
+		if (others_active) {
+			mutex_unlock(&server->logs_mutex);
+			ret = scoutfs_server_apply_commit(sb, 0);
+			if (ret < 0)
+				err_str = "applying commit before waiting for finalized";
+
+			msleep(FINALIZE_POLL_MS);
+
+			scoutfs_server_hold_commit(sb);
+			mutex_lock(&server->logs_mutex);
+
+			/* done if we timed out */
+			if (time_after(jiffies, timeo)) {
+				ret = 0;
+				break;
+			}
+
+			/* rescan items now that we reacquired lock */
+			continue;
+		}
+
+		/* we can add the merge item under the lock once everyone's finalized */
+
+		/* add an initial full-range */
+		scoutfs_key_set_zeros(&rng.start);
+		scoutfs_key_set_ones(&rng.end);
+		key = rng.start;
+		key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
+		ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
+					   &super->log_merge, &key, &rng, sizeof(rng));
+		if (ret < 0) {
+			err_str = "inserting new merge range item";
+			break;
+		}
+
+		/* and add the merge status item, deleting the range if insertion fails */
+		scoutfs_key_set_zeros(&stat.next_range_key);
+		stat.nr_requests = 0;
+		stat.nr_complete = 0;
+		stat.seq = cpu_to_le64(scoutfs_server_next_seq(sb));
+
+		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
+		ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
+					   &super->log_merge, &key,
+					   &stat, sizeof(stat));
+		if (ret < 0) {
+			err_str = "inserting new merge status item";
+			key = rng.start;
+			key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
+			err = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
+						   &super->log_merge, &key);
+			BUG_ON(err); /* inconsistent */
+		}
+
+		/* we're done, caller can make forward progress */
+		break;
+	}
+
+	if (ret < 0)
+		scoutfs_err(sb, "error %d finalizing log trees for rid %016llx: %s",
+			    ret, rid, err_str);
+
+	return ret;
+}
+
+/*
  * Give the client roots to all the trees that they'll use to build
  * their transaction.
  *
@@ -718,10 +1033,8 @@ static int server_get_log_trees(struct super_block *sb,
 	__le64 exclusive[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
 	__le64 vacant[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
 	struct alloc_extent_cb_args cba;
-	struct scoutfs_log_trees fin;
 	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
-	bool have_fin = false;
 	bool unlock_alloc = false;
 	u64 data_zone_blocks;
 	char *err_str = NULL;
@@ -737,18 +1050,8 @@ static int server_get_log_trees(struct super_block *sb,
 
 	mutex_lock(&server->logs_mutex);
 
-	/* see if we have already have a finalized root from the rid */
-	ret = find_log_trees_item(sb, &super->logs_root, true, rid, 0, &lt);
-	if (ret < 0 && ret != -ENOENT) {
-		err_str = "finding first log trees";
-		goto unlock;
-	}
-	if (ret == 0 && le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED)
-		have_fin = true;
-
 	/* use the last non-finalized root, or start a new one */
-	ret = find_log_trees_item(sb, &super->logs_root, false, rid, U64_MAX,
-				  &lt);
+	ret = find_log_trees_item(sb, &super->logs_root, false, rid, U64_MAX, &lt);
 	if (ret < 0 && ret != -ENOENT) {
 		err_str = "finding last log trees";
 		goto unlock;
@@ -767,39 +1070,10 @@ static int server_get_log_trees(struct super_block *sb,
 		lt.nr = cpu_to_le64(nr);
 	}
 
-	/*
-	 * Finalize the client log btree when it has enough leaf blocks
-	 * to allow some degree of merging concurrency.  Smaller btrees
-	 * are also finalized when meta was low so that deleted items
-	 * are merged promptly and freed blocks can bring the client out
-	 * of enospc.
-	 */
-	if (!have_fin && ((lt.item_root.height > 2) ||
-		          (le32_to_cpu(lt.meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW))) {
-		fin = lt;
-		memset(&fin.meta_avail, 0, sizeof(fin.meta_avail));
-		memset(&fin.meta_freed, 0, sizeof(fin.meta_freed));
-		memset(&fin.data_avail, 0, sizeof(fin.data_avail));
-		memset(&fin.data_freed, 0, sizeof(fin.data_freed));
-		memset(&fin.srch_file, 0, sizeof(fin.srch_file));
-		le64_add_cpu(&fin.flags, SCOUTFS_LOG_TREES_FINALIZED);
-
-		scoutfs_key_init_log_trees(&key, le64_to_cpu(fin.rid),
-					   le64_to_cpu(fin.nr));
-		ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
-					   &super->logs_root, &key, &fin,
-					   sizeof(fin));
-		if (ret < 0) {
-			err_str = "updating finalized log trees";
-			goto unlock;
-		}
-
-		memset(&lt.item_root, 0, sizeof(lt.item_root));
-		memset(&lt.bloom_ref, 0, sizeof(lt.bloom_ref));
-		lt.max_item_seq = 0;
-		le64_add_cpu(&lt.nr, 1);
-		lt.flags = 0;
-	}
+	/* drops and re-acquires the mutex and commit if it has to wait */
+	ret = finalize_and_start_log_merge(sb, &lt, rid);
+	if (ret < 0)
+		goto unlock;
 
 	if (get_volopt_val(server, SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR, &data_zone_blocks)) {
 		ret = get_data_alloc_zone_bits(sb, rid, exclusive, vacant, data_zone_blocks);
@@ -1085,6 +1359,7 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	/* the mount is no longer writing to the zones */
 	zero_data_alloc_zone_bits(&lt);
 	le64_add_cpu(&lt.flags, SCOUTFS_LOG_TREES_FINALIZED);
+	lt.finalize_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
 
 	err = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
@@ -1488,145 +1763,6 @@ out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 
-/*
- * Log merge range items are stored at the starting fs key of the range.
- * The only fs key field that doesn't hold information is the zone, so
- * we use the zone to differentiate all types that we store in the log
- * merge tree.
- */
-static void init_log_merge_key(struct scoutfs_key *key, u8 zone, u64 first,
-			       u64 second)
-{
-	*key = (struct scoutfs_key) {
-		.sk_zone = zone,
-		._sk_first = cpu_to_le64(first),
-		._sk_second = cpu_to_le64(second),
-	};
-}
-
-static int next_log_merge_item_key(struct super_block *sb, struct scoutfs_btree_root *root,
-				   u8 zone, struct scoutfs_key *key, void *val, size_t val_len)
-{
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	int ret;
-
-	ret = scoutfs_btree_next(sb, root, key, &iref);
-	if (ret == 0) {
-		if (iref.key->sk_zone != zone)
-			ret = -ENOENT;
-		else if (iref.val_len != val_len)
-			ret = -EIO;
-		else
-			memcpy(val, iref.val, val_len);
-		scoutfs_btree_put_iref(&iref);
-	}
-
-	return ret;
-}
-
-static int next_log_merge_item(struct super_block *sb,
-			       struct scoutfs_btree_root *root,
-			       u8 zone, u64 first, u64 second,
-			       void *val, size_t val_len)
-{
-	struct scoutfs_key key;
-
-	init_log_merge_key(&key, zone, first, second);
-	return next_log_merge_item_key(sb, root, zone, &key, val, val_len);
-}
-
-/*
- * We start a log merge operation if there are any finalized log trees
- * whose greatest seq is within the last stable seq.  This is called by
- * every client's get_log_merge handler at a relatively low frequency
- * until a merge starts.
- */
-static int start_log_merge(struct super_block *sb,
-			   struct scoutfs_super_block *super,
-			   struct scoutfs_log_merge_status *stat_ret)
-{
-	struct server_info *server = SCOUTFS_SB(sb)->server_info;
-	struct scoutfs_log_merge_status stat;
-	struct scoutfs_log_merge_range rng;
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_log_trees *lt;
-	struct scoutfs_key key;
-	u64 last_seq;
-	bool start;
-	int ret;
-	int err;
-
-	scoutfs_key_init_log_trees(&key, 0, 0);
-
-	ret = get_stable_trans_seq(sb, &last_seq);
-	if (ret < 0)
-		goto out;
-
-	scoutfs_key_init_log_trees(&key, 0, 0);
-	for (start = false; !start; scoutfs_key_inc(&key)) {
-		ret = scoutfs_btree_next(sb, &super->logs_root, &key, &iref);
-		if (ret == 0) {
-			if (iref.val_len == sizeof(*lt)) {
-				key = *iref.key;
-				lt = iref.val;
-				if ((le64_to_cpu(lt->flags) &
-				     SCOUTFS_LOG_TREES_FINALIZED) &&
-				    (le64_to_cpu(lt->max_item_seq) <=
-				     last_seq)) {
-					start = true;
-				}
-			} else {
-				ret = -EIO;
-			}
-			scoutfs_btree_put_iref(&iref);
-		}
-		if (ret < 0)
-			goto out;
-	}
-
-	if (!start) {
-		ret = -ENOENT;
-		goto out;
-	}
-
-	/* add an initial full-range */
-	scoutfs_key_set_zeros(&rng.start);
-	scoutfs_key_set_ones(&rng.end);
-	key = rng.start;
-	key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
-	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
-				   &super->log_merge, &key, &rng, sizeof(rng));
-	if (ret < 0)
-		goto out;
-
-	/* and add the merge status item */
-	scoutfs_key_set_zeros(&stat.next_range_key);
-	stat.nr_requests = 0;
-	stat.nr_complete = 0;
-	stat.last_seq = cpu_to_le64(last_seq);
-	stat.seq = cpu_to_le64(scoutfs_server_next_seq(sb));
-
-	init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
-	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
-				   &super->log_merge, &key,
-				   &stat, sizeof(stat));
-	if (ret < 0) {
-		key = rng.start;
-		key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
-		err = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
-					   &super->log_merge, &key);
-		BUG_ON(err); /* inconsistent */
-	}
-
-	/* queue free to see if there's lingering items to process */
-	if (ret == 0)
-		queue_work(server->wq, &server->log_merge_free_work);
-out:
-	if (ret == 0)
-		*stat_ret = stat;
-	return ret;
-}
-
 /* Requests drain once we get this many completions to splice */
 #define LOG_MERGE_SPLICE_BATCH 8
 
@@ -1839,9 +1975,8 @@ static int splice_log_merge_completions(struct super_block *sb,
 		}
 
 		/* only free the inputs to the log merge that just finished */
-		if (!(le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) ||
-		    (le64_to_cpu(lt.max_item_seq) >
-		     le64_to_cpu(stat->last_seq)))
+		if (!((le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) &&
+		      (le64_to_cpu(lt.finalize_seq) < le64_to_cpu(stat->seq))))
 			continue;
 
 		fr.root = lt.item_root;
@@ -1914,15 +2049,14 @@ static int next_least_log_item(struct super_block *sb,
 
 	for (scoutfs_key_init_log_trees(&key, 0, 0); ; scoutfs_key_inc(&key)) {
 
-		/* find the next finalized log root within the merge last_seq */
+		/* find the next finalized log root within the merge */
 		ret = scoutfs_btree_next(sb, logs_root, &key, &iref);
 		if (ret == 0) {
 			if (iref.val_len == sizeof(*lt)) {
 				key = *iref.key;
 				lt = iref.val;
-				if ((le64_to_cpu(lt->flags) &
-				     SCOUTFS_LOG_TREES_FINALIZED) &&
-				    (le64_to_cpu(lt->max_item_seq) <= seq))
+				if ((le64_to_cpu(lt->flags) & SCOUTFS_LOG_TREES_FINALIZED) &&
+				    (le64_to_cpu(lt->finalize_seq) < seq))
 					item_root = lt->item_root;
 				else
 					item_root.ref.blkno = 0;
@@ -2095,21 +2229,19 @@ restart:
 	del_req = false;
 	upd_stat = false;
 
-	/* get the status item, maybe creating a new one */
+	/* get the status item */
 	ret = next_log_merge_item(sb, &super->log_merge,
 				  SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0,
 				  &stat, sizeof(stat));
-	if (ret == -ENOENT)
-		ret = start_log_merge(sb, super, &stat);
 	if (ret < 0) {
-		err_str = "finding merge status item";
+		if (ret != -ENOENT)
+			err_str = "finding merge status item";
 		goto out;
 	}
 
 	trace_scoutfs_get_log_merge_status(sb, rid, &stat.next_range_key,
 					   le64_to_cpu(stat.nr_requests),
 					   le64_to_cpu(stat.nr_complete),
-					   le64_to_cpu(stat.last_seq),
 					   le64_to_cpu(stat.seq));
 
 	/* find the next range, always checking for splicing */
@@ -2149,8 +2281,7 @@ restart:
 		}
 
 		/* find the next logged item in the next range */
-		ret = next_least_log_item(sb, &super->logs_root,
-					  le64_to_cpu(stat.last_seq),
+		ret = next_least_log_item(sb, &super->logs_root, le64_to_cpu(stat.seq),
 					  &rng.start, &rng.end, &next_key);
 		if (ret == 0) {
 			break;
@@ -2173,7 +2304,7 @@ restart:
 
 	/* start to build the request that's saved and sent to the client */
 	req.logs_root = super->logs_root;
-	req.last_seq = stat.last_seq;
+	req.input_seq = stat.seq;
 	req.rid = cpu_to_le64(rid);
 	req.seq = cpu_to_le64(scoutfs_server_next_seq(sb));
 	req.flags = 0;
@@ -2254,7 +2385,7 @@ restart:
 
 	trace_scoutfs_get_log_merge_request(sb, rid, &req.root,
 					    &req.start, &req.end,
-					    le64_to_cpu(req.last_seq),
+					    le64_to_cpu(req.input_seq),
 					    le64_to_cpu(req.seq));
 
 	/* make sure next range avoids ranges for parent in use */

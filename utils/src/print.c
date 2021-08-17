@@ -290,6 +290,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n"
 		       "      max_item_seq: %llu\n"
+		       "      finalize_seq: %llu\n"
 		       "      rid: %016llx\n"
 		       "      nr: %llu\n"
 		       "      flags: %llx\n"
@@ -306,6 +307,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 		       ALCROOT_A(&lt->data_freed),
 		       SRF_A(&lt->srch_file),
 		       le64_to_cpu(lt->max_item_seq),
+		       le64_to_cpu(lt->finalize_seq),
 		       le64_to_cpu(lt->rid),
 		       le64_to_cpu(lt->nr),
 		       le64_to_cpu(lt->flags),
@@ -397,12 +399,10 @@ static int print_log_merge_item(struct scoutfs_key *key, void *val,
 	switch (key->sk_zone) {
 	case SCOUTFS_LOG_MERGE_STATUS_ZONE:
 		stat = val;
-		printf("    status: next_range_key "SK_FMT" nr_req %llu nr_comp %llu"
-		       " last_seq %llu seq %llu\n",
+		printf("    status: next_range_key "SK_FMT" nr_req %llu nr_comp %llu seq %llu\n",
 		       SK_ARG(&stat->next_range_key),
 		       le64_to_cpu(stat->nr_requests),
 		       le64_to_cpu(stat->nr_complete),
-		       le64_to_cpu(stat->last_seq),
 		       le64_to_cpu(stat->seq));
 		break;
 	case SCOUTFS_LOG_MERGE_RANGE_ZONE:
@@ -414,12 +414,12 @@ static int print_log_merge_item(struct scoutfs_key *key, void *val,
 	case SCOUTFS_LOG_MERGE_REQUEST_ZONE:
 		req = val;
 		printf("    request: logs_root "BTROOT_F" logs_root "BTROOT_F" start "SK_FMT
-		       " end "SK_FMT" last_seq %llu rid %016llx seq %llu flags 0x%llx\n",
+		       " end "SK_FMT" input_seq %llu rid %016llx seq %llu flags 0x%llx\n",
 		       BTROOT_A(&req->logs_root),
 		       BTROOT_A(&req->root),
 		       SK_ARG(&req->start),
 		       SK_ARG(&req->end),
-		       le64_to_cpu(req->last_seq),
+		       le64_to_cpu(req->input_seq),
 		       le64_to_cpu(req->rid),
 		       le64_to_cpu(req->seq),
 		       le64_to_cpu(req->flags));

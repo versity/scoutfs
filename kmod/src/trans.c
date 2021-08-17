@@ -190,25 +190,8 @@ void scoutfs_trans_write_func(struct work_struct *work)
 		goto out;
 	}
 
-	trace_scoutfs_trans_write_func(sb,
-			scoutfs_block_writer_dirty_bytes(sb, &tri->wri));
-
-	if (!scoutfs_block_writer_has_dirty(sb, &tri->wri) &&
-	    !scoutfs_item_dirty_pages(sb)) {
-		if (sbi->trans_deadline_expired) {
-			/*
-			 * If we're not writing data then we only advance the
-			 * seq at the sync deadline interval.  This keeps idle
-			 * mounts from pinning a seq and stopping readers of the
-			 * seq indices but doesn't send a message for every sync
-			 * syscall.
-			 */
-			ret = scoutfs_client_advance_seq(sb, &trans_seq);
-			if (ret < 0)
-			      s = "clean advance seq";
-		}
-		goto err;
-	}
+	trace_scoutfs_trans_write_func(sb, scoutfs_block_writer_dirty_bytes(sb, &tri->wri),
+				       scoutfs_item_dirty_pages(sb));
 
 	if (sbi->trans_deadline_expired)
 		scoutfs_inc_counter(sb, trans_commit_timer);
@@ -219,15 +202,12 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	ret = (s = "data submit", scoutfs_inode_walk_writeback(sb, true)) ?:
 	      (s = "item dirty", scoutfs_item_write_dirty(sb))  ?:
 	      (s = "data prepare", scoutfs_data_prepare_commit(sb))  ?:
-	      (s = "alloc prepare", scoutfs_alloc_prepare_commit(sb,
-						&tri->alloc, &tri->wri))  ?:
+	      (s = "alloc prepare", scoutfs_alloc_prepare_commit(sb, &tri->alloc, &tri->wri))  ?:
 	      (s = "meta write", scoutfs_block_writer_write(sb, &tri->wri))  ?:
 	      (s = "data wait", scoutfs_inode_walk_writeback(sb, false)) ?:
-	      (s = "commit log trees", commit_btrees(sb)) ?:
-	      scoutfs_item_write_done(sb) ?:
-	      (s = "advance seq", scoutfs_client_advance_seq(sb, &trans_seq)) ?:
-	      (s = "get log trees", scoutfs_trans_get_log_trees(sb));
-err:
+	      (s = "commit log trees", commit_btrees(sb)) ?: scoutfs_item_write_done(sb) ?:
+	      (s = "get log trees", scoutfs_trans_get_log_trees(sb)) ?:
+	      (s = "advance seq", scoutfs_client_advance_seq(sb, &trans_seq));
 	if (ret < 0)
 		scoutfs_err(sb, "critical transaction commit failure: %s, %d",
 			    s, ret);
