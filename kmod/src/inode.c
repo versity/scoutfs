@@ -1972,7 +1972,11 @@ void scoutfs_inode_start(struct super_block *sb)
 	schedule_orphan_dwork(inf);
 }
 
-void scoutfs_inode_stop(struct super_block *sb)
+/*
+ * Orphan scanning can instantiate inodes.  We shut it down before
+ * calling into the vfs to tear down dentries and inodes during unmount.
+ */
+void scoutfs_inode_orphan_stop(struct super_block *sb)
 {
 	DECLARE_INODE_SB_INFO(sb, inf);
 
@@ -1980,6 +1984,14 @@ void scoutfs_inode_stop(struct super_block *sb)
 		inf->stopped = true;
 		cancel_delayed_work_sync(&inf->orphan_scan_dwork);
 	}
+}
+
+void scoutfs_inode_flush_iput(struct super_block *sb)
+{
+	DECLARE_INODE_SB_INFO(sb, inf);
+
+	if (inf)
+		flush_work(&inf->iput_work);
 }
 
 void scoutfs_inode_destroy(struct super_block *sb)

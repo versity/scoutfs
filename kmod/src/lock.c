@@ -1527,6 +1527,14 @@ void scoutfs_lock_unmount_begin(struct super_block *sb)
 	}
 }
 
+void scoutfs_lock_flush_invalidate(struct super_block *sb)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+
+	if (linfo)
+		flush_work(&linfo->inv_work);
+}
+
 /*
  * The caller is going to be shutting down transactions and the client.
  * We need to make sure that locking won't call either after we return.
