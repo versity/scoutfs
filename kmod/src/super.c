@@ -661,7 +661,12 @@ static struct dentry *scoutfs_mount(struct file_system_type *fs_type, int flags,
  */
 static void scoutfs_kill_sb(struct super_block *sb)
 {
-	trace_scoutfs_kill_sb(sb);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	if (sbi) {
+		sbi->unmounting = true;
+		smp_wmb();
+	}
 
 	if (SCOUTFS_HAS_SBI(sb))
 		scoutfs_lock_unmount_begin(sb);
