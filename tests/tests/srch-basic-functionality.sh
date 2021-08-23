@@ -17,8 +17,10 @@ diff_srch_find()
 	local n="$1"
 
 	sync
-	scoutfs search-xattrs "$n" -p "$T_M0" > "$T_TMP.srch"
-	find_xattrs -d "$T_D0" -m "$T_M0" -n "$n" > "$T_TMP.find"
+	scoutfs search-xattrs "$n" -p "$T_M0" > "$T_TMP.srch" || \
+		t_fail "search-xattrs failed"
+	find_xattrs -d "$T_D0" -m "$T_M0" -n "$n" > "$T_TMP.find" || \
+		t_fail "find_xattrs failed"
 
 	diff -u "$T_TMP.srch" "$T_TMP.find"
 }
