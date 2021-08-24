@@ -122,7 +122,6 @@
 	EXPAND_COUNTER(lock_free)				\
 	EXPAND_COUNTER(lock_grant_request)			\
 	EXPAND_COUNTER(lock_grant_response)			\
-	EXPAND_COUNTER(lock_grant_work)				\
 	EXPAND_COUNTER(lock_invalidate_coverage)		\
 	EXPAND_COUNTER(lock_invalidate_inode)			\
 	EXPAND_COUNTER(lock_invalidate_request)			\
