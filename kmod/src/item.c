@@ -1445,6 +1445,11 @@ static int read_page_item(struct super_block *sb, struct scoutfs_key *key,
  * locks protect the stable items we read.  Invalidation is careful not
  * to drop pages that have items that we couldn't see because they were
  * dirty when we started reading.
+ *
+ * The forest item reader is reading stable trees that could be
+ * overwritten.  It can return -ESTALE which we return to the caller who
+ * will retry the operation and work with a new set of more recent
+ * btrees.
  */
 static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 		      struct scoutfs_key *key, struct scoutfs_lock *lock)
@@ -1615,7 +1620,7 @@ retry:
 					       &lock->end);
 		else
 			ret = read_pages(sb, cinf, key, lock);
-		if (ret < 0)
+		if (ret < 0 && ret != -ESTALE)
 			goto out;
 		goto retry;
 	}

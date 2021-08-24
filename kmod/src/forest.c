@@ -251,10 +251,8 @@ static int forest_read_items(struct super_block *sb, struct scoutfs_key *key,
  * that covers all the blocks.  Any keys outside of this range can't be
  * trusted because we didn't visit all the trees to check their items.
  *
- * If we hit stale blocks and retry we can call the callback for
- * duplicate items.  This is harmless because the items are stable while
- * the caller holds their cluster lock and the caller has to filter out
- * item seqs anyway.
+ * We return -ESTALE if we hit stale blocks to give the caller a chance
+ * to reset their state and retry with a newer version of the btrees.
  */
 int scoutfs_forest_read_items(struct super_block *sb,
 			      struct scoutfs_lock *lock,
@@ -263,7 +261,6 @@ int scoutfs_forest_read_items(struct super_block *sb,
 			      struct scoutfs_key *end,
 			      scoutfs_forest_item_cb cb, void *arg)
 {
-	DECLARE_STALE_TRACKING_SUPER_REFS(prev_refs, refs);
 	struct forest_read_items_data rid = {
 		.cb = cb,
 		.cb_arg = arg,
@@ -281,14 +278,11 @@ int scoutfs_forest_read_items(struct super_block *sb,
 	scoutfs_inc_counter(sb, forest_read_items);
 	calc_bloom_nrs(&bloom, &lock->start);
 
-retry:
 	ret = scoutfs_client_get_roots(sb, &roots);
 	if (ret)
 		goto out;
 
 	trace_scoutfs_forest_using_roots(sb, &roots.fs_root, &roots.logs_root);
-	refs.fs_ref = roots.fs_root.ref;
-	refs.logs_ref = roots.logs_root.ref;
 
 	*start = lock->start;
 	*end = lock->end;
@@ -352,13 +346,6 @@ retry:
 
 	ret = 0;
 out:
-	if (ret == -ESTALE) {
-		if (memcmp(&prev_refs, &refs, sizeof(refs)) == 0)
-			return -EIO;
-		prev_refs = refs;
-		goto retry;
-	}
-
 	return ret;
 }
 
