@@ -28,15 +28,11 @@ struct scoutfs_lock {
 	u64 dirty_trans_seq;
 	struct list_head lru_head;
 	wait_queue_head_t waitq;
-	ktime_t grace_deadline;
 	unsigned long request_pending:1,
 		      invalidate_pending:1;
 
-	struct list_head grant_head;
-	struct scoutfs_net_lock grant_nl;
-	struct list_head inv_head;
-	struct scoutfs_net_lock inv_nl;
-	u64 inv_net_id;
+	struct list_head inv_head;  /* entry in linfo's list of locks with invalidations */
+	struct list_head inv_list;  /* list of lock's invalidation requests */
 	struct list_head shrink_head;
 
 	spinlock_t cov_list_lock;
@@ -106,6 +102,7 @@ void scoutfs_free_unused_locks(struct super_block *sb);
 
 int scoutfs_lock_setup(struct super_block *sb);
 void scoutfs_lock_unmount_begin(struct super_block *sb);
+void scoutfs_lock_flush_invalidate(struct super_block *sb);
 void scoutfs_lock_shutdown(struct super_block *sb);
 void scoutfs_lock_destroy(struct super_block *sb);
 

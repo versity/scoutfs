@@ -238,7 +238,7 @@ static int do_mkfs(struct mkfs_args *args)
 	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
 	super->version = cpu_to_le64(SCOUTFS_INTEROP_VERSION);
 	uuid_generate(super->uuid);
-	super->next_ino = cpu_to_le64(SCOUTFS_ROOT_INO + 1);
+	super->next_ino = cpu_to_le64(round_up(SCOUTFS_ROOT_INO + 1, SCOUTFS_LOCK_INODE_GROUP_NR));
 	super->seq = cpu_to_le64(1);
 	super->total_meta_blocks = cpu_to_le64(last_meta + 1);
 	super->total_data_blocks = cpu_to_le64(last_data + 1);

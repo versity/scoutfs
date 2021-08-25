@@ -89,6 +89,7 @@ struct scoutfs_sb_info {
 	struct dentry *debug_root;
 
 	bool forced_unmount;
+	bool unmounting;
 
 	unsigned long corruption_messages_once[SC_NR_LONGS];
 };
@@ -115,6 +116,19 @@ static inline bool scoutfs_forcing_unmount(struct super_block *sb)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
 	return sbi->forced_unmount;
+}
+
+/*
+ * True if we're shutting down the system and can be used as a coarse
+ * indicator that we can avoid doing some work that no longer makes
+ * sense.
+ */
+static inline bool scoutfs_unmounting(struct super_block *sb)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	smp_rmb();
+	return !sbi || sbi->unmounting;
 }
 
 /*

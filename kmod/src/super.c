@@ -255,7 +255,16 @@ static void scoutfs_put_super(struct super_block *sb)
 
 	trace_scoutfs_put_super(sb);
 
-	scoutfs_inode_stop(sb);
+	/*
+	 * Wait for invalidation and iput to finish with any lingering
+	 * inode references that escaped the evict_inodes in
+	 * generic_shutdown_super.  MS_ACTIVE is clear so final iput
+	 * will always evict.
+	 */
+	scoutfs_lock_flush_invalidate(sb);
+	scoutfs_inode_flush_iput(sb);
+	WARN_ON_ONCE(!list_empty(&sb->s_inodes));
+
 	scoutfs_forest_stop(sb);
 	scoutfs_srch_destroy(sb);
 
@@ -661,10 +670,17 @@ static struct dentry *scoutfs_mount(struct file_system_type *fs_type, int flags,
  */
 static void scoutfs_kill_sb(struct super_block *sb)
 {
-	trace_scoutfs_kill_sb(sb);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
-	if (SCOUTFS_HAS_SBI(sb))
+	if (sbi) {
+		sbi->unmounting = true;
+		smp_wmb();
+	}
+
+	if (SCOUTFS_HAS_SBI(sb)) {
+		scoutfs_inode_orphan_stop(sb);
 		scoutfs_lock_unmount_begin(sb);
+	}
 
 	kill_block_super(sb);
 }

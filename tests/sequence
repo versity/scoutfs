@@ -25,7 +25,6 @@ basic-posix-consistency.sh
 dirent-consistency.sh
 mkdir-rename-rmdir.sh
 lock-ex-race-processes.sh
-lock-conflicting-batch-commit.sh
 cross-mount-data-free.sh
 persistent-item-vers.sh
 setup-error-teardown.sh

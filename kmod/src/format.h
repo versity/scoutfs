@@ -457,6 +457,7 @@ struct scoutfs_log_trees {
 	__le64 data_alloc_zone_blocks;
 	__le64 data_alloc_zones[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
 	__le64 max_item_seq;
+	__le64 finalize_seq;
 	__le64 rid;
 	__le64 nr;
 	__le64 flags;
@@ -508,7 +509,6 @@ struct scoutfs_log_merge_status {
 	struct scoutfs_key next_range_key;
 	__le64 nr_requests;
 	__le64 nr_complete;
-	__le64 last_seq;
 	__le64 seq;
 };
 
@@ -525,7 +525,7 @@ struct scoutfs_log_merge_request {
 	struct scoutfs_btree_root root;
 	struct scoutfs_key start;
 	struct scoutfs_key end;
-	__le64 last_seq;
+	__le64 input_seq;
 	__le64 rid;
 	__le64 seq;
 	__le64 flags;
@@ -973,6 +973,7 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_ALLOC_INODES,
 	SCOUTFS_NET_CMD_GET_LOG_TREES,
 	SCOUTFS_NET_CMD_COMMIT_LOG_TREES,
+	SCOUTFS_NET_CMD_SYNC_LOG_TREES,
 	SCOUTFS_NET_CMD_GET_ROOTS,
 	SCOUTFS_NET_CMD_ADVANCE_SEQ,
 	SCOUTFS_NET_CMD_GET_LAST_SEQ,
@@ -1060,6 +1061,7 @@ enum scoutfs_lock_trace {
 	SLT_INVALIDATE,
 	SLT_REQUEST,
 	SLT_RESPONSE,
+	SLT_NR,
 };
 
 /*

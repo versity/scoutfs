@@ -15,6 +15,8 @@ struct scoutfs_ext_ops {
 		      u64 start, u64 len, u64 map, u8 flags);
 	int (*remove)(struct super_block *sb, void *arg, u64 start, u64 len,
 		      u64 map, u8 flags);
+
+	bool insert_overlap_warn;
 };
 
 bool scoutfs_ext_can_merge(struct scoutfs_extent *left,

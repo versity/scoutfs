@@ -677,8 +677,15 @@ static void scoutfs_net_recv_worker(struct work_struct *work)
 
 		scoutfs_tseq_add(&ninf->msg_tseq_tree, &mrecv->tseq_entry);
 
-		/* synchronously process greeting before next recvmsg */
-		if (nh.cmd == SCOUTFS_NET_CMD_GREETING)
+		/*
+		 * Initial received greetings are processed
+		 * synchronously before any other incoming messages.
+		 *
+		 * Incoming requests or responses to the lock client are
+		 * called synchronously to avoid reordering.
+		 */
+		if (nh.cmd == SCOUTFS_NET_CMD_GREETING ||
+		    (nh.cmd == SCOUTFS_NET_CMD_LOCK && !conn->listening_conn))
 			scoutfs_net_proc_worker(&mrecv->proc_work);
 		else
 			queue_work(conn->workq, &mrecv->proc_work);

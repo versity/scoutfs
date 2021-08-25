@@ -133,7 +133,8 @@ int scoutfs_inode_init(void);
 
 int scoutfs_inode_setup(struct super_block *sb);
 void scoutfs_inode_start(struct super_block *sb);
-void scoutfs_inode_stop(struct super_block *sb);
+void scoutfs_inode_orphan_stop(struct super_block *sb);
+void scoutfs_inode_flush_iput(struct super_block *sb);
 void scoutfs_inode_destroy(struct super_block *sb);
 
 #endif
