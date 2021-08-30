@@ -316,6 +316,52 @@ out:
 	return ret;
 }
 
+/*
+ * Verify that the caller's dentry still precisely matches our dirent
+ * items.
+ *
+ * The caller has a dentry that the vfs revalidated before they acquired
+ * their locks.  If the dentry is still covered by a lock we immediately
+ * return 0.   If not, we check items and return -ENOENT if a positive
+ * dentry no longer matches the items or -EEXIST if a negative entry's
+ * name now has an item.
+ */
+static int verify_entry(struct super_block *sb, u64 dir_ino, struct dentry *dentry,
+			struct scoutfs_lock *lock)
+{
+	struct dentry_info *di = dentry->d_fsdata;
+	struct scoutfs_dirent dent = {0,};
+	const char *name;
+	u64 dentry_ino;
+	int name_len;
+	u64 hash;
+	int ret;
+
+	if (scoutfs_lock_is_covered(sb, &di->lock_cov))
+		return 0;
+
+	dentry_ino = dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
+	name = dentry->d_name.name;
+	name_len = dentry->d_name.len;
+	hash = dirent_name_hash(name, name_len);
+
+	ret = lookup_dirent(sb, dir_ino, name, name_len, hash, &dent, lock);
+	if (ret < 0 && ret != -ENOENT)
+		return ret;
+
+	if (dentry_ino != le64_to_cpu(dent.ino) || di->hash != le64_to_cpu(dent.hash) ||
+	    di->pos != le64_to_cpu(dent.pos)) {
+		if (dentry_ino)
+			ret = -ENOENT;
+		else
+			ret = -EEXIST;
+	} else {
+		ret = 0;
+	}
+
+	return ret;
+}
+
 static int scoutfs_d_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	struct super_block *sb = dentry->d_sb;
@@ -423,7 +469,7 @@ static struct dentry *scoutfs_lookup(struct inode *dir, struct dentry *dentry,
 {
 	struct super_block *sb = dir->i_sb;
 	struct scoutfs_lock *dir_lock = NULL;
-	struct scoutfs_dirent dent;
+	struct scoutfs_dirent dent = {0,};
 	struct inode *inode;
 	u64 ino = 0;
 	u64 hash;
@@ -451,9 +497,11 @@ static struct dentry *scoutfs_lookup(struct inode *dir, struct dentry *dentry,
 		ret = 0;
 	} else if (ret == 0) {
 		ino = le64_to_cpu(dent.ino);
+	}
+	if (ret == 0)
 		update_dentry_info(sb, dentry, le64_to_cpu(dent.hash),
 				   le64_to_cpu(dent.pos), dir_lock);
-	}
+
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_READ);
 
 out:
@@ -767,6 +815,10 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
+	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	if (ret < 0)
+		goto out;
+
 	pos = SCOUTFS_I(dir)->next_readdir_pos++;
 
 	ret = add_entry_items(sb, scoutfs_ino(dir), hash, pos,
@@ -845,6 +897,10 @@ static int scoutfs_link(struct dentry *old_dentry,
 				  NULL, NULL, NULL, NULL);
 	if (ret)
 		return ret;
+
+	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	if (ret < 0)
+		goto out_unlock;
 
 	if (inode->i_nlink >= SCOUTFS_LINK_MAX) {
 		ret = -EMLINK;
@@ -953,6 +1009,10 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 	if (ret)
 		return ret;
 
+	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	if (ret < 0)
+		goto unlock;
+
 	if (S_ISDIR(inode->i_mode) && i_size_read(inode)) {
 		ret = -ENOTEMPTY;
 		goto unlock;
@@ -989,6 +1049,8 @@ retry:
 		WARN_ON_ONCE(ret); /* should have been dirty */
 		goto out;
 	}
+
+	update_dentry_info(sb, dentry, 0, 0, dir_lock);
 
 	dir->i_ctime = ts;
 	dir->i_mtime = ts;
@@ -1205,6 +1267,10 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 				 &dir_lock, &inode_lock, NULL, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
+
+	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	if (ret < 0)
+		goto out;
 
 	ret = symlink_item_ops(sb, SYM_CREATE, scoutfs_ino(inode), inode_lock,
 			       symname, name_len);
@@ -1503,26 +1569,6 @@ static int verify_ancestors(struct super_block *sb, u64 p1, u64 p2,
 }
 
 /*
- * Make sure that a dirent from the dir to the inode exists at the name.
- * The caller has the name locked in the dir.
- */
-static int verify_entry(struct super_block *sb, u64 dir_ino, const char *name,
-			unsigned name_len, u64 hash, u64 ino,
-			struct scoutfs_lock *lock)
-{
-	struct scoutfs_dirent dent;
-	int ret;
-
-	ret = lookup_dirent(sb, dir_ino, name, name_len, hash, &dent, lock);
-	if (ret == 0 && le64_to_cpu(dent.ino) != ino)
-		ret = -ENOENT;
-	else if (ret == -ENOENT && ino == 0)
-		ret = 0;
-
-	return ret;
-}
-
-/*
  * The vfs performs checks on cached inodes and dirents before calling
  * here.  It doesn't hold any locks so all of those checks can be based
  * on cached state that has been invalidated by other operations in the
@@ -1616,13 +1662,8 @@ static int scoutfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	}
 
 	/* make sure that the entries assumed by the argument still exist */
-	ret = verify_entry(sb, scoutfs_ino(old_dir), old_dentry->d_name.name,
-			   old_dentry->d_name.len, old_hash,
-			   scoutfs_ino(old_inode), old_dir_lock) ?:
-	      verify_entry(sb, scoutfs_ino(new_dir), new_dentry->d_name.name,
-			   new_dentry->d_name.len, new_hash,
-			   new_inode ? scoutfs_ino(new_inode) : 0,
-			   new_dir_lock);
+	ret = verify_entry(sb, scoutfs_ino(old_dir), old_dentry, old_dir_lock) ?:
+	      verify_entry(sb, scoutfs_ino(new_dir), new_dentry, new_dir_lock);
 	if (ret)
 		goto out_unlock;
 
