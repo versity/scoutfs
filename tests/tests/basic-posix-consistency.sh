@@ -197,4 +197,13 @@ scoutfs walk-inodes -p "$T_M0" -- data_seq 0 -1 > "$T_TMP.0"
 scoutfs walk-inodes -p "$T_M1" -- data_seq 0 -1 > "$T_TMP.1"
 diff -u "$T_TMP.0" "$T_TMP.1"
 
+echo "== concurrent creates make one file"
+mkdir "$T_D0/concurrent"
+for i in $(t_fs_nrs); do
+	eval p="\$T_D${i}/concurrent/one-file"
+	touch "$p" 2>&1 > "$T_TMP.multi-create.$i" &
+done
+wait
+ls "$T_D0/concurrent"
+
 t_pass
