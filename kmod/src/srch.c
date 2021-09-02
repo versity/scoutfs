@@ -2081,7 +2081,7 @@ static int delete_files(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_srch_compact *sc)
 {
-	int ret;
+	int ret = 0;
 	int i;
 
 	for (i = 0; i < sc->nr; i++) {
