@@ -135,8 +135,8 @@ static int alloc_dentry_info(struct dentry *dentry)
 {
 	struct dentry_info *di;
 
-	/* XXX read mb? */
-	if (dentry->d_fsdata)
+	smp_rmb();
+	if (dentry->d_op == &scoutfs_dentry_ops)
 		return 0;
 
 	di = kmem_cache_zalloc(dentry_info_cache, GFP_NOFS);
@@ -148,6 +148,7 @@ static int alloc_dentry_info(struct dentry *dentry)
 	spin_lock(&dentry->d_lock);
 	if (!dentry->d_fsdata) {
 		dentry->d_fsdata = di;
+		smp_wmb();
 		d_set_d_op(dentry, &scoutfs_dentry_ops);
 	}
 	spin_unlock(&dentry->d_lock);
@@ -903,10 +904,6 @@ static int scoutfs_link(struct dentry *old_dentry,
 	if (ret)
 		return ret;
 
-	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
-	if (ret < 0)
-		goto out_unlock;
-
 	if (inode->i_nlink >= SCOUTFS_LINK_MAX) {
 		ret = -EMLINK;
 		goto out_unlock;
@@ -914,6 +911,10 @@ static int scoutfs_link(struct dentry *old_dentry,
 
 	ret = alloc_dentry_info(dentry);
 	if (ret)
+		goto out_unlock;
+
+	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	if (ret < 0)
 		goto out_unlock;
 
 	dir_size = i_size_read(dir) + dentry->d_name.len;
@@ -1015,6 +1016,10 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 				  NULL, NULL, NULL, NULL);
 	if (ret)
 		return ret;
+
+	ret = alloc_dentry_info(dentry);
+	if (ret)
+		goto unlock;
 
 	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
@@ -1676,7 +1681,9 @@ static int scoutfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	}
 
 	/* make sure that the entries assumed by the argument still exist */
-	ret = verify_entry(sb, scoutfs_ino(old_dir), old_dentry, old_dir_lock) ?:
+	ret = alloc_dentry_info(old_dentry) ?:
+	      alloc_dentry_info(new_dentry) ?:
+	      verify_entry(sb, scoutfs_ino(old_dir), old_dentry, old_dir_lock) ?:
 	      verify_entry(sb, scoutfs_ino(new_dir), new_dentry, new_dir_lock);
 	if (ret)
 		goto out_unlock;
