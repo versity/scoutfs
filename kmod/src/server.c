@@ -3942,11 +3942,11 @@ shutdown:
 	/* wait for extra queues by requests, won't find waiters */
 	flush_work(&server->commit_work);
 
-	scoutfs_fence_stop(sb);
 	scoutfs_lock_server_destroy(sb);
 	scoutfs_omap_server_shutdown(sb);
 
 out:
+	scoutfs_fence_stop(sb);
 	scoutfs_net_free_conn(sb, conn);
 
 	/* let quorum know that we've shutdown */
