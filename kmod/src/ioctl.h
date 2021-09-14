@@ -490,7 +490,7 @@ struct scoutfs_ioctl_resize_devices {
 #define SCOUTFS_IOC_RESIZE_DEVICES \
 	_IOR(SCOUTFS_IOCTL_MAGIC, 14, struct scoutfs_ioctl_resize_devices)
 
-#define SCOUTFs_IOCTL_XATTR_TOTAL_NAME_NR 3
+#define SCOUTFS_IOCTL_XATTR_TOTAL_NAME_NR 3
 
 /*
  * Copy global totals of .totl. xattr value payloads to the user.   This
@@ -521,7 +521,7 @@ struct scoutfs_ioctl_resize_devices {
  * for a single struct entry.
  */
 struct scoutfs_ioctl_read_xattr_totals {
-	__u64 pos_name[SCOUTFs_IOCTL_XATTR_TOTAL_NAME_NR];
+	__u64 pos_name[SCOUTFS_IOCTL_XATTR_TOTAL_NAME_NR];
 	__u64 totals_ptr;
 	__u64 totals_bytes;
 };
@@ -533,7 +533,7 @@ struct scoutfs_ioctl_read_xattr_totals {
  * the total.
  */
 struct scoutfs_ioctl_xattr_total {
-	__u64 name[SCOUTFs_IOCTL_XATTR_TOTAL_NAME_NR];
+	__u64 name[SCOUTFS_IOCTL_XATTR_TOTAL_NAME_NR];
 	__u64 total;
 	__u64 count;
 };
