@@ -26,6 +26,7 @@
 #include "hash.h"
 #include "srch.h"
 #include "counters.h"
+#include "xattr.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -221,25 +222,17 @@ out:
 }
 
 struct forest_read_items_data {
-	bool is_fs;
+	int fic;
 	scoutfs_forest_item_cb cb;
 	void *cb_arg;
 };
 
-static int forest_read_items(struct super_block *sb, struct scoutfs_key *key,
+static int forest_read_items(struct super_block *sb, struct scoutfs_key *key, u64 seq, u8 flags,
 			     void *val, int val_len, void *arg)
 {
 	struct forest_read_items_data *rid = arg;
-	struct scoutfs_log_item_value _liv = {0,};
-	struct scoutfs_log_item_value *liv = &_liv;
 
-	if (!rid->is_fs) {
-		liv = val;
-		val += sizeof(struct scoutfs_log_item_value);
-		val_len -= sizeof(struct scoutfs_log_item_value);
-	}
-
-	return rid->cb(sb, key, liv, val, val_len, rid->cb_arg);
+	return rid->cb(sb, key, seq, flags, val, val_len, rid->fic, rid->cb_arg);
 }
 
 /*
@@ -255,8 +248,8 @@ static int forest_read_items(struct super_block *sb, struct scoutfs_key *key,
  * to reset their state and retry with a newer version of the btrees.
  */
 int scoutfs_forest_read_items(struct super_block *sb,
-			      struct scoutfs_lock *lock,
 			      struct scoutfs_key *key,
+			      struct scoutfs_key *bloom_key,
 			      struct scoutfs_key *start,
 			      struct scoutfs_key *end,
 			      scoutfs_forest_item_cb cb, void *arg)
@@ -272,11 +265,13 @@ int scoutfs_forest_read_items(struct super_block *sb,
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_block *bl;
 	struct scoutfs_key ltk;
+	struct scoutfs_key orig_start = *start;
+	struct scoutfs_key orig_end = *end;
 	int ret;
 	int i;
 
 	scoutfs_inc_counter(sb, forest_read_items);
-	calc_bloom_nrs(&bloom, &lock->start);
+	calc_bloom_nrs(&bloom, bloom_key);
 
 	ret = scoutfs_client_get_roots(sb, &roots);
 	if (ret)
@@ -284,16 +279,16 @@ int scoutfs_forest_read_items(struct super_block *sb,
 
 	trace_scoutfs_forest_using_roots(sb, &roots.fs_root, &roots.logs_root);
 
-	*start = lock->start;
-	*end = lock->end;
+	*start = orig_start;
+	*end = orig_end;
 
 	/* start with fs root items */
-	rid.is_fs = true;
+	rid.fic |= FIC_FS_ROOT;
 	ret = scoutfs_btree_read_items(sb, &roots.fs_root, key, start, end,
 				       forest_read_items, &rid);
 	if (ret < 0)
 		goto out;
-	rid.is_fs = false;
+	rid.fic &= ~FIC_FS_ROOT;
 
 	scoutfs_key_init_log_trees(&ltk, 0, 0);
 	for (;; scoutfs_key_inc(&ltk)) {
@@ -338,15 +333,38 @@ int scoutfs_forest_read_items(struct super_block *sb,
 
 		scoutfs_inc_counter(sb, forest_bloom_pass);
 
+		if ((le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
+			rid.fic |= FIC_FINALIZED;
+
 		ret = scoutfs_btree_read_items(sb, &lt.item_root, key, start,
 					       end, forest_read_items, &rid);
 		if (ret < 0)
 			goto out;
+
+		rid.fic &= ~FIC_FINALIZED;
 	}
 
 	ret = 0;
 out:
 	return ret;
+}
+
+/*
+ * If the items are deltas then combine the src with the destination
+ * value and store the result in the destination.
+ *
+ * Returns:
+ *  -errno: fatal error, no change
+ *  0: not delta items, no change
+ *  +ve: SCOUTFS_DELTA_ values indicating when dst and/or src can be dropped
+ */
+int scoutfs_forest_combine_deltas(struct scoutfs_key *key, void *dst, int dst_len,
+				  void *src, int src_len)
+{
+	if (key->sk_zone == SCOUTFS_XATTR_TOTL_ZONE)
+		return scoutfs_xattr_combine_totl(dst, dst_len, src, src_len);
+
+	return 0;
 }
 
 /*
@@ -564,26 +582,6 @@ void scoutfs_forest_get_btrees(struct super_block *sb,
 					    &lt->bloom_ref);
 }
 
-/*
- * Compare input items to merge by their log item value seq when their
- * keys match.
- */
-static int merge_cmp(void *a_val, int a_val_len, void *b_val, int b_val_len)
-{
-	struct scoutfs_log_item_value *a = a_val;
-	struct scoutfs_log_item_value *b = b_val;
-
-	/* sort merge item by seq */
-	return scoutfs_cmp(le64_to_cpu(a->seq), le64_to_cpu(b->seq));
-}
-
-static bool merge_is_del(void *val, int val_len)
-{
-	struct scoutfs_log_item_value *liv = val;
-
-	return !!(liv->flags & SCOUTFS_LOG_ITEM_FLAG_DELETION);
-}
-
 #define LOG_MERGE_DELAY_MS (5 * MSEC_PER_SEC)
 
 /*
@@ -673,10 +671,8 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 	}
 
 	ret = scoutfs_btree_merge(sb, &alloc, &wri, &req.start, &req.end,
-				  &next, &comp.root, &inputs, merge_cmp,
-				  merge_is_del,
+				  &next, &comp.root, &inputs,
 				  !!(req.flags & cpu_to_le64(SCOUTFS_LOG_MERGE_REQUEST_SUBTREE)),
-				  sizeof(struct scoutfs_log_item_value),
 				  SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT, 10);
 	if (ret == -ERANGE) {
 		comp.remain = next;

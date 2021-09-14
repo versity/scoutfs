@@ -21,6 +21,7 @@
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/aio.h>
+#include <linux/list_sort.h>
 
 #include "format.h"
 #include "key.h"
@@ -39,6 +40,7 @@
 #include "srch.h"
 #include "alloc.h"
 #include "server.h"
+#include "counters.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -541,6 +543,7 @@ out:
 static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct scoutfs_ioctl_stat_more stm;
 
 	if (get_user(stm.valid_bytes, (__u64 __user *)arg))
@@ -552,6 +555,8 @@ static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 	stm.data_seq = scoutfs_inode_data_seq(inode);
 	stm.data_version = scoutfs_inode_data_version(inode);
 	scoutfs_inode_get_onoff(inode, &stm.online_blocks, &stm.offline_blocks);
+	stm.crtime_sec = si->crtime.tv_sec;
+	stm.crtime_nsec = si->crtime.tv_nsec;
 
 	if (copy_to_user((void __user *)arg, &stm, stm.valid_bytes))
 		return -EFAULT;
@@ -617,6 +622,7 @@ static long scoutfs_ioc_data_waiting(struct file *file, unsigned long arg)
 static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file->f_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_ioctl_setattr_more __user *usm = (void __user *)arg;
 	struct scoutfs_ioctl_setattr_more sm;
@@ -685,6 +691,8 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 		i_size_write(inode, sm.i_size);
 	inode->i_ctime.tv_sec = sm.ctime_sec;
 	inode->i_ctime.tv_nsec = sm.ctime_nsec;
+	si->crtime.tv_sec = sm.crtime_sec;
+	si->crtime.tv_nsec = sm.crtime_nsec;
 
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 	ret = 0;
@@ -1035,6 +1043,293 @@ out:
 	return ret;
 }
 
+struct xattr_total_entry {
+	struct rb_node node;
+	struct scoutfs_ioctl_xattr_total xt;
+	u64 fs_seq;
+	u64 fs_total;
+	u64 fs_count;
+	u64 fin_seq;
+	u64 fin_total;
+	s64 fin_count;
+	u64 log_seq;
+	u64 log_total;
+	s64 log_count;
+};
+
+static int cmp_xt_entry_name(const struct xattr_total_entry *a,
+			     const struct xattr_total_entry *b)
+
+{
+	return scoutfs_cmp_u64s(a->xt.name[0], b->xt.name[0]) ?:
+	       scoutfs_cmp_u64s(a->xt.name[1], b->xt.name[1]) ?:
+	       scoutfs_cmp_u64s(a->xt.name[2], b->xt.name[2]);
+}
+
+/*
+ * Record the contribution of the three classes of logged items we can
+ * see: the item in the fs_root, items from finalized log btrees, and
+ * items from active log btrees.  Once we have the full set the caller
+ * can decide which of the items contribute to the total it sends to the
+ * user.
+ */
+static int read_xattr_total_item(struct super_block *sb, struct scoutfs_key *key,
+				 u64 seq, u8 flags, void *val, int val_len, int fic, void *arg)
+{
+	struct scoutfs_xattr_totl_val *tval = val;
+	struct xattr_total_entry *ent;
+	struct xattr_total_entry rd;
+	struct rb_root *root = arg;
+	struct rb_node *parent;
+	struct rb_node **node;
+	int cmp;
+
+	rd.xt.name[0] = le64_to_cpu(key->skxt_a);
+	rd.xt.name[1] = le64_to_cpu(key->skxt_b);
+	rd.xt.name[2] = le64_to_cpu(key->skxt_c);
+
+	/* find entry matching name */
+	node = &root->rb_node;
+	parent = NULL;
+	cmp = -1;
+	while (*node) {
+		parent = *node;
+		ent = container_of(*node, struct xattr_total_entry, node);
+
+		/* sort merge items by key then newest to oldest */
+		cmp = cmp_xt_entry_name(&rd, ent);
+		if (cmp < 0)
+			node = &(*node)->rb_left;
+		else if (cmp > 0)
+			node = &(*node)->rb_right;
+		else
+			break;
+	}
+
+	/* allocate and insert new node if we need to */
+	if (cmp != 0) {
+		ent = kzalloc(sizeof(*ent), GFP_KERNEL);
+		if (!ent)
+			return -ENOMEM;
+
+		memcpy(&ent->xt.name, &rd.xt.name, sizeof(ent->xt.name));
+
+		rb_link_node(&ent->node, parent, node);
+		rb_insert_color(&ent->node, root);
+	}
+
+	if (fic & FIC_FS_ROOT) {
+		ent->fs_seq = seq;
+		ent->fs_total = le64_to_cpu(tval->total);
+		ent->fs_count = le64_to_cpu(tval->count);
+	} else if (fic & FIC_FINALIZED) {
+		ent->fin_seq = seq;
+		ent->fin_total += le64_to_cpu(tval->total);
+		ent->fin_count += le64_to_cpu(tval->count);
+	} else {
+		ent->log_seq = seq;
+		ent->log_total += le64_to_cpu(tval->total);
+		ent->log_count += le64_to_cpu(tval->count);
+	}
+
+	scoutfs_inc_counter(sb, totl_read_item);
+
+	return 0;
+}
+
+/* these are always _safe, node stores next */
+#define for_each_xt_ent(ent, node, root)					\
+	for (node = rb_first(root);						\
+	     node && (ent = rb_entry(node, struct xattr_total_entry, node),	\
+		      node = rb_next(node), 1); )
+
+#define for_each_xt_ent_reverse(ent, node, root)				\
+	for (node = rb_last(root);						\
+	     node && (ent = rb_entry(node, struct xattr_total_entry, node),	\
+		      node = rb_prev(node), 1); )
+
+static void free_xt_ent(struct rb_root *root, struct xattr_total_entry *ent)
+{
+	rb_erase(&ent->node, root);
+	kfree(ent);
+}
+
+static void free_all_xt_ents(struct rb_root *root)
+{
+	struct xattr_total_entry *ent;
+	struct rb_node *node;
+
+	for_each_xt_ent(ent, node, root)
+		free_xt_ent(root, ent);
+}
+
+/*
+ * Starting from the caller's pos_name, copy the names, totals, and
+ * counts for the .totl. tagged xattrs in the system sorted by their
+ * name until the user's buffer is full.  This only sees xattrs that
+ * have been committed.  It doesn't use locking to force commits and
+ * block writers so it can be a little bit out of date with respect to
+ * dirty xattrs in memory across the system.
+ *
+ * Our reader has to be careful because the log btree merging code can
+ * write partial results to the fs_root.  This means that a reader can
+ * see both cases where new finalized logs should be applied to the old
+ * fs items and where old finalized logs have already been applied to
+ * the partially merged fs items.  Currently active logged items are
+ * always applied on top of all cases.
+ *
+ * These cases are differentiated with a combination of sequence numbers
+ * in items, the count of contributing xattrs, and a flag
+ * differentiating finalized and active logged items.  This lets us
+ * recognize all cases, including when finalized logs were merged and
+ * deleted the fs item.
+ *
+ * We're allocating a tracking struct for each totl name we see while
+ * traversing the item btrees.  The forest reader is providing the items
+ * it finds in leaf blocks that contain the search key.  In the worst
+ * case all of these blocks are full and none of the items overlap.  At
+ * most, figure order a thousand names per mount.  But in practice many
+ * of these factors fall away: leaf blocks aren't fill, leaf items
+ * overlap, there aren't finalized log btrees, and not all mounts are
+ * actively changing totals.   We're much more likely to only read a
+ * leaf block's worth of totals that have been long since merged into
+ * the fs_root.
+ */
+static long scoutfs_ioc_read_xattr_totals(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_read_xattr_totals __user *urxt = (void __user *)arg;
+	struct scoutfs_ioctl_read_xattr_totals rxt;
+	struct scoutfs_ioctl_xattr_total __user *uxt;
+	struct xattr_total_entry *ent;
+	struct scoutfs_key key;
+	struct scoutfs_key bloom_key;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	struct rb_root root = RB_ROOT;
+	struct rb_node *node;
+	int count = 0;
+	int ret;
+
+	if (!(file->f_mode & FMODE_READ)) {
+		ret = -EBADF;
+		goto out;
+	}
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&rxt, urxt, sizeof(rxt))) {
+		ret = -EFAULT;
+		goto out;
+	}
+	uxt = (void __user *)rxt.totals_ptr;
+
+	if ((rxt.totals_ptr & (sizeof(__u64) - 1)) ||
+	    (rxt.totals_bytes < sizeof(struct scoutfs_ioctl_xattr_total))) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	scoutfs_key_set_zeros(&bloom_key);
+	bloom_key.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
+	scoutfs_xattr_init_totl_key(&start, rxt.pos_name);
+
+	while (rxt.totals_bytes >= sizeof(struct scoutfs_ioctl_xattr_total)) {
+
+		scoutfs_key_set_ones(&end);
+		end.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
+		if (scoutfs_key_compare(&start, &end) > 0)
+			break;
+
+		key = start;
+		ret = scoutfs_forest_read_items(sb, &key, &bloom_key, &start, &end,
+						read_xattr_total_item, &root);
+		if (ret < 0) {
+			if (ret == -ESTALE) {
+				free_all_xt_ents(&root);
+				continue;
+			}
+			goto out;
+		}
+
+		if (RB_EMPTY_ROOT(&root))
+			break;
+
+		/* trim totals that fall outside of the consistent range */
+		for_each_xt_ent(ent, node, &root) {
+			scoutfs_xattr_init_totl_key(&key, ent->xt.name);
+			if (scoutfs_key_compare(&key, &start) < 0) {
+				free_xt_ent(&root, ent);
+			} else {
+				break;
+			}
+		}
+		for_each_xt_ent_reverse(ent, node, &root) {
+			scoutfs_xattr_init_totl_key(&key, ent->xt.name);
+			if (scoutfs_key_compare(&key, &end) > 0) {
+				free_xt_ent(&root, ent);
+			} else {
+				break;
+			}
+		}
+
+		/* copy resulting unique non-zero totals to userspace */
+		for_each_xt_ent(ent, node, &root) {
+			if (rxt.totals_bytes < sizeof(ent->xt))
+				break;
+
+			/* start with the fs item if we have it */
+			if (ent->fs_seq != 0) {
+				ent->xt.total = ent->fs_total;
+				ent->xt.count = ent->fs_count;
+				scoutfs_inc_counter(sb, totl_read_fs);
+			}
+
+			/* apply finalized logs if they're newer or creating */
+			if (((ent->fs_seq != 0) && (ent->fin_seq > ent->fs_seq)) ||
+			    ((ent->fs_seq == 0) && (ent->fin_count > 0))) {
+				ent->xt.total += ent->fin_total;
+				ent->xt.count += ent->fin_count;
+				scoutfs_inc_counter(sb, totl_read_finalized);
+			}
+
+			/* always apply active logs which must be newer than fs and finalized */
+			if (ent->log_seq > 0) {
+				ent->xt.total += ent->log_total;
+				ent->xt.count += ent->log_count;
+				scoutfs_inc_counter(sb, totl_read_logged);
+			}
+
+			if (ent->xt.total != 0 || ent->xt.count != 0) {
+				if (copy_to_user(uxt, &ent->xt, sizeof(ent->xt))) {
+					ret = -EFAULT;
+					goto out;
+				}
+
+				uxt++;
+				rxt.totals_bytes -= sizeof(ent->xt);
+				count++;
+				scoutfs_inc_counter(sb, totl_read_copied);
+			}
+
+			free_xt_ent(&root, ent);
+		}
+
+		/* continue after the last possible key read */
+		start = end;
+		scoutfs_key_inc(&start);
+	}
+
+	ret = 0;
+out:
+	free_all_xt_ents(&root);
+
+	return ret ?: count;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1066,6 +1361,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_move_blocks(file, arg);
 	case SCOUTFS_IOC_RESIZE_DEVICES:
 		return scoutfs_ioc_resize_devices(file, arg);
+	case SCOUTFS_IOC_READ_XATTR_TOTALS:
+		return scoutfs_ioc_read_xattr_totals(file, arg);
 	}
 
 	return -ENOTTY;

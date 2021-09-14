@@ -20,13 +20,15 @@ struct scoutfs_btree_item_ref {
 
 /* caller gives an item to the callback */
 typedef int (*scoutfs_btree_item_cb)(struct super_block *sb,
-				     struct scoutfs_key *key,
+				     struct scoutfs_key *key, u64 seq, u8 flags,
 				     void *val, int val_len, void *arg);
 
 /* simple singly-linked list of items */
 struct scoutfs_btree_item_list {
 	struct scoutfs_btree_item_list *next;
 	struct scoutfs_key key;
+	u64 seq;
+	u8 flags;
 	int val_len;
 	u8 val[0];
 };
@@ -108,14 +110,7 @@ struct scoutfs_btree_root_head {
 	struct list_head head;
 	struct scoutfs_btree_root root;
 };
-/*
- * Compare the values of merge input items whose keys are equal to
- * determine their merge order.
- */
-typedef int (*scoutfs_btree_merge_cmp_t)(void *a_val, int a_val_len,
-					 void *b_val, int b_val_len);
-/* whether merging item should be removed from destination */
-typedef bool (*scoutfs_btree_merge_is_del_t)(void *val, int val_len);
+
 int scoutfs_btree_merge(struct super_block *sb,
 			struct scoutfs_alloc *alloc,
 			struct scoutfs_block_writer *wri,
@@ -124,9 +119,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 			struct scoutfs_key *next_ret,
 			struct scoutfs_btree_root *root,
 			struct list_head *input_list,
-			scoutfs_btree_merge_cmp_t merge_cmp,
-			scoutfs_btree_merge_is_del_t merge_is_del, bool subtree,
-			int drop_val, int dirty_limit, int alloc_low);
+			bool subtree, int dirty_limit, int alloc_low);
 
 int scoutfs_btree_free_blocks(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,

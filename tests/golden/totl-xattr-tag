@@ -1,0 +1,30 @@
+== single file
+1.2.3 = 1, 1
+4.5.6 = 1, 1
+== multiple files add up
+1.2.3 = 2, 2
+4.5.6 = 2, 2
+== removing xattr updates total
+1.2.3 = 2, 2
+4.5.6 = 1, 1
+== updating xattr updates total
+1.2.3 = 11, 2
+4.5.6 = 1, 1
+== removing files update total
+1.2.3 = 10, 1
+== multiple files/names in one transaction
+1.2.3 = 55, 10
+== testing invalid names
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+== testing invalid values
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+setfattr: /mnt/test/test/totl-xattr-tag/invalid: Invalid argument
+== larger population that could merge

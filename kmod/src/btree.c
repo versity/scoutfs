@@ -30,6 +30,7 @@
 #include "avl.h"
 #include "hash.h"
 #include "sort_priv.h"
+#include "forest.h"
 
 #include "scoutfs_trace.h"
 
@@ -502,9 +503,8 @@ static __le16 insert_value(struct scoutfs_btree_block *bt, __le16 item_off,
  * This only consumes free space.  It's safe to use references to block
  * structures after this call.
  */
-static void create_item(struct scoutfs_btree_block *bt,
-			struct scoutfs_key *key, void *val, unsigned val_len,
-			struct scoutfs_avl_node *parent, int cmp)
+static void create_item(struct scoutfs_btree_block *bt, struct scoutfs_key *key, u64 seq, u8 flags,
+			void *val, unsigned val_len, struct scoutfs_avl_node *parent, int cmp)
 {
 	struct scoutfs_btree_item *item;
 
@@ -516,6 +516,8 @@ static void create_item(struct scoutfs_btree_block *bt,
 	item = end_item(bt);
 
 	item->key = *key;
+	item->seq = cpu_to_le64(seq);
+	item->flags = flags;
 
 	scoutfs_avl_insert(&bt->item_root, parent, &item->node, cmp);
 	leaf_item_hash_insert(bt, item_key(item), ptr_off(bt, item));
@@ -558,6 +560,8 @@ static void delete_item(struct scoutfs_btree_block *bt,
 	/* move the final item into the deleted space */
 	if (end != item) {
 		item->key = end->key;
+		item->seq = end->seq;
+		item->flags = end->flags;
 		item->val_off = end->val_off;
 		item->val_len = end->val_len;
 		leaf_item_hash_change(bt, &end->key, ptr_off(bt, item),
@@ -606,8 +610,8 @@ static void move_items(struct scoutfs_btree_block *dst,
 		else
 			next = next_item(src, from);
 
-		create_item(dst, item_key(from), item_val(src, from),
-			    item_val_len(from), par, cmp);
+		create_item(dst, item_key(from), le64_to_cpu(from->seq), from->flags,
+			    item_val(src, from), item_val_len(from), par, cmp);
 
 		if (move_right) {
 			if (par)
@@ -680,7 +684,7 @@ static void create_parent_item(struct scoutfs_btree_block *parent,
 
 	scoutfs_avl_search(&parent->item_root, cmp_key_item, key, &cmp, &par,
 			   NULL, NULL);
-	create_item(parent, key, &ref, sizeof(ref), par, cmp);
+	create_item(parent, key, 0, 0, &ref, sizeof(ref), par, cmp);
 }
 
 /*
@@ -1529,7 +1533,7 @@ int scoutfs_btree_insert(struct super_block *sb,
 			if (node) {
 				ret = -EEXIST;
 			} else {
-				create_item(bt, key, val, val_len, par, cmp);
+				create_item(bt, key, 0, 0, val, val_len, par, cmp);
 				ret = 0;
 			}
 		}
@@ -1630,7 +1634,7 @@ int scoutfs_btree_force(struct super_block *sb,
 		} else {
 			scoutfs_avl_search(&bt->item_root, cmp_key_item, key,
 					   &cmp, &par, NULL, NULL);
-			create_item(bt, key, val, val_len, par, cmp);
+			create_item(bt, key, 0, 0, val, val_len, par, cmp);
 		}
 		ret = 0;
 
@@ -1849,8 +1853,8 @@ int scoutfs_btree_read_items(struct super_block *sb,
 		if (scoutfs_key_compare(&item->key, end) > 0)
 			break;
 
-		ret = cb(sb, item_key(item), item_val(bt, item),
-			 item_val_len(item), arg);
+		ret = cb(sb, item_key(item), le64_to_cpu(item->seq), item->flags,
+			 item_val(bt, item), item_val_len(item), arg);
 		if (ret < 0)
 			break;
 
@@ -1870,6 +1874,10 @@ out:
  * This can make partial progress before returning an error, leaving
  * dirty btree blocks with only some of the caller's items.  It's up to
  * the caller to resolve this.
+ *
+ * This, along with merging, are the only places that seq and flags are
+ * set in btree items.  They're only used for fs items written through
+ * the item cache and forest of log btrees.
  */
 int scoutfs_btree_insert_list(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,
@@ -1895,13 +1903,28 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 		do {
 			item = leaf_item_hash_search(sb, bt, &lst->key);
 			if (item) {
-				update_item_value(bt, item, lst->val,
-						  lst->val_len);
+				/* try to merge delta values, _NULL not deleted; merge will */
+				ret = scoutfs_forest_combine_deltas(&lst->key,
+								    item_val(bt, item),
+								    item_val_len(item),
+								    lst->val, lst->val_len);
+				if (ret < 0) {
+					scoutfs_block_put(sb, bl);
+					goto out;
+				}
+
+				item->seq = cpu_to_le64(lst->seq);
+				item->flags = lst->flags;
+
+				if (ret == 0)
+					update_item_value(bt, item, lst->val, lst->val_len);
+				else
+					ret = 0;
 			} else {
 				scoutfs_avl_search(&bt->item_root,
 						   cmp_key_item, &lst->key,
 						   &cmp, &par, NULL, NULL);
-				create_item(bt, &lst->key, lst->val,
+				create_item(bt, &lst->key, lst->seq, lst->flags, lst->val,
 					    lst->val_len, par, cmp);
 			}
 
@@ -2017,6 +2040,8 @@ struct merge_pos {
 	struct scoutfs_btree_block *bt;
 	struct scoutfs_avl_node *avl;
 	struct scoutfs_key *key;
+	u64 seq;
+	u8 flags;
 	unsigned int val_len;
 	u8 *val;
 };
@@ -2029,14 +2054,23 @@ static struct merge_pos *first_mpos(struct rb_root *root)
 	return NULL;
 }
 
+static struct merge_pos *next_mpos(struct merge_pos *mpos)
+{
+	struct rb_node *node;
+
+	if (mpos && (node = rb_next(&mpos->node)))
+		return container_of(node, struct merge_pos, node);
+	else
+		return NULL;
+}
+
 static void free_mpos(struct super_block *sb, struct merge_pos *mpos)
 {
 	scoutfs_block_put(sb, mpos->bl);
 	kfree(mpos);
 }
 
-static void insert_mpos(struct rb_root *pos_root, struct merge_pos *ins,
-			scoutfs_btree_merge_cmp_t merge_cmp)
+static void insert_mpos(struct rb_root *pos_root, struct merge_pos *ins)
 {
 	struct rb_node **node = &pos_root->rb_node;
 	struct rb_node *parent = NULL;
@@ -2050,7 +2084,7 @@ static void insert_mpos(struct rb_root *pos_root, struct merge_pos *ins,
 
 		/* sort merge items by key then newest to oldest */
 		cmp = scoutfs_key_compare(ins->key, mpos->key) ?:
-		      -merge_cmp(ins->val, ins->val_len, mpos->val, mpos->val_len);
+		      -scoutfs_cmp(ins->seq, mpos->seq);
 
 		if (cmp < 0)
 			node = &(*node)->rb_left;
@@ -2069,8 +2103,7 @@ static void insert_mpos(struct rb_root *pos_root, struct merge_pos *ins,
  * the mpos on error or if there are no more items in the range.
  */
 static int reset_mpos(struct super_block *sb, struct rb_root *pos_root, struct merge_pos *mpos,
-		      struct scoutfs_key *start, struct scoutfs_key *end,
-		      scoutfs_btree_merge_cmp_t merge_cmp)
+		      struct scoutfs_key *start, struct scoutfs_key *end)
 {
 	struct scoutfs_btree_item *item;
 	struct scoutfs_avl_node *next;
@@ -2123,12 +2156,64 @@ static int reset_mpos(struct super_block *sb, struct rb_root *pos_root, struct m
 
 	/* insert the next item within range at its version */
 	mpos->key = item_key(item);
+	mpos->seq = le64_to_cpu(item->seq);
+	mpos->flags = item->flags;
 	mpos->val_len = item_val_len(item);
 	mpos->val = item_val(mpos->bt, item);
 
-	insert_mpos(pos_root, mpos, merge_cmp);
+	insert_mpos(pos_root, mpos);
 	ret = 0;
 out:
+	return ret;
+}
+
+/*
+ * The caller has reset all the merge positions for all the input log
+ * btree roots and wants the next logged item it should try and merge
+ * with the items in the fs_root.
+ *
+ * We look ahead in the logged item stream to see if we should merge any
+ * older logged delta items into one result for the caller.  We also
+ * take this opportunity to skip and reset the mpos for any older
+ * versions of the first item.
+ */
+static int next_resolved_mpos(struct super_block *sb, struct rb_root *pos_root,
+			      struct scoutfs_key *end, struct merge_pos **mpos_ret)
+{
+	struct merge_pos *mpos;
+	struct merge_pos *next;
+	struct scoutfs_key key;
+	int ret = 0;
+
+	while ((mpos = first_mpos(pos_root)) && (next = next_mpos(mpos)) &&
+	       !scoutfs_key_compare(mpos->key, next->key)) {
+
+		ret = scoutfs_forest_combine_deltas(mpos->key, mpos->val, mpos->val_len,
+						    next->val, next->val_len);
+		if (ret < 0)
+			break;
+
+		/* reset advances to the next item */
+		key = *mpos->key;
+		scoutfs_key_inc(&key);
+
+		/* always skip next combined or older version */
+		ret = reset_mpos(sb, pos_root, next, &key, end);
+		if (ret < 0)
+			break;
+
+		if (ret == SCOUTFS_DELTA_COMBINED) {
+			scoutfs_inc_counter(sb, btree_merge_delta_combined);
+		} else if (ret == SCOUTFS_DELTA_COMBINED_NULL) {
+			scoutfs_inc_counter(sb, btree_merge_delta_null);
+			/* if merging resulted in no info, skip current */
+			ret = reset_mpos(sb, pos_root, mpos, &key, end);
+			if (ret < 0)
+				break;
+		}
+	}
+
+	*mpos_ret = mpos;
 	return ret;
 }
 
@@ -2137,16 +2222,9 @@ out:
  * destination root.  The order of the input roots doesn't matter, the
  * items are merged in sorted key order.
  *
- * The merge_cmp callback determines the order that the input items are
- * merged in.  The is_del callback determines if a merging item should
- * be removed from the destination.
- *
  * subtree indicates that the destination root is in fact one of many
  * parent blocks and shouldn't be split or allowed to fall below the
  * join low water mark.
- *
- * drop_val indicates the initial length of the value that should be
- * dropped when merging items into destination items.
  *
  * -ERANGE is returned if the merge doesn't fully exhaust the range, due
  * to allocators running low or needing to join/split the parent.
@@ -2161,9 +2239,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 			struct scoutfs_key *next_ret,
 			struct scoutfs_btree_root *root,
 			struct list_head *inputs,
-			scoutfs_btree_merge_cmp_t merge_cmp,
-			scoutfs_btree_merge_is_del_t merge_is_del, bool subtree,
-			int drop_val, int dirty_limit, int alloc_low)
+			bool subtree, int dirty_limit, int alloc_low)
 {
 	struct scoutfs_btree_root_head *rhead;
 	struct rb_root pos_root = RB_ROOT;
@@ -2178,6 +2254,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 	int walk_val_len;
 	int walk_flags;
 	bool is_del;
+	int delta;
 	int cmp;
 	int ret;
 
@@ -2194,7 +2271,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 		RB_CLEAR_NODE(&mpos->node);
 		mpos->root = &rhead->root;
 
-		ret = reset_mpos(sb, &pos_root, mpos, start, end, merge_cmp);
+		ret = reset_mpos(sb, &pos_root, mpos, start, end);
 		if (ret < 0)
 			goto out;
 	}
@@ -2204,7 +2281,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 		walk_flags |= BTW_SUBTREE;
 	walk_val_len = 0;
 
-	while ((mpos = first_mpos(&pos_root))) {
+	while ((ret = next_resolved_mpos(sb, &pos_root, end, &mpos)) == 0 && mpos) {
 
 		if (scoutfs_block_writer_dirty_bytes(sb, wri) >= dirty_limit) {
 			scoutfs_inc_counter(sb, btree_merge_dirty_limit);
@@ -2232,13 +2309,13 @@ int scoutfs_btree_merge(struct super_block *sb,
 		bt = bl->data;
 		scoutfs_inc_counter(sb, btree_merge_walk);
 
-		for (; mpos; mpos = first_mpos(&pos_root)) {
+		/* catch non-root blocks that fell under low, maybe from null deltas */
+		if (root->ref.blkno != bt->hdr.blkno && !total_above_join_low_water(bt)) {
+			walk_flags |= BTW_DELETE;
+			continue;
+		}
 
-			/* val must have at least what we need to drop */
-			if (mpos->val_len < drop_val) {
-				ret = -EIO;
-				goto out;
-			}
+		while ((ret = next_resolved_mpos(sb, &pos_root, end, &mpos)) == 0 && mpos) {
 
 			/* walk to new leaf if we exceed parent ref key */
 			if (scoutfs_key_compare(mpos->key, &kr.end) > 0)
@@ -2246,7 +2323,24 @@ int scoutfs_btree_merge(struct super_block *sb,
 
 			/* see if there's an existing item */
 			item = leaf_item_hash_search(sb, bt, mpos->key);
-			is_del = merge_is_del(mpos->val, mpos->val_len);
+			is_del = !!(mpos->flags & SCOUTFS_ITEM_FLAG_DELETION);
+
+			/* see if we're merging delta items */
+			if (item && !is_del)
+				delta = scoutfs_forest_combine_deltas(mpos->key,
+								      item_val(bt, item),
+								      item_val_len(item),
+								      mpos->val, mpos->val_len);
+			else
+				delta = 0;
+			if (delta < 0) {
+				ret = delta;
+				goto out;
+			} else if (delta == SCOUTFS_DELTA_COMBINED) {
+				scoutfs_inc_counter(sb, btree_merge_delta_combined);
+			} else if (delta == SCOUTFS_DELTA_COMBINED_NULL) {
+				scoutfs_inc_counter(sb, btree_merge_delta_null);
+			}
 
 			trace_scoutfs_btree_merge_items(sb, mpos->root,
 					mpos->key, mpos->val_len,
@@ -2255,7 +2349,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 					item ? item_val_len(item) : 0, is_del);
 
 			/* rewalk and split if ins/update needs room */
-			if (!is_del && !mid_free_item_room(bt, mpos->val_len)) {
+			if (!is_del && !delta && !mid_free_item_room(bt, mpos->val_len)) {
 				walk_flags |= BTW_INSERT;
 				walk_val_len = mpos->val_len;
 				break;
@@ -2266,18 +2360,35 @@ int scoutfs_btree_merge(struct super_block *sb,
 				scoutfs_avl_search(&bt->item_root,
 						   cmp_key_item, mpos->key,
 						   &cmp, &par, NULL, NULL);
-				create_item(bt, mpos->key,
-					    mpos->val + drop_val,
-					    mpos->val_len - drop_val, par, cmp);
+				create_item(bt, mpos->key, mpos->seq, mpos->flags,
+					    mpos->val, mpos->val_len, par, cmp);
 				scoutfs_inc_counter(sb, btree_merge_insert);
 			}
 
 			/* update existing items */
-			if (item && !is_del) {
-				update_item_value(bt, item,
-						  mpos->val + drop_val,
-						  mpos->val_len - drop_val);
+			if (item && !is_del && !delta) {
+				item->seq = cpu_to_le64(mpos->seq);
+				item->flags = mpos->flags;
+				update_item_value(bt, item, mpos->val, mpos->val_len);
 				scoutfs_inc_counter(sb, btree_merge_update);
+			}
+
+			/* update combined delta item seq */
+			if (delta == SCOUTFS_DELTA_COMBINED) {
+				item->seq = cpu_to_le64(mpos->seq);
+			}
+
+			/*
+			 * combined delta items that aren't needed are
+			 * immediately dropped.  We don't back off if
+			 * the deletion would fall under the low water
+			 * mark because we've already modified the
+			 * value, we don't want to retry after a join
+			 * and apply the value a second time.
+			 */
+			if (delta == SCOUTFS_DELTA_COMBINED_NULL) {
+				delete_item(bt, item, NULL);
+				scoutfs_inc_counter(sb, btree_merge_delta_null);
 			}
 
 			/* delete if merge item was deletion */
@@ -2299,12 +2410,9 @@ int scoutfs_btree_merge(struct super_block *sb,
 			/* finished with this key, skip any older items */
 			next = *mpos->key;
 			scoutfs_key_inc(&next);
-			while (mpos && scoutfs_key_compare(mpos->key, &next) < 0) {
-				ret = reset_mpos(sb, &pos_root, mpos, &next, end, merge_cmp);
-				if (ret < 0)
-					goto out;
-				mpos = first_mpos(&pos_root);
-			}
+			ret = reset_mpos(sb, &pos_root, mpos, &next, end);
+			if (ret < 0)
+				goto out;
 		}
 	}
 

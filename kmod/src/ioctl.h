@@ -232,6 +232,9 @@ struct scoutfs_ioctl_stat_more {
 	__u64 data_version;
 	__u64 online_blocks;
 	__u64 offline_blocks;
+	__u64 crtime_sec;
+	__u32 crtime_nsec;
+	__u8  _pad[4];
 };
 
 #define SCOUTFS_IOC_STAT_MORE _IOR(SCOUTFS_IOCTL_MAGIC, 5, \
@@ -267,7 +270,8 @@ struct scoutfs_ioctl_data_waiting {
 /*
  * If i_size is set then data_version must be non-zero.  If the offline
  * flag is set then i_size must be set and a offline extent will be
- * created from offset 0 to i_size.
+ * created from offset 0 to i_size.  The time fields are always applied
+ * to the inode.
  */
 struct scoutfs_ioctl_setattr_more {
 	__u64 data_version;
@@ -275,7 +279,8 @@ struct scoutfs_ioctl_setattr_more {
 	__u64 flags;
 	__u64 ctime_sec;
 	__u32 ctime_nsec;
-	__u8 _pad[4];
+	__u32 crtime_nsec;
+	__u64 crtime_sec;
 };
 
 #define SCOUTFS_IOC_SETATTR_MORE_OFFLINE		(1 << 0)
@@ -484,5 +489,56 @@ struct scoutfs_ioctl_resize_devices {
 
 #define SCOUTFS_IOC_RESIZE_DEVICES \
 	_IOR(SCOUTFS_IOCTL_MAGIC, 14, struct scoutfs_ioctl_resize_devices)
+
+#define SCOUTFs_IOCTL_XATTR_TOTAL_NAME_NR 3
+
+/*
+ * Copy global totals of .totl. xattr value payloads to the user.   This
+ * only sees xattrs which have been committed and this doesn't force
+ * commits of dirty data throughout the system.  This can be out of sync
+ * by the amount of xattrs that can be dirty in open transactions that
+ * are being built throughout the system.
+ *
+ * pos_name: The array name of the first total that can be returned.
+ * The name is derived from the key of the xattrs that contribute to the
+ * total.  For xattrs with a .totl.1.2.3 key, the pos_name[] should be
+ * {1, 2, 3}.
+ *
+ * totals_ptr: An aligned pointer to a buffer that will be filled with
+ * an array of scoutfs_ioctl_xattr_total structs for each total copied.
+ *
+ * totals_bytes: The size of the buffer in bytes.  There must be room
+ * for at least one struct element so that returning 0 can promise that
+ * there were no more totals to copy after the pos_name.
+ *
+ * The number of copied elements is returned and 0 is returned if there
+ * were no more totals to copy after the pos_name.
+ *
+ * In addition to the usual errnos (EIO, EINVAL, EPERM, EFAULT) this
+ * adds:
+ *
+ * EINVAL: The totals_ buffer was not aligned or was not large enough
+ * for a single struct entry.
+ */
+struct scoutfs_ioctl_read_xattr_totals {
+	__u64 pos_name[SCOUTFs_IOCTL_XATTR_TOTAL_NAME_NR];
+	__u64 totals_ptr;
+	__u64 totals_bytes;
+};
+
+/*
+ * An individual total that is given to userspace.   The total is the
+ * sum of all the values in the xattr payloads matching the name.  The
+ * count is the number of xattrs, not number of files, contributing to
+ * the total.
+ */
+struct scoutfs_ioctl_xattr_total {
+	__u64 name[SCOUTFs_IOCTL_XATTR_TOTAL_NAME_NR];
+	__u64 total;
+	__u64 count;
+};
+
+#define SCOUTFS_IOC_READ_XATTR_TOTALS \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 15, struct scoutfs_ioctl_read_xattr_totals)
 
 #endif

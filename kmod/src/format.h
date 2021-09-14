@@ -168,6 +168,11 @@ struct scoutfs_key {
 #define sko_rid		_sk_first
 #define sko_ino		_sk_second
 
+/* xattr totl */
+#define skxt_a		_sk_first
+#define skxt_b		_sk_second
+#define skxt_c		_sk_third
+
 /* inode */
 #define ski_ino		_sk_first
 
@@ -244,10 +249,14 @@ struct scoutfs_btree_root {
 struct scoutfs_btree_item {
 	struct scoutfs_avl_node node;
 	struct scoutfs_key key;
+	__le64 seq;
 	__le16 val_off;
 	__le16 val_len;
-	__u8 __pad[4];
+	__u8 flags;
+	__u8 __pad[3];
 };
+
+#define SCOUTFS_ITEM_FLAG_DELETION (1 << 0)
 
 struct scoutfs_btree_block {
 	struct scoutfs_block_header hdr;
@@ -465,21 +474,8 @@ struct scoutfs_log_trees {
 
 #define SCOUTFS_LOG_TREES_FINALIZED	(1ULL << 0)
 
-struct scoutfs_log_item_value {
-	__le64 seq;
-	__u8 flags;
-	__u8 __pad[7];
-	__u8 data[];
-};
-
-/*
- * FS items are limited by the max btree value length with the log item
- * value header.
- */
-#define SCOUTFS_MAX_VAL_SIZE \
-	(SCOUTFS_BTREE_MAX_VAL_LEN - sizeof(struct scoutfs_log_item_value))
-
-#define SCOUTFS_LOG_ITEM_FLAG_DELETION		(1 << 0)
+/* FS items are limited by the max btree value length */
+#define SCOUTFS_MAX_VAL_SIZE	SCOUTFS_BTREE_MAX_VAL_LEN
 
 struct scoutfs_bloom_block {
 	struct scoutfs_block_header hdr;
@@ -577,8 +573,9 @@ struct scoutfs_log_merge_freeing {
  */
 #define SCOUTFS_INODE_INDEX_ZONE		1
 #define SCOUTFS_ORPHAN_ZONE			2
-#define SCOUTFS_FS_ZONE				3
-#define SCOUTFS_LOCK_ZONE			4
+#define SCOUTFS_XATTR_TOTL_ZONE			3
+#define SCOUTFS_FS_ZONE				4
+#define SCOUTFS_LOCK_ZONE			5
 /* Items only stored in server btrees */
 #define SCOUTFS_LOG_TREES_ZONE			6
 #define SCOUTFS_TRANS_SEQ_ZONE			7
@@ -642,6 +639,17 @@ struct scoutfs_xattr {
 	__u8 name[];
 };
 
+/*
+ * .totl. xattrs are mapped to items.  The dotted u64s in the xattr name
+ * map to the item key.  The item value total is the sum of all the
+ * xattr values.   The item value count records the number of xattrs
+ * contributing to the total and is used when combining logged items to
+ * determine if totals are being created or destroyed.
+ */
+struct scoutfs_xattr_totl_val {
+	__le64 total;
+	__le64 count;
+};
 
 /* XXX does this exist upstream somewhere? */
 #define member_sizeof(TYPE, MEMBER) (sizeof(((TYPE *)0)->MEMBER))
@@ -815,13 +823,6 @@ struct scoutfs_super_block {
  *
  * @offline_blocks: The number of fixed 4k blocks that could be made
  * online by staging.
- *
- * XXX
- *	- otime?
- *	- compat flags?
- *	- version?
- *	- generation?
- *	- be more careful with rdev?
  */
 struct scoutfs_inode {
 	__le64 size;
@@ -832,6 +833,7 @@ struct scoutfs_inode {
 	__le64 offline_blocks;
 	__le64 next_readdir_pos;
 	__le64 next_xattr_id;
+	__le64 version;
 	__le32 nlink;
 	__le32 uid;
 	__le32 gid;
@@ -841,6 +843,7 @@ struct scoutfs_inode {
 	struct scoutfs_timespec atime;
 	struct scoutfs_timespec ctime;
 	struct scoutfs_timespec mtime;
+	struct scoutfs_timespec crtime;
 };
 
 #define SCOUTFS_INO_FLAG_TRUNCATE 0x1
@@ -892,6 +895,7 @@ enum scoutfs_dentry_type {
 #define SCOUTFS_XATTR_MAX_NAME_LEN	255
 #define SCOUTFS_XATTR_MAX_VAL_LEN	65535
 #define SCOUTFS_XATTR_MAX_PART_SIZE	SCOUTFS_MAX_VAL_SIZE
+#define SCOUTFS_XATTR_MAX_TOTL_U64	23 /* octal U64_MAX */
 
 #define SCOUTFS_XATTR_NR_PARTS(name_len, val_len)			\
 	DIV_ROUND_UP(sizeof(struct scoutfs_xattr) + name_len + val_len, \

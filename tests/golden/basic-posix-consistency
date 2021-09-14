@@ -53,3 +53,5 @@ mv: cannot move ‘/mnt/test/test/basic-posix-consistency/dir/c/clobber’ to �
 == inode indexes match after syncing existing
 == inode indexes match after copying and syncing
 == inode indexes match after removing and syncing
+== concurrent creates make one file
+one-file

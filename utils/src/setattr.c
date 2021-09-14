@@ -21,6 +21,7 @@
 struct setattr_args {
 	char *filename;
 	struct timespec ctime;
+	struct timespec crtime;
 	u64 data_version;
 	u64 i_size;
 	bool offline;
@@ -42,6 +43,8 @@ static int do_setattr(struct setattr_args *args)
 
 	sm.ctime_sec = args->ctime.tv_sec;
 	sm.ctime_nsec = args->ctime.tv_nsec;
+	sm.crtime_sec = args->crtime.tv_sec;
+	sm.crtime_nsec = args->crtime.tv_nsec;
 	sm.data_version = args->data_version;
 	if (args->offline)
 		sm.flags |= SCOUTFS_IOC_SETATTR_MORE_OFFLINE;
@@ -70,6 +73,11 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	switch (key) {
 	case 't': /* timespec */
 		ret = parse_timespec(arg, &args->ctime);
+		if (ret)
+			return ret;
+		break;
+	case 'r': /* timespec */
+		ret = parse_timespec(arg, &args->crtime);
 		if (ret)
 			return ret;
 		break;
@@ -112,7 +120,8 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 }
 
 static struct argp_option options[] = {
-	{ "ctime", 't', "TIMESPEC", 0, "Set creation time using \"<seconds-since-epoch>.<nanoseconds>\" format"},
+	{ "ctime", 't', "TIMESPEC", 0, "Set change time using \"<seconds-since-epoch>.<nanoseconds>\" format"},
+	{ "crtime", 'r', "TIMESPEC", 0, "Set creation time using \"<seconds-since-epoch>.<nanoseconds>\" format"},
 	{ "data-version", 'V', "VERSION", 0, "Set data version"},
 	{ "size", 's', "SIZE", 0, "Set file size (bytes or KMGTP units). Requires --data-version"},
 	{ "offline", 'o', NULL, 0, "Set file contents as offline, not sparse. Requires --size"},

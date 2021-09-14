@@ -135,8 +135,8 @@ static int alloc_dentry_info(struct dentry *dentry)
 {
 	struct dentry_info *di;
 
-	/* XXX read mb? */
-	if (dentry->d_fsdata)
+	smp_rmb();
+	if (dentry->d_op == &scoutfs_dentry_ops)
 		return 0;
 
 	di = kmem_cache_zalloc(dentry_info_cache, GFP_NOFS);
@@ -148,6 +148,7 @@ static int alloc_dentry_info(struct dentry *dentry)
 	spin_lock(&dentry->d_lock);
 	if (!dentry->d_fsdata) {
 		dentry->d_fsdata = di;
+		smp_wmb();
 		d_set_d_op(dentry, &scoutfs_dentry_ops);
 	}
 	spin_unlock(&dentry->d_lock);
@@ -801,6 +802,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	struct inode *inode = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
 	struct scoutfs_lock *inode_lock = NULL;
+	struct scoutfs_inode_info *si;
 	LIST_HEAD(ind_locks);
 	u64 hash;
 	u64 pos;
@@ -814,6 +816,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 				 &dir_lock, &inode_lock, NULL, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
+	si = SCOUTFS_I(inode);
 
 	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
@@ -833,6 +836,9 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = dir->i_mtime;
+	si->crtime = inode->i_mtime;
+	inode_inc_iversion(dir);
+	inode_inc_iversion(inode);
 
 	if (S_ISDIR(mode)) {
 		inc_nlink(inode);
@@ -898,10 +904,6 @@ static int scoutfs_link(struct dentry *old_dentry,
 	if (ret)
 		return ret;
 
-	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
-	if (ret < 0)
-		goto out_unlock;
-
 	if (inode->i_nlink >= SCOUTFS_LINK_MAX) {
 		ret = -EMLINK;
 		goto out_unlock;
@@ -909,6 +911,10 @@ static int scoutfs_link(struct dentry *old_dentry,
 
 	ret = alloc_dentry_info(dentry);
 	if (ret)
+		goto out_unlock;
+
+	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	if (ret < 0)
 		goto out_unlock;
 
 	dir_size = i_size_read(dir) + dentry->d_name.len;
@@ -958,6 +964,8 @@ retry:
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 	inode->i_ctime = dir->i_mtime;
 	inc_nlink(inode);
+	inode_inc_iversion(dir);
+	inode_inc_iversion(inode);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
@@ -1009,6 +1017,10 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 	if (ret)
 		return ret;
 
+	ret = alloc_dentry_info(dentry);
+	if (ret)
+		goto unlock;
+
 	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
 		goto unlock;
@@ -1055,6 +1067,8 @@ retry:
 	dir->i_ctime = ts;
 	dir->i_mtime = ts;
 	i_size_write(dir, i_size_read(dir) - dentry->d_name.len);
+	inode_inc_iversion(dir);
+	inode_inc_iversion(inode);
 
 	inode->i_ctime = ts;
 	drop_nlink(inode);
@@ -1247,6 +1261,7 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 	struct inode *inode = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
 	struct scoutfs_lock *inode_lock = NULL;
+	struct scoutfs_inode_info *si;
 	LIST_HEAD(ind_locks);
 	u64 hash;
 	u64 pos;
@@ -1267,6 +1282,7 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 				 &dir_lock, &inode_lock, NULL, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
+	si = SCOUTFS_I(inode);
 
 	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
@@ -1290,9 +1306,12 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
+	inode_inc_iversion(dir);
 
 	inode->i_ctime = dir->i_mtime;
+	si->crtime = inode->i_ctime;
 	i_size_write(inode, name_len);
+	inode_inc_iversion(inode);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
@@ -1662,7 +1681,9 @@ static int scoutfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	}
 
 	/* make sure that the entries assumed by the argument still exist */
-	ret = verify_entry(sb, scoutfs_ino(old_dir), old_dentry, old_dir_lock) ?:
+	ret = alloc_dentry_info(old_dentry) ?:
+	      alloc_dentry_info(new_dentry) ?:
+	      verify_entry(sb, scoutfs_ino(old_dir), old_dentry, old_dir_lock) ?:
 	      verify_entry(sb, scoutfs_ino(new_dir), new_dentry, new_dir_lock);
 	if (ret)
 		goto out_unlock;
@@ -1773,6 +1794,13 @@ retry:
 	if (new_inode)
 		old_inode->i_ctime = now;
 
+	inode_inc_iversion(old_dir);
+	inode_inc_iversion(old_inode);
+	if (new_dir != old_dir)
+		inode_inc_iversion(new_dir);
+	if (new_inode)
+		inode_inc_iversion(new_inode);
+
 	scoutfs_update_inode_item(old_dir, old_dir_lock, &ind_locks);
 	scoutfs_update_inode_item(old_inode, old_inode_lock, &ind_locks);
 	if (new_dir != old_dir)
@@ -1858,6 +1886,7 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	struct scoutfs_lock *dir_lock = NULL;
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
+	struct scoutfs_inode_info *si;
 	LIST_HEAD(ind_locks);
 	int ret;
 
@@ -1868,6 +1897,7 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 				 &dir_lock, &inode_lock, &orph_lock, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
+	si = SCOUTFS_I(inode);
 
 	ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
 	if (ret < 0) {
@@ -1876,9 +1906,11 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	}
 
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	si->crtime = inode->i_mtime;
 	insert_inode_hash(inode);
 	ihold(inode); /* need to update inode modifications in d_tmpfile */
 	d_tmpfile(dentry, inode);
+	inode_inc_iversion(inode);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);

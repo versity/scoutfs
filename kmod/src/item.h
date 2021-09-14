@@ -18,6 +18,8 @@ int scoutfs_item_create_force(struct super_block *sb, struct scoutfs_key *key,
 			      struct scoutfs_lock *lock);
 int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock);
+int scoutfs_item_delta(struct super_block *sb, struct scoutfs_key *key,
+		       void *val, int val_len, struct scoutfs_lock *lock);
 int scoutfs_item_delete(struct super_block *sb, struct scoutfs_key *key,
 			  struct scoutfs_lock *lock);
 int scoutfs_item_delete_force(struct super_block *sb,

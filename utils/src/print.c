@@ -47,13 +47,14 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_inode *inode = val;
 
-	printf("    inode: ino %llu size %llu nlink %u\n"
+	printf("    inode: ino %llu size %llu version %llu nlink %u\n"
 	       "      uid %u gid %u mode 0%o rdev 0x%x flags 0x%x\n"
 	       "      next_readdir_pos %llu meta_seq %llu data_seq %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
 	       "      mtime %llu.%08u\n",
 	       le64_to_cpu(key->ski_ino),
 	       le64_to_cpu(inode->size),
+	       le64_to_cpu(inode->version),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev),
@@ -73,6 +74,17 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 static void print_orphan(struct scoutfs_key *key, void *val, int val_len)
 {
 	printf("    orphan: ino %llu\n", le64_to_cpu(key->sko_ino));
+}
+
+
+static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
+{
+	struct scoutfs_xattr_totl_val *tval = val;
+
+	printf("    xattr totl: %llu.%llu.%llu = %lld, %lld\n",
+	       le64_to_cpu(key->skxt_a), le64_to_cpu(key->skxt_b),
+	       le64_to_cpu(key->skxt_c), le64_to_cpu(tval->total),
+	       le64_to_cpu(tval->count));
 }
 
 static u8 *global_printable_name(u8 *name, int name_len)
@@ -163,6 +175,9 @@ static print_func_t find_printer(u8 zone, u8 type)
 			return print_orphan;
 	}
 
+	if (zone == SCOUTFS_XATTR_TOTL_ZONE)
+		return print_xattr_totl;
+
 	if (zone == SCOUTFS_FS_ZONE) {
 		switch(type) {
 			case SCOUTFS_INODE_TYPE: return print_inode;
@@ -178,52 +193,25 @@ static print_func_t find_printer(u8 zone, u8 type)
 	return NULL;
 }
 
-static int print_fs_item(struct scoutfs_key *key, void *val,
+#define flag_char(val, bit, c) \
+	(((val) & (bit)) ? (c) : '-')
+
+static int print_fs_item(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 			 unsigned val_len, void *arg)
 {
 	print_func_t printer;
 
-	printf("    "SK_FMT"\n", SK_ARG(key));
+	printf("    "SK_FMT" %llu %c\n",
+	       SK_ARG(key), seq, flag_char(flags, SCOUTFS_ITEM_FLAG_DELETION, 'd'));
 
 	/* only items in leaf blocks have values */
-	if (val) {
+	if (val != NULL && !(flags & SCOUTFS_ITEM_FLAG_DELETION)) {
 		printer = find_printer(key->sk_zone, key->sk_type);
 		if (printer)
 			printer(key, val, val_len);
 		else
 			printf("      (unknown zone %u type %u)\n",
 			       key->sk_zone, key->sk_type);
-	}
-
-	return 0;
-}
-
-/* same as fs item but with a small header in the value */
-static int print_logs_item(struct scoutfs_key *key, void *val,
-			   unsigned val_len, void *arg)
-{
-	struct scoutfs_log_item_value *liv;
-	print_func_t printer;
-
-	printf("    "SK_FMT"\n", SK_ARG(key));
-
-	/* only items in leaf blocks have values */
-	if (val) {
-		liv = val;
-		printf("    log_item_value: seq %llu flags %x\n",
-		       le64_to_cpu(liv->seq), liv->flags);
-
-		/* deletion items don't have values */
-		if (!(liv->flags & SCOUTFS_LOG_ITEM_FLAG_DELETION)) {
-			printer = find_printer(key->sk_zone,
-					       key->sk_type);
-			if (printer)
-				printer(key, val + sizeof(*liv),
-					val_len - sizeof(*liv));
-			else
-				printf("      (unknown zone %u type %u)\n",
-				       key->sk_zone, key->sk_type);
-		}
 	}
 
 	return 0;
@@ -269,7 +257,7 @@ static int print_logs_item(struct scoutfs_key *key, void *val,
 	le64_to_cpu((srf)->ref.seq)
 
 /* same as fs item but with a small header in the value */
-static int print_log_trees_item(struct scoutfs_key *key, void *val,
+static int print_log_trees_item(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 				unsigned val_len, void *arg)
 {
 	struct scoutfs_log_trees *lt = val;
@@ -330,7 +318,7 @@ static int print_log_trees_item(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-static int print_srch_root_item(struct scoutfs_key *key, void *val,
+static int print_srch_root_item(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 				unsigned val_len, void *arg)
 {
 	struct scoutfs_srch_compact *sc;
@@ -363,7 +351,7 @@ static int print_srch_root_item(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-static int print_trans_seqs_entry(struct scoutfs_key *key, void *val,
+static int print_trans_seqs_entry(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 				  unsigned val_len, void *arg)
 {
 	printf("    trans_seq %llu rid %016llx\n",
@@ -372,7 +360,7 @@ static int print_trans_seqs_entry(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-static int print_mounted_client_entry(struct scoutfs_key *key, void *val,
+static int print_mounted_client_entry(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 				      unsigned val_len, void *arg)
 {
 	struct scoutfs_mounted_client_btree_val *mcv = val;
@@ -387,8 +375,8 @@ static int print_mounted_client_entry(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-static int print_log_merge_item(struct scoutfs_key *key, void *val,
-				      unsigned val_len, void *arg)
+static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
+				unsigned val_len, void *arg)
 {
 	struct scoutfs_log_merge_status *stat;
 	struct scoutfs_log_merge_range *rng;
@@ -451,7 +439,7 @@ static int print_log_merge_item(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-static int print_alloc_item(struct scoutfs_key *key, void *val,
+static int print_alloc_item(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 			    unsigned val_len, void *arg)
 {
 	if (key->sk_zone == SCOUTFS_FREE_EXTENT_BLKNO_ZONE)
@@ -469,7 +457,7 @@ static int print_alloc_item(struct scoutfs_key *key, void *val,
 	return 0;
 }
 
-typedef int (*print_item_func)(struct scoutfs_key *key, void *val,
+typedef int (*print_item_func)(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 			       unsigned val_len, void *arg);
 
 static int print_block_ref(struct scoutfs_key *key, void *val,
@@ -477,7 +465,7 @@ static int print_block_ref(struct scoutfs_key *key, void *val,
 {
 	struct scoutfs_block_ref *ref = val;
 
-	func(key, NULL, 0, arg);
+	func(key, 0, 0, NULL, 0, arg);
 	printf("    ref blkno %llu seq %llu\n",
 		le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq));
 
@@ -586,7 +574,7 @@ static int print_btree_block(int fd, struct scoutfs_super_block *super,
 		if (level)
 			print_block_ref(key, val, val_len, func, arg);
 		else
-			func(key, val, val_len, arg);
+			func(key, le64_to_cpu(item->seq), item->flags, val, val_len, arg);
 	}
 
 	free(bt);
@@ -744,8 +732,8 @@ struct print_recursion_args {
 };
 
 /* same as fs item but with a small header in the value */
-static int print_log_trees_roots(struct scoutfs_key *key, void *val,
-				unsigned val_len, void *arg)
+static int print_log_trees_roots(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
+				 unsigned val_len, void *arg)
 {
 	struct scoutfs_log_trees *lt = val;
 	struct print_recursion_args *pa = arg;
@@ -776,14 +764,14 @@ static int print_log_trees_roots(struct scoutfs_key *key, void *val,
 		ret = err;
 
 	err = print_btree(pa->fd, pa->super, "", &lt->item_root,
-			  print_logs_item, NULL);
+			  print_fs_item, NULL);
 	if (err && !ret)
 		ret = err;
 
 	return ret;
 }
 
-static int print_srch_root_files(struct scoutfs_key *key, void *val,
+static int print_srch_root_files(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 				 unsigned val_len, void *arg)
 {
 	struct print_recursion_args *pa = arg;
@@ -843,7 +831,7 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 				break;
 			continue;
 		} else {
-			func(key, val, val_len, arg);
+			func(key, le64_to_cpu(item->seq), item->flags, val, val_len, arg);
 		}
 
 		node = avl_next(&bt->item_root, node);

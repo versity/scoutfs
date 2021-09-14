@@ -47,6 +47,8 @@
 	EXPAND_COUNTER(btree_merge)				\
 	EXPAND_COUNTER(btree_merge_alloc_low)			\
 	EXPAND_COUNTER(btree_merge_delete)			\
+	EXPAND_COUNTER(btree_merge_delta_combined)		\
+	EXPAND_COUNTER(btree_merge_delta_null)			\
 	EXPAND_COUNTER(btree_merge_dirty_limit)			\
 	EXPAND_COUNTER(btree_merge_drop_old)			\
 	EXPAND_COUNTER(btree_merge_insert)			\
@@ -91,6 +93,8 @@
 	EXPAND_COUNTER(item_clear_dirty)			\
 	EXPAND_COUNTER(item_create)				\
 	EXPAND_COUNTER(item_delete)				\
+	EXPAND_COUNTER(item_delta)				\
+	EXPAND_COUNTER(item_delta_written)			\
 	EXPAND_COUNTER(item_dirty)				\
 	EXPAND_COUNTER(item_invalidate)				\
 	EXPAND_COUNTER(item_invalidate_page)			\
@@ -188,6 +192,11 @@
 	EXPAND_COUNTER(srch_search_xattrs)			\
 	EXPAND_COUNTER(srch_read_stale)				\
 	EXPAND_COUNTER(statfs)					\
+	EXPAND_COUNTER(totl_read_copied)			\
+	EXPAND_COUNTER(totl_read_finalized)			\
+	EXPAND_COUNTER(totl_read_fs)				\
+	EXPAND_COUNTER(totl_read_item)				\
+	EXPAND_COUNTER(totl_read_logged)			\
 	EXPAND_COUNTER(trans_commit_data_alloc_low)		\
 	EXPAND_COUNTER(trans_commit_dirty_meta_full)		\
 	EXPAND_COUNTER(trans_commit_fsync)			\

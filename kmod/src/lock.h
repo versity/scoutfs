@@ -84,6 +84,8 @@ int scoutfs_lock_rename(struct super_block *sb, enum scoutfs_lock_mode mode, int
 			struct scoutfs_lock **lock);
 int scoutfs_lock_orphan(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
 		        u64 ino, struct scoutfs_lock **lock);
+int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+			    struct scoutfs_lock **lock);
 void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock,
 		    enum scoutfs_lock_mode mode);
 

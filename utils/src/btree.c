@@ -75,6 +75,9 @@ void btree_append_item(struct scoutfs_btree_block *bt,
 	le16_add_cpu(&bt->total_item_bytes, sizeof(struct scoutfs_btree_item));
 
 	item->key = *key;
+	item->seq = cpu_to_le64(1);
+	item->flags = 0;
+
 	leaf_item_hash_insert(bt, &item->key,
 			      cpu_to_le16((void *)item - (void *)bt));
 	if (val_len == 0)
