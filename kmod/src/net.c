@@ -880,13 +880,31 @@ static void destroy_conn(struct scoutfs_net_connection *conn)
 }
 
 /*
- * Have a pretty aggressive keepalive timeout of around 10 seconds.  The
- * TCP keepalives are being processed out of task context so they should
- * be responsive even when mounts are under load.
+ * By default, TCP would maintain a connection to an unresponsive peer
+ * for a very long time indeed.   We can't do that because quorum
+ * members will only participate in an election when they don't have a
+ * healthy connection to a server.  We use the KEEPALIVE* and
+ * TCP_USER_TIMEOUT options to ensure that we'll break an unresponsive
+ * connection and return to the quorum and client connection paths to
+ * try and establish a new connection to an active server.
+ *
+ * The TCP_KEEP* and TCP_USER_TIMEOUT option interaction is subtle.
+ * TCP_USER_TIMEOUT only applies if there is unacked written data in the
+ * send queue.  It doesn't work if the connection is idle.  Adding
+ * keepalice probes with user_timeout set changes how the keepalive
+ * timeout is calculated.   CNT no longer matters.   Each time
+ * additional probes (not the first) are sent the user timeout is
+ * checked against the last time data was received.  If none of the
+ * keepalives are responded to then eventually the user timeout applies.
+ *
+ * Given all this, we start with the overall unresponsive timeout.  Then
+ * we set the probes to start sending towards the end of the timeout.
+ * We give it a few tries for a successful response before the timeout
+ * elapses during the probe timer processing after the unsuccessful
+ * probes.
  */
-#define KEEPCNT			3
-#define KEEPIDLE		7
-#define KEEPINTVL		1
+#define UNRESPONSIVE_TIMEOUT_SECS 10
+#define UNRESPONSIVE_PROBES 3
 static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 			       struct socket *sock)
 {
@@ -895,7 +913,7 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 	int optval;
 	int ret;
 
-	/* but use a keepalive timeout instead of send timeout */
+	/* we use a keepalive timeout instead of send timeout */
 	tv.tv_sec = 0;
 	tv.tv_usec = 0;
 	ret = kernel_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
@@ -903,20 +921,28 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 	if (ret)
 		goto out;
 
-	optval = KEEPCNT;
+	/* not checked when user_timeout != 0, but for clarity */
+	optval = UNRESPONSIVE_PROBES;
 	ret = kernel_setsockopt(sock, SOL_TCP, TCP_KEEPCNT,
 				(char *)&optval, sizeof(optval));
 	if (ret)
 		goto out;
 
-	optval = KEEPIDLE;
+	BUILD_BUG_ON(UNRESPONSIVE_PROBES >= UNRESPONSIVE_TIMEOUT_SECS);
+	optval = UNRESPONSIVE_TIMEOUT_SECS - (UNRESPONSIVE_PROBES);
 	ret = kernel_setsockopt(sock, SOL_TCP, TCP_KEEPIDLE,
 				(char *)&optval, sizeof(optval));
 	if (ret)
 		goto out;
 
-	optval = KEEPINTVL;
+	optval = 1;
 	ret = kernel_setsockopt(sock, SOL_TCP, TCP_KEEPINTVL,
+				(char *)&optval, sizeof(optval));
+	if (ret)
+		goto out;
+
+	optval = UNRESPONSIVE_TIMEOUT_SECS * MSEC_PER_SEC;
+	ret = kernel_setsockopt(sock, SOL_TCP, TCP_USER_TIMEOUT,
 				(char *)&optval, sizeof(optval));
 	if (ret)
 		goto out;
