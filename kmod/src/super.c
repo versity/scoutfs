@@ -714,11 +714,11 @@ static int __init scoutfs_module_init(void)
 	 */
 	__asm__ __volatile__ (
 		".section	.note.git_describe,\"a\"\n"
-		".string	\""SCOUTFS_GIT_DESCRIBE"\\n\"\n"
+		".ascii		\""SCOUTFS_GIT_DESCRIBE"\\n\"\n"
 		".previous\n");
 	__asm__ __volatile__ (
 		".section	.note.scoutfs_interop_version,\"a\"\n"
-		".string	\""SCOUTFS_INTEROP_VERSION_STR"\\n\"\n"
+		".ascii		\""SCOUTFS_INTEROP_VERSION_STR"\\n\"\n"
 		".previous\n");
 
 	scoutfs_init_counters();
