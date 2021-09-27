@@ -32,30 +32,6 @@
 #include "leaf_item_hash.h"
 #include "blkid.h"
 
-/*
- * Update the block header fields and write out the block.
- */
-static int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
-		       int shift, struct scoutfs_block_header *hdr)
-{
-	size_t size = 1ULL << shift;
-	ssize_t ret;
-
-	hdr->magic = cpu_to_le32(magic);
-	hdr->fsid = fsid;
-	hdr->blkno = cpu_to_le64(blkno);
-	hdr->seq = cpu_to_le64(seq);
-	hdr->crc = cpu_to_le32(crc_block(hdr, size));
-
-	ret = pwrite(fd, hdr, size, blkno << shift);
-	if (ret != size) {
-		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
-			blkno, ret, strerror(errno), errno);
-		return -errno;
-	}
-
-	return 0;
-}
 
 /*
  * Return the order of the length of a free extent, which we define as
@@ -356,32 +332,18 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* write the super block to data dev and meta dev*/
-	ret = write_block(data_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid, 1,
-			  SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  &super->hdr);
+	ret = write_block_sync(data_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid, 1,
+			       SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			       &super->hdr);
 	if (ret)
 		goto out;
-
-	if (fsync(data_fd)) {
-		ret = -errno;
-		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
-			args->data_device, strerror(errno), errno);
-		goto out;
-	}
 
 	super->flags |= cpu_to_le64(SCOUTFS_FLAG_IS_META_BDEV);
-	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid,
-			  1, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  &super->hdr);
+	ret = write_block_sync(meta_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid,
+			       1, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			       &super->hdr);
 	if (ret)
 		goto out;
-
-	if (fsync(meta_fd)) {
-		ret = -errno;
-		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
-			args->meta_device, strerror(errno), errno);
-		goto out;
-	}
 
 	uuid_unparse(super->uuid, uuid_str);
 
