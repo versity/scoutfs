@@ -403,11 +403,22 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 		goto out;
 	}
 
+	if (le64_to_cpu(super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN ||
+	    le64_to_cpu(super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX) {
+		scoutfs_err(sb, "super block has format version %llu outside of supported version range %u-%u",
+			    le64_to_cpu(super->fmt_vers), SCOUTFS_FORMAT_VERSION_MIN,
+			    SCOUTFS_FORMAT_VERSION_MAX);
+		ret = -EINVAL;
+		goto out;
+	}
 
-	if (super->version != cpu_to_le64(SCOUTFS_INTEROP_VERSION)) {
-		scoutfs_err(sb, "super block has invalid version %llu, expected %llu",
-			    le64_to_cpu(super->version),
-			    SCOUTFS_INTEROP_VERSION);
+	/*
+	 * fill_supers checks the fmt_vers in both supers and then decides to use it.
+	 * From then on we verify that the supers we read have that version.
+	 */
+	if (sbi->fmt_vers != 0 && le64_to_cpu(super->fmt_vers) != sbi->fmt_vers) {
+		scoutfs_err(sb, "super block has format version %llu than %llu read at mount",
+			    le64_to_cpu(super->fmt_vers), sbi->fmt_vers);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -524,6 +535,14 @@ static int scoutfs_read_supers(struct super_block *sb)
 		goto out;
 	}
 
+	if (le64_to_cpu(meta_super->fmt_vers) != le64_to_cpu(data_super->fmt_vers)) {
+		scoutfs_err(sb, "meta device format version %llu != data device format version %llu",
+			    le64_to_cpu(meta_super->fmt_vers), le64_to_cpu(data_super->fmt_vers));
+		goto out;
+	}
+
+
+	sbi->fmt_vers = le64_to_cpu(meta_super->fmt_vers);
 	sbi->super = *meta_super;
 out:
 	kfree(meta_super);
@@ -717,8 +736,12 @@ static int __init scoutfs_module_init(void)
 		".ascii		\""SCOUTFS_GIT_DESCRIBE"\\n\"\n"
 		".previous\n");
 	__asm__ __volatile__ (
-		".section	.note.scoutfs_interop_version,\"a\"\n"
-		".ascii		\""SCOUTFS_INTEROP_VERSION_STR"\\n\"\n"
+		".section	.note.scoutfs_format_version_min,\"a\"\n"
+		".ascii		\""SCOUTFS_FORMAT_VERSION_MIN_STR"\\n\"\n"
+		".previous\n");
+	__asm__ __volatile__ (
+		".section	.note.scoutfs_format_version_max,\"a\"\n"
+		".ascii		\""SCOUTFS_FORMAT_VERSION_MAX_STR"\\n\"\n"
 		".previous\n");
 
 	scoutfs_init_counters();
@@ -752,4 +775,5 @@ module_exit(scoutfs_module_exit)
 MODULE_AUTHOR("Zach Brown <zab@versity.com>");
 MODULE_LICENSE("GPL");
 MODULE_INFO(git_describe, SCOUTFS_GIT_DESCRIBE);
-MODULE_INFO(scoutfs_interop_version, SCOUTFS_INTEROP_VERSION_STR);
+MODULE_INFO(scoutfs_format_version_min, SCOUTFS_FORMAT_VERSION_MIN_STR);
+MODULE_INFO(scoutfs_format_version_max, SCOUTFS_FORMAT_VERSION_MAX_STR);

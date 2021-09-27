@@ -361,7 +361,8 @@ static int client_greeting(struct super_block *sb,
 			   void *resp, unsigned int resp_len, int error,
 			   void *data)
 {
-	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct client_info *client = sbi->client_info;
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct scoutfs_net_greeting *gr = resp;
 	bool new_server;
@@ -378,17 +379,15 @@ static int client_greeting(struct super_block *sb,
 	}
 
 	if (gr->fsid != super->hdr.fsid) {
-		scoutfs_warn(sb, "server sent fsid 0x%llx, client has 0x%llx",
-			     le64_to_cpu(gr->fsid),
-			     le64_to_cpu(super->hdr.fsid));
+		scoutfs_warn(sb, "server greeting response fsid 0x%llx did not match client fsid 0x%llx",
+			     le64_to_cpu(gr->fsid), le64_to_cpu(super->hdr.fsid));
 		ret = -EINVAL;
 		goto out;
 	}
 
-	if (gr->version != super->version) {
-		scoutfs_warn(sb, "server sent format 0x%llx, client has 0x%llx",
-			     le64_to_cpu(gr->version),
-			     le64_to_cpu(super->version));
+	if (le64_to_cpu(gr->fmt_vers) != sbi->fmt_vers) {
+		scoutfs_warn(sb, "server greeting response format version %llu did not match client format version %llu",
+			     le64_to_cpu(gr->fmt_vers), sbi->fmt_vers);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -514,7 +513,7 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 
 	/* send a greeting to verify endpoints of each connection */
 	greet.fsid = super->hdr.fsid;
-	greet.version = super->version;
+	greet.fmt_vers = cpu_to_le64(sbi->fmt_vers);
 	greet.server_term = cpu_to_le64(client->server_term);
 	greet.rid = cpu_to_le64(sbi->rid);
 	greet.flags = 0;

@@ -79,11 +79,16 @@ int read_block(int fd, u64 blkno, int shift, void **ret_val)
 	void *buf;
 	int ret;
 
+	buf = NULL;
 	*ret_val = NULL;
 
-	buf = malloc(size);
-	if (!buf)
-		return -ENOMEM;
+	ret = posix_memalign(&buf, size, size);
+	if (ret != 0) {
+		ret = -errno;
+		fprintf(stderr, "%zu byte aligned buffer allocation failed: %s (%d)\n",
+			size, strerror(errno), errno);
+		return ret;
+	}
 
 	ret = pread(fd, buf, size, blkno << shift);
 	if (ret == -1) {
@@ -136,7 +141,7 @@ int read_block_verify(int fd, u32 magic, u64 fsid, u64 blkno, int shift, void **
 		if (le32_to_cpu(hdr->magic) != magic)
 			fprintf(stderr, "read blkno %llu has bad magic %08x != expected %08x\n",
 				blkno, le32_to_cpu(hdr->magic), magic);
-		else if (fsid != 0 && le32_to_cpu(hdr->fsid) != fsid)
+		else if (fsid != 0 && le64_to_cpu(hdr->fsid) != fsid)
 			fprintf(stderr, "read blkno %llu has bad fsid %016llx != expected %016llx\n",
 				blkno, le64_to_cpu(hdr->fsid), fsid);
 		else if (le32_to_cpu(hdr->blkno) != blkno)

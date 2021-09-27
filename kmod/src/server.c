@@ -3199,7 +3199,8 @@ static int server_greeting(struct super_block *sb,
 			   struct scoutfs_net_connection *conn,
 			   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
 	struct scoutfs_net_greeting *gr = arg;
 	struct scoutfs_net_greeting greet;
 	DECLARE_SERVER_INFO(sb, server);
@@ -3215,17 +3216,16 @@ static int server_greeting(struct super_block *sb,
 	}
 
 	if (gr->fsid != super->hdr.fsid) {
-		scoutfs_warn(sb, "client sent fsid 0x%llx, server has 0x%llx",
-			     le64_to_cpu(gr->fsid),
+		scoutfs_warn(sb, "client rid %016llx greeting fsid 0x%llx did not match server fsid 0x%llx",
+			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fsid),
 			     le64_to_cpu(super->hdr.fsid));
 		ret = -EINVAL;
 		goto send_err;
 	}
 
-	if (gr->version != super->version) {
-		scoutfs_warn(sb, "client sent format 0x%llx, server has 0x%llx",
-			     le64_to_cpu(gr->version),
-			     le64_to_cpu(super->version));
+	if (le64_to_cpu(gr->fmt_vers) != sbi->fmt_vers) {
+		scoutfs_warn(sb, "client rid %016llx greeting format version %llu did not match server format version %llu",
+			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fmt_vers), sbi->fmt_vers);
 		ret = -EINVAL;
 		goto send_err;
 	}
@@ -3249,7 +3249,7 @@ send_err:
 	err = ret;
 
 	greet.fsid = super->hdr.fsid;
-	greet.version = super->version;
+	greet.fmt_vers = cpu_to_le64(sbi->fmt_vers);
 	greet.server_term = cpu_to_le64(server->term);
 	greet.rid = gr->rid;
 	greet.flags = 0;

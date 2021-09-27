@@ -828,7 +828,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				qst.term);
 	}
 
-	/* informational event that we're shutting down, nothing relies on it */
+	/* record that this slot no longer has an active quorum */
 	update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_END, qst.term, true);
 out:
 	if (ret < 0) {

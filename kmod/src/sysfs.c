@@ -37,6 +37,16 @@ struct attr_funcs {
 #define ATTR_FUNCS_RO(_name) \
 	static struct attr_funcs _name##_attr_funcs = __ATTR_RO(_name)
 
+static ssize_t format_version_show(struct kobject *kobj, struct attribute *attr,
+			 char *buf)
+{
+	struct super_block *sb = KOBJ_TO_SB(kobj, sb_id_kobj);
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	return snprintf(buf, PAGE_SIZE, "%llu\n", sbi->fmt_vers);
+}
+ATTR_FUNCS_RO(format_version);
+
 static ssize_t fsid_show(struct kobject *kobj, struct attribute *attr,
 			 char *buf)
 {
@@ -91,6 +101,7 @@ static ssize_t attr_funcs_show(struct kobject *kobj, struct attribute *attr,
 
 
 static struct attribute *sb_id_attrs[] = {
+	&format_version_attr_funcs.attr,
 	&fsid_attr_funcs.attr,
 	&rid_attr_funcs.attr,
 	NULL,

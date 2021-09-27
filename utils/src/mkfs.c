@@ -110,6 +110,7 @@ struct mkfs_args {
 	unsigned long long max_meta_size;
 	unsigned long long max_data_size;
 	u64 data_alloc_zone_blocks;
+	u64 fmt_vers;
 	bool force;
 	bool allow_small_size;
 	int nr_slots;
@@ -212,7 +213,7 @@ static int do_mkfs(struct mkfs_args *args)
 
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
-	super->version = cpu_to_le64(SCOUTFS_INTEROP_VERSION);
+	super->fmt_vers = cpu_to_le64(args->fmt_vers);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(round_up(SCOUTFS_ROOT_INO + 1, SCOUTFS_LOCK_INODE_GROUP_NR));
 	super->seq = cpu_to_le64(1);
@@ -351,16 +352,16 @@ static int do_mkfs(struct mkfs_args *args)
 	       "  meta device path:     %s\n"
 	       "  data device path:     %s\n"
 	       "  fsid:                 %llx\n"
-	       "  version:              %llx\n"
 	       "  uuid:                 %s\n"
+	       "  format version:       %llu\n"
 	       "  64KB metadata blocks: "SIZE_FMT"\n"
 	       "  4KB data blocks:      "SIZE_FMT"\n"
 	       "  quorum slots:         ",
 		args->meta_device,
 	        args->data_device,
 		le64_to_cpu(super->hdr.fsid),
-		le64_to_cpu(super->version),
 		uuid_str,
+		le64_to_cpu(super->fmt_vers),
 		SIZE_ARGS(le64_to_cpu(super->total_meta_blocks),
 			  SCOUTFS_BLOCK_LG_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->total_data_blocks),
@@ -484,6 +485,16 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	case 'A':
 		args->allow_small_size = true;
 		break;
+	case 'V':
+		ret = parse_u64(arg, &args->fmt_vers);
+		if (ret)
+			return ret;
+		if (args->fmt_vers < SCOUTFS_FORMAT_VERSION_MIN ||
+		    args->fmt_vers > SCOUTFS_FORMAT_VERSION_MAX)
+			argp_error(state, "format-version %llu is outside supported range of %u-%u",
+				   args->fmt_vers, SCOUTFS_FORMAT_VERSION_MIN,
+				   SCOUTFS_FORMAT_VERSION_MAX);
+		break;
 	case 'z': /* data-alloc-zone-blocks */
 	{
 		ret = parse_u64(arg, &args->data_alloc_zone_blocks);
@@ -527,6 +538,7 @@ static struct argp_option options[] = {
 	{ "max-meta-size", 'm', "SIZE", 0, "Use a size less than the base metadata device size (bytes or KMGTP units)"},
 	{ "max-data-size", 'd', "SIZE", 0, "Use a size less than the base data device size (bytes or KMGTP units)"},
 	{ "data-alloc-zone-blocks", 'z', "BLOCKS", 0, "Divide data device into block zones so each mounts writes to a zone (4KB blocks)"},
+	{ "format-version", 'V', "version", 0, "Specify a format version within supported range, ("SCOUTFS_FORMAT_VERSION_MIN_STR"-"SCOUTFS_FORMAT_VERSION_MAX_STR", default "SCOUTFS_FORMAT_VERSION_MAX_STR")"},
 	{ NULL }
 };
 
@@ -539,7 +551,9 @@ static struct argp argp = {
 
 static int mkfs_cmd(int argc, char *argv[])
 {
-	struct mkfs_args mkfs_args = {NULL,};
+	struct mkfs_args mkfs_args = {
+		.fmt_vers = SCOUTFS_FORMAT_VERSION_MAX,
+	};
 	int ret;
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &mkfs_args);

@@ -36,6 +36,7 @@ struct scoutfs_sb_info {
 
 	/* assigned once at the start of each mount, read-only */
 	u64 rid;
+	u64 fmt_vers;
 
 	struct scoutfs_super_block super;
 

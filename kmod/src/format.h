@@ -1,8 +1,15 @@
 #ifndef _SCOUTFS_FORMAT_H_
 #define _SCOUTFS_FORMAT_H_
 
-#define SCOUTFS_INTEROP_VERSION		0ULL
-#define SCOUTFS_INTEROP_VERSION_STR	__stringify(0)
+/*
+ * The format version defines the format of structures on devices,
+ * structures that are communicated over the wire, and the protocol
+ * behind the structures.
+ */
+#define SCOUTFS_FORMAT_VERSION_MIN		0
+#define SCOUTFS_FORMAT_VERSION_MIN_STR	__stringify(SCOUTFS_FORMAT_VERSION_MIN)
+#define SCOUTFS_FORMAT_VERSION_MAX		0
+#define SCOUTFS_FORMAT_VERSION_MAX_STR	__stringify(SCOUTFS_FORMAT_VERSION_MAX)
 
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */
@@ -783,7 +790,7 @@ struct scoutfs_volume_options {
 struct scoutfs_super_block {
 	struct scoutfs_block_header hdr;
 	__le64 id;
-	__le64 version;
+	__le64 fmt_vers;
 	__le64 flags;
 	__u8 uuid[SCOUTFS_UUID_BYTES];
 	__le64 seq;
@@ -928,7 +935,7 @@ enum scoutfs_dentry_type {
  */
 struct scoutfs_net_greeting {
 	__le64 fsid;
-	__le64 version;
+	__le64 fmt_vers;
 	__le64 server_term;
 	__le64 rid;
 	__le64 flags;

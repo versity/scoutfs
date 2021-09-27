@@ -935,8 +935,8 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	printf("super blkno %llu\n", blkno);
 	print_block_header(&super->hdr, SCOUTFS_BLOCK_SM_SIZE);
-	printf("  version %llx uuid %s\n",
-	       le64_to_cpu(super->version), uuid_str);
+	printf("  fmt_vers %llu uuid %s\n",
+	       le64_to_cpu(super->fmt_vers), uuid_str);
 	printf("  flags: 0x%016llx\n", le64_to_cpu(super->flags));
 
 	/* XXX these are all in a crazy order */
