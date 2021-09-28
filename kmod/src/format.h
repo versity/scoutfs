@@ -733,7 +733,9 @@ enum {
 
 struct scoutfs_quorum_block {
 	struct scoutfs_block_header hdr;
+	__le64 write_nr;
 	struct scoutfs_quorum_block_event {
+		__le64 write_nr;
 		__le64 rid;
 		__le64 term;
 		struct scoutfs_timespec ts;

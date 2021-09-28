@@ -898,13 +898,15 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 		printf("quorum blkno %llu (slot %llu)\n",
 		       blkno, blkno - SCOUTFS_QUORUM_BLKNO);
 		print_block_header(&blk->hdr, SCOUTFS_BLOCK_SM_SIZE);
+		printf("  write_nr %llu\n", le64_to_cpu(blk->write_nr));
 
 		for (e = 0; e < array_size(event_names); e++) {
 			ev = &blk->events[e];
 
-			printf("  %12s: rid %016llx term %llu ts %llu.%08u\n",
+			printf("  %12s: rid %016llx term %llu write_nr %llu ts %llu.%08u\n",
 			       event_names[e], le64_to_cpu(ev->rid), le64_to_cpu(ev->term),
-			       le64_to_cpu(ev->ts.sec), le32_to_cpu(ev->ts.nsec));
+			       le64_to_cpu(ev->write_nr), le64_to_cpu(ev->ts.sec),
+			       le32_to_cpu(ev->ts.nsec));
 		}
 	}
 
