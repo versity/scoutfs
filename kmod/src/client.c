@@ -306,6 +306,14 @@ int scoutfs_client_resize_devices(struct super_block *sb, struct scoutfs_net_res
 					nrd, sizeof(*nrd), NULL, 0);
 }
 
+int scoutfs_client_statfs(struct super_block *sb, struct scoutfs_net_statfs *nst)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_STATFS,
+					NULL, 0, nst, sizeof(*nst));
+}
+
 /*
  * The server is asking that we trigger a commit of the current log
  * trees so that they can ensure an item seq discontinuity between

@@ -2921,6 +2921,68 @@ out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 };
 
+struct statfs_free_blocks {
+	u64 meta;
+	u64 data;
+};
+
+static int count_free_blocks(struct super_block *sb, void *arg, int owner,
+			     u64 id, bool meta, bool avail, u64 blocks)
+{
+	struct statfs_free_blocks *sfb = arg;
+
+	if (meta)
+		sfb->meta += blocks;
+	else
+		sfb->data += blocks;
+
+	return 0;
+}
+
+/*
+ * We calculate the total inode count and free blocks from the current in-memory dirty
+ * versions of the super block and log_trees structs, so we have to lock them.
+ */
+static int server_statfs(struct super_block *sb, struct scoutfs_net_connection *conn,
+			 u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_net_statfs nst = {{0,}};
+	struct statfs_free_blocks sfb = {0,};
+	u64 inode_count;
+	int ret;
+
+	if (arg_len != 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&server->alloc_mutex);
+	ret = scoutfs_alloc_foreach_super(sb, super, count_free_blocks, &sfb);
+	mutex_unlock(&server->alloc_mutex);
+	if (ret < 0)
+		goto out;
+
+	mutex_lock(&server->logs_mutex);
+	ret = scoutfs_forest_inode_count(sb, super, &inode_count);
+	mutex_unlock(&server->logs_mutex);
+	if (ret < 0)
+		goto out;
+
+	BUILD_BUG_ON(sizeof(nst.uuid) != sizeof(super->uuid));
+	memcpy(nst.uuid, super->uuid, sizeof(nst.uuid));
+	nst.free_meta_blocks = cpu_to_le64(sfb.meta);
+	nst.total_meta_blocks = super->total_meta_blocks;
+	nst.free_data_blocks = cpu_to_le64(sfb.data);
+	nst.total_data_blocks = super->total_data_blocks;
+	nst.inode_count = cpu_to_le64(inode_count);
+
+	ret = 0;
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, &nst, sizeof(nst));
+}
+
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 {
 	*key = (struct scoutfs_key) {
@@ -3558,6 +3620,7 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_SET_VOLOPT]		= server_set_volopt,
 	[SCOUTFS_NET_CMD_CLEAR_VOLOPT]		= server_clear_volopt,
 	[SCOUTFS_NET_CMD_RESIZE_DEVICES]	= server_resize_devices,
+	[SCOUTFS_NET_CMD_STATFS]		= server_statfs,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 

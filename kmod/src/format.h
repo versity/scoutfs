@@ -1003,6 +1003,7 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_SET_VOLOPT,
 	SCOUTFS_NET_CMD_CLEAR_VOLOPT,
 	SCOUTFS_NET_CMD_RESIZE_DEVICES,
+	SCOUTFS_NET_CMD_STATFS,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };
@@ -1048,6 +1049,15 @@ struct scoutfs_net_roots {
 struct scoutfs_net_resize_devices {
 	__le64 new_total_meta_blocks;
 	__le64 new_total_data_blocks;
+};
+
+struct scoutfs_net_statfs {
+	__u8 uuid[SCOUTFS_UUID_BYTES];
+	__le64 free_meta_blocks;
+	__le64 total_meta_blocks;
+	__le64 free_data_blocks;
+	__le64 total_data_blocks;
+	__le64 inode_count;
 };
 
 struct scoutfs_net_lock {
