@@ -166,6 +166,8 @@ typedef int (*scoutfs_alloc_foreach_cb_t)(struct super_block *sb, void *arg,
 					  bool meta, bool avail, u64 blocks);
 int scoutfs_alloc_foreach(struct super_block *sb,
 			  scoutfs_alloc_foreach_cb_t cb, void *arg);
+int scoutfs_alloc_foreach_super(struct super_block *sb, struct scoutfs_super_block *super,
+				scoutfs_alloc_foreach_cb_t cb, void *arg);
 
 typedef void (*scoutfs_alloc_extent_cb_t)(struct super_block *sb, void *cb_arg,
 					  struct scoutfs_extent *ext);
