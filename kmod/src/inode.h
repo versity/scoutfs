@@ -127,8 +127,6 @@ int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_
 void scoutfs_inode_queue_writeback(struct inode *inode);
 int scoutfs_inode_walk_writeback(struct super_block *sb, bool write);
 
-u64 scoutfs_last_ino(struct super_block *sb);
-
 void scoutfs_inode_exit(void);
 int scoutfs_inode_init(void);
 
