@@ -277,6 +277,7 @@ static int print_log_trees_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       "      data_avail: "ALCROOT_F"\n"
 		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n"
+		       "      inode_count_delta: %lld\n"
 		       "      max_item_seq: %llu\n"
 		       "      finalize_seq: %llu\n"
 		       "      rid: %016llx\n"
@@ -294,6 +295,7 @@ static int print_log_trees_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       ALCROOT_A(&lt->data_avail),
 		       ALCROOT_A(&lt->data_freed),
 		       SRF_A(&lt->srch_file),
+		       le64_to_cpu(lt->inode_count_delta),
 		       le64_to_cpu(lt->max_item_seq),
 		       le64_to_cpu(lt->finalize_seq),
 		       le64_to_cpu(lt->rid),
@@ -940,7 +942,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("  flags: 0x%016llx\n", le64_to_cpu(super->flags));
 
 	/* XXX these are all in a crazy order */
-	printf("  next_ino %llu seq %llu\n"
+	printf("  next_ino %llu inode_count %llu seq %llu\n"
 	       "  total_meta_blocks %llu total_data_blocks %llu\n"
 	       "  meta_alloc[0]: "ALCROOT_F"\n"
 	       "  meta_alloc[1]: "ALCROOT_F"\n"
@@ -956,6 +958,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  mounted_clients: "BTR_FMT"\n"
 	       "  srch_root: "BTR_FMT"\n",
 		le64_to_cpu(super->next_ino),
+		le64_to_cpu(super->inode_count),
 		le64_to_cpu(super->seq),
 		le64_to_cpu(super->total_meta_blocks),
 		le64_to_cpu(super->total_data_blocks),

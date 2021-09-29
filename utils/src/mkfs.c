@@ -216,6 +216,7 @@ static int do_mkfs(struct mkfs_args *args)
 	super->fmt_vers = cpu_to_le64(args->fmt_vers);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(round_up(SCOUTFS_ROOT_INO + 1, SCOUTFS_LOCK_INODE_GROUP_NR));
+	super->inode_count = cpu_to_le64(1);
 	super->seq = cpu_to_le64(1);
 	super->total_meta_blocks = cpu_to_le64(last_meta + 1);
 	super->total_data_blocks = cpu_to_le64(last_data + 1);

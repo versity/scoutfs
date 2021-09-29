@@ -472,6 +472,7 @@ struct scoutfs_log_trees {
 	struct scoutfs_srch_file srch_file;
 	__le64 data_alloc_zone_blocks;
 	__le64 data_alloc_zones[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
+	__le64 inode_count_delta;
 	__le64 max_item_seq;
 	__le64 finalize_seq;
 	__le64 rid;
@@ -795,6 +796,7 @@ struct scoutfs_super_block {
 	__u8 uuid[SCOUTFS_UUID_BYTES];
 	__le64 seq;
 	__le64 next_ino;
+	__le64 inode_count;
 	__le64 total_meta_blocks;	/* both static and dynamic */
 	__le64 total_data_blocks;
 	struct scoutfs_quorum_config qconf;

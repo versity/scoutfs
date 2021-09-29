@@ -938,6 +938,7 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 
 			memset(&lt->item_root, 0, sizeof(lt->item_root));
 			memset(&lt->bloom_ref, 0, sizeof(lt->bloom_ref));
+			lt->inode_count_delta = 0;
 			lt->max_item_seq = 0;
 			lt->finalize_seq = 0;
 			le64_add_cpu(&lt->nr, 1);
@@ -2010,6 +2011,9 @@ static int splice_log_merge_completions(struct super_block *sb,
 			err_str = "deleting log trees item";
 			goto out;
 		}
+
+		le64_add_cpu(&super->inode_count, le64_to_cpu(lt.inode_count_delta));
+
 	}
 
 	init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);

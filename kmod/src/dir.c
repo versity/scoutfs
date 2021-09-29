@@ -31,6 +31,7 @@
 #include "lock.h"
 #include "hash.h"
 #include "omap.h"
+#include "forest.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
 
@@ -836,6 +837,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	si->crtime = inode->i_mtime;
 	inode_inc_iversion(dir);
 	inode_inc_iversion(inode);
+	scoutfs_forest_inc_inode_count(sb);
 
 	if (S_ISDIR(mode)) {
 		inc_nlink(inode);
@@ -1309,6 +1311,7 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 	si->crtime = inode->i_ctime;
 	i_size_write(inode, name_len);
 	inode_inc_iversion(inode);
+	scoutfs_forest_inc_inode_count(sb);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
@@ -1908,6 +1911,7 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	ihold(inode); /* need to update inode modifications in d_tmpfile */
 	d_tmpfile(dentry, inode);
 	inode_inc_iversion(inode);
+	scoutfs_forest_inc_inode_count(sb);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);

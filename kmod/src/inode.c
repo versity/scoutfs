@@ -34,6 +34,7 @@
 #include "client.h"
 #include "cmp.h"
 #include "omap.h"
+#include "forest.h"
 #include "btree.h"
 
 /*
@@ -1578,6 +1579,8 @@ retry:
 		goto out;
 
 	ret = scoutfs_inode_orphan_delete(sb, ino, orph_lock);
+	if (ret == 0)
+		scoutfs_forest_dec_inode_count(sb);
 out:
 	del_deleting_ino(inf, &del);
 	if (release)
