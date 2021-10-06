@@ -1481,10 +1481,11 @@ static int kway_merge(struct super_block *sb,
 	int ind;
 	int i;
 
-	if (WARN_ON_ONCE(nr <= 1))
+	if (WARN_ON_ONCE(nr <= 0))
 		return -EINVAL;
 
-	nr_parents = roundup_pow_of_two(nr) - 1;
+	/* always at least one parent for single leaf */
+	nr_parents = max_t(unsigned long, 1, roundup_pow_of_two(nr) - 1);
 	/* root at [1] for easy sib/parent index calc, final pad for odd sib */
 	nr_nodes = 1 + nr_parents + nr + 1;
 	tnodes = __vmalloc(nr_nodes * sizeof(struct tourn_node),
