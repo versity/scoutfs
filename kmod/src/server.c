@@ -4008,7 +4008,7 @@ void scoutfs_server_stop(struct super_block *sb)
 int scoutfs_server_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct server_info *server;
+	struct server_info *server = NULL;
 
 	server = kzalloc(sizeof(struct server_info), GFP_KERNEL);
 	if (!server)

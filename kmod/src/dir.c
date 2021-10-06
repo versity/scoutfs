@@ -276,8 +276,7 @@ static int lookup_dirent(struct super_block *sb, u64 dir_ino, const char *name,
 
 	dent = alloc_dirent(SCOUTFS_NAME_LEN);
 	if (!dent) {
-		ret = -ENOMEM;
-		goto out;
+		return -ENOMEM;
 	}
 
 	init_dirent_key(&key, SCOUTFS_DIRENT_TYPE, dir_ino, hash, 0);
@@ -539,10 +538,10 @@ static int KC_DECLARE_READDIR(scoutfs_readdir, struct file *file,
 {
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
-	struct scoutfs_dirent *dent;
-	struct scoutfs_key key;
+	struct scoutfs_lock *dir_lock = NULL;
+	struct scoutfs_dirent *dent = NULL;
 	struct scoutfs_key last_key;
-	struct scoutfs_lock *dir_lock;
+	struct scoutfs_key key;
 	int name_len;
 	u64 pos;
 	int ret;
@@ -552,8 +551,7 @@ static int KC_DECLARE_READDIR(scoutfs_readdir, struct file *file,
 
 	dent = alloc_dirent(SCOUTFS_NAME_LEN);
 	if (!dent) {
-		ret = -ENOMEM;
-		goto out;
+		return -ENOMEM;
 	}
 
 	init_dirent_key(&last_key, SCOUTFS_READDIR_TYPE, scoutfs_ino(inode),
@@ -620,18 +618,17 @@ static int add_entry_items(struct super_block *sb, u64 dir_ino, u64 hash,
 			   u64 ino, umode_t mode, struct scoutfs_lock *dir_lock,
 			   struct scoutfs_lock *inode_lock)
 {
+	struct scoutfs_dirent *dent = NULL;
 	struct scoutfs_key rdir_key;
 	struct scoutfs_key ent_key;
 	struct scoutfs_key lb_key;
-	struct scoutfs_dirent *dent;
-	bool del_ent = false;
 	bool del_rdir = false;
+	bool del_ent = false;
 	int ret;
 
 	dent = alloc_dirent(name_len);
 	if (!dent) {
-		ret = -ENOMEM;
-		goto out;
+		return -ENOMEM;
 	}
 
 	/* initialize the dent */
@@ -1364,10 +1361,10 @@ int scoutfs_dir_add_next_linkref(struct super_block *sb, u64 ino,
 				 u64 dir_ino, u64 dir_pos,
 				 struct list_head *list)
 {
-	struct scoutfs_link_backref_entry *ent;
+	struct scoutfs_link_backref_entry *ent = NULL;
+	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_key last_key;
 	struct scoutfs_key key;
-	struct scoutfs_lock *lock = NULL;
 	int len;
 	int ret;
 
