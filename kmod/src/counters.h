@@ -178,6 +178,7 @@
 	EXPAND_COUNTER(srch_add_entry)				\
 	EXPAND_COUNTER(srch_compact_dirty_block)		\
 	EXPAND_COUNTER(srch_compact_entry)			\
+	EXPAND_COUNTER(srch_compact_error)			\
 	EXPAND_COUNTER(srch_compact_flush)			\
 	EXPAND_COUNTER(srch_compact_log_page)			\
 	EXPAND_COUNTER(srch_compact_removed_entry)		\

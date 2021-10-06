@@ -28,6 +28,7 @@
 #include "btree.h"
 #include "spbm.h"
 #include "client.h"
+#include "counters.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -2128,6 +2129,7 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	struct scoutfs_alloc alloc;
 	unsigned long delay;
 	int ret;
+	int err;
 
 	sc = kmalloc(sizeof(struct scoutfs_srch_compact), GFP_NOFS);
 	if (sc == NULL) {
@@ -2166,10 +2168,14 @@ commit:
 	sc->meta_freed = alloc.freed;
 	sc->flags |= ret < 0 ? SCOUTFS_SRCH_COMPACT_FLAG_ERROR : 0;
 
-	ret = scoutfs_client_srch_commit_compact(sb, sc);
+	err = scoutfs_client_srch_commit_compact(sb, sc);
+	if (err < 0 && ret == 0)
+		ret = err;
 out:
 	/* our allocators and files should be stable */
 	WARN_ON_ONCE(ret == -ESTALE);
+	if (ret < 0)
+		scoutfs_inc_counter(sb, srch_compact_error);
 
 	scoutfs_block_writer_forget_all(sb, &wri);
 	if (!atomic_read(&srinf->shutdown)) {
