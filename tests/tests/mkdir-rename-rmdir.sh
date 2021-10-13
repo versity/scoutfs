@@ -23,9 +23,7 @@ else
 	NR_MNTS=$T_NR_MOUNTS
 fi
 
-# test until final op mount dir wraps
-while [ ${op_mnt[$NR_OPS]} == 0 ]; do
-
+while : ; do
 	# sequentially perform each op from its mount dir
 	for op in $(seq 0 $((NR_OPS - 1))); do
 		m=${op_mnt[$op]}
@@ -45,7 +43,7 @@ while [ ${op_mnt[$NR_OPS]} == 0 ]; do
 
 	# advance through mnt nrs for each op
 	i=0
-	while [ ${op_mnt[$NR_OPS]} == 0 ]; do
+	while [ $i -lt $NR_OPS ]; do
 		((op_mnt[$i]++))
 		if [ ${op_mnt[$i]} -ge $NR_MNTS ]; then
 			op_mnt[$i]=0
@@ -54,6 +52,9 @@ while [ ${op_mnt[$NR_OPS]} == 0 ]; do
 			break
 		fi
 	done
+
+	# done when the last op's mnt nr wrapped
+	[ $i -ge $NR_OPS ] && break
 done
 
 t_pass
