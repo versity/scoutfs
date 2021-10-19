@@ -17,6 +17,7 @@
 #include <linux/atomic.h>
 #include <linux/writeback.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 
 #include "super.h"
 #include "trans.h"
@@ -100,6 +101,7 @@ static int commit_btrees(struct super_block *sb)
  */
 int scoutfs_trans_get_log_trees(struct super_block *sb)
 {
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	DECLARE_TRANS_INFO(sb, tri);
 	struct scoutfs_log_trees lt;
 	int ret = 0;
@@ -112,6 +114,11 @@ int scoutfs_trans_get_log_trees(struct super_block *sb)
 
 		scoutfs_forest_init_btrees(sb, &tri->alloc, &tri->wri, &lt);
 		scoutfs_data_init_btrees(sb, &tri->alloc, &tri->wri, &lt);
+
+		/* first set during mount from 0 to nonzero allows commits */
+		spin_lock(&tri->write_lock);
+		sbi->trans_seq = le64_to_cpu(lt.get_trans_seq);
+		spin_unlock(&tri->write_lock);
 	}
 	return ret;
 }
@@ -162,26 +169,22 @@ static bool drained_holders(struct trans_info *tri)
  * functions that would try to hold the transaction.  We record the task
  * whose committing the transaction so that holding won't deadlock.
  *
- * Any dirty block had to have allocated a new blkno which would have
- * created dirty allocator metadata blocks.  We can avoid writing
- * entirely if we don't have any dirty metadata blocks.  This is
- * important because we don't try to serialize this work during
- * unmount.. we can execute as the vfs is shutting down.. we need to
- * decide that nothing is dirty without calling the vfs at all.
+ * Once we clear the write func bit in holders then waiting holders can
+ * enter the transaction and continue modifying the transaction.  Once
+ * we start writing we consider the transaction done and won't exit,
+ * clearing the write func bit, until get_log_trees has opened the next
+ * transaction.  The exception is forced unmount which is allowed to
+ * generate errors and throw away data.
  *
- * We first try to sync the dirty inodes and write their dirty data blocks,
- * then we write all our dirty metadata blocks, and only when those succeed
- * do we write the new super that references all of these newly written blocks.
- *
- * If there are write errors then blocks are kept dirty in memory and will
- * be written again at the next sync.
+ * This means that the only way fsync can return an error is if we're in
+ * forced unmount.
  */
 void scoutfs_trans_write_func(struct work_struct *work)
 {
 	struct trans_info *tri = container_of(work, struct trans_info, write_work.work);
 	struct super_block *sb = tri->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	u64 trans_seq = sbi->trans_seq;
+	bool retrying = false;
 	char *s = NULL;
 	int ret = 0;
 
@@ -191,6 +194,12 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	atomic_add(TRANS_HOLDERS_WRITE_FUNC_BIT, &tri->holders);
 
 	wait_event(tri->hold_wq, drained_holders(tri));
+
+	/* mount hasn't opened first transaction yet, still complete sync */
+	if (sbi->trans_seq == 0) {
+		ret = 0;
+		goto out;
+	}
 
 	if (scoutfs_forcing_unmount(sb)) {
 		ret = -EIO;
@@ -205,25 +214,41 @@ void scoutfs_trans_write_func(struct work_struct *work)
 
 	scoutfs_inc_counter(sb, trans_commit_written);
 
-	/* XXX this all needs serious work for dealing with errors */
-	ret = (s = "data submit", scoutfs_inode_walk_writeback(sb, true)) ?:
-	      (s = "item dirty", scoutfs_item_write_dirty(sb))  ?:
-	      (s = "data prepare", scoutfs_data_prepare_commit(sb))  ?:
-	      (s = "alloc prepare", scoutfs_alloc_prepare_commit(sb, &tri->alloc, &tri->wri))  ?:
-	      (s = "meta write", scoutfs_block_writer_write(sb, &tri->wri))  ?:
-	      (s = "data wait", scoutfs_inode_walk_writeback(sb, false)) ?:
-	      (s = "commit log trees", commit_btrees(sb)) ?: scoutfs_item_write_done(sb) ?:
-	      (s = "get log trees", scoutfs_trans_get_log_trees(sb)) ?:
-	      (s = "advance seq", scoutfs_client_advance_seq(sb, &trans_seq));
-	if (ret < 0)
-		scoutfs_err(sb, "critical transaction commit failure: %s, %d",
-			    s, ret);
+	do {
+		ret = (s = "data submit", scoutfs_inode_walk_writeback(sb, true)) ?:
+		      (s = "item dirty", scoutfs_item_write_dirty(sb))  ?:
+		      (s = "data prepare", scoutfs_data_prepare_commit(sb))  ?:
+		      (s = "alloc prepare", scoutfs_alloc_prepare_commit(sb, &tri->alloc,
+									 &tri->wri))  ?:
+		      (s = "meta write", scoutfs_block_writer_write(sb, &tri->wri))  ?:
+		      (s = "data wait", scoutfs_inode_walk_writeback(sb, false)) ?:
+		      (s = "commit log trees", commit_btrees(sb)) ?:
+		      scoutfs_item_write_done(sb) ?:
+		      (s = "get log trees", scoutfs_trans_get_log_trees(sb));
+		if (ret < 0) {
+			if (!retrying) {
+				scoutfs_warn(sb, "critical transaction commit failure: %s = %d, retrying",
+					    s, ret);
+				retrying = true;
+			}
+
+			if (scoutfs_forcing_unmount(sb)) {
+				ret = -EIO;
+				break;
+			}
+
+			msleep(2 * MSEC_PER_SEC);
+
+		} else if (retrying) {
+			scoutfs_info(sb, "retried transaction commit succeeded");
+		}
+
+	} while (ret < 0);
 
 out:
 	spin_lock(&tri->write_lock);
 	tri->write_count++;
 	tri->write_ret = ret;
-	sbi->trans_seq = trans_seq;
 	spin_unlock(&tri->write_lock);
 	wake_up(&tri->write_wq);
 
@@ -464,6 +489,7 @@ static bool holders_no_writer(struct trans_info *tri)
  */
 int scoutfs_hold_trans(struct super_block *sb, bool allocing)
 {
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	DECLARE_TRANS_INFO(sb, tri);
 	u64 seq;
 	int ret;
@@ -472,6 +498,12 @@ int scoutfs_hold_trans(struct super_block *sb, bool allocing)
 		return 0;
 
 	for (;;) {
+		/* shouldn't get holders until mount finishes, (not locking for cheap test) */
+		if (WARN_ON_ONCE(sbi->trans_seq == 0)) {
+			ret = -EINVAL;
+			break;
+		}
+
 		/* if a caller already has a hold we acquire unconditionally */
 		if (inc_journal_info_holders()) {
 			atomic_inc(&tri->holders);

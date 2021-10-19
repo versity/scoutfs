@@ -1980,48 +1980,6 @@ DEFINE_EVENT(scoutfs_clock_sync_class, scoutfs_recv_clock_sync,
 	TP_ARGS(clock_sync_id)
 );
 
-TRACE_EVENT(scoutfs_trans_seq_advance,
-	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
-
-	TP_ARGS(sb, rid, trans_seq),
-
-	TP_STRUCT__entry(
-		SCSB_TRACE_FIELDS
-		__field(__u64, s_rid)
-		__field(__u64, trans_seq)
-	),
-
-	TP_fast_assign(
-		SCSB_TRACE_ASSIGN(sb);
-		__entry->s_rid = rid;
-		__entry->trans_seq = trans_seq;
-	),
-
-	TP_printk(SCSBF" rid %016llx trans_seq %llu\n",
-		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
-);
-
-TRACE_EVENT(scoutfs_trans_seq_remove,
-	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
-
-	TP_ARGS(sb, rid, trans_seq),
-
-	TP_STRUCT__entry(
-		SCSB_TRACE_FIELDS
-		__field(__u64, s_rid)
-		__field(__u64, trans_seq)
-	),
-
-	TP_fast_assign(
-		SCSB_TRACE_ASSIGN(sb);
-		__entry->s_rid = rid;
-		__entry->trans_seq = trans_seq;
-	),
-
-	TP_printk(SCSBF" rid %016llx trans_seq %llu",
-		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
-);
-
 TRACE_EVENT(scoutfs_trans_seq_last,
 	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
 

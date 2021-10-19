@@ -353,15 +353,6 @@ static int print_srch_root_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 	return 0;
 }
 
-static int print_trans_seqs_entry(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
-				  unsigned val_len, void *arg)
-{
-	printf("    trans_seq %llu rid %016llx\n",
-	       le64_to_cpu(key->skts_trans_seq), le64_to_cpu(key->skts_rid));
-
-	return 0;
-}
-
 static int print_mounted_client_entry(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 				      unsigned val_len, void *arg)
 {
@@ -954,7 +945,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  fs_root: "BTR_FMT"\n"
 	       "  logs_root: "BTR_FMT"\n"
 	       "  log_merge: "BTR_FMT"\n"
-	       "  trans_seqs: "BTR_FMT"\n"
 	       "  mounted_clients: "BTR_FMT"\n"
 	       "  srch_root: "BTR_FMT"\n",
 		le64_to_cpu(super->next_ino),
@@ -972,7 +962,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		BTR_ARG(&super->fs_root),
 		BTR_ARG(&super->logs_root),
 		BTR_ARG(&super->log_merge),
-		BTR_ARG(&super->trans_seqs),
 		BTR_ARG(&super->mounted_clients),
 		BTR_ARG(&super->srch_root));
 
@@ -1021,11 +1010,6 @@ static int print_volume(int fd)
 
 	err = print_btree(fd, super, "mounted_clients", &super->mounted_clients,
 			  print_mounted_client_entry, NULL);
-	if (err && !ret)
-		ret = err;
-
-	err = print_btree(fd, super, "trans_seqs", &super->trans_seqs,
-			  print_trans_seqs_entry, NULL);
 	if (err && !ret)
 		ret = err;
 

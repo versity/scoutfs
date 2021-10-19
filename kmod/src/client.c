@@ -117,21 +117,6 @@ int scoutfs_client_get_roots(struct super_block *sb,
 					NULL, 0, roots, sizeof(*roots));
 }
 
-int scoutfs_client_advance_seq(struct super_block *sb, u64 *seq)
-{
-	struct client_info *client = SCOUTFS_SB(sb)->client_info;
-	__le64 leseq;
-	int ret;
-
-	ret = scoutfs_net_sync_request(sb, client->conn,
-				       SCOUTFS_NET_CMD_ADVANCE_SEQ,
-				       NULL, 0, &leseq, sizeof(leseq));
-	if (ret == 0)
-		*seq = le64_to_cpu(leseq);
-
-	return ret;
-}
-
 int scoutfs_client_get_last_seq(struct super_block *sb, u64 *seq)
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;

@@ -646,8 +646,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	/* send requests once iget progress shows we had a server */
-	ret = scoutfs_trans_get_log_trees(sb) ?:
-	      scoutfs_client_advance_seq(sb, &sbi->trans_seq);
+	ret = scoutfs_trans_get_log_trees(sb);
 	if (ret)
 		goto out;
 

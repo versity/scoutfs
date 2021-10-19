@@ -207,10 +207,6 @@ struct scoutfs_key {
 #define sklt_rid	_sk_first
 #define sklt_nr		_sk_second
 
-/* seqs */
-#define skts_trans_seq	_sk_first
-#define skts_rid	_sk_second
-
 /* mounted clients */
 #define skmc_rid	_sk_first
 
@@ -461,6 +457,12 @@ struct scoutfs_srch_compact {
  * XXX I imagine we should rename these now that they've evolved to track
  * all the btrees that clients use during a transaction.  It's not just
  * about item logs, it's about clients making changes to trees.
+ *
+ * @get_trans_seq, @commit_trans_seq: These pair of sequence numbers
+ * determine if a transaction is currently open for the mount that owns
+ * the log_trees struct.  get_trans_seq is advanced by the server as the
+ * transaction is opened.   The server sets comimt_trans_seq equal to
+ * get_ as the transaction is committed.
  */
 struct scoutfs_log_trees {
 	struct scoutfs_alloc_list_head meta_avail;
@@ -473,6 +475,8 @@ struct scoutfs_log_trees {
 	__le64 data_alloc_zone_blocks;
 	__le64 data_alloc_zones[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
 	__le64 inode_count_delta;
+	__le64 get_trans_seq;
+	__le64 commit_trans_seq;
 	__le64 max_item_seq;
 	__le64 finalize_seq;
 	__le64 rid;
@@ -586,17 +590,16 @@ struct scoutfs_log_merge_freeing {
 #define SCOUTFS_LOCK_ZONE			5
 /* Items only stored in server btrees */
 #define SCOUTFS_LOG_TREES_ZONE			6
-#define SCOUTFS_TRANS_SEQ_ZONE			7
-#define SCOUTFS_MOUNTED_CLIENT_ZONE		8
-#define SCOUTFS_SRCH_ZONE			9
-#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		10
-#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		11
+#define SCOUTFS_MOUNTED_CLIENT_ZONE		7
+#define SCOUTFS_SRCH_ZONE			8
+#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		9
+#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		10
 /* Items only stored in log merge server btrees */
-#define SCOUTFS_LOG_MERGE_STATUS_ZONE		12
-#define SCOUTFS_LOG_MERGE_RANGE_ZONE		13
-#define SCOUTFS_LOG_MERGE_REQUEST_ZONE		14
-#define SCOUTFS_LOG_MERGE_COMPLETE_ZONE		15
-#define SCOUTFS_LOG_MERGE_FREEING_ZONE		16
+#define SCOUTFS_LOG_MERGE_STATUS_ZONE		11
+#define SCOUTFS_LOG_MERGE_RANGE_ZONE		12
+#define SCOUTFS_LOG_MERGE_REQUEST_ZONE		13
+#define SCOUTFS_LOG_MERGE_COMPLETE_ZONE		14
+#define SCOUTFS_LOG_MERGE_FREEING_ZONE		15
 
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
@@ -807,7 +810,6 @@ struct scoutfs_super_block {
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
 	struct scoutfs_btree_root log_merge;
-	struct scoutfs_btree_root trans_seqs;
 	struct scoutfs_btree_root mounted_clients;
 	struct scoutfs_btree_root srch_root;
 	struct scoutfs_volume_options volopt;
@@ -990,7 +992,6 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_COMMIT_LOG_TREES,
 	SCOUTFS_NET_CMD_SYNC_LOG_TREES,
 	SCOUTFS_NET_CMD_GET_ROOTS,
-	SCOUTFS_NET_CMD_ADVANCE_SEQ,
 	SCOUTFS_NET_CMD_GET_LAST_SEQ,
 	SCOUTFS_NET_CMD_LOCK,
 	SCOUTFS_NET_CMD_LOCK_RECOVER,
