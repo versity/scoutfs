@@ -2609,6 +2609,36 @@ TRACE_EVENT(scoutfs_alloc_move,
 		  __entry->ret)
 );
 
+DECLARE_EVENT_CLASS(scoutfs_alloc_extent_class,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+
+	TP_ARGS(sb, ext),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		STE_FIELDS(ext)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		STE_ASSIGN(ext, ext);
+	),
+
+	TP_printk(SCSBF" ext "STE_FMT, SCSB_TRACE_ARGS, STE_ENTRY_ARGS(ext))
+);
+DEFINE_EVENT(scoutfs_alloc_extent_class, scoutfs_alloc_move_extent,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+	TP_ARGS(sb, ext)
+);
+DEFINE_EVENT(scoutfs_alloc_extent_class, scoutfs_alloc_fill_extent,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+	TP_ARGS(sb, ext)
+);
+DEFINE_EVENT(scoutfs_alloc_extent_class, scoutfs_alloc_empty_extent,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+	TP_ARGS(sb, ext)
+);
+
 TRACE_EVENT(scoutfs_item_read_page,
 	TP_PROTO(struct super_block *sb, struct scoutfs_key *key,
 		 struct scoutfs_key *pg_start, struct scoutfs_key *pg_end),

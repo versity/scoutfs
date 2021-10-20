@@ -970,6 +970,8 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 
 		moved += ext.len;
 		scoutfs_inc_counter(sb, alloc_moved_extent);
+
+		trace_scoutfs_alloc_move_extent(sb, &ext);
 	}
 
 	scoutfs_inc_counter(sb, alloc_move);
@@ -1157,6 +1159,8 @@ int scoutfs_alloc_fill_list(struct super_block *sb,
 
 		for (i = 0; i < ext.len; i++)
 			list_block_add(lhead, lblk, ext.start + i);
+
+		trace_scoutfs_alloc_fill_extent(sb, &ext);
 	}
 
 out:
@@ -1225,6 +1229,8 @@ int scoutfs_alloc_empty_list(struct super_block *sb,
 			break;
 
 		list_block_remove(lhead, lblk, ext.len);
+
+		trace_scoutfs_alloc_empty_extent(sb, &ext);
 	}
 
 	scoutfs_block_put(sb, bl);
