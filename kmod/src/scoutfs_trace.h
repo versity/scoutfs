@@ -58,9 +58,6 @@ struct lock_info;
 	__entry->pref##_map,			\
 	__entry->pref##_flags
 
-#define DECLARE_TRACED_EXTENT(name) \
-	struct scoutfs_traced_extent name = {0}
-
 DECLARE_EVENT_CLASS(scoutfs_ino_ret_class,
 	TP_PROTO(struct super_block *sb, u64 ino, int ret),
 
