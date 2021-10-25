@@ -604,7 +604,6 @@ struct scoutfs_log_merge_freeing {
 /* inode index zone */
 #define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
 #define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	2
-#define SCOUTFS_INODE_INDEX_NR			3 /* don't forget to update */
 
 /* orphan zone, redundant type used for clarity */
 #define SCOUTFS_ORPHAN_TYPE			1

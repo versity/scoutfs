@@ -186,6 +186,37 @@ static void set_inode_ops(struct inode *inode)
 	mapping_set_gfp_mask(inode->i_mapping, GFP_USER);
 }
 
+static unsigned int item_index_arr_ind(u8 type)
+{
+	switch (type) {
+		case SCOUTFS_INODE_INDEX_META_SEQ_TYPE: return 0; break;
+		case SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE: return 1; break;
+		/* should never get here, we control callers, not untrusted data */
+		default: BUG(); break;
+	}
+}
+
+static void set_item_major(struct scoutfs_inode_info *si, u8 type, __le64 maj)
+{
+	unsigned int ind = item_index_arr_ind(type);
+
+	si->item_majors[ind] = le64_to_cpu(maj);
+}
+
+static u64 get_item_major(struct scoutfs_inode_info *si, u8 type)
+{
+	unsigned int ind = item_index_arr_ind(type);
+
+	return si->item_majors[ind];
+}
+
+static u64 get_item_minor(struct scoutfs_inode_info *si, u8 type)
+{
+	unsigned int ind = item_index_arr_ind(type);
+
+	return si->item_minors[ind];
+}
+
 /*
  * The caller has ensured that the fields in the incoming scoutfs inode
  * reflect both the inode item and the inode index items.  This happens
@@ -202,10 +233,8 @@ static void set_item_info(struct scoutfs_inode_info *si,
 	memset(si->item_minors, 0, sizeof(si->item_minors));
 
 	si->have_item = true;
-	si->item_majors[SCOUTFS_INODE_INDEX_META_SEQ_TYPE] =
-		le64_to_cpu(sinode->meta_seq);
-	si->item_majors[SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE] =
-		le64_to_cpu(sinode->data_seq);
+	set_item_major(si, SCOUTFS_INODE_INDEX_META_SEQ_TYPE, sinode->meta_seq);
+	set_item_major(si, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE, sinode->data_seq);
 }
 
 static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
@@ -795,16 +824,14 @@ static bool will_del_index(struct scoutfs_inode_info *si,
 			   u8 type, u64 major, u32 minor)
 {
 	return si && si->have_item &&
-	       (si->item_majors[type] != major ||
-		si->item_minors[type] != minor);
+	       (get_item_major(si, type) != major || get_item_minor(si, type) != minor);
 }
 
 static bool will_ins_index(struct scoutfs_inode_info *si,
 			   u8 type, u64 major, u32 minor)
 {
 	return !si || !si->have_item ||
-	       (si->item_majors[type] != major ||
-		si->item_minors[type] != minor);
+	       (get_item_major(si, type) != major || get_item_minor(si, type) != minor);
 }
 
 static bool inode_has_index(umode_t mode, u8 type)
@@ -912,14 +939,14 @@ static int update_index_items(struct super_block *sb,
 	if (ret || !will_del_index(si, type, major, minor))
 		return ret;
 
-	trace_scoutfs_delete_index_item(sb, type, si->item_majors[type],
-					si->item_minors[type], ino);
+	trace_scoutfs_delete_index_item(sb, type, get_item_major(si, type),
+					get_item_minor(si, type), ino);
 
-	scoutfs_inode_init_index_key(&del, type, si->item_majors[type],
-				     si->item_minors[type], ino);
+	scoutfs_inode_init_index_key(&del, type, get_item_major(si, type),
+				     get_item_minor(si, type), ino);
 
-	del_lock = find_index_lock(lock_list, type, si->item_majors[type],
-				   si->item_minors[type], ino);
+	del_lock = find_index_lock(lock_list, type, get_item_major(si, type),
+				   get_item_minor(si, type), ino);
 	ret = scoutfs_item_delete_force(sb, &del, del_lock);
 	if (ret) {
 		err = scoutfs_item_delete(sb, &ins, ins_lock);
@@ -1056,8 +1083,8 @@ static int prepare_index_items(struct scoutfs_inode_info *si,
 	}
 
 	if (will_del_index(si, type, major, minor)) {
-		ret = add_index_lock(list, ino, type, si->item_majors[type],
-				     si->item_minors[type]);
+		ret = add_index_lock(list, ino, type, get_item_major(si, type),
+				     get_item_minor(si, type));
 		if (ret)
 			return ret;
 	}
@@ -1076,7 +1103,7 @@ static u64 upd_data_seq(struct scoutfs_sb_info *sbi,
 	if (!si || !si->have_item || set_data_seq)
 		return sbi->trans_seq;
 
-	return si->item_majors[SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE];
+	return get_item_major(si, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE);
 }
 
 /*

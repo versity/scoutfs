@@ -9,6 +9,8 @@
 
 struct scoutfs_lock;
 
+#define SCOUTFS_INODE_NR_INDICES 2
+
 struct scoutfs_inode_info {
 	/* read or initialized for each inode instance */
 	u64 ino;
@@ -38,8 +40,8 @@ struct scoutfs_inode_info {
 	 */
 	struct mutex item_mutex;
 	bool have_item;
-	u64 item_majors[SCOUTFS_INODE_INDEX_NR];
-	u32 item_minors[SCOUTFS_INODE_INDEX_NR];
+	u64 item_majors[SCOUTFS_INODE_NR_INDICES];
+	u32 item_minors[SCOUTFS_INODE_NR_INDICES];
 
 	/* updated at on each new lock acquisition */
 	atomic64_t last_refreshed;
