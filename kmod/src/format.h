@@ -583,48 +583,48 @@ struct scoutfs_log_merge_freeing {
 /*
  * Keys are first sorted by major key zones.
  */
-#define SCOUTFS_INODE_INDEX_ZONE		1
-#define SCOUTFS_ORPHAN_ZONE			2
-#define SCOUTFS_XATTR_TOTL_ZONE			3
-#define SCOUTFS_FS_ZONE				4
-#define SCOUTFS_LOCK_ZONE			5
+#define SCOUTFS_INODE_INDEX_ZONE		4
+#define SCOUTFS_ORPHAN_ZONE			8
+#define SCOUTFS_XATTR_TOTL_ZONE			12
+#define SCOUTFS_FS_ZONE				16
+#define SCOUTFS_LOCK_ZONE			20
 /* Items only stored in server btrees */
-#define SCOUTFS_LOG_TREES_ZONE			6
-#define SCOUTFS_MOUNTED_CLIENT_ZONE		7
-#define SCOUTFS_SRCH_ZONE			8
-#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		9
-#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		10
+#define SCOUTFS_LOG_TREES_ZONE			24
+#define SCOUTFS_MOUNTED_CLIENT_ZONE		28
+#define SCOUTFS_SRCH_ZONE			32
+#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		36
+#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		40
 /* Items only stored in log merge server btrees */
-#define SCOUTFS_LOG_MERGE_STATUS_ZONE		11
-#define SCOUTFS_LOG_MERGE_RANGE_ZONE		12
-#define SCOUTFS_LOG_MERGE_REQUEST_ZONE		13
-#define SCOUTFS_LOG_MERGE_COMPLETE_ZONE		14
-#define SCOUTFS_LOG_MERGE_FREEING_ZONE		15
+#define SCOUTFS_LOG_MERGE_STATUS_ZONE		44
+#define SCOUTFS_LOG_MERGE_RANGE_ZONE		48
+#define SCOUTFS_LOG_MERGE_REQUEST_ZONE		52
+#define SCOUTFS_LOG_MERGE_COMPLETE_ZONE		56
+#define SCOUTFS_LOG_MERGE_FREEING_ZONE		60
 
 /* inode index zone */
-#define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
-#define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	2
+#define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	4
+#define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	8
 
 /* orphan zone, redundant type used for clarity */
-#define SCOUTFS_ORPHAN_TYPE			1
+#define SCOUTFS_ORPHAN_TYPE			4
 
 /* fs zone */
-#define SCOUTFS_INODE_TYPE			1
-#define SCOUTFS_XATTR_TYPE			2
-#define SCOUTFS_DIRENT_TYPE			3
-#define SCOUTFS_READDIR_TYPE			4
-#define SCOUTFS_LINK_BACKREF_TYPE		5
-#define SCOUTFS_SYMLINK_TYPE			6
-#define SCOUTFS_DATA_EXTENT_TYPE		7
+#define SCOUTFS_INODE_TYPE			4
+#define SCOUTFS_XATTR_TYPE			8
+#define SCOUTFS_DIRENT_TYPE			12
+#define SCOUTFS_READDIR_TYPE			16
+#define SCOUTFS_LINK_BACKREF_TYPE		20
+#define SCOUTFS_SYMLINK_TYPE			24
+#define SCOUTFS_DATA_EXTENT_TYPE		28
 
 /* lock zone, only ever found in lock ranges, never in persistent items */
-#define SCOUTFS_RENAME_TYPE			1
+#define SCOUTFS_RENAME_TYPE			4
 
 /* srch zone, only in server btrees */
-#define SCOUTFS_SRCH_LOG_TYPE		1
-#define SCOUTFS_SRCH_BLOCKS_TYPE	2
-#define SCOUTFS_SRCH_PENDING_TYPE	3
-#define SCOUTFS_SRCH_BUSY_TYPE		4
+#define SCOUTFS_SRCH_LOG_TYPE		4
+#define SCOUTFS_SRCH_BLOCKS_TYPE	8
+#define SCOUTFS_SRCH_PENDING_TYPE	12
+#define SCOUTFS_SRCH_BUSY_TYPE		16
 
 /* file data extents have start and len in key */
 struct scoutfs_data_extent_val {
