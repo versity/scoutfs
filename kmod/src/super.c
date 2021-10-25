@@ -20,7 +20,6 @@
 #include <linux/statfs.h>
 #include <linux/sched.h>
 #include <linux/debugfs.h>
-#include <linux/percpu.h>
 
 #include "super.h"
 #include "block.h"
@@ -51,37 +50,6 @@
 #include "scoutfs_trace.h"
 
 static struct dentry *scoutfs_debugfs_root;
-
-static DEFINE_PER_CPU(u64, clock_sync_ids) = 0;
-
-/*
- * Give the caller a unique clock sync id for a message they're about to
- * send.  We make the ids reasonably globally unique by using randomly
- * initialized per-cpu 64bit counters.
- */
-__le64 scoutfs_clock_sync_id(void)
-{
-	u64 rnd = 0;
-	u64 ret;
-	u64 *id;
-
-retry:
-	preempt_disable();
-	id = this_cpu_ptr(&clock_sync_ids);
-	if (*id == 0) {
-		if (rnd == 0) {
-			preempt_enable();
-			get_random_bytes(&rnd, sizeof(rnd));
-			goto retry;
-		}
-		*id = rnd;
-	}
-
-	ret = ++(*id);
-	preempt_enable();
-
-	return cpu_to_le64(ret);
-}
 
 /* the statfs file fields can be small (and signed?) :/ */
 static __statfs_word saturate_truncated_word(u64 files)

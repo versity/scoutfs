@@ -160,6 +160,4 @@ int scoutfs_write_super(struct super_block *sb,
 /* to keep this out of the ioctl.h public interface definition */
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
-__le64 scoutfs_clock_sync_id(void);
-
 #endif
