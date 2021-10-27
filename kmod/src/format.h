@@ -6,9 +6,9 @@
  * structures that are communicated over the wire, and the protocol
  * behind the structures.
  */
-#define SCOUTFS_FORMAT_VERSION_MIN		0
+#define SCOUTFS_FORMAT_VERSION_MIN		1
 #define SCOUTFS_FORMAT_VERSION_MIN_STR	__stringify(SCOUTFS_FORMAT_VERSION_MIN)
-#define SCOUTFS_FORMAT_VERSION_MAX		0
+#define SCOUTFS_FORMAT_VERSION_MAX		1
 #define SCOUTFS_FORMAT_VERSION_MAX_STR	__stringify(SCOUTFS_FORMAT_VERSION_MAX)
 
 /* statfs(2) f_type */
