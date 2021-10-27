@@ -13,8 +13,7 @@
  * This is enforced by pahole scripting in external build environments.
  */
 
-/* XXX I have no idea how these are chosen. */
-#define SCOUTFS_IOCTL_MAGIC 's'
+#define SCOUTFS_IOCTL_MAGIC 0xE8  /* arbitrarily chosen hole in ioctl-number.rst */
 
 /*
  * Packed scoutfs keys rarely cross the ioctl boundary so we have a
@@ -88,7 +87,7 @@ enum scoutfs_ino_walk_seq_type {
  * Adds entries to the user's buffer for each inode that is found in the
  * given index between the first and last positions.
  */
-#define SCOUTFS_IOC_WALK_INODES _IOR(SCOUTFS_IOCTL_MAGIC, 1, \
+#define SCOUTFS_IOC_WALK_INODES _IOW(SCOUTFS_IOCTL_MAGIC, 1, \
 				     struct scoutfs_ioctl_walk_inodes)
 
 /*
@@ -167,7 +166,7 @@ struct scoutfs_ioctl_ino_path_result {
 };
 
 /* Get a single path from the root to the given inode number */
-#define SCOUTFS_IOC_INO_PATH _IOR(SCOUTFS_IOCTL_MAGIC, 2, \
+#define SCOUTFS_IOC_INO_PATH _IOW(SCOUTFS_IOCTL_MAGIC, 2, \
 				  struct scoutfs_ioctl_ino_path)
 
 /*
@@ -254,7 +253,7 @@ struct scoutfs_ioctl_data_waiting {
 
 #define SCOUTFS_IOC_DATA_WAITING_FLAGS_UNKNOWN		(U64_MAX << 0)
 
-#define SCOUTFS_IOC_DATA_WAITING _IOR(SCOUTFS_IOCTL_MAGIC, 6, \
+#define SCOUTFS_IOC_DATA_WAITING _IOW(SCOUTFS_IOCTL_MAGIC, 6, \
 				      struct scoutfs_ioctl_data_waiting)
 
 /*
@@ -286,8 +285,8 @@ struct scoutfs_ioctl_listxattr_hidden {
 	__u32 hash_pos;
 };
 
-#define SCOUTFS_IOC_LISTXATTR_HIDDEN _IOR(SCOUTFS_IOCTL_MAGIC, 8, \
-					  struct scoutfs_ioctl_listxattr_hidden)
+#define SCOUTFS_IOC_LISTXATTR_HIDDEN _IOWR(SCOUTFS_IOCTL_MAGIC, 8, \
+					   struct scoutfs_ioctl_listxattr_hidden)
 
 /*
  * Return the inode numbers of inodes which might contain the given
@@ -340,8 +339,8 @@ struct scoutfs_ioctl_search_xattrs {
 /* set in output_flags if returned inodes reached last_ino */
 #define SCOUTFS_SEARCH_XATTRS_OFLAG_END (1ULL << 0)
 
-#define SCOUTFS_IOC_SEARCH_XATTRS _IOR(SCOUTFS_IOCTL_MAGIC, 9, \
-				     struct scoutfs_ioctl_search_xattrs)
+#define SCOUTFS_IOC_SEARCH_XATTRS _IOW(SCOUTFS_IOCTL_MAGIC, 9, \
+				       struct scoutfs_ioctl_search_xattrs)
 
 /*
  * Give the user information about the filesystem.
@@ -377,7 +376,7 @@ struct scoutfs_ioctl_data_wait_err {
 	__s64 err;
 };
 
-#define SCOUTFS_IOC_DATA_WAIT_ERR _IOR(SCOUTFS_IOCTL_MAGIC, 11, \
+#define SCOUTFS_IOC_DATA_WAIT_ERR _IOW(SCOUTFS_IOCTL_MAGIC, 11, \
 				       struct scoutfs_ioctl_data_wait_err)
 
 
@@ -396,7 +395,7 @@ struct scoutfs_ioctl_alloc_detail_entry {
 	__u8 __pad[6];
 };
 
-#define SCOUTFS_IOC_ALLOC_DETAIL _IOR(SCOUTFS_IOCTL_MAGIC, 12, \
+#define SCOUTFS_IOC_ALLOC_DETAIL _IOW(SCOUTFS_IOCTL_MAGIC, 12, \
 				      struct scoutfs_ioctl_alloc_detail)
 
 /*
@@ -459,7 +458,7 @@ struct scoutfs_ioctl_move_blocks {
 	__u64 flags;
 };
 
-#define SCOUTFS_IOC_MOVE_BLOCKS _IOR(SCOUTFS_IOCTL_MAGIC, 13, \
+#define SCOUTFS_IOC_MOVE_BLOCKS _IOW(SCOUTFS_IOCTL_MAGIC, 13, \
 				     struct scoutfs_ioctl_move_blocks)
 
 struct scoutfs_ioctl_resize_devices {
@@ -468,7 +467,7 @@ struct scoutfs_ioctl_resize_devices {
 };
 
 #define SCOUTFS_IOC_RESIZE_DEVICES \
-	_IOR(SCOUTFS_IOCTL_MAGIC, 14, struct scoutfs_ioctl_resize_devices)
+	_IOW(SCOUTFS_IOCTL_MAGIC, 14, struct scoutfs_ioctl_resize_devices)
 
 #define SCOUTFS_IOCTL_XATTR_TOTAL_NAME_NR 3
 
@@ -519,6 +518,6 @@ struct scoutfs_ioctl_xattr_total {
 };
 
 #define SCOUTFS_IOC_READ_XATTR_TOTALS \
-	_IOR(SCOUTFS_IOCTL_MAGIC, 15, struct scoutfs_ioctl_read_xattr_totals)
+	_IOW(SCOUTFS_IOCTL_MAGIC, 15, struct scoutfs_ioctl_read_xattr_totals)
 
 #endif
