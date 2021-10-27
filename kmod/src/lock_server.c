@@ -80,9 +80,6 @@ struct lock_server_info {
 	struct dentry *tseq_dentry;
 	struct scoutfs_tseq_tree stats_tseq_tree;
 	struct dentry *stats_tseq_dentry;
-
-	struct scoutfs_alloc *alloc;
-	struct scoutfs_block_writer *wri;
 };
 
 #define DECLARE_LOCK_SERVER_INFO(sb, name) \
@@ -815,9 +812,7 @@ static void stats_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
  * Setup the lock server.  This is called before networking can deliver
  * requests.
  */
-int scoutfs_lock_server_setup(struct super_block *sb,
-			      struct scoutfs_alloc *alloc,
-			      struct scoutfs_block_writer *wri)
+int scoutfs_lock_server_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct lock_server_info *inf;
@@ -831,8 +826,6 @@ int scoutfs_lock_server_setup(struct super_block *sb,
 	inf->locks_root = RB_ROOT;
 	scoutfs_tseq_tree_init(&inf->tseq_tree, lock_server_tseq_show);
 	scoutfs_tseq_tree_init(&inf->stats_tseq_tree, stats_tseq_show);
-	inf->alloc = alloc;
-	inf->wri = wri;
 
 	inf->tseq_dentry = scoutfs_tseq_create("server_locks", sbi->debug_root,
 					       &inf->tseq_tree);

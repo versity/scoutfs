@@ -3887,7 +3887,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	}
 	scoutfs_server_set_seq_if_greater(sb, max_seq);
 
-	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri);
+	ret = scoutfs_lock_server_setup(sb);
 	if (ret) {
 		scoutfs_err(sb, "server error %d starting lock server", ret);
 		goto shutdown;
