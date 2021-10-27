@@ -131,12 +131,10 @@ static int do_stat(struct stat_args *args)
 	if (args->is_inode) {
 		cmd = SCOUTFS_IOC_STAT_MORE;
 		fields = inode_fields;
-		st.stm.valid_bytes = sizeof(struct scoutfs_ioctl_stat_more);
 		pr = print_inode_field;
 	} else {
 		cmd = SCOUTFS_IOC_STATFS_MORE;
 		fields = fs_fields;
-		st.sfm.valid_bytes = sizeof(struct scoutfs_ioctl_statfs_more);
 		pr = print_fs_field;
 	}
 
