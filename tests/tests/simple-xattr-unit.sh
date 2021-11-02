@@ -46,6 +46,35 @@ print_and_run() {
 	"$@" || echo "returned nonzero status: $?"
 }
 
+# fill a buffer with strings that identify their byte offset
+offs=""
+for o in $(seq 0 7 $((65535 - 7))); do
+	offs+="$(printf "[%5u]" $o)"
+done
+
+change_val_sizes() {
+	local name="$1"
+	local file="$2"
+	local from="$3"
+	local to="$4"
+
+	while : ; do
+		setfattr -x "$name" "$file" > /dev/null 2>&1
+		setfattr -n "$name" -v "${offs:0:$from}" "$file"
+		setfattr -n "$name" -v "${offs:0:$to}" "$file"
+		if ! diff -u <(echo -n "${offs:0:$to}") <(getfattr --absolute-names --only-values -n "$name" $file) ; then
+			echo "setting $name from $from to $to failed"
+		fi
+
+		if [ $from == $3 ]; then
+			from=$4
+			to=$3
+		else
+			break
+		fi
+	done
+}
+
 echo "=== XATTR_ flag combinations"
 touch "$FILE"
 print_and_run dumb_setxattr -p "$FILE" -n user.test -v val -c -r
@@ -79,5 +108,18 @@ for i in $(seq 1 $NR); do
 	val_len=$((RANDOM % 65536))
 	test_xattr_lengths $name_len $val_len
 done
+
+echo "=== alternate val size between interesting sizes"
+name="user.test"
+ITEM=896
+HDR=$((8 + 9))
+# one full item apart
+change_val_sizes $name "$FILE" $(((ITEM * 2) - HDR)) $(((ITEM * 3) - HDR))
+# multiple full items apart
+change_val_sizes $name "$FILE" $(((ITEM * 6) - HDR)) $(((ITEM * 9) - HDR))
+# item boundary fence posts
+change_val_sizes $name "$FILE" $(((ITEM * 5) - HDR - 1)) $(((ITEM * 13) - HDR + 1))
+# min and max
+change_val_sizes $name "$FILE" 1 65535
 
 t_pass

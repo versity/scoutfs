@@ -16,3 +16,4 @@ setfattr: /mnt/test/test/simple-xattr-unit/file: Numerical result out of range
 setfattr: /mnt/test/test/simple-xattr-unit/file: Argument list too long
 === good length boundaries
 === 500 random lengths
+=== alternate val size between interesting sizes

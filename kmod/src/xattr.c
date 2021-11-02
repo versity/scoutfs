@@ -368,7 +368,7 @@ static int change_xattr_items(struct inode *inode, u64 id,
 	}
 
 	/* update dirtied overlapping existing items, last partial first */
-	for (i = old_parts - 1; i >= 0; i--) {
+	for (i = min(old_parts, new_parts) - 1; i >= 0; i--) {
 		off = i * SCOUTFS_XATTR_MAX_PART_SIZE;
 		bytes = min_t(unsigned int, new_bytes - off,
 			      SCOUTFS_XATTR_MAX_PART_SIZE);
