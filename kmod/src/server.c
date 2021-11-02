@@ -2068,6 +2068,19 @@ static void server_log_merge_free_work(struct work_struct *work)
 			break;
 		}
 
+		/* Dirty the btree before freeing so that we can pin it
+		 * so that later touches will succeed.
+		 */
+		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_FREEING_ZONE,
+				   le64_to_cpu(fr.seq), 0);
+		ret = scoutfs_btree_dirty(sb, &server->alloc,
+						&server->wri, &super->log_merge,
+						&key);
+		if (ret < 0) {
+			err_str = "dirtying log btree";
+			break;
+		}
+
 		ret = scoutfs_btree_free_blocks(sb, &server->alloc,
 						&server->wri, &fr.key,
 						&fr.root, 10);
@@ -2077,8 +2090,6 @@ static void server_log_merge_free_work(struct work_struct *work)
 		}
 
 		/* freed blocks are in allocator, we *have* to update key */
-		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_FREEING_ZONE,
-				   le64_to_cpu(fr.seq), 0);
 		if (scoutfs_key_is_ones(&fr.key))
 			ret = scoutfs_btree_delete(sb, &server->alloc,
 						   &server->wri,
