@@ -38,13 +38,6 @@ struct scoutfs_data_wait {
 		.err = 0,						\
 	}
 
-struct scoutfs_traced_extent {
-	u64 iblock;
-	u64 count;
-	u64 blkno;
-	u8 flags;
-};
-
 extern const struct address_space_operations scoutfs_file_aops;
 extern const struct file_operations scoutfs_file_fops;
 struct scoutfs_alloc;

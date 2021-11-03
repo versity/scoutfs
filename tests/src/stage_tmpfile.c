@@ -113,7 +113,6 @@ int main(int argc, char **argv)
 	}
 
 	// get current data_version after fallocate's size extensions
-	stm.valid_bytes = sizeof(struct scoutfs_ioctl_stat_more);
 	ret = ioctl(dest_fd, SCOUTFS_IOC_STAT_MORE, &stm);
 	if (ret < 0) {
 		perror("stat_more ioctl error");

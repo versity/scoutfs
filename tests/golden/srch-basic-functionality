@@ -2,6 +2,7 @@
 == update existing xattr
 == remove an xattr
 == remove xattr with files
+== trigger small log merges by rotating single block with unmount
 == create entries in current log
 == delete small fraction
 == remove files

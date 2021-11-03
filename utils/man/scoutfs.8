@@ -15,6 +15,34 @@ environment variable. If that variable is also absent the current working
 directory will be used.
 
 .TP
+.BI "change-format-version [-V, --format-version VERS] [-F|--offline META-DEVICE DATA-DEVICE]"
+.sp
+Change the format version of an existing file system.  The maxmimum
+supported version is used by default.   A specific version in the range
+can be specified.   The range of supported versions in shown in the
+output of --help.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-F, --offline META-DEVICE DATA-DEVICE"
+Change the format version by writing directly to the metadata and data
+devices.   Like mkfs, this writes directly to the devices without
+protection and must only be used on completely unmounted devices.   The
+command will fail if it sees evidence of active quorum use of the device
+or of previously connected clients which haven't been reclaimed.  The
+only way to avoid these checks is to fully mount and cleanly unmount the
+file system. 
+.sp
+This is not an atomic operation because it writes to blocks on two
+devices.   Write failure can result in the versions becoming out of sync
+which will prevent the system from mouting.  To recover the error must
+be resolved so the command can be repeated and successfully write to
+the super blocks on both devices.
+.RE
+.PD
+
+.TP
 .BI "df [-h|--human-readable] [-p|--path PATH]"
 .sp
 Display available and used space on the ScoutFS data and metadata devices.
@@ -32,7 +60,7 @@ A path within a ScoutFS filesystem.
 .PD
 
 .TP
-.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-slot} NR,ADDR,PORT [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-z|--data-alloc-zone-blocks BLOCKS] [-f|--force] [-A|--allow-small-size]"
+.BI "mkfs META-DEVICE DATA-DEVICE {-Q|--quorum-slot} NR,ADDR,PORT [-m|--max-meta-size SIZE] [-d|--max-data-size SIZE] [-z|--data-alloc-zone-blocks BLOCKS] [-f|--force] [-A|--allow-small-size] [-V|--format-version VERS]"
 .sp
 Initialize a new ScoutFS filesystem on the target devices. Since ScoutFS uses
 separate block devices for its metadata and data storage, two are required.
@@ -99,6 +127,13 @@ Set the data_alloc_zone_blocks volume option, as described in
 .TP
 .B "-f, --force"
 Ignore presence of existing data on the data and metadata devices.
+.TP
+.B "-V, --format-verson"
+Specify the format version to use in the newly created file system.
+The range of supported versions is visible in the output of 
++.BR scoutfs (8)
++.I --help
+.
 .RE
 .PD
 

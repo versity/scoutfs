@@ -73,9 +73,6 @@ struct server_info {
 	struct llist_head commit_waiters;
 	struct work_struct commit_work;
 
-	/* server tracks seq use */
-	struct rw_semaphore seq_rwsem;
-
 	struct list_head clients;
 	unsigned long nr_clients;
 
@@ -938,6 +935,7 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 
 			memset(&lt->item_root, 0, sizeof(lt->item_root));
 			memset(&lt->bloom_ref, 0, sizeof(lt->bloom_ref));
+			lt->inode_count_delta = 0;
 			lt->max_item_seq = 0;
 			lt->finalize_seq = 0;
 			le64_add_cpu(&lt->nr, 1);
@@ -1022,6 +1020,16 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
  *
  * If the committed log trees are large enough we finalize them and make
  * them available to log merging.
+ *
+ * As we prepare a new transaction we get its get_trans_seq to indicate
+ * that it's open.  The client uses this to identify its open
+ * transaction and we watch all the log trees to track the sequence
+ * numbers of transactions that clients have open.  This limits the
+ * transaction sequence numbers that can be returned in the index of
+ * inodes by meta and data transaction numbers.  We communicate the
+ * largest possible sequence number to clients via an rpc.  The
+ * transactions are closed by setting the commit_trans_seq during commit
+ * or as the mount is cleaned up.
  */
 static int server_get_log_trees(struct super_block *sb,
 				struct scoutfs_net_connection *conn,
@@ -1068,6 +1076,19 @@ static int server_get_log_trees(struct super_block *sb,
 		memset(&lt, 0, sizeof(lt));
 		lt.rid = cpu_to_le64(rid);
 		lt.nr = cpu_to_le64(nr);
+	}
+
+	/* the commit_trans_seq can never go past the open_trans_seq */
+	if (le64_to_cpu(lt.get_trans_seq) < le64_to_cpu(lt.commit_trans_seq)) {
+		err_str = "invalid open_trans_seq and commit_trans_seq";
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	/* transaction's already open, client resent get_ after server failover */
+	if (le64_to_cpu(lt.get_trans_seq) > le64_to_cpu(lt.commit_trans_seq)) {
+		ret = 0;
+		goto unlock;
 	}
 
 	/* drops and re-acquires the mutex and commit if it has to wait */
@@ -1150,6 +1171,9 @@ static int server_get_log_trees(struct super_block *sb,
 		lt.data_alloc_zone_blocks = cpu_to_le64(data_zone_blocks);
 	}
 
+	/* give the transaction a new seq (must have been ==) */
+	lt.get_trans_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
+
 	/* update client's log tree's item */
 	scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid),
 				   le64_to_cpu(lt.nr));
@@ -1186,9 +1210,11 @@ static int server_commit_log_trees(struct super_block *sb,
 	const u64 rid = scoutfs_net_client_rid(conn);
 	DECLARE_SERVER_INFO(sb, server);
 	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_log_trees *exist;
 	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
 	char *err_str = NULL;
+	bool committed = false;
 	int ret;
 
 	if (arg_len != sizeof(struct scoutfs_log_trees)) {
@@ -1213,12 +1239,26 @@ static int server_commit_log_trees(struct super_block *sb,
 	scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid),
 				   le64_to_cpu(lt.nr));
 	ret = scoutfs_btree_lookup(sb, &super->logs_root, &key, &iref);
-	if (ret < 0) {
+	if (ret < 0)
 		err_str = "finding log trees item";
-		goto unlock;
-	}
-	if (ret == 0)
+	if (ret == 0) {
+		if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
+			exist = iref.val;
+			if (exist->get_trans_seq != lt.get_trans_seq) {
+				ret = -EIO;
+				err_str = "invalid log trees item get_trans_seq";
+			} else {
+				if (exist->commit_trans_seq == lt.get_trans_seq)
+					committed = true;
+			}
+		} else {
+			ret = -EIO;
+			err_str = "invalid log trees item size";
+		}
 		scoutfs_btree_put_iref(&iref);
+	}
+	if (ret < 0 || committed)
+		goto unlock;
 
 	/* try to rotate the srch log when big enough */
 	mutex_lock(&server->srch_mutex);
@@ -1229,6 +1269,8 @@ static int server_commit_log_trees(struct super_block *sb,
 		err_str = "rotating srch log file";
 		goto unlock;
 	}
+
+	lt.commit_trans_seq = lt.get_trans_seq;
 
 	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				   &super->logs_root, &key, &lt, sizeof(lt));
@@ -1356,6 +1398,9 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	       alloc_move_empty(sb, &super->data_alloc, &lt.data_freed));
 	mutex_unlock(&server->alloc_mutex);
 
+	/* the transaction is no longer open */
+	lt.commit_trans_seq = lt.get_trans_seq;
+
 	/* the mount is no longer writing to the zones */
 	zero_data_alloc_zone_bits(&lt);
 	le64_add_cpu(&lt.flags, SCOUTFS_LOG_TREES_FINALIZED);
@@ -1375,140 +1420,6 @@ out:
 	return ret;
 }
 
-static void init_trans_seq_key(struct scoutfs_key *key, u64 seq, u64 rid)
-{
-	*key = (struct scoutfs_key) {
-		.sk_zone = SCOUTFS_TRANS_SEQ_ZONE,
-		.skts_trans_seq = cpu_to_le64(seq),
-		.skts_rid = cpu_to_le64(rid),
-	};
-}
-
-/*
- * Remove all trans_seq items owned by the client rid, the caller holds
- * the seq_rwsem.
- */
-static int remove_trans_seq_locked(struct super_block *sb, u64 rid)
-{
-	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_key key;
-	int ret = 0;
-
-	init_trans_seq_key(&key, 0, 0);
-
-	for (;;) {
-		ret = scoutfs_btree_next(sb, &super->trans_seqs, &key, &iref);
-		if (ret < 0) {
-			if (ret == -ENOENT)
-				ret = 0;
-			break;
-		}
-
-		key = *iref.key;
-		scoutfs_btree_put_iref(&iref);
-
-		if (le64_to_cpu(key.skts_rid) == rid) {
-			trace_scoutfs_trans_seq_remove(sb, rid,
-					le64_to_cpu(key.skts_trans_seq));
-			ret = scoutfs_btree_delete(sb, &server->alloc,
-						   &server->wri,
-						   &super->trans_seqs, &key);
-			if (ret < 0)
-				break;
-		}
-
-		scoutfs_key_inc(&key);
-	}
-
-	return ret;
-}
-
-/*
- * Give the client the next sequence number for the transaction that
- * they're opening.
- *
- * We track the sequence numbers of transactions that clients have open.
- * This limits the transaction sequence numbers that can be returned in
- * the index of inodes by meta and data transaction numbers.  We
- * communicate the largest possible sequence number to clients via an
- * rpc.
- *
- * The transaction sequence tracking is stored in a btree so it is
- * shared across servers.  Final entries are removed when processing a
- * client's farewell or when it's removed.  We can be processent a
- * resent request that was committed by a previous server before the
- * reply was lost.  At this point the client has no transactions open
- * and may or may not have just finished one.  To keep it simple we
- * always remove any previous seq items, if there are any, and then
- * insert a new item for the client at the next greatest seq.
- */
-static int server_advance_seq(struct super_block *sb,
-			      struct scoutfs_net_connection *conn,
-			      u8 cmd, u64 id, void *arg, u16 arg_len)
-{
-	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
-	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_key key;
-	__le64 leseq = 0;
-	u64 seq;
-	int ret;
-
-	if (arg_len != 0) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	scoutfs_server_hold_commit(sb);
-
-	down_write(&server->seq_rwsem);
-
-	ret = remove_trans_seq_locked(sb, rid);
-	if (ret < 0)
-		goto unlock;
-
-	seq = scoutfs_server_next_seq(sb);
-
-	trace_scoutfs_trans_seq_advance(sb, rid, seq);
-
-	init_trans_seq_key(&key, seq, rid);
-	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri,
-				   &super->trans_seqs, &key, NULL, 0);
-	if (ret == 0)
-		leseq = cpu_to_le64(seq);
-unlock:
-	up_write(&server->seq_rwsem);
-	ret = scoutfs_server_apply_commit(sb, ret);
-
-out:
-	return scoutfs_net_response(sb, conn, cmd, id, ret,
-				    &leseq, sizeof(leseq));
-}
-
-/*
- * Remove any transaction sequences owned by the client who's sent a
- * farewell They must have committed any final transaction by the time
- * they get here via sending their farewell message.  This can be called
- * multiple times as the client's farewell is retransmitted so it's OK
- * to not find any entries.  This is called with the server commit rwsem
- * held.
- */
-static int remove_trans_seq(struct super_block *sb, u64 rid)
-{
-	DECLARE_SERVER_INFO(sb, server);
-	int ret = 0;
-
-	down_write(&server->seq_rwsem);
-	ret = remove_trans_seq_locked(sb, rid);
-	up_write(&server->seq_rwsem);
-
-	return ret;
-}
-
 /*
  * Give the caller the last seq before outstanding client commits.  All
  * seqs up to and including this are stable, new client transactions can
@@ -1520,27 +1431,41 @@ static int get_stable_trans_seq(struct super_block *sb, u64 *last_seq_ret)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
 	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_log_trees *lt;
 	struct scoutfs_key key;
 	u64 last_seq = 0;
 	int ret;
 
-	down_read(&server->seq_rwsem);
+	last_seq = scoutfs_server_seq(sb) - 1;
+	scoutfs_key_init_log_trees(&key, 0, 0);
 
-	init_trans_seq_key(&key, 0, 0);
-	ret = scoutfs_btree_next(sb, &super->trans_seqs, &key, &iref);
-	if (ret == 0) {
-		last_seq = le64_to_cpu(iref.key->skts_trans_seq) - 1;
-		scoutfs_btree_put_iref(&iref);
+	mutex_lock(&server->logs_mutex);
 
-	} else if (ret == -ENOENT) {
-		last_seq = scoutfs_server_seq(sb) - 1;
-		ret = 0;
+	for (;; scoutfs_key_inc(&key)) {
+		ret = scoutfs_btree_next(sb, &super->logs_root, &key, &iref);
+		if (ret == 0) {
+			if (iref.val_len == sizeof(*lt)) {
+				lt = iref.val;
+				if ((le64_to_cpu(lt->get_trans_seq) >
+				     le64_to_cpu(lt->commit_trans_seq)) &&
+				     le64_to_cpu(lt->get_trans_seq) <= last_seq) {
+					last_seq = le64_to_cpu(lt->get_trans_seq) - 1;
+				}
+				key = *iref.key;
+			} else {
+				ret = -EIO;
+			}
+			scoutfs_btree_put_iref(&iref);
+		}
+		if (ret < 0) {
+			if (ret == -ENOENT) {
+				ret = 0;
+				break;
+			}
+		}
 	}
 
-	up_read(&server->seq_rwsem);
-
-	if (ret < 0)
-		last_seq = 0;
+	mutex_unlock(&server->logs_mutex);
 
 	*last_seq_ret = last_seq;
 	return ret;
@@ -2010,6 +1935,9 @@ static int splice_log_merge_completions(struct super_block *sb,
 			err_str = "deleting log trees item";
 			goto out;
 		}
+
+		le64_add_cpu(&super->inode_count, le64_to_cpu(lt.inode_count_delta));
+
 	}
 
 	init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
@@ -2917,6 +2845,68 @@ out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 };
 
+struct statfs_free_blocks {
+	u64 meta;
+	u64 data;
+};
+
+static int count_free_blocks(struct super_block *sb, void *arg, int owner,
+			     u64 id, bool meta, bool avail, u64 blocks)
+{
+	struct statfs_free_blocks *sfb = arg;
+
+	if (meta)
+		sfb->meta += blocks;
+	else
+		sfb->data += blocks;
+
+	return 0;
+}
+
+/*
+ * We calculate the total inode count and free blocks from the current in-memory dirty
+ * versions of the super block and log_trees structs, so we have to lock them.
+ */
+static int server_statfs(struct super_block *sb, struct scoutfs_net_connection *conn,
+			 u8 cmd, u64 id, void *arg, u16 arg_len)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_net_statfs nst = {{0,}};
+	struct statfs_free_blocks sfb = {0,};
+	u64 inode_count;
+	int ret;
+
+	if (arg_len != 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&server->alloc_mutex);
+	ret = scoutfs_alloc_foreach_super(sb, super, count_free_blocks, &sfb);
+	mutex_unlock(&server->alloc_mutex);
+	if (ret < 0)
+		goto out;
+
+	mutex_lock(&server->logs_mutex);
+	ret = scoutfs_forest_inode_count(sb, super, &inode_count);
+	mutex_unlock(&server->logs_mutex);
+	if (ret < 0)
+		goto out;
+
+	BUILD_BUG_ON(sizeof(nst.uuid) != sizeof(super->uuid));
+	memcpy(nst.uuid, super->uuid, sizeof(nst.uuid));
+	nst.free_meta_blocks = cpu_to_le64(sfb.meta);
+	nst.total_meta_blocks = super->total_meta_blocks;
+	nst.free_data_blocks = cpu_to_le64(sfb.data);
+	nst.total_data_blocks = super->total_data_blocks;
+	nst.inode_count = cpu_to_le64(inode_count);
+
+	ret = 0;
+out:
+	return scoutfs_net_response(sb, conn, cmd, id, ret, &nst, sizeof(nst));
+}
+
 static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
 {
 	*key = (struct scoutfs_key) {
@@ -3199,7 +3189,8 @@ static int server_greeting(struct super_block *sb,
 			   struct scoutfs_net_connection *conn,
 			   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = &sbi->super;
 	struct scoutfs_net_greeting *gr = arg;
 	struct scoutfs_net_greeting greet;
 	DECLARE_SERVER_INFO(sb, server);
@@ -3215,17 +3206,16 @@ static int server_greeting(struct super_block *sb,
 	}
 
 	if (gr->fsid != super->hdr.fsid) {
-		scoutfs_warn(sb, "client sent fsid 0x%llx, server has 0x%llx",
-			     le64_to_cpu(gr->fsid),
+		scoutfs_warn(sb, "client rid %016llx greeting fsid 0x%llx did not match server fsid 0x%llx",
+			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fsid),
 			     le64_to_cpu(super->hdr.fsid));
 		ret = -EINVAL;
 		goto send_err;
 	}
 
-	if (gr->version != super->version) {
-		scoutfs_warn(sb, "client sent format 0x%llx, server has 0x%llx",
-			     le64_to_cpu(gr->version),
-			     le64_to_cpu(super->version));
+	if (le64_to_cpu(gr->fmt_vers) != sbi->fmt_vers) {
+		scoutfs_warn(sb, "client rid %016llx greeting format version %llu did not match server format version %llu",
+			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fmt_vers), sbi->fmt_vers);
 		ret = -EINVAL;
 		goto send_err;
 	}
@@ -3249,7 +3239,7 @@ send_err:
 	err = ret;
 
 	greet.fsid = super->hdr.fsid;
-	greet.version = super->version;
+	greet.fmt_vers = cpu_to_le64(sbi->fmt_vers);
 	greet.server_term = cpu_to_le64(server->term);
 	greet.rid = gr->rid;
 	greet.flags = 0;
@@ -3308,7 +3298,6 @@ static int reclaim_rid(struct super_block *sb, u64 rid)
 
 	/* delete mounted client last, recovery looks for it */
 	ret = scoutfs_lock_server_farewell(sb, rid) ?:
-	      remove_trans_seq(sb, rid) ?:
 	      reclaim_open_log_tree(sb, rid) ?:
 	      cancel_srch_compact(sb, rid) ?:
 	      cancel_log_merge(sb, rid) ?:
@@ -3542,7 +3531,6 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_GET_LOG_TREES]		= server_get_log_trees,
 	[SCOUTFS_NET_CMD_COMMIT_LOG_TREES]	= server_commit_log_trees,
 	[SCOUTFS_NET_CMD_GET_ROOTS]		= server_get_roots,
-	[SCOUTFS_NET_CMD_ADVANCE_SEQ]		= server_advance_seq,
 	[SCOUTFS_NET_CMD_GET_LAST_SEQ]		= server_get_last_seq,
 	[SCOUTFS_NET_CMD_LOCK]			= server_lock,
 	[SCOUTFS_NET_CMD_SRCH_GET_COMPACT]	= server_srch_get_compact,
@@ -3554,6 +3542,7 @@ static scoutfs_net_request_t server_req_funcs[] = {
 	[SCOUTFS_NET_CMD_SET_VOLOPT]		= server_set_volopt,
 	[SCOUTFS_NET_CMD_CLEAR_VOLOPT]		= server_clear_volopt,
 	[SCOUTFS_NET_CMD_RESIZE_DEVICES]	= server_resize_devices,
+	[SCOUTFS_NET_CMD_STATFS]		= server_statfs,
 	[SCOUTFS_NET_CMD_FAREWELL]		= server_farewell,
 };
 
@@ -3898,7 +3887,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	}
 	scoutfs_server_set_seq_if_greater(sb, max_seq);
 
-	ret = scoutfs_lock_server_setup(sb, &server->alloc, &server->wri);
+	ret = scoutfs_lock_server_setup(sb);
 	if (ret) {
 		scoutfs_err(sb, "server error %d starting lock server", ret);
 		goto shutdown;
@@ -3942,11 +3931,11 @@ shutdown:
 	/* wait for extra queues by requests, won't find waiters */
 	flush_work(&server->commit_work);
 
-	scoutfs_fence_stop(sb);
 	scoutfs_lock_server_destroy(sb);
 	scoutfs_omap_server_shutdown(sb);
 
 out:
+	scoutfs_fence_stop(sb);
 	scoutfs_net_free_conn(sb, conn);
 
 	/* let quorum know that we've shutdown */
@@ -4021,7 +4010,6 @@ int scoutfs_server_setup(struct super_block *sb)
 	init_rwsem(&server->commit_rwsem);
 	init_llist_head(&server->commit_waiters);
 	INIT_WORK(&server->commit_work, scoutfs_server_commit_func);
-	init_rwsem(&server->seq_rwsem);
 	INIT_LIST_HEAD(&server->clients);
 	spin_lock_init(&server->farewell_lock);
 	INIT_LIST_HEAD(&server->farewell_requests);

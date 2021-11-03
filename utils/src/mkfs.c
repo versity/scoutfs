@@ -32,30 +32,6 @@
 #include "leaf_item_hash.h"
 #include "blkid.h"
 
-/*
- * Update the block header fields and write out the block.
- */
-static int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
-		       int shift, struct scoutfs_block_header *hdr)
-{
-	size_t size = 1ULL << shift;
-	ssize_t ret;
-
-	hdr->magic = cpu_to_le32(magic);
-	hdr->fsid = fsid;
-	hdr->blkno = cpu_to_le64(blkno);
-	hdr->seq = cpu_to_le64(seq);
-	hdr->crc = cpu_to_le32(crc_block(hdr, size));
-
-	ret = pwrite(fd, hdr, size, blkno << shift);
-	if (ret != size) {
-		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
-			blkno, ret, strerror(errno), errno);
-		return -errno;
-	}
-
-	return 0;
-}
 
 /*
  * Return the order of the length of a free extent, which we define as
@@ -134,6 +110,7 @@ struct mkfs_args {
 	unsigned long long max_meta_size;
 	unsigned long long max_data_size;
 	u64 data_alloc_zone_blocks;
+	u64 fmt_vers;
 	bool force;
 	bool allow_small_size;
 	int nr_slots;
@@ -236,9 +213,10 @@ static int do_mkfs(struct mkfs_args *args)
 
 	/* partially initialize the super so we can use it to init others */
 	memset(super, 0, SCOUTFS_BLOCK_SM_SIZE);
-	super->version = cpu_to_le64(SCOUTFS_INTEROP_VERSION);
+	super->fmt_vers = cpu_to_le64(args->fmt_vers);
 	uuid_generate(super->uuid);
 	super->next_ino = cpu_to_le64(round_up(SCOUTFS_ROOT_INO + 1, SCOUTFS_LOCK_INODE_GROUP_NR));
+	super->inode_count = cpu_to_le64(1);
 	super->seq = cpu_to_le64(1);
 	super->total_meta_blocks = cpu_to_le64(last_meta + 1);
 	super->total_data_blocks = cpu_to_le64(last_data + 1);
@@ -356,32 +334,18 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* write the super block to data dev and meta dev*/
-	ret = write_block(data_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid, 1,
-			  SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  &super->hdr);
+	ret = write_block_sync(data_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid, 1,
+			       SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			       &super->hdr);
 	if (ret)
 		goto out;
-
-	if (fsync(data_fd)) {
-		ret = -errno;
-		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
-			args->data_device, strerror(errno), errno);
-		goto out;
-	}
 
 	super->flags |= cpu_to_le64(SCOUTFS_FLAG_IS_META_BDEV);
-	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid,
-			  1, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
-			  &super->hdr);
+	ret = write_block_sync(meta_fd, SCOUTFS_BLOCK_MAGIC_SUPER, fsid,
+			       1, SCOUTFS_SUPER_BLKNO, SCOUTFS_BLOCK_SM_SHIFT,
+			       &super->hdr);
 	if (ret)
 		goto out;
-
-	if (fsync(meta_fd)) {
-		ret = -errno;
-		fprintf(stderr, "failed to fsync '%s': %s (%d)\n",
-			args->meta_device, strerror(errno), errno);
-		goto out;
-	}
 
 	uuid_unparse(super->uuid, uuid_str);
 
@@ -389,16 +353,16 @@ static int do_mkfs(struct mkfs_args *args)
 	       "  meta device path:     %s\n"
 	       "  data device path:     %s\n"
 	       "  fsid:                 %llx\n"
-	       "  version:              %llx\n"
 	       "  uuid:                 %s\n"
+	       "  format version:       %llu\n"
 	       "  64KB metadata blocks: "SIZE_FMT"\n"
 	       "  4KB data blocks:      "SIZE_FMT"\n"
 	       "  quorum slots:         ",
 		args->meta_device,
 	        args->data_device,
 		le64_to_cpu(super->hdr.fsid),
-		le64_to_cpu(super->version),
 		uuid_str,
+		le64_to_cpu(super->fmt_vers),
 		SIZE_ARGS(le64_to_cpu(super->total_meta_blocks),
 			  SCOUTFS_BLOCK_LG_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->total_data_blocks),
@@ -522,6 +486,16 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	case 'A':
 		args->allow_small_size = true;
 		break;
+	case 'V':
+		ret = parse_u64(arg, &args->fmt_vers);
+		if (ret)
+			return ret;
+		if (args->fmt_vers < SCOUTFS_FORMAT_VERSION_MIN ||
+		    args->fmt_vers > SCOUTFS_FORMAT_VERSION_MAX)
+			argp_error(state, "format-version %llu is outside supported range of %u-%u",
+				   args->fmt_vers, SCOUTFS_FORMAT_VERSION_MIN,
+				   SCOUTFS_FORMAT_VERSION_MAX);
+		break;
 	case 'z': /* data-alloc-zone-blocks */
 	{
 		ret = parse_u64(arg, &args->data_alloc_zone_blocks);
@@ -565,6 +539,7 @@ static struct argp_option options[] = {
 	{ "max-meta-size", 'm', "SIZE", 0, "Use a size less than the base metadata device size (bytes or KMGTP units)"},
 	{ "max-data-size", 'd', "SIZE", 0, "Use a size less than the base data device size (bytes or KMGTP units)"},
 	{ "data-alloc-zone-blocks", 'z', "BLOCKS", 0, "Divide data device into block zones so each mounts writes to a zone (4KB blocks)"},
+	{ "format-version", 'V', "version", 0, "Specify a format version within supported range, ("SCOUTFS_FORMAT_VERSION_MIN_STR"-"SCOUTFS_FORMAT_VERSION_MAX_STR", default "SCOUTFS_FORMAT_VERSION_MAX_STR")"},
 	{ NULL }
 };
 
@@ -577,7 +552,9 @@ static struct argp argp = {
 
 static int mkfs_cmd(int argc, char *argv[])
 {
-	struct mkfs_args mkfs_args = {NULL,};
+	struct mkfs_args mkfs_args = {
+		.fmt_vers = SCOUTFS_FORMAT_VERSION_MAX,
+	};
 	int ret;
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &mkfs_args);

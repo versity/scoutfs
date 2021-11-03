@@ -11,9 +11,7 @@ int scoutfs_lock_server_response(struct super_block *sb, u64 rid,
 				 struct scoutfs_net_lock *nl);
 int scoutfs_lock_server_farewell(struct super_block *sb, u64 rid);
 
-int scoutfs_lock_server_setup(struct super_block *sb,
-			      struct scoutfs_alloc *alloc,
-			      struct scoutfs_block_writer *wri);
+int scoutfs_lock_server_setup(struct super_block *sb);
 void scoutfs_lock_server_destroy(struct super_block *sb);
 
 #endif

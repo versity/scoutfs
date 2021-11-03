@@ -546,11 +546,6 @@ static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct scoutfs_ioctl_stat_more stm;
 
-	if (get_user(stm.valid_bytes, (__u64 __user *)arg))
-		return -EFAULT;
-
-	stm.valid_bytes = min_t(u64, stm.valid_bytes,
-				sizeof(struct scoutfs_ioctl_stat_more));
 	stm.meta_seq = scoutfs_inode_meta_seq(inode);
 	stm.data_seq = scoutfs_inode_data_seq(inode);
 	stm.data_version = scoutfs_inode_data_version(inode);
@@ -558,7 +553,7 @@ static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 	stm.crtime_sec = si->crtime.tv_sec;
 	stm.crtime_nsec = si->crtime.tv_nsec;
 
-	if (copy_to_user((void __user *)arg, &stm, stm.valid_bytes))
+	if (copy_to_user((void __user *)arg, &stm, sizeof(stm)))
 		return -EFAULT;
 
 	return 0;
@@ -879,9 +874,6 @@ static long scoutfs_ioc_statfs_more(struct file *file, unsigned long arg)
 	struct scoutfs_ioctl_statfs_more sfm;
 	int ret;
 
-	if (get_user(sfm.valid_bytes, (__u64 __user *)arg))
-		return -EFAULT;
-
 	super = kzalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
 	if (!super)
 		return -ENOMEM;
@@ -890,8 +882,6 @@ static long scoutfs_ioc_statfs_more(struct file *file, unsigned long arg)
 	if (ret)
 		goto out;
 
-	sfm.valid_bytes = min_t(u64, sfm.valid_bytes,
-				sizeof(struct scoutfs_ioctl_statfs_more));
 	sfm.fsid = le64_to_cpu(super->hdr.fsid);
 	sfm.rid = sbi->rid;
 	sfm.total_meta_blocks = le64_to_cpu(super->total_meta_blocks);
@@ -902,7 +892,7 @@ static long scoutfs_ioc_statfs_more(struct file *file, unsigned long arg)
 	if (ret)
 		goto out;
 
-	if (copy_to_user((void __user *)arg, &sfm, sfm.valid_bytes))
+	if (copy_to_user((void __user *)arg, &sfm, sizeof(sfm)))
 		ret = -EFAULT;
 	else
 		ret = 0;

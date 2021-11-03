@@ -10,7 +10,6 @@ int scoutfs_client_commit_log_trees(struct super_block *sb,
 int scoutfs_client_get_roots(struct super_block *sb,
 			     struct scoutfs_net_roots *roots);
 u64 *scoutfs_client_bulk_alloc(struct super_block *sb);
-int scoutfs_client_advance_seq(struct super_block *sb, u64 *seq);
 int scoutfs_client_get_last_seq(struct super_block *sb, u64 *seq);
 int scoutfs_client_lock_request(struct super_block *sb,
 				struct scoutfs_net_lock *nl);
@@ -34,6 +33,7 @@ int scoutfs_client_get_volopt(struct super_block *sb, struct scoutfs_volume_opti
 int scoutfs_client_set_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt);
 int scoutfs_client_clear_volopt(struct super_block *sb, struct scoutfs_volume_options *volopt);
 int scoutfs_client_resize_devices(struct super_block *sb, struct scoutfs_net_resize_devices *nrd);
+int scoutfs_client_statfs(struct super_block *sb, struct scoutfs_net_statfs *nst);
 
 int scoutfs_client_setup(struct super_block *sb);
 void scoutfs_client_destroy(struct super_block *sb);

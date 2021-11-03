@@ -117,21 +117,6 @@ int scoutfs_client_get_roots(struct super_block *sb,
 					NULL, 0, roots, sizeof(*roots));
 }
 
-int scoutfs_client_advance_seq(struct super_block *sb, u64 *seq)
-{
-	struct client_info *client = SCOUTFS_SB(sb)->client_info;
-	__le64 leseq;
-	int ret;
-
-	ret = scoutfs_net_sync_request(sb, client->conn,
-				       SCOUTFS_NET_CMD_ADVANCE_SEQ,
-				       NULL, 0, &leseq, sizeof(leseq));
-	if (ret == 0)
-		*seq = le64_to_cpu(leseq);
-
-	return ret;
-}
-
 int scoutfs_client_get_last_seq(struct super_block *sb, u64 *seq)
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
@@ -306,6 +291,14 @@ int scoutfs_client_resize_devices(struct super_block *sb, struct scoutfs_net_res
 					nrd, sizeof(*nrd), NULL, 0);
 }
 
+int scoutfs_client_statfs(struct super_block *sb, struct scoutfs_net_statfs *nst)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_STATFS,
+					NULL, 0, nst, sizeof(*nst));
+}
+
 /*
  * The server is asking that we trigger a commit of the current log
  * trees so that they can ensure an item seq discontinuity between
@@ -361,7 +354,8 @@ static int client_greeting(struct super_block *sb,
 			   void *resp, unsigned int resp_len, int error,
 			   void *data)
 {
-	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct client_info *client = sbi->client_info;
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct scoutfs_net_greeting *gr = resp;
 	bool new_server;
@@ -378,17 +372,15 @@ static int client_greeting(struct super_block *sb,
 	}
 
 	if (gr->fsid != super->hdr.fsid) {
-		scoutfs_warn(sb, "server sent fsid 0x%llx, client has 0x%llx",
-			     le64_to_cpu(gr->fsid),
-			     le64_to_cpu(super->hdr.fsid));
+		scoutfs_warn(sb, "server greeting response fsid 0x%llx did not match client fsid 0x%llx",
+			     le64_to_cpu(gr->fsid), le64_to_cpu(super->hdr.fsid));
 		ret = -EINVAL;
 		goto out;
 	}
 
-	if (gr->version != super->version) {
-		scoutfs_warn(sb, "server sent format 0x%llx, client has 0x%llx",
-			     le64_to_cpu(gr->version),
-			     le64_to_cpu(super->version));
+	if (le64_to_cpu(gr->fmt_vers) != sbi->fmt_vers) {
+		scoutfs_warn(sb, "server greeting response format version %llu did not match client format version %llu",
+			     le64_to_cpu(gr->fmt_vers), sbi->fmt_vers);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -514,7 +506,7 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 
 	/* send a greeting to verify endpoints of each connection */
 	greet.fsid = super->hdr.fsid;
-	greet.version = super->version;
+	greet.fmt_vers = cpu_to_le64(sbi->fmt_vers);
 	greet.server_term = cpu_to_le64(client->server_term);
 	greet.rid = cpu_to_le64(sbi->rid);
 	greet.flags = 0;

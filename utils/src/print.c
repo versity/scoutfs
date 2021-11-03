@@ -277,6 +277,7 @@ static int print_log_trees_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       "      data_avail: "ALCROOT_F"\n"
 		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n"
+		       "      inode_count_delta: %lld\n"
 		       "      max_item_seq: %llu\n"
 		       "      finalize_seq: %llu\n"
 		       "      rid: %016llx\n"
@@ -294,6 +295,7 @@ static int print_log_trees_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       ALCROOT_A(&lt->data_avail),
 		       ALCROOT_A(&lt->data_freed),
 		       SRF_A(&lt->srch_file),
+		       le64_to_cpu(lt->inode_count_delta),
 		       le64_to_cpu(lt->max_item_seq),
 		       le64_to_cpu(lt->finalize_seq),
 		       le64_to_cpu(lt->rid),
@@ -347,15 +349,6 @@ static int print_srch_root_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 			printf("      "SRF_FMT"\n", SRF_A(sfl));
 		}
 	}
-
-	return 0;
-}
-
-static int print_trans_seqs_entry(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
-				  unsigned val_len, void *arg)
-{
-	printf("    trans_seq %llu rid %016llx\n",
-	       le64_to_cpu(key->skts_trans_seq), le64_to_cpu(key->skts_rid));
 
 	return 0;
 }
@@ -898,13 +891,15 @@ static int print_quorum_blocks(int fd, struct scoutfs_super_block *super)
 		printf("quorum blkno %llu (slot %llu)\n",
 		       blkno, blkno - SCOUTFS_QUORUM_BLKNO);
 		print_block_header(&blk->hdr, SCOUTFS_BLOCK_SM_SIZE);
+		printf("  write_nr %llu\n", le64_to_cpu(blk->write_nr));
 
 		for (e = 0; e < array_size(event_names); e++) {
 			ev = &blk->events[e];
 
-			printf("  %12s: rid %016llx term %llu ts %llu.%08u\n",
+			printf("  %12s: rid %016llx term %llu write_nr %llu ts %llu.%08u\n",
 			       event_names[e], le64_to_cpu(ev->rid), le64_to_cpu(ev->term),
-			       le64_to_cpu(ev->ts.sec), le32_to_cpu(ev->ts.nsec));
+			       le64_to_cpu(ev->write_nr), le64_to_cpu(ev->ts.sec),
+			       le32_to_cpu(ev->ts.nsec));
 		}
 	}
 
@@ -933,12 +928,12 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	printf("super blkno %llu\n", blkno);
 	print_block_header(&super->hdr, SCOUTFS_BLOCK_SM_SIZE);
-	printf("  version %llx uuid %s\n",
-	       le64_to_cpu(super->version), uuid_str);
+	printf("  fmt_vers %llu uuid %s\n",
+	       le64_to_cpu(super->fmt_vers), uuid_str);
 	printf("  flags: 0x%016llx\n", le64_to_cpu(super->flags));
 
 	/* XXX these are all in a crazy order */
-	printf("  next_ino %llu seq %llu\n"
+	printf("  next_ino %llu inode_count %llu seq %llu\n"
 	       "  total_meta_blocks %llu total_data_blocks %llu\n"
 	       "  meta_alloc[0]: "ALCROOT_F"\n"
 	       "  meta_alloc[1]: "ALCROOT_F"\n"
@@ -950,10 +945,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	       "  fs_root: "BTR_FMT"\n"
 	       "  logs_root: "BTR_FMT"\n"
 	       "  log_merge: "BTR_FMT"\n"
-	       "  trans_seqs: "BTR_FMT"\n"
 	       "  mounted_clients: "BTR_FMT"\n"
 	       "  srch_root: "BTR_FMT"\n",
 		le64_to_cpu(super->next_ino),
+		le64_to_cpu(super->inode_count),
 		le64_to_cpu(super->seq),
 		le64_to_cpu(super->total_meta_blocks),
 		le64_to_cpu(super->total_data_blocks),
@@ -967,7 +962,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 		BTR_ARG(&super->fs_root),
 		BTR_ARG(&super->logs_root),
 		BTR_ARG(&super->log_merge),
-		BTR_ARG(&super->trans_seqs),
 		BTR_ARG(&super->mounted_clients),
 		BTR_ARG(&super->srch_root));
 
@@ -1016,11 +1010,6 @@ static int print_volume(int fd)
 
 	err = print_btree(fd, super, "mounted_clients", &super->mounted_clients,
 			  print_mounted_client_entry, NULL);
-	if (err && !ret)
-		ret = err;
-
-	err = print_btree(fd, super, "trans_seqs", &super->trans_seqs,
-			  print_trans_seqs_entry, NULL);
 	if (err && !ret)
 		ret = err;
 

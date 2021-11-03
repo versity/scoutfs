@@ -8,6 +8,7 @@
 
 #include "cmd.h"
 #include "util.h"
+#include "format.h"
 
 static struct argp_command {
 	char *name;
@@ -68,6 +69,9 @@ static void usage(void)
 	fprintf(stderr, "usage: scoutfs <command> [<args>]\n\n");
 	fprintf(stderr, "Selected fs defaults to current working directory.\n");
 	fprintf(stderr, "See <command> --help for more details.\n");
+
+	fprintf(stderr, "\nSupported format version: %u-%u\n",
+			SCOUTFS_FORMAT_VERSION_MIN, SCOUTFS_FORMAT_VERSION_MAX);
 
 	fprintf(stderr, "\nCore admin:\n");
 	print_cmds_for_group(GROUP_CORE);

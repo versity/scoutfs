@@ -20,7 +20,6 @@
 #include <linux/statfs.h>
 #include <linux/sched.h>
 #include <linux/debugfs.h>
-#include <linux/percpu.h>
 
 #include "super.h"
 #include "block.h"
@@ -52,66 +51,34 @@
 
 static struct dentry *scoutfs_debugfs_root;
 
-static DEFINE_PER_CPU(u64, clock_sync_ids) = 0;
-
-/*
- * Give the caller a unique clock sync id for a message they're about to
- * send.  We make the ids reasonably globally unique by using randomly
- * initialized per-cpu 64bit counters.
- */
-__le64 scoutfs_clock_sync_id(void)
+/* the statfs file fields can be small (and signed?) :/ */
+static __statfs_word saturate_truncated_word(u64 files)
 {
-	u64 rnd = 0;
-	u64 ret;
-	u64 *id;
+	__statfs_word word = files;
 
-retry:
-	preempt_disable();
-	id = this_cpu_ptr(&clock_sync_ids);
-	if (*id == 0) {
-		if (rnd == 0) {
-			preempt_enable();
-			get_random_bytes(&rnd, sizeof(rnd));
-			goto retry;
-		}
-		*id = rnd;
+	if (word != files) {
+		word = ~0ULL;
+		if (word < 0)
+			word = (unsigned long)word >> 1;
 	}
 
-	ret = ++(*id);
-	preempt_enable();
-
-	return cpu_to_le64(ret);
-}
-
-struct statfs_free_blocks {
-	u64 meta;
-	u64 data;
-};
-
-static int count_free_blocks(struct super_block *sb, void *arg, int owner,
-			     u64 id, bool meta, bool avail, u64 blocks)
-{
-	struct statfs_free_blocks *sfb = arg;
-
-	if (meta)
-		sfb->meta += blocks;
-	else
-		sfb->data += blocks;
-
-	return 0;
+	return word;
 }
 
 /*
- * Build the free block counts by having alloc read all the persistent
- * blocks which contain allocators and calling us for each of them.
- * Only the super block reads aren't cached so repeatedly calling statfs
- * is like repeated O_DIRECT IO.  We can add a cache and stale results
- * if that IO becomes a problem.
+ * The server gives us the current sum of free blocks and the total
+ * inode count that it can see across all the clients' log trees.  It
+ * won't see allocations and inode creations or deletions that are dirty
+ * in client memory as it builds a transaction.
  *
- * We fake the number of free inodes value by assuming that we can fill
- * free blocks with a certain number of inodes.  We then the number of
- * current inodes to that free count to determine the total possible
- * inodes.
+ * We don't have static limits on the number of files so the statfs
+ * fields for the total possible files and the number free isn't
+ * particularly helpful.  What we do want to report is the number of
+ * inodes, so we fake a max possible number of inodes given a
+ * conservative estimate of the total space consumption per file and
+ * then find the free by subtracting our precise count of active inodes.
+ * This seems like the least surprising compromise where the file max
+ * doesn't change and the caller gets the correct count of used inodes.
  *
  * The fsid that we report is constructed from the xor of the first two
  * and second two little endian u32s that make up the uuid bytes.
@@ -119,41 +86,33 @@ static int count_free_blocks(struct super_block *sb, void *arg, int owner,
 static int scoutfs_statfs(struct dentry *dentry, struct kstatfs *kst)
 {
 	struct super_block *sb = dentry->d_inode->i_sb;
-	struct scoutfs_super_block *super = NULL;
-	struct statfs_free_blocks sfb = {0,};
+	struct scoutfs_net_statfs nst;
+	u64 files;
+	u64 ffree;
 	__le32 uuid[4];
 	int ret;
 
 	scoutfs_inc_counter(sb, statfs);
 
-	super = kzalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
-	if (!super) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	ret = scoutfs_read_super(sb, super);
+	ret = scoutfs_client_statfs(sb, &nst);
 	if (ret)
 		goto out;
 
-	ret = scoutfs_alloc_foreach(sb, count_free_blocks, &sfb);
-	if (ret < 0)
-		goto out;
-
-	kst->f_bfree = (sfb.meta << SCOUTFS_BLOCK_SM_LG_SHIFT) + sfb.data;
+	kst->f_bfree = (le64_to_cpu(nst.free_meta_blocks) << SCOUTFS_BLOCK_SM_LG_SHIFT) +
+		       le64_to_cpu(nst.free_data_blocks);
 	kst->f_type = SCOUTFS_SUPER_MAGIC;
 	kst->f_bsize = SCOUTFS_BLOCK_SM_SIZE;
-	kst->f_blocks = (le64_to_cpu(super->total_meta_blocks) <<
-			 SCOUTFS_BLOCK_SM_LG_SHIFT) +
-			le64_to_cpu(super->total_data_blocks);
+	kst->f_blocks = (le64_to_cpu(nst.total_meta_blocks) << SCOUTFS_BLOCK_SM_LG_SHIFT) +
+			le64_to_cpu(nst.total_data_blocks);
 	kst->f_bavail = kst->f_bfree;
 
-	/* arbitrarily assume ~1K / empty file */
-	kst->f_ffree = sfb.meta * (SCOUTFS_BLOCK_LG_SIZE / 1024);
-	kst->f_files = kst->f_ffree + le64_to_cpu(super->next_ino);
+	files = div_u64(le64_to_cpu(nst.total_meta_blocks) << SCOUTFS_BLOCK_LG_SHIFT, 2048);
+	ffree = files - le64_to_cpu(nst.inode_count);
+	kst->f_files = saturate_truncated_word(files);
+	kst->f_ffree = saturate_truncated_word(ffree);
 
-	BUILD_BUG_ON(sizeof(uuid) != sizeof(super->uuid));
-	memcpy(uuid, super->uuid, sizeof(uuid));
+	BUILD_BUG_ON(sizeof(uuid) != sizeof(nst.uuid));
+	memcpy(uuid, nst.uuid, sizeof(uuid));
 	kst->f_fsid.val[0] = le32_to_cpu(uuid[0]) ^ le32_to_cpu(uuid[1]);
 	kst->f_fsid.val[1] = le32_to_cpu(uuid[2]) ^ le32_to_cpu(uuid[3]);
 	kst->f_namelen = SCOUTFS_NAME_LEN;
@@ -162,8 +121,6 @@ static int scoutfs_statfs(struct dentry *dentry, struct kstatfs *kst)
 	/* the vfs fills f_flags */
 	ret = 0;
 out:
-	kfree(super);
-
 	/*
 	 * We don't take cluster locks in statfs which makes it a very
 	 * convenient place to trigger lock reclaim for debugging. We
@@ -403,11 +360,22 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 		goto out;
 	}
 
+	if (le64_to_cpu(super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN ||
+	    le64_to_cpu(super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX) {
+		scoutfs_err(sb, "super block has format version %llu outside of supported version range %u-%u",
+			    le64_to_cpu(super->fmt_vers), SCOUTFS_FORMAT_VERSION_MIN,
+			    SCOUTFS_FORMAT_VERSION_MAX);
+		ret = -EINVAL;
+		goto out;
+	}
 
-	if (super->version != cpu_to_le64(SCOUTFS_INTEROP_VERSION)) {
-		scoutfs_err(sb, "super block has invalid version %llu, expected %llu",
-			    le64_to_cpu(super->version),
-			    SCOUTFS_INTEROP_VERSION);
+	/*
+	 * fill_supers checks the fmt_vers in both supers and then decides to use it.
+	 * From then on we verify that the supers we read have that version.
+	 */
+	if (sbi->fmt_vers != 0 && le64_to_cpu(super->fmt_vers) != sbi->fmt_vers) {
+		scoutfs_err(sb, "super block has format version %llu than %llu read at mount",
+			    le64_to_cpu(super->fmt_vers), sbi->fmt_vers);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -524,6 +492,14 @@ static int scoutfs_read_supers(struct super_block *sb)
 		goto out;
 	}
 
+	if (le64_to_cpu(meta_super->fmt_vers) != le64_to_cpu(data_super->fmt_vers)) {
+		scoutfs_err(sb, "meta device format version %llu != data device format version %llu",
+			    le64_to_cpu(meta_super->fmt_vers), le64_to_cpu(data_super->fmt_vers));
+		goto out;
+	}
+
+
+	sbi->fmt_vers = le64_to_cpu(meta_super->fmt_vers);
 	sbi->super = *meta_super;
 out:
 	kfree(meta_super);
@@ -561,12 +537,8 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		return ret;
 
 	spin_lock_init(&sbi->next_ino_lock);
-	init_waitqueue_head(&sbi->trans_hold_wq);
 	spin_lock_init(&sbi->data_wait_root.lock);
 	sbi->data_wait_root.root = RB_ROOT;
-	spin_lock_init(&sbi->trans_write_lock);
-	INIT_DELAYED_WORK(&sbi->trans_write_work, scoutfs_trans_write_func);
-	init_waitqueue_head(&sbi->trans_write_wq);
 	scoutfs_sysfs_init_attrs(sb, &sbi->mopts_ssa);
 
 	ret = scoutfs_parse_options(sb, data, &opts);
@@ -642,8 +614,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	/* send requests once iget progress shows we had a server */
-	ret = scoutfs_trans_get_log_trees(sb) ?:
-	      scoutfs_client_advance_seq(sb, &sbi->trans_seq);
+	ret = scoutfs_trans_get_log_trees(sb);
 	if (ret)
 		goto out;
 
@@ -714,11 +685,15 @@ static int __init scoutfs_module_init(void)
 	 */
 	__asm__ __volatile__ (
 		".section	.note.git_describe,\"a\"\n"
-		".string	\""SCOUTFS_GIT_DESCRIBE"\\n\"\n"
+		".ascii		\""SCOUTFS_GIT_DESCRIBE"\\n\"\n"
 		".previous\n");
 	__asm__ __volatile__ (
-		".section	.note.scoutfs_interop_version,\"a\"\n"
-		".string	\""SCOUTFS_INTEROP_VERSION_STR"\\n\"\n"
+		".section	.note.scoutfs_format_version_min,\"a\"\n"
+		".ascii		\""SCOUTFS_FORMAT_VERSION_MIN_STR"\\n\"\n"
+		".previous\n");
+	__asm__ __volatile__ (
+		".section	.note.scoutfs_format_version_max,\"a\"\n"
+		".ascii		\""SCOUTFS_FORMAT_VERSION_MAX_STR"\\n\"\n"
 		".previous\n");
 
 	scoutfs_init_counters();
@@ -752,4 +727,5 @@ module_exit(scoutfs_module_exit)
 MODULE_AUTHOR("Zach Brown <zab@versity.com>");
 MODULE_LICENSE("GPL");
 MODULE_INFO(git_describe, SCOUTFS_GIT_DESCRIBE);
-MODULE_INFO(scoutfs_interop_version, SCOUTFS_INTEROP_VERSION_STR);
+MODULE_INFO(scoutfs_format_version_min, SCOUTFS_FORMAT_VERSION_MIN_STR);
+MODULE_INFO(scoutfs_format_version_max, SCOUTFS_FORMAT_VERSION_MAX_STR);

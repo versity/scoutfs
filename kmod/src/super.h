@@ -36,6 +36,7 @@ struct scoutfs_sb_info {
 
 	/* assigned once at the start of each mount, read-only */
 	u64 rid;
+	u64 fmt_vers;
 
 	struct scoutfs_super_block super;
 
@@ -56,20 +57,11 @@ struct scoutfs_sb_info {
 	struct item_cache_info *item_cache_info;
 	struct fence_info *fence_info;
 
-	wait_queue_head_t trans_hold_wq;
-	struct task_struct *trans_task;
-
 	/* tracks tasks waiting for data extents */
 	struct scoutfs_data_wait_root data_wait_root;
 
-	spinlock_t trans_write_lock;
-	u64 trans_write_count;
+	/* set as transaction opens with trans holders excluded */
 	u64 trans_seq;
-	int trans_write_ret;
-	struct delayed_work trans_write_work;
-	wait_queue_head_t trans_write_wq;
-	struct workqueue_struct *trans_write_workq;
-	bool trans_deadline_expired;
 
 	struct trans_info *trans_info;
 	struct lock_info *lock_info;
@@ -167,7 +159,5 @@ int scoutfs_write_super(struct super_block *sb,
 
 /* to keep this out of the ioctl.h public interface definition */
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
-
-__le64 scoutfs_clock_sync_id(void);
 
 #endif

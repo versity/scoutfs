@@ -448,8 +448,10 @@ static void set_quorum_block_event(struct super_block *sb, struct scoutfs_quorum
 		return;
 
 	getnstimeofday64(&ts);
+	le64_add_cpu(&blk->write_nr, 1);
 
 	ev = &blk->events[event];
+	ev->write_nr = blk->write_nr;
 	ev->rid = cpu_to_le64(sbi->rid);
 	ev->term = cpu_to_le64(term);
 	ev->ts.sec = cpu_to_le64(ts.tv_sec);
@@ -826,7 +828,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				qst.term);
 	}
 
-	/* informational event that we're shutting down, nothing relies on it */
+	/* record that this slot no longer has an active quorum */
 	update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_END, qst.term, true);
 out:
 	if (ret < 0) {

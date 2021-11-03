@@ -254,17 +254,20 @@ test -e "$T_RESULTS" || mkdir -p "$T_RESULTS"
 test -d "$T_RESULTS" || \
 	 die "$T_RESULTS dir is not a directory"
 
+# might as well build our stuff with all cpus, assuming idle system
+MAKE_ARGS="-j $(getconf _NPROCESSORS_ONLN)"
+
 # build kernel module
 msg "building kmod/ dir $T_KMOD"
 cmd cd "$T_KMOD"
-cmd make
+cmd make $MAKE_ARGS
 cmd sync
 cmd cd -
 
 # build utils
 msg "building utils/ dir $T_UTILS"
 cmd cd "$T_UTILS"
-cmd make
+cmd make $MAKE_ARGS
 cmd sync
 cmd cd -
 
@@ -281,7 +284,7 @@ fi
 
 # building our test binaries
 msg "building test binaries"
-cmd make
+cmd make $MAKE_ARGS
 
 # set any options implied by others 
 test -n "$T_MKFS" && T_UNMOUNT=1

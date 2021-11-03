@@ -113,6 +113,14 @@ static inline int memcmp_lens(const void *a, int a_len,
 
 int get_path(char *path, int flags);
 int read_block(int fd, u64 blkno, int shift, void **ret_val);
+int read_block_crc(int fd, u64 blkno, int shift, void **ret_val);
+int read_block_verify(int fd, u32 magic, u64 fsid, u64 blkno, int shift, void **ret_val);
+
+struct scoutfs_block_header;
+int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
+		int shift, struct scoutfs_block_header *hdr);
+int write_block_sync(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
+		     int shift, struct scoutfs_block_header *hdr);
 
 #define __stringify_1(x) #x
 #define __stringify(x) __stringify_1(x)

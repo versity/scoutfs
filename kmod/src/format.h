@@ -1,8 +1,15 @@
 #ifndef _SCOUTFS_FORMAT_H_
 #define _SCOUTFS_FORMAT_H_
 
-#define SCOUTFS_INTEROP_VERSION		0ULL
-#define SCOUTFS_INTEROP_VERSION_STR	__stringify(0)
+/*
+ * The format version defines the format of structures on devices,
+ * structures that are communicated over the wire, and the protocol
+ * behind the structures.
+ */
+#define SCOUTFS_FORMAT_VERSION_MIN		1
+#define SCOUTFS_FORMAT_VERSION_MIN_STR	__stringify(SCOUTFS_FORMAT_VERSION_MIN)
+#define SCOUTFS_FORMAT_VERSION_MAX		1
+#define SCOUTFS_FORMAT_VERSION_MAX_STR	__stringify(SCOUTFS_FORMAT_VERSION_MAX)
 
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */
@@ -199,10 +206,6 @@ struct scoutfs_key {
 /* log trees */
 #define sklt_rid	_sk_first
 #define sklt_nr		_sk_second
-
-/* seqs */
-#define skts_trans_seq	_sk_first
-#define skts_rid	_sk_second
 
 /* mounted clients */
 #define skmc_rid	_sk_first
@@ -454,6 +457,12 @@ struct scoutfs_srch_compact {
  * XXX I imagine we should rename these now that they've evolved to track
  * all the btrees that clients use during a transaction.  It's not just
  * about item logs, it's about clients making changes to trees.
+ *
+ * @get_trans_seq, @commit_trans_seq: These pair of sequence numbers
+ * determine if a transaction is currently open for the mount that owns
+ * the log_trees struct.  get_trans_seq is advanced by the server as the
+ * transaction is opened.   The server sets comimt_trans_seq equal to
+ * get_ as the transaction is committed.
  */
 struct scoutfs_log_trees {
 	struct scoutfs_alloc_list_head meta_avail;
@@ -465,6 +474,9 @@ struct scoutfs_log_trees {
 	struct scoutfs_srch_file srch_file;
 	__le64 data_alloc_zone_blocks;
 	__le64 data_alloc_zones[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
+	__le64 inode_count_delta;
+	__le64 get_trans_seq;
+	__le64 commit_trans_seq;
 	__le64 max_item_seq;
 	__le64 finalize_seq;
 	__le64 rid;
@@ -571,50 +583,48 @@ struct scoutfs_log_merge_freeing {
 /*
  * Keys are first sorted by major key zones.
  */
-#define SCOUTFS_INODE_INDEX_ZONE		1
-#define SCOUTFS_ORPHAN_ZONE			2
-#define SCOUTFS_XATTR_TOTL_ZONE			3
-#define SCOUTFS_FS_ZONE				4
-#define SCOUTFS_LOCK_ZONE			5
+#define SCOUTFS_INODE_INDEX_ZONE		4
+#define SCOUTFS_ORPHAN_ZONE			8
+#define SCOUTFS_XATTR_TOTL_ZONE			12
+#define SCOUTFS_FS_ZONE				16
+#define SCOUTFS_LOCK_ZONE			20
 /* Items only stored in server btrees */
-#define SCOUTFS_LOG_TREES_ZONE			6
-#define SCOUTFS_TRANS_SEQ_ZONE			7
-#define SCOUTFS_MOUNTED_CLIENT_ZONE		8
-#define SCOUTFS_SRCH_ZONE			9
-#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		10
-#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		11
+#define SCOUTFS_LOG_TREES_ZONE			24
+#define SCOUTFS_MOUNTED_CLIENT_ZONE		28
+#define SCOUTFS_SRCH_ZONE			32
+#define SCOUTFS_FREE_EXTENT_BLKNO_ZONE		36
+#define SCOUTFS_FREE_EXTENT_ORDER_ZONE		40
 /* Items only stored in log merge server btrees */
-#define SCOUTFS_LOG_MERGE_STATUS_ZONE		12
-#define SCOUTFS_LOG_MERGE_RANGE_ZONE		13
-#define SCOUTFS_LOG_MERGE_REQUEST_ZONE		14
-#define SCOUTFS_LOG_MERGE_COMPLETE_ZONE		15
-#define SCOUTFS_LOG_MERGE_FREEING_ZONE		16
+#define SCOUTFS_LOG_MERGE_STATUS_ZONE		44
+#define SCOUTFS_LOG_MERGE_RANGE_ZONE		48
+#define SCOUTFS_LOG_MERGE_REQUEST_ZONE		52
+#define SCOUTFS_LOG_MERGE_COMPLETE_ZONE		56
+#define SCOUTFS_LOG_MERGE_FREEING_ZONE		60
 
 /* inode index zone */
-#define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	1
-#define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	2
-#define SCOUTFS_INODE_INDEX_NR			3 /* don't forget to update */
+#define SCOUTFS_INODE_INDEX_META_SEQ_TYPE	4
+#define SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE	8
 
 /* orphan zone, redundant type used for clarity */
-#define SCOUTFS_ORPHAN_TYPE			1
+#define SCOUTFS_ORPHAN_TYPE			4
 
 /* fs zone */
-#define SCOUTFS_INODE_TYPE			1
-#define SCOUTFS_XATTR_TYPE			2
-#define SCOUTFS_DIRENT_TYPE			3
-#define SCOUTFS_READDIR_TYPE			4
-#define SCOUTFS_LINK_BACKREF_TYPE		5
-#define SCOUTFS_SYMLINK_TYPE			6
-#define SCOUTFS_DATA_EXTENT_TYPE		7
+#define SCOUTFS_INODE_TYPE			4
+#define SCOUTFS_XATTR_TYPE			8
+#define SCOUTFS_DIRENT_TYPE			12
+#define SCOUTFS_READDIR_TYPE			16
+#define SCOUTFS_LINK_BACKREF_TYPE		20
+#define SCOUTFS_SYMLINK_TYPE			24
+#define SCOUTFS_DATA_EXTENT_TYPE		28
 
 /* lock zone, only ever found in lock ranges, never in persistent items */
-#define SCOUTFS_RENAME_TYPE			1
+#define SCOUTFS_RENAME_TYPE			4
 
 /* srch zone, only in server btrees */
-#define SCOUTFS_SRCH_LOG_TYPE		1
-#define SCOUTFS_SRCH_BLOCKS_TYPE	2
-#define SCOUTFS_SRCH_PENDING_TYPE	3
-#define SCOUTFS_SRCH_BUSY_TYPE		4
+#define SCOUTFS_SRCH_LOG_TYPE		4
+#define SCOUTFS_SRCH_BLOCKS_TYPE	8
+#define SCOUTFS_SRCH_PENDING_TYPE	12
+#define SCOUTFS_SRCH_BUSY_TYPE		16
 
 /* file data extents have start and len in key */
 struct scoutfs_data_extent_val {
@@ -733,7 +743,9 @@ enum {
 
 struct scoutfs_quorum_block {
 	struct scoutfs_block_header hdr;
+	__le64 write_nr;
 	struct scoutfs_quorum_block_event {
+		__le64 write_nr;
 		__le64 rid;
 		__le64 term;
 		struct scoutfs_timespec ts;
@@ -781,11 +793,12 @@ struct scoutfs_volume_options {
 struct scoutfs_super_block {
 	struct scoutfs_block_header hdr;
 	__le64 id;
-	__le64 version;
+	__le64 fmt_vers;
 	__le64 flags;
 	__u8 uuid[SCOUTFS_UUID_BYTES];
 	__le64 seq;
 	__le64 next_ino;
+	__le64 inode_count;
 	__le64 total_meta_blocks;	/* both static and dynamic */
 	__le64 total_data_blocks;
 	struct scoutfs_quorum_config qconf;
@@ -796,7 +809,6 @@ struct scoutfs_super_block {
 	struct scoutfs_btree_root fs_root;
 	struct scoutfs_btree_root logs_root;
 	struct scoutfs_btree_root log_merge;
-	struct scoutfs_btree_root trans_seqs;
 	struct scoutfs_btree_root mounted_clients;
 	struct scoutfs_btree_root srch_root;
 	struct scoutfs_volume_options volopt;
@@ -926,7 +938,7 @@ enum scoutfs_dentry_type {
  */
 struct scoutfs_net_greeting {
 	__le64 fsid;
-	__le64 version;
+	__le64 fmt_vers;
 	__le64 server_term;
 	__le64 rid;
 	__le64 flags;
@@ -957,7 +969,6 @@ struct scoutfs_net_greeting {
  * response messages.
  */
 struct scoutfs_net_header {
-	__le64 clock_sync_id;
 	__le64 seq;
 	__le64 recv_seq;
 	__le64 id;
@@ -979,7 +990,6 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_COMMIT_LOG_TREES,
 	SCOUTFS_NET_CMD_SYNC_LOG_TREES,
 	SCOUTFS_NET_CMD_GET_ROOTS,
-	SCOUTFS_NET_CMD_ADVANCE_SEQ,
 	SCOUTFS_NET_CMD_GET_LAST_SEQ,
 	SCOUTFS_NET_CMD_LOCK,
 	SCOUTFS_NET_CMD_LOCK_RECOVER,
@@ -992,6 +1002,7 @@ enum scoutfs_net_cmd {
 	SCOUTFS_NET_CMD_SET_VOLOPT,
 	SCOUTFS_NET_CMD_CLEAR_VOLOPT,
 	SCOUTFS_NET_CMD_RESIZE_DEVICES,
+	SCOUTFS_NET_CMD_STATFS,
 	SCOUTFS_NET_CMD_FAREWELL,
 	SCOUTFS_NET_CMD_UNKNOWN,
 };
@@ -1037,6 +1048,15 @@ struct scoutfs_net_roots {
 struct scoutfs_net_resize_devices {
 	__le64 new_total_meta_blocks;
 	__le64 new_total_data_blocks;
+};
+
+struct scoutfs_net_statfs {
+	__u8 uuid[SCOUTFS_UUID_BYTES];
+	__le64 free_meta_blocks;
+	__le64 total_meta_blocks;
+	__le64 free_data_blocks;
+	__le64 total_data_blocks;
+	__le64 inode_count;
 };
 
 struct scoutfs_net_lock {

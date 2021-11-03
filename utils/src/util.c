@@ -10,6 +10,8 @@
 #include <wordexp.h>
 
 #include "util.h"
+#include "format.h"
+#include "crc.h"
 
 #define ENV_PATH "SCOUTFS_MOUNT_PATH"
 
@@ -77,11 +79,16 @@ int read_block(int fd, u64 blkno, int shift, void **ret_val)
 	void *buf;
 	int ret;
 
+	buf = NULL;
 	*ret_val = NULL;
 
-	buf = malloc(size);
-	if (!buf)
-		return -ENOMEM;
+	ret = posix_memalign(&buf, size, size);
+	if (ret != 0) {
+		ret = -errno;
+		fprintf(stderr, "%zu byte aligned buffer allocation failed: %s (%d)\n",
+			size, strerror(errno), errno);
+		return ret;
+	}
 
 	ret = pread(fd, buf, size, blkno << shift);
 	if (ret == -1) {
@@ -97,4 +104,100 @@ int read_block(int fd, u64 blkno, int shift, void **ret_val)
 		*ret_val = buf;
 		return 0;
 	}
+}
+
+int read_block_crc(int fd, u64 blkno, int shift, void **ret_val)
+{
+	struct scoutfs_block_header *hdr;
+	size_t size = 1ULL << shift;
+	int ret;
+	u32 crc;
+
+	ret = read_block(fd, blkno, shift, ret_val);
+	if (ret == 0) {
+		hdr = *ret_val;
+		crc = crc_block(hdr, size);
+		if (crc != le32_to_cpu(hdr->crc)) {
+			fprintf(stderr, "crc of read blkno %llu failed, stored %08x != calculated %08x\n",
+				blkno, le32_to_cpu(hdr->crc), crc);
+			free(*ret_val);
+			*ret_val = NULL;
+			ret = -EIO;
+		}
+	}
+
+	return ret;
+}
+
+int read_block_verify(int fd, u32 magic, u64 fsid, u64 blkno, int shift, void **ret_val)
+{
+	struct scoutfs_block_header *hdr = NULL;
+	int ret;
+
+	ret = read_block_crc(fd, blkno, shift, ret_val);
+	if (ret == 0) {
+		hdr = *ret_val;
+		ret = -EIO;
+		if (le32_to_cpu(hdr->magic) != magic)
+			fprintf(stderr, "read blkno %llu has bad magic %08x != expected %08x\n",
+				blkno, le32_to_cpu(hdr->magic), magic);
+		else if (fsid != 0 && le64_to_cpu(hdr->fsid) != fsid)
+			fprintf(stderr, "read blkno %llu has bad fsid %016llx != expected %016llx\n",
+				blkno, le64_to_cpu(hdr->fsid), fsid);
+		else if (le32_to_cpu(hdr->blkno) != blkno)
+			fprintf(stderr, "read blkno %llu has bad blkno %llu != expected %llu\n",
+				blkno, le64_to_cpu(hdr->blkno), blkno);
+		else
+			ret = 0;
+
+		if (ret < 0) {
+			free(*ret_val);
+			*ret_val = NULL;
+		}
+	}
+
+
+	return ret;
+}
+
+/*
+ * Update the block header fields and write out the block.
+ */
+int write_block(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
+		int shift, struct scoutfs_block_header *hdr)
+{
+	size_t size = 1ULL << shift;
+	ssize_t ret;
+
+	hdr->magic = cpu_to_le32(magic);
+	hdr->fsid = fsid;
+	hdr->blkno = cpu_to_le64(blkno);
+	hdr->seq = cpu_to_le64(seq);
+	hdr->crc = cpu_to_le32(crc_block(hdr, size));
+
+	ret = pwrite(fd, hdr, size, blkno << shift);
+	if (ret != size) {
+		fprintf(stderr, "write to blkno %llu returned %zd: %s (%d)\n",
+			blkno, ret, strerror(errno), errno);
+		return -errno;
+	}
+
+	return 0;
+}
+
+int write_block_sync(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
+		     int shift, struct scoutfs_block_header *hdr)
+{
+	int ret = write_block(fd, magic, fsid, seq, blkno, shift, hdr);
+	if (ret != 0)
+		return ret;
+
+	if (fsync(fd)) {
+		ret = -errno;
+		fprintf(stderr, "fsync after write to blkno %llu failed: %s (%d)\n",
+			blkno, strerror(errno), errno);
+		return ret;
+	}
+
+	return 0;
 }

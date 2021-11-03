@@ -58,9 +58,6 @@ struct lock_info;
 	__entry->pref##_map,			\
 	__entry->pref##_flags
 
-#define DECLARE_TRACED_EXTENT(name) \
-	struct scoutfs_traced_extent name = {0}
-
 DECLARE_EVENT_CLASS(scoutfs_ino_ret_class,
 	TP_PROTO(struct super_block *sb, u64 ino, int ret),
 
@@ -1957,74 +1954,6 @@ TRACE_EVENT(scoutfs_quorum_loop,
 		  __entry->timeout_sec, __entry->timeout_nsec)
 );
 
-/*
- * We can emit trace events to make it easier to synchronize the
- * monotonic clocks in trace logs between nodes.  By looking at the send
- * and recv times of many messages flowing between nodes we can get
- * surprisingly good estimates of the clock offset between them.
- */
-DECLARE_EVENT_CLASS(scoutfs_clock_sync_class,
-	TP_PROTO(__le64 clock_sync_id),
-	TP_ARGS(clock_sync_id),
-	TP_STRUCT__entry(
-		__field(__u64, clock_sync_id)
-	),
-	TP_fast_assign(
-		__entry->clock_sync_id = le64_to_cpu(clock_sync_id);
-	),
-	TP_printk("clock_sync_id %016llx", __entry->clock_sync_id)
-);
-DEFINE_EVENT(scoutfs_clock_sync_class, scoutfs_send_clock_sync,
-	TP_PROTO(__le64 clock_sync_id),
-	TP_ARGS(clock_sync_id)
-);
-DEFINE_EVENT(scoutfs_clock_sync_class, scoutfs_recv_clock_sync,
-	TP_PROTO(__le64 clock_sync_id),
-	TP_ARGS(clock_sync_id)
-);
-
-TRACE_EVENT(scoutfs_trans_seq_advance,
-	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
-
-	TP_ARGS(sb, rid, trans_seq),
-
-	TP_STRUCT__entry(
-		SCSB_TRACE_FIELDS
-		__field(__u64, s_rid)
-		__field(__u64, trans_seq)
-	),
-
-	TP_fast_assign(
-		SCSB_TRACE_ASSIGN(sb);
-		__entry->s_rid = rid;
-		__entry->trans_seq = trans_seq;
-	),
-
-	TP_printk(SCSBF" rid %016llx trans_seq %llu\n",
-		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
-);
-
-TRACE_EVENT(scoutfs_trans_seq_remove,
-	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
-
-	TP_ARGS(sb, rid, trans_seq),
-
-	TP_STRUCT__entry(
-		SCSB_TRACE_FIELDS
-		__field(__u64, s_rid)
-		__field(__u64, trans_seq)
-	),
-
-	TP_fast_assign(
-		SCSB_TRACE_ASSIGN(sb);
-		__entry->s_rid = rid;
-		__entry->trans_seq = trans_seq;
-	),
-
-	TP_printk(SCSBF" rid %016llx trans_seq %llu",
-		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
-);
-
 TRACE_EVENT(scoutfs_trans_seq_last,
 	TP_PROTO(struct super_block *sb, u64 rid, u64 trans_seq),
 
@@ -2610,6 +2539,36 @@ TRACE_EVENT(scoutfs_alloc_move,
 	TP_printk(SCSBF" total %llu moved %llu ret %d",
 		  SCSB_TRACE_ARGS, __entry->total, __entry->moved,
 		  __entry->ret)
+);
+
+DECLARE_EVENT_CLASS(scoutfs_alloc_extent_class,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+
+	TP_ARGS(sb, ext),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		STE_FIELDS(ext)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		STE_ASSIGN(ext, ext);
+	),
+
+	TP_printk(SCSBF" ext "STE_FMT, SCSB_TRACE_ARGS, STE_ENTRY_ARGS(ext))
+);
+DEFINE_EVENT(scoutfs_alloc_extent_class, scoutfs_alloc_move_extent,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+	TP_ARGS(sb, ext)
+);
+DEFINE_EVENT(scoutfs_alloc_extent_class, scoutfs_alloc_fill_extent,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+	TP_ARGS(sb, ext)
+);
+DEFINE_EVENT(scoutfs_alloc_extent_class, scoutfs_alloc_empty_extent,
+	TP_PROTO(struct super_block *sb, struct scoutfs_extent *ext),
+	TP_ARGS(sb, ext)
 );
 
 TRACE_EVENT(scoutfs_item_read_page,

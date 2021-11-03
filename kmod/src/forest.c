@@ -66,6 +66,8 @@ struct forest_info {
 
 	struct workqueue_struct *workq;
 	struct delayed_work log_merge_dwork;
+
+	atomic64_t inode_count_delta;
 };
 
 #define DECLARE_FOREST_INFO(sb, name) \
@@ -523,6 +525,62 @@ int scoutfs_forest_srch_add(struct super_block *sb, u64 hash, u64 ino, u64 id)
 	return ret;
 }
 
+void scoutfs_forest_inc_inode_count(struct super_block *sb)
+{
+	DECLARE_FOREST_INFO(sb, finf);
+
+	atomic64_inc(&finf->inode_count_delta);
+}
+
+void scoutfs_forest_dec_inode_count(struct super_block *sb)
+{
+	DECLARE_FOREST_INFO(sb, finf);
+
+	atomic64_dec(&finf->inode_count_delta);
+}
+
+/*
+ * Return the total inode count from the super block and all the
+ * log_btrees it references.   This assumes it's working with a block
+ * reference hierarchy that should be fully consistent.   If we see
+ * ESTALE we've hit persistent corruption.
+ */
+int scoutfs_forest_inode_count(struct super_block *sb, struct scoutfs_super_block *super,
+			       u64 *inode_count)
+{
+	struct scoutfs_log_trees *lt;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	int ret;
+
+	*inode_count = le64_to_cpu(super->inode_count);
+
+	scoutfs_key_init_log_trees(&key, 0, 0);
+	for (;;) {
+		ret = scoutfs_btree_next(sb, &super->logs_root, &key, &iref);
+		if (ret == 0) {
+			if (iref.val_len == sizeof(*lt)) {
+				key = *iref.key;
+				scoutfs_key_inc(&key);
+				lt = iref.val;
+				*inode_count += le64_to_cpu(lt->inode_count_delta);
+			} else {
+				ret = -EIO;
+			}
+			scoutfs_btree_put_iref(&iref);
+		}
+		if (ret < 0) {
+			if (ret == -ENOENT)
+				ret = 0;
+			else if (ret == -ESTALE)
+				ret = -EIO;
+			break;
+		}
+	}
+
+	return ret;
+}
+
 /*
  * This is called from transactions as a new transaction opens and is
  * serialized with all writers.
@@ -551,6 +609,8 @@ void scoutfs_forest_init_btrees(struct super_block *sb,
 	WARN_ON_ONCE(finf->srch_bl); /* commiting should have put the block */
 	finf->srch_bl = NULL;
 
+	atomic64_set(&finf->inode_count_delta, le64_to_cpu(lt->inode_count_delta));
+
 	trace_scoutfs_forest_init_our_log(sb, le64_to_cpu(lt->rid),
 					  le64_to_cpu(lt->nr),
 					  le64_to_cpu(lt->item_root.ref.blkno),
@@ -577,6 +637,8 @@ void scoutfs_forest_get_btrees(struct super_block *sb,
 
 	scoutfs_block_put(sb, finf->srch_bl);
 	finf->srch_bl = NULL;
+
+	lt->inode_count_delta = cpu_to_le64(atomic64_read(&finf->inode_count_delta));
 
 	trace_scoutfs_forest_prepare_commit(sb, &lt->item_root.ref,
 					    &lt->bloom_ref);

@@ -48,7 +48,6 @@ static int do_df(struct df_args *args)
 	if (fd < 0)
 		return fd;
 
-	sfm.valid_bytes = sizeof(struct scoutfs_ioctl_statfs_more);
 	ret = ioctl(fd, SCOUTFS_IOC_STATFS_MORE, &sfm);
 	if (ret < 0) {
 		fprintf(stderr, "statfs_more returned %d: error %s (%d)\n",

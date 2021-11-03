@@ -198,7 +198,86 @@ with the
 .IB READ_XATTR_TOTALS
 ioctl.
 .RE
- 
+
+.SH FORMAT VERSION
+The format version defines the layout and use of structures stored on
+devices and passed over the network.  The version is incremented for
+every change in structures that is not backwards compatible with
+previous versions.  A single version implies all changes, individual
+changes can't be selectively adopted.
+.sp
+As a new file system is created the format version is stored in both of
+the super blocks written to the metadata and data devices.  By default
+the greatest supported version is written while an older supported
+version may be specified.
+.sp
+During mount the kernel module verifies that the format versions stored
+in both of the super blocks match and are supported.   That version
+defines the set of features and behavior of all the mounts using the
+file system, including the network protocol that is communicated over
+the wire.
+.sp
+Any combination of software release versions that support the current
+format version of the file system can safely be used concurrently.  This
+allows for rolling software updates of multiple mounts using a shared
+file system.
+.sp
+To use new incompatible features added in newer format versions the super blocks must
+be updated.   This can currently only be safely performed on a
+completely and cleanly unmounted file system.  The
+.BR scoutfs (8)
+.I change-format-version
+command can be used with the 
+.I --offline
+option to write a newer supported version into the super blocks.  It
+will fail if it sees any indication of unresolved mounts that may be
+using the devices: either active quorum members working with their
+quorum blocks or persistent records of mounted clients that haven't been
+resolved.  Like creating a new file system, there is no protection
+against multiple invocations of the change command corrupting the
+system.  Once the version is updated older software can no longer use
+the file system so this change should be performed with care.  Once the
+newer format version is successfully written it can be mounted and newer
+features can be used.
+.sp
+Each layer of the system can show its supported format versions:
+.RS
+.TP
+.B Userspace utilities
+.B scoutfs --help
+includes the range of supported format versions for a given release
+of the userspace utilities.
+.TP
+.B Kernel module
+.I modinfo MODULE
+shows the range of supproted versions for a kernel module file in the
+.I scoutfs_format_version_min
+and
+.I scoutfs_format_version_min
+fields.
+.TP
+.B Inserted module
+The supported version range of an inserted module can be found in
+.I .note.scoutfs_format_version_min
+and
+.I .note.scoutfs_format_version_max
+notes files in the sysfs notes directory for the inserted module,
+typically
+.I /sys/module/scoutfs/notes/
+.TP
+.B Metadata and data devices
+.I scoutfs print DEVICE
+shows the
+.I fmt_vers
+field in the initial output of the super block on the device.
+.TP
+.B Mounted filesystem
+The version that a mount is using is shown in the
+.I format_version
+file in the mount's sysfs directory, typically
+.I /sys/fs/scoutfs/f.FSID.r.RID/
+.RE
+
 .SH CORRUPTION DETECTION
 A
 .B scoutfs

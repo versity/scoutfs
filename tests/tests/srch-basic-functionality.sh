@@ -42,6 +42,31 @@ echo "== remove xattr with files"
 rm -f "$T_D0/"{create,update}
 diff_srch_find scoutfs.srch.test
 
+echo "== trigger small log merges by rotating single block with unmount"
+sv=$(t_server_nr)
+i=1
+while [ "$i" -lt "8" ]; do
+	for nr in $(t_fs_nrs); do
+		# not checking, can go over limit by fs_nrs
+		((i++))
+
+		if [ $nr == $sv ]; then
+			continue;
+		fi
+
+		eval path="\$T_D${nr}/single-block-$i"
+		touch "$path"
+		setfattr -n scoutfs.srch.single-block-logs -v $i "$path"
+		t_umount $nr
+		t_mount $nr
+
+		((i++))
+	done
+done
+# wait for srch compaction worker delay
+sleep 10
+rm -rf "$T_D0/single-block-*"
+
 echo "== create entries in current log"
 DIR="$T_D0/dir"
 NR=$((LOG / 4))

@@ -970,6 +970,8 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 
 		moved += ext.len;
 		scoutfs_inc_counter(sb, alloc_moved_extent);
+
+		trace_scoutfs_alloc_move_extent(sb, &ext);
 	}
 
 	scoutfs_inc_counter(sb, alloc_move);
@@ -1157,6 +1159,8 @@ int scoutfs_alloc_fill_list(struct super_block *sb,
 
 		for (i = 0; i < ext.len; i++)
 			list_block_add(lhead, lblk, ext.start + i);
+
+		trace_scoutfs_alloc_fill_extent(sb, &ext);
 	}
 
 out:
@@ -1225,6 +1229,8 @@ int scoutfs_alloc_empty_list(struct super_block *sb,
 			break;
 
 		list_block_remove(lhead, lblk, ext.len);
+
+		trace_scoutfs_alloc_empty_extent(sb, &ext);
 	}
 
 	scoutfs_block_put(sb, bl);
@@ -1327,15 +1333,17 @@ bool scoutfs_alloc_test_flag(struct super_block *sb,
 }
 
 /*
- * Call the callers callback for every persistent allocator structure
- * we can find.
+ * Iterate over the allocator structures referenced by the caller's
+ * super and call the caller's callback with summaries of the blocks
+ * found in each structure.
+ *
+ * The caller's responsible for the stability of the referenced blocks.
+ * If the blocks could be stale the caller must deal with retrying when
+ * it sees ESTALE.
  */
-int scoutfs_alloc_foreach(struct super_block *sb,
-			  scoutfs_alloc_foreach_cb_t cb, void *arg)
+int scoutfs_alloc_foreach_super(struct super_block *sb, struct scoutfs_super_block *super,
+				scoutfs_alloc_foreach_cb_t cb, void *arg)
 {
-	struct scoutfs_block_ref stale_refs[2] = {{0,}};
-	struct scoutfs_block_ref refs[2] = {{0,}};
-	struct scoutfs_super_block *super = NULL;
 	struct scoutfs_srch_compact *sc;
 	struct scoutfs_log_merge_request *lmreq;
 	struct scoutfs_log_merge_complete *lmcomp;
@@ -1348,20 +1356,11 @@ int scoutfs_alloc_foreach(struct super_block *sb,
 	u64 id;
 	int ret;
 
-	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
 	sc = kmalloc(sizeof(struct scoutfs_srch_compact), GFP_NOFS);
-	if (!super || !sc) {
+	if (!sc) {
 		ret = -ENOMEM;
 		goto out;
 	}
-
-retry:
-	ret = scoutfs_read_super(sb, super);
-	if (ret < 0)
-		goto out;
-
-	refs[0] = super->logs_root.ref;
-	refs[1] = super->srch_root.ref;
 
 	/* all the server allocators */
 	ret = cb(sb, arg, SCOUTFS_ALLOC_OWNER_SERVER, 0, true, true,
@@ -1505,6 +1504,40 @@ retry:
 
 	ret = 0;
 out:
+
+	kfree(sc);
+	return ret;
+}
+
+/*
+ * Read the current on-disk super and use it to walk the allocators and
+ * call the caller's callback.  This assumes that the super it's reading
+ * could be stale and will retry if it encounters stale blocks.
+ */
+int scoutfs_alloc_foreach(struct super_block *sb,
+			  scoutfs_alloc_foreach_cb_t cb, void *arg)
+{
+	struct scoutfs_super_block *super = NULL;
+	struct scoutfs_block_ref stale_refs[2] = {{0,}};
+	struct scoutfs_block_ref refs[2] = {{0,}};
+	int ret;
+
+	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
+	if (!super) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+retry:
+	ret = scoutfs_read_super(sb, super);
+	if (ret < 0)
+		goto out;
+
+	refs[0] = super->logs_root.ref;
+	refs[1] = super->srch_root.ref;
+
+	ret = scoutfs_alloc_foreach_super(sb, super, cb, arg);
+out:
 	if (ret == -ESTALE) {
 		if (memcmp(&stale_refs, &refs, sizeof(refs)) == 0) {
 			ret = -EIO;
@@ -1516,10 +1549,8 @@ out:
 	}
 
 	kfree(super);
-	kfree(sc);
 	return ret;
 }
-
 
 struct foreach_cb_args {
 	scoutfs_alloc_extent_cb_t cb;

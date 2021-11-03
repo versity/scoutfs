@@ -28,6 +28,7 @@
 #include "btree.h"
 #include "spbm.h"
 #include "client.h"
+#include "counters.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -1481,10 +1482,11 @@ static int kway_merge(struct super_block *sb,
 	int ind;
 	int i;
 
-	if (WARN_ON_ONCE(nr <= 1))
+	if (WARN_ON_ONCE(nr <= 0))
 		return -EINVAL;
 
-	nr_parents = roundup_pow_of_two(nr) - 1;
+	/* always at least one parent for single leaf */
+	nr_parents = max_t(unsigned long, 1, roundup_pow_of_two(nr) - 1);
 	/* root at [1] for easy sib/parent index calc, final pad for odd sib */
 	nr_nodes = 1 + nr_parents + nr + 1;
 	tnodes = __vmalloc(nr_nodes * sizeof(struct tourn_node),
@@ -2127,6 +2129,7 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	struct scoutfs_alloc alloc;
 	unsigned long delay;
 	int ret;
+	int err;
 
 	sc = kmalloc(sizeof(struct scoutfs_srch_compact), GFP_NOFS);
 	if (sc == NULL) {
@@ -2165,10 +2168,14 @@ commit:
 	sc->meta_freed = alloc.freed;
 	sc->flags |= ret < 0 ? SCOUTFS_SRCH_COMPACT_FLAG_ERROR : 0;
 
-	ret = scoutfs_client_srch_commit_compact(sb, sc);
+	err = scoutfs_client_srch_commit_compact(sb, sc);
+	if (err < 0 && ret == 0)
+		ret = err;
 out:
 	/* our allocators and files should be stable */
 	WARN_ON_ONCE(ret == -ESTALE);
+	if (ret < 0)
+		scoutfs_inc_counter(sb, srch_compact_error);
 
 	scoutfs_block_writer_forget_all(sb, &wri);
 	if (!atomic_read(&srinf->shutdown)) {
