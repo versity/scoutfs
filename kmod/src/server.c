@@ -2426,7 +2426,9 @@ static int server_commit_log_merge(struct super_block *sb,
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_key key;
 	char *err_str = NULL;
-	int ret;
+	bool deleted = false;
+	int ret = 0;
+	int err = 0;
 
 	scoutfs_key_set_zeros(&rng.end);
 
@@ -2474,6 +2476,7 @@ static int server_commit_log_merge(struct super_block *sb,
 		err_str = "deleting orig request";
 		goto out;
 	}
+	deleted = true;
 
 	if (le64_to_cpu(comp->flags) & SCOUTFS_LOG_MERGE_COMP_ERROR) {
 		/* restore the range and reclaim the allocator if it failed */
@@ -2533,8 +2536,11 @@ out:
 	if (ret < 0)
 		scoutfs_err(sb, "error %d committing log merge: %s", ret, err_str);
 
-	ret = scoutfs_server_apply_commit(sb, ret);
-	BUG_ON(ret < 0); /* inconsistent */
+	err = scoutfs_server_apply_commit(sb, ret);
+	BUG_ON(ret < 0 && deleted); /* inconsistent */
+
+	if (ret == 0)
+		ret = err;
 
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
