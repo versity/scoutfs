@@ -72,6 +72,12 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error reading quorum block"
 	re="$re|scoutfs .* error .* writing quorum block"
 	re="$re|scoutfs .* error .* while checking to delete inode"
+	re="$re|scoutfs .* error .*writing btree blocks.*"
+	re="$re|scoutfs .* error .*writing super block.*"
+	re="$re|scoutfs .* error .* freeing merged btree blocks.*.looping commit del.*upd freeing item"
+	re="$re|scoutfs .* error .* freeing merged btree blocks.*.final commit del.upd freeing item"
+	re="$re|scoutfs .* error .*reading quorum block.*to update event.*"
+	re="$re|scoutfs .* error.*server failed to bind to.*"
 
 	egrep -v "($re)" 
 }
