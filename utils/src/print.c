@@ -922,10 +922,6 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 	uuid_unparse(super->uuid, uuid_str);
 
-	if (!(le64_to_cpu(super->flags) && SCOUTFS_FLAG_IS_META_BDEV))
-	    fprintf(stderr,
-		    "**** Printing metadata from a data device! Did you mean to do this? ****\n");
-
 	printf("super blkno %llu\n", blkno);
 	print_block_header(&super->hdr, SCOUTFS_BLOCK_SM_SIZE);
 	printf("  fmt_vers %llu uuid %s\n",
@@ -1006,6 +1002,13 @@ static int print_volume(int fd)
 
 	print_super_block(super, SCOUTFS_SUPER_BLKNO);
 
+	if (!(le64_to_cpu(super->flags) & SCOUTFS_FLAG_IS_META_BDEV)) {
+		fprintf(stderr,
+			"**** Printing from data device is not allowed ****\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
 	ret = print_quorum_blocks(fd, super);
 
 	err = print_btree(fd, super, "mounted_clients", &super->mounted_clients,
@@ -1072,6 +1075,7 @@ static int print_volume(int fd)
 	if (err && !ret)
 		ret = err;
 
+out:
 	free(super);
 
 	return ret;
