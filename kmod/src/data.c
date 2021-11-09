@@ -501,7 +501,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 	u64 offset;
 	int ret;
 
-	WARN_ON_ONCE(create && !mutex_is_locked(&inode->i_mutex));
+	WARN_ON_ONCE(create && !rwsem_is_locked(&si->extent_sem));
 
 	/* make sure caller holds a cluster lock */
 	lock = scoutfs_per_task_get(&si->pt_data_lock);
@@ -1794,6 +1794,191 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 	return ret;
 }
 
+/* Mostly cribbed from mm/filemap.c:filemap_page_mkwrite() */
+static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
+				     struct vm_fault *vmf)
+{
+	struct page *page = vmf->page;
+	struct file *file = vma->vm_file;
+	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
+	DECLARE_DATA_WAIT(dw);
+	struct write_begin_data wbd;
+	u64 ind_seq;
+	loff_t size;
+	loff_t pos;
+	int ret;
+	int err;
+
+	sb_start_pagefault(sb);
+	down_write(&si->extent_sem);
+
+retry:
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+	if (ret) {
+		ret = VM_FAULT_ERROR;
+		goto out;
+	}
+
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
+		/* data_version is per inode, whole file must be online */
+		ret = scoutfs_data_wait_check(inode, 0, i_size_read(inode),
+					      SEF_OFFLINE,
+					      SCOUTFS_IOC_DWO_WRITE,
+					      &dw, inode_lock);
+		if (ret != 0)
+			goto out;
+	}
+
+	file_update_time(vma->vm_file);
+	lock_page(page);
+	size = i_size_read(inode);
+	pos = page_offset(page);
+	ret = VM_FAULT_LOCKED;
+	if (page->mapping != inode->i_mapping || pos >= size) {
+		unlock_page(page);
+		ret = VM_FAULT_NOPAGE;
+		goto out;
+	}
+
+
+	/* scoutfs_write_begin */
+	memset(&wbd, 0, sizeof(wbd));
+	INIT_LIST_HEAD(&wbd.ind_locks);
+	wbd.lock = inode_lock;
+
+	do {
+		err = scoutfs_inode_index_start(sb, &ind_seq) ?:
+			scoutfs_inode_index_prepare(sb, &wbd.ind_locks, inode,
+						    true) ?:
+			scoutfs_inode_index_try_lock_hold(sb, &wbd.ind_locks,
+							  ind_seq);
+	} while (err > 0);
+	if (err < 0) {
+		ret = VM_FAULT_ERROR;
+		goto out_release_trans;
+	}
+
+	err = __block_write_begin(page, pos, PAGE_SIZE, scoutfs_get_block);
+	if (err) {
+		ret = VM_FAULT_ERROR;
+		goto out_release_trans;
+	}
+	/* end scoutfs_write_begin */
+
+	/*
+	 * We mark the page dirty already here so that when freeze is in
+	 * progress, we are guaranteed that writeback during freezing will
+	 * see the dirty page and writeprotect it again.
+	 */
+	set_page_dirty(page);
+	wait_for_stable_page(page);
+
+	/* scoutfs_write_end */
+	if (!si->staging) {
+		scoutfs_inode_set_data_seq(inode);
+		scoutfs_inode_inc_data_version(inode);
+	}
+
+	scoutfs_update_inode_item(inode, wbd.lock, &wbd.ind_locks);
+	scoutfs_inode_queue_writeback(inode);
+out_release_trans:
+	scoutfs_release_trans(sb);
+	scoutfs_inode_index_unlock(sb, &wbd.ind_locks);
+	/* end scoutfs_write_end */
+
+out:
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+	up_write(&si->extent_sem);
+	if (scoutfs_data_wait_found(&dw)) {
+		ret = scoutfs_data_wait(inode, &dw);
+		if (ret == 0)
+			goto retry;
+	}
+
+	sb_end_pagefault(sb);
+	return ret;
+}
+
+static int scoutfs_data_filemap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	struct file *file = vma->vm_file;
+	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
+	DECLARE_DATA_WAIT(dw);
+	bool have_ret = false;
+	loff_t pos;
+	int ret;
+
+	pos = vmf->pgoff;
+	pos <<= PAGE_CACHE_SHIFT;
+
+retry:
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+	if (ret < 0)
+		return VM_FAULT_SIGBUS;
+
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
+		/* protect checked extents from stage/release */
+		mutex_lock(&si->s_i_mutex);
+		atomic_inc(&inode->i_dio_count);
+		mutex_unlock(&si->s_i_mutex);
+
+		ret = scoutfs_data_wait_check(inode, pos, PAGE_SIZE,
+					      SEF_OFFLINE, SCOUTFS_IOC_DWO_READ,
+					      &dw, inode_lock);
+		if (ret != 0) {
+			goto out;
+		}
+	}
+
+	ret = filemap_fault(vma, vmf);
+	have_ret = true;
+
+out:
+	if (scoutfs_per_task_del(&si->pt_data_lock, &pt_ent))
+		inode_dio_done(inode);
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	if (scoutfs_data_wait_found(&dw)) {
+		int err = scoutfs_data_wait(inode, &dw);
+		if (!have_ret) {
+			if (err == 0)
+				goto retry;
+			up_read(&vma->vm_mm->mmap_sem);
+			ret = VM_FAULT_RETRY;
+			have_ret = true;
+		}
+	}
+
+	if (!have_ret)
+		ret = VM_FAULT_SIGBUS;
+
+	return ret;
+}
+
+
+static const struct vm_operations_struct scoutfs_data_file_vm_ops = {
+	.fault		= scoutfs_data_filemap_fault,
+	.page_mkwrite	= scoutfs_data_page_mkwrite,
+	.remap_pages	= generic_file_remap_pages,
+};
+
+static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	file_accessed(file);
+	vma->vm_ops = &scoutfs_data_file_vm_ops;
+	return 0;
+}
+
 const struct address_space_operations scoutfs_file_aops = {
 	.readpage		= scoutfs_readpage,
 	.readpages		= scoutfs_readpages,
@@ -1808,6 +1993,7 @@ const struct file_operations scoutfs_file_fops = {
 	.write		= do_sync_write,
 	.aio_read	= scoutfs_file_aio_read,
 	.aio_write	= scoutfs_file_aio_write,
+	.mmap		= scoutfs_file_mmap,
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= scoutfs_file_llseek,

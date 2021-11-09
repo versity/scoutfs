@@ -49,9 +49,9 @@ ssize_t scoutfs_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 
 retry:
 	/* protect checked extents from release */
-	mutex_lock(&inode->i_mutex);
+	mutex_lock(&si->s_i_mutex);
 	atomic_inc(&inode->i_dio_count);
-	mutex_unlock(&inode->i_mutex);
+	mutex_unlock(&si->s_i_mutex);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
