@@ -835,17 +835,9 @@ static void scoutfs_net_destroy_worker(struct work_struct *work)
 	if (conn->listening_conn && conn->notify_down)
 		conn->notify_down(sb, conn, conn->info, conn->rid);
 
-	/*
-	 * Usually networking is idle and we destroy pending sends, but when forcing unmount
-	 * we can have to wake up waiters by failing pending sends.
-	 */
 	list_splice_init(&conn->resend_queue, &conn->send_queue);
-	list_for_each_entry_safe(msend, tmp, &conn->send_queue, head) {
-		if (scoutfs_forcing_unmount(sb))
-			call_resp_func(sb, conn, msend->resp_func, msend->resp_data,
-				       NULL, 0, -ECONNABORTED);
+	list_for_each_entry_safe(msend, tmp, &conn->send_queue, head)
 		free_msend(ninf, msend);
-	}
 
 	/* accepted sockets are removed from their listener's list */
 	if (conn->listening_conn) {
@@ -1134,9 +1126,11 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 	struct net_info *ninf = SCOUTFS_SB(sb)->net_info;
 	struct scoutfs_net_connection *listener;
 	struct scoutfs_net_connection *acc_conn;
+	scoutfs_net_response_t resp_func;
 	struct message_send *msend;
 	struct message_send *tmp;
 	unsigned long delay;
+	void *resp_data;
 
 	trace_scoutfs_net_shutdown_work_enter(sb, 0, 0);
 	trace_scoutfs_conn_shutdown_start(conn);
@@ -1181,6 +1175,30 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 
 	/* and wait for accepted conn shutdown work to finish */
 	wait_event(conn->waitq, empty_accepted_list(conn));
+
+	/*
+	 * Forced unmount will cause net submit to fail once it's
+	 * started and it calls shutdown to interrupt any previous
+	 * senders waiting for a response.   The response callbacks can
+	 * do quite a lot of work so we're careful to call them outside
+	 * the lock.
+	 */
+	if (scoutfs_forcing_unmount(sb)) {
+		spin_lock(&conn->lock);
+		list_splice_tail_init(&conn->send_queue, &conn->resend_queue);
+		while ((msend = list_first_entry_or_null(&conn->resend_queue,
+							struct message_send, head))) {
+			resp_func = msend->resp_func;
+			resp_data = msend->resp_data;
+			free_msend(ninf, msend);
+			spin_unlock(&conn->lock);
+
+			call_resp_func(sb, conn, resp_func, resp_data, NULL, 0, -ECONNABORTED);
+
+			spin_lock(&conn->lock);
+		}
+		spin_unlock(&conn->lock);
+	}
 
 	spin_lock(&conn->lock);
 

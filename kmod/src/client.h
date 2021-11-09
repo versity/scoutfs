@@ -35,6 +35,7 @@ int scoutfs_client_clear_volopt(struct super_block *sb, struct scoutfs_volume_op
 int scoutfs_client_resize_devices(struct super_block *sb, struct scoutfs_net_resize_devices *nrd);
 int scoutfs_client_statfs(struct super_block *sb, struct scoutfs_net_statfs *nst);
 
+void scoutfs_client_net_shutdown(struct super_block *sb);
 int scoutfs_client_setup(struct super_block *sb);
 void scoutfs_client_destroy(struct super_block *sb);
 

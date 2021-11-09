@@ -668,3 +668,11 @@ void scoutfs_client_destroy(struct super_block *sb)
 	kfree(client);
 	sbi->client_info = NULL;
 }
+
+void scoutfs_client_net_shutdown(struct super_block *sb)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	if (client && client->conn)
+		scoutfs_net_shutdown(sb, client->conn);
+}

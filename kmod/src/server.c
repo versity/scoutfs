@@ -2068,6 +2068,19 @@ static void server_log_merge_free_work(struct work_struct *work)
 			break;
 		}
 
+		/* Dirty the btree before freeing so that we can pin it
+		 * so that later touches will succeed.
+		 */
+		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_FREEING_ZONE,
+				   le64_to_cpu(fr.seq), 0);
+		ret = scoutfs_btree_dirty(sb, &server->alloc,
+						&server->wri, &super->log_merge,
+						&key);
+		if (ret < 0) {
+			err_str = "dirtying log btree";
+			break;
+		}
+
 		ret = scoutfs_btree_free_blocks(sb, &server->alloc,
 						&server->wri, &fr.key,
 						&fr.root, 10);
@@ -2077,8 +2090,6 @@ static void server_log_merge_free_work(struct work_struct *work)
 		}
 
 		/* freed blocks are in allocator, we *have* to update key */
-		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_FREEING_ZONE,
-				   le64_to_cpu(fr.seq), 0);
 		if (scoutfs_key_is_ones(&fr.key))
 			ret = scoutfs_btree_delete(sb, &server->alloc,
 						   &server->wri,
@@ -2415,7 +2426,9 @@ static int server_commit_log_merge(struct super_block *sb,
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_key key;
 	char *err_str = NULL;
-	int ret;
+	bool deleted = false;
+	int ret = 0;
+	int err = 0;
 
 	scoutfs_key_set_zeros(&rng.end);
 
@@ -2463,6 +2476,7 @@ static int server_commit_log_merge(struct super_block *sb,
 		err_str = "deleting orig request";
 		goto out;
 	}
+	deleted = true;
 
 	if (le64_to_cpu(comp->flags) & SCOUTFS_LOG_MERGE_COMP_ERROR) {
 		/* restore the range and reclaim the allocator if it failed */
@@ -2522,8 +2536,11 @@ out:
 	if (ret < 0)
 		scoutfs_err(sb, "error %d committing log merge: %s", ret, err_str);
 
-	ret = scoutfs_server_apply_commit(sb, ret);
-	BUG_ON(ret < 0); /* inconsistent */
+	err = scoutfs_server_apply_commit(sb, ret);
+	BUG_ON(ret < 0 && deleted); /* inconsistent */
+
+	if (ret == 0)
+		ret = err;
 
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
@@ -3812,6 +3829,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct scoutfs_net_connection *conn = NULL;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
 	struct sockaddr_in sin;
+	bool alloc_init = false;
 	u64 max_seq;
 	int ret;
 
@@ -3819,6 +3837,8 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
+
+	scoutfs_block_writer_init(sb, &server->wri);
 
 	/* first make sure no other servers are still running */
 	ret = scoutfs_quorum_fence_leaders(sb, server->term);
@@ -3859,7 +3879,6 @@ static void scoutfs_server_worker(struct work_struct *work)
 	atomic64_set(&server->seq_atomic, le64_to_cpu(super->seq));
 	set_roots(server, &super->fs_root, &super->logs_root,
 		  &super->srch_root);
-	scoutfs_block_writer_init(sb, &server->wri);
 
 	/* prepare server alloc for this transaction, larger first */
 	if (le64_to_cpu(super->server_meta_avail[0].total_nr) <
@@ -3870,6 +3889,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	scoutfs_alloc_init(&server->alloc,
 			   &super->server_meta_avail[server->other_ind ^ 1],
 			   &super->server_meta_freed[server->other_ind ^ 1]);
+	alloc_init = true;
 	server->other_avail = &super->server_meta_avail[server->other_ind];
 	server->other_freed = &super->server_meta_freed[server->other_ind];
 
@@ -3930,6 +3950,11 @@ shutdown:
 
 	/* wait for extra queues by requests, won't find waiters */
 	flush_work(&server->commit_work);
+
+	if (alloc_init)
+		scoutfs_alloc_prepare_commit(sb, &server->alloc, &server->wri);
+
+	scoutfs_block_writer_forget_all(sb, &server->wri);
 
 	scoutfs_lock_server_destroy(sb);
 	scoutfs_omap_server_shutdown(sb);
