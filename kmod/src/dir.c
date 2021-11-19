@@ -1615,8 +1615,9 @@ static int verify_ancestors(struct super_block *sb, u64 p1, u64 p2,
  * from using parent/child locking orders as two groups can have both
  * parent and child relationships to each other.
  */
-static int scoutfs_rename(struct inode *old_dir, struct dentry *old_dentry,
-			  struct inode *new_dir, struct dentry *new_dentry)
+static int scoutfs_rename_common(struct inode *old_dir,
+				 struct dentry *old_dentry, struct inode *new_dir,
+				 struct dentry *new_dentry, unsigned int flags)
 {
 	struct super_block *sb = old_dir->i_sb;
 	struct inode *old_inode = old_dentry->d_inode;
@@ -1687,6 +1688,11 @@ static int scoutfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	      verify_entry(sb, scoutfs_ino(new_dir), new_dentry, new_dir_lock);
 	if (ret)
 		goto out_unlock;
+
+	if ((flags & RENAME_NOREPLACE) && (new_inode != NULL)) {
+		ret = -EEXIST;
+		goto out_unlock;
+	}
 
 	if (should_orphan(new_inode)) {
 		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(new_inode),
@@ -1870,6 +1876,23 @@ out_unlock:
 	return ret;
 }
 
+static int scoutfs_rename(struct inode *old_dir,
+			  struct dentry *old_dentry, struct inode *new_dir,
+			  struct dentry *new_dentry)
+{
+	return scoutfs_rename_common(old_dir, old_dentry, new_dir, new_dentry, 0);
+}
+
+static int scoutfs_rename2(struct inode *old_dir,
+			  struct dentry *old_dentry, struct inode *new_dir,
+			  struct dentry *new_dentry, unsigned int flags)
+{
+	if (flags & ~RENAME_NOREPLACE)
+		return -EINVAL;
+
+	return scoutfs_rename_common(old_dir, old_dentry, new_dir, new_dentry, flags);
+}
+
 #ifdef KC_FMODE_KABI_ITERATE
 /* we only need this to set the iterate flag for kabi :/ */
 static int scoutfs_dir_open(struct inode *inode, struct file *file)
@@ -1960,6 +1983,7 @@ const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.permission	= scoutfs_permission,
 	},
 	.tmpfile	= scoutfs_tmpfile,
+	.rename2	= scoutfs_rename2,
 };
 
 void scoutfs_dir_exit(void)
