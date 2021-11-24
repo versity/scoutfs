@@ -517,7 +517,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 		break;
 	case ARGP_KEY_FINI:
 		if (!args->nr_slots)
-			argp_error(state, "must specify at least one quorum slot with --quorum-count|-Q");
+			argp_error(state, "must specify at least one quorum slot with --quorum-slot|-Q");
 		if (!args->meta_device)
 			argp_error(state, "no metadata device argument given");
 		if (!args->data_device)
