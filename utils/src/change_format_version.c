@@ -45,16 +45,11 @@ static int do_change_fmt_vers(struct change_fmt_vers_args *args)
 {
 	struct scoutfs_super_block *meta_super = NULL;
 	struct scoutfs_super_block *data_super = NULL;
-	struct scoutfs_quorum_block *qblk = NULL;
-	struct scoutfs_quorum_block_event *beg;
-	struct scoutfs_quorum_block_event *end;
 	bool wrote_meta = false;
-	bool in_use = false;
 	char uuid_str[37];
 	int meta_fd = -1;
 	int data_fd = -1;
 	int ret;
-	int i;
 
 	meta_fd = open(args->meta_device, O_DIRECT | O_SYNC | O_RDWR | O_EXCL);
 	if (meta_fd < 0) {
@@ -117,42 +112,11 @@ static int do_change_fmt_vers(struct change_fmt_vers_args *args)
 		goto out;
 	}
 
-	if (meta_super->mounted_clients.ref.blkno != 0) {
-		fprintf(stderr, "meta superblock mounted clients btree is not empty.\n");
-		ret = -EBUSY;
-		in_use = true;
+	ret = meta_super_in_use(meta_fd, meta_super);
+	if (ret < 0) {
+		if (ret == -EBUSY)
+			fprintf(stderr, "The filesystem must be fully recovered and cleanly unmounted to change the format version\n");
 		goto out;
-	}
-
-	/* check for active quorum slots */
-	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
-		if (!quorum_slot_present(meta_super, i))
-			continue;
-		ret = read_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i, SCOUTFS_BLOCK_SM_SHIFT,
-				 (void **)&qblk);
-		if (ret < 0) {
-			fprintf(stderr, "error reading quorum block for slot %u\n", i);
-			goto out;
-		}
-
-		beg = &qblk->events[SCOUTFS_QUORUM_EVENT_BEGIN];
-		end = &qblk->events[SCOUTFS_QUORUM_EVENT_END];
-
-		if (le64_to_cpu(beg->write_nr) > le64_to_cpu(end->write_nr)) {
-			fprintf(stderr, "mount in quorum slot %u could still be running.\n"
-					"  begin event: write_nr %llu timestamp %llu.%08u\n"
-					"    end event: write_nr %llu timestamp %llu.%08u\n",
-				i, le64_to_cpu(beg->write_nr), le64_to_cpu(beg->ts.sec),
-				le32_to_cpu(beg->ts.nsec),
-				le64_to_cpu(end->write_nr), le64_to_cpu(end->ts.sec),
-				le32_to_cpu(end->ts.nsec));
-			ret = -EBUSY;
-			in_use = true;
-			goto out;
-		}
-
-		free(qblk);
-		qblk = NULL;
 	}
 
 	if (le64_to_cpu(meta_super->fmt_vers) != args->fmt_vers) {
@@ -195,11 +159,7 @@ static int do_change_fmt_vers(struct change_fmt_vers_args *args)
 		le64_to_cpu(meta_super->fmt_vers));
 
 out:
-	if (in_use)
-		fprintf(stderr, "The filesystem must be fully recovered and cleanly unmounted to change the format version\n");
 
-	if (qblk)
-		free(qblk);
 	if (meta_super)
 		free(meta_super);
 	if (data_super)
