@@ -224,6 +224,7 @@ static int do_mkfs(struct mkfs_args *args)
 	assert(sizeof(args->slots) ==
 		     member_sizeof(struct scoutfs_super_block, qconf.slots));
 	memcpy(super->qconf.slots, args->slots, sizeof(args->slots));
+	super->qconf.version = cpu_to_le64(1);
 
 	if (invalid_data_alloc_zone_blocks(le64_to_cpu(super->total_data_blocks),
 					   args->data_alloc_zone_blocks)) {
@@ -350,14 +351,15 @@ static int do_mkfs(struct mkfs_args *args)
 	uuid_unparse(super->uuid, uuid_str);
 
 	printf("Created scoutfs filesystem:\n"
-	       "  meta device path:     %s\n"
-	       "  data device path:     %s\n"
-	       "  fsid:                 %llx\n"
-	       "  uuid:                 %s\n"
-	       "  format version:       %llu\n"
-	       "  64KB metadata blocks: "SIZE_FMT"\n"
-	       "  4KB data blocks:      "SIZE_FMT"\n"
-	       "  quorum slots:         ",
+	       "  meta device path:       %s\n"
+	       "  data device path:       %s\n"
+	       "  fsid:                   %llx\n"
+	       "  uuid:                   %s\n"
+	       "  format version:         %llu\n"
+	       "  64KB metadata blocks:   "SIZE_FMT"\n"
+	       "  4KB data blocks:        "SIZE_FMT"\n"
+	       "  quorum config version:  %llu\n"
+	       "  quorum slots:           ",
 		args->meta_device,
 	        args->data_device,
 		le64_to_cpu(super->hdr.fsid),
@@ -366,10 +368,11 @@ static int do_mkfs(struct mkfs_args *args)
 		SIZE_ARGS(le64_to_cpu(super->total_meta_blocks),
 			  SCOUTFS_BLOCK_LG_SIZE),
 		SIZE_ARGS(le64_to_cpu(super->total_data_blocks),
-			  SCOUTFS_BLOCK_SM_SIZE));
+			  SCOUTFS_BLOCK_SM_SIZE),
+		le64_to_cpu(super->qconf.version));
 
 	print_quorum_slots(super->qconf.slots, array_size(super->qconf.slots),
-			   "                        ");
+			   "                          ");
 
 	ret = 0;
 out:
