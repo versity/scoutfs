@@ -1,5 +1,6 @@
 src/*.d
 src/createmany
+src/dumb_renameat2
 src/dumb_setxattr
 src/handle_cat
 src/bulk_create_paths

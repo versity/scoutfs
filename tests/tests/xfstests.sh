@@ -60,13 +60,9 @@ EOF
 
 cat << EOF > local.exclude
 generic/003	# missing atime update in buffered read
-generic/023	# renameat2 not implemented
-generic/024	# renameat2 not implemented
-generic/025	# renameat2 not implemented
 generic/029	# mmap missing
 generic/030	# mmap missing
 generic/075	# file content mismatch failures (fds, etc)
-generic/078	# renameat2 not implemented
 generic/080	# mmap missing
 generic/103	# enospc causes trans commit failures
 generic/105	# needs trigage: something about acls
