@@ -12,6 +12,7 @@
 #include "util.h"
 #include "format.h"
 #include "crc.h"
+#include "quorum.h"
 
 #define ENV_PATH "SCOUTFS_MOUNT_PATH"
 
@@ -200,4 +201,57 @@ int write_block_sync(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
 	}
 
 	return 0;
+}
+
+/*
+ * Check to see if the metadata super block indicates that there might
+ * be active mounts using the system.  Returns -errno, 0, or -EBUSY if
+ * we found evidence that the device might be in use.
+ */
+int meta_super_in_use(int meta_fd, struct scoutfs_super_block *meta_super)
+{
+	struct scoutfs_quorum_block *qblk = NULL;
+	struct scoutfs_quorum_block_event *beg;
+	struct scoutfs_quorum_block_event *end;
+	int ret = 0;
+	int i;
+
+	if (meta_super->mounted_clients.ref.blkno != 0) {
+		fprintf(stderr, "meta superblock mounted clients btree is not empty.\n");
+		ret = -EBUSY;
+		goto out;
+	}
+
+	/* check for active quorum slots */
+	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
+		if (!quorum_slot_present(meta_super, i))
+			continue;
+		ret = read_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i, SCOUTFS_BLOCK_SM_SHIFT,
+				 (void **)&qblk);
+		if (ret < 0) {
+			fprintf(stderr, "error reading quorum block for slot %u\n", i);
+			goto out;
+		}
+
+		beg = &qblk->events[SCOUTFS_QUORUM_EVENT_BEGIN];
+		end = &qblk->events[SCOUTFS_QUORUM_EVENT_END];
+
+		if (le64_to_cpu(beg->write_nr) > le64_to_cpu(end->write_nr)) {
+			fprintf(stderr, "mount in quorum slot %u could still be running.\n"
+					"  begin event: write_nr %llu timestamp %llu.%08u\n"
+					"    end event: write_nr %llu timestamp %llu.%08u\n",
+				i, le64_to_cpu(beg->write_nr), le64_to_cpu(beg->ts.sec),
+				le32_to_cpu(beg->ts.nsec),
+				le64_to_cpu(end->write_nr), le64_to_cpu(end->ts.sec),
+				le32_to_cpu(end->ts.nsec));
+			ret = -EBUSY;
+			goto out;
+		}
+
+		free(qblk);
+		qblk = NULL;
+	}
+
+out:
+	return ret;
 }

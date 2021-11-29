@@ -43,6 +43,40 @@ the super blocks on both devices.
 .PD
 
 .TP
+.BI "change-quorum-config {-Q|--quorum-slot} NR,ADDR,PORT [-F|--offline META-DEVICE DATA-DEVICE]"
+.sp
+Change the quorum configuration for an existing file system.  The new
+configuration completely replaces the old configuration.   Any slots
+from the old configuration that should be retained must be described
+with arguments in the new configuration.
+.sp
+Currently the configuration may only be changed offline.
+.sp
+.RS 1.0i
+.PD 0
+.TP
+.B "-Q, --quorum-slot NR,ADDR,PORT"
+The quorum configuration is built by specifying configured slots with
+multiple arguments as described in the
+.B mkfs
+command.
+.TP
+.B "-F, --offline META-DEVICE"
+Perform the change offline by updating the superblock in the metadata
+device.   The command will read the super block and refuse to make the
+change if it sees any evidence that the metadata device is currently in
+use.   The file system must be successfully unmounted after possibly
+recovering any previously unresolved mounts for the change to be
+successful.   After the change succeeds the newly configured slots can
+be used by mounts.
+.sp
+The offline change directly reads from and writes to the device and does
+not protect against concurrent use of the device.   It must be carefully
+run when the file system will not be mounted.
+.RE
+.PD
+
+.TP
 .BI "df [-h|--human-readable] [-p|--path PATH]"
 .sp
 Display available and used space on the ScoutFS data and metadata devices.
