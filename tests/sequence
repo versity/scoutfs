@@ -33,6 +33,7 @@ resize-devices.sh
 fence-and-reclaim.sh
 orphan-inodes.sh
 mount-unmount-race.sh
+client-unmount-recovery.sh
 createmany-parallel-mounts.sh
 archive-light-cycle.sh
 block-stale-reads.sh
