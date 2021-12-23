@@ -494,13 +494,13 @@ out:
 	return ret;
 }
 
-int scoutfs_forest_insert_list(struct super_block *sb,
-			       struct scoutfs_btree_item_list *lst)
+int scoutfs_forest_insert_list(struct super_block *sb, scoutfs_btree_item_iter_cb cb,
+			       void *pos, void *arg)
 {
 	DECLARE_FOREST_INFO(sb, finf);
 
 	return scoutfs_btree_insert_list(sb, finf->alloc, finf->wri,
-					 &finf->our_log.item_root, lst);
+					 &finf->our_log.item_root, cb, pos, arg);
 }
 
 /*

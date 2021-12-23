@@ -403,24 +403,24 @@ TRACE_EVENT(scoutfs_sync_fs,
 );
 
 TRACE_EVENT(scoutfs_trans_write_func,
-	TP_PROTO(struct super_block *sb, u64 dirty_block_bytes, u64 dirty_item_pages),
+	TP_PROTO(struct super_block *sb, u64 dirty_block_bytes, u64 dirty_item_bytes),
 
-	TP_ARGS(sb, dirty_block_bytes, dirty_item_pages),
+	TP_ARGS(sb, dirty_block_bytes, dirty_item_bytes),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, dirty_block_bytes)
-		__field(__u64, dirty_item_pages)
+		__field(__u64, dirty_item_bytes)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->dirty_block_bytes = dirty_block_bytes;
-		__entry->dirty_item_pages = dirty_item_pages;
+		__entry->dirty_item_bytes = dirty_item_bytes;
 	),
 
-	TP_printk(SCSBF" dirty_block_bytes %llu dirty_item_pages %llu",
-		  SCSB_TRACE_ARGS, __entry->dirty_block_bytes, __entry->dirty_item_pages)
+	TP_printk(SCSBF" dirty_block_bytes %llu dirty_item_bytes %llu",
+		  SCSB_TRACE_ARGS, __entry->dirty_block_bytes, __entry->dirty_item_bytes)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_trans_hold_release_class,

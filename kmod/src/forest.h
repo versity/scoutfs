@@ -29,8 +29,8 @@ void scoutfs_forest_set_max_seq(struct super_block *sb, u64 max_seq);
 int scoutfs_forest_get_max_seq(struct super_block *sb,
 			       struct scoutfs_super_block *super,
 			       u64 *seq);
-int scoutfs_forest_insert_list(struct super_block *sb,
-			       struct scoutfs_btree_item_list *lst);
+int scoutfs_forest_insert_list(struct super_block *sb, scoutfs_btree_item_iter_cb cb,
+			       void *pos, void *arg);
 int scoutfs_forest_srch_add(struct super_block *sb, u64 hash, u64 ino, u64 id);
 
 void scoutfs_forest_inc_inode_count(struct super_block *sb);

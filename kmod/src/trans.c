@@ -207,7 +207,7 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	}
 
 	trace_scoutfs_trans_write_func(sb, scoutfs_block_writer_dirty_bytes(sb, &tri->wri),
-				       scoutfs_item_dirty_pages(sb));
+				       scoutfs_item_dirty_bytes(sb));
 
 	if (tri->deadline_expired)
 		scoutfs_inc_counter(sb, trans_commit_timer);
@@ -422,16 +422,18 @@ static void release_holders(struct super_block *sb)
  */
 static bool commit_before_hold(struct super_block *sb, struct trans_info *tri)
 {
+	u64 dirty_blocks = (scoutfs_item_dirty_bytes(sb) >> SCOUTFS_BLOCK_LG_SHIFT) + 1;
+
 	/*
-	 * In theory each dirty item page could be straddling two full
-	 * blocks, requiring 4 allocations for each item cache page.
-	 * That's much too conservative, typically many dirty item cache
-	 * pages that are near each other all land in one block.  This
+	 * In theory each dirty item could be added to a full block that
+	 * has to split, requiring 2 meta block allocs for each dirty
+	 * item.  That's much too conservative, typically many dirty
+	 * items that are near each other all land in one block.  This
 	 * rough estimate is still so far beyond what typically happens
 	 * that it accounts for having to dirty parent blocks and
 	 * whatever dirtying is done during the transaction hold.
 	 */
-	if (scoutfs_alloc_meta_low(sb, &tri->alloc, scoutfs_item_dirty_pages(sb) * 2)) {
+	if (scoutfs_alloc_meta_low(sb, &tri->alloc, dirty_blocks * 4)) {
 		scoutfs_inc_counter(sb, trans_commit_dirty_meta_full);
 		return true;
 	}

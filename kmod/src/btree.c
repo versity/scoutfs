@@ -1875,12 +1875,11 @@ out:
  * set in btree items.  They're only used for fs items written through
  * the item cache and forest of log btrees.
  */
-int scoutfs_btree_insert_list(struct super_block *sb,
-			      struct scoutfs_alloc *alloc,
-			      struct scoutfs_block_writer *wri,
-			      struct scoutfs_btree_root *root,
-			      struct scoutfs_btree_item_list *lst)
+int scoutfs_btree_insert_list(struct super_block *sb, struct scoutfs_alloc *alloc,
+			      struct scoutfs_block_writer *wri, struct scoutfs_btree_root *root,
+			      scoutfs_btree_item_iter_cb iter_cb, void *pos, void *arg)
 {
+	struct scoutfs_btree_item_desc desc;
 	struct scoutfs_btree_item *item;
 	struct btree_walk_key_range kr;
 	struct scoutfs_btree_block *bt;
@@ -1889,44 +1888,46 @@ int scoutfs_btree_insert_list(struct super_block *sb,
 	int cmp;
 	int ret = 0;
 
-	while (lst) {
+	pos = iter_cb(sb, &desc, pos, arg);
+
+	while (pos) {
 		ret = btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_INSERT,
-				 &lst->key, lst->val_len, &bl, &kr, NULL);
+				 desc.key, desc.val_len, &bl, &kr, NULL);
 		if (ret < 0)
 			goto out;
 		bt = bl->data;
 
 		do {
-			item = leaf_item_hash_search(sb, bt, &lst->key);
+			item = leaf_item_hash_search(sb, bt, desc.key);
 			if (item) {
 				/* try to merge delta values, _NULL not deleted; merge will */
-				ret = scoutfs_forest_combine_deltas(&lst->key,
+				ret = scoutfs_forest_combine_deltas(desc.key,
 								    item_val(bt, item),
 								    item_val_len(item),
-								    lst->val, lst->val_len);
+								    desc.val, desc.val_len);
 				if (ret < 0) {
 					scoutfs_block_put(sb, bl);
 					goto out;
 				}
 
-				item->seq = cpu_to_le64(lst->seq);
-				item->flags = lst->flags;
+				item->seq = cpu_to_le64(desc.seq);
+				item->flags = desc.flags;
 
 				if (ret == 0)
-					update_item_value(bt, item, lst->val, lst->val_len);
+					update_item_value(bt, item, desc.val, desc.val_len);
 				else
 					ret = 0;
 			} else {
 				scoutfs_avl_search(&bt->item_root,
-						   cmp_key_item, &lst->key,
+						   cmp_key_item, desc.key,
 						   &cmp, &par, NULL, NULL);
-				create_item(bt, &lst->key, lst->seq, lst->flags, lst->val,
-					    lst->val_len, par, cmp);
+				create_item(bt, desc.key, desc.seq, desc.flags, desc.val,
+					    desc.val_len, par, cmp);
 			}
 
-			lst = lst->next;
-		} while (lst && scoutfs_key_compare(&lst->key, &kr.end) <= 0 &&
-			 mid_free_item_room(bt, lst->val_len));
+			pos = iter_cb(sb, &desc, pos, arg);
+		} while (pos && scoutfs_key_compare(desc.key, &kr.end) <= 0 &&
+			 mid_free_item_room(bt, desc.val_len));
 
 		scoutfs_block_put(sb, bl);
 	}
