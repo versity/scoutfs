@@ -13,6 +13,7 @@ scoutfs-y +=			\
 	block.o			\
 	btree.o			\
 	client.o		\
+	cwskip.o		\
 	counters.o		\
 	data.o			\
 	dir.o			\
