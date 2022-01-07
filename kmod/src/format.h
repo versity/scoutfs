@@ -861,6 +861,27 @@ struct scoutfs_inode {
 	struct scoutfs_timespec crtime;
 };
 
+/*
+ * There are so few versions that we don't mind doing this work inline
+ * so that both utils and kernel can share these.  Mounting has already
+ * checked that the format version is within the supported min and max,
+ * so these functions only deal with size variance within that band.
+ */
+/* Returns the native written inode size for the given format version, 0 for bad version */
+static inline int scoutfs_inode_vers_bytes(__u64 fmt_vers)
+{
+	return sizeof(struct scoutfs_inode);
+}
+/*
+ * Returns true if bytes is a valid inode size to read from the given
+ * version.  The given version must be greater than the version that
+ * introduced the size.
+ */
+static inline int scoutfs_inode_valid_vers_bytes(__u64 fmt_vers, int bytes)
+{
+	return bytes == sizeof(struct scoutfs_inode);
+}
+
 #define SCOUTFS_INO_FLAG_TRUNCATE 0x1
 
 #define SCOUTFS_ROOT_INO 1
