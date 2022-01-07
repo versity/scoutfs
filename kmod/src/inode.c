@@ -285,6 +285,28 @@ void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 	};
 }
 
+/* Returns the max inode size given format version */
+static int max_inode_fmt_ver_bytes(struct super_block *sb)
+{
+	return sizeof(struct scoutfs_inode);
+}
+
+static int lookup_inode_item(struct super_block *sb, struct scoutfs_key *key,
+			     struct scoutfs_lock *lock,
+			     struct scoutfs_inode_payload_wrapper *inode_payload)
+{
+	int inode_bytes = max_inode_fmt_ver_bytes(sb);
+	int ret;
+
+	ret = scoutfs_item_lookup(sb, key, &inode_payload->sinode,
+				  sizeof(struct scoutfs_inode_payload_wrapper), lock);
+
+	if (ret >= 0 && ret != inode_bytes)
+		return -EIO;
+
+	return ret;
+}
+
 /*
  * Refresh the vfs inode fields if the lock indicates that the current
  * contents could be stale.
@@ -299,9 +321,9 @@ void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct scoutfs_inode_payload_wrapper wrap;
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_key key;
-	struct scoutfs_inode sinode;
 	const u64 refresh_gen = lock->refresh_gen;
 	int ret;
 
@@ -320,13 +342,13 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 
 	mutex_lock(&si->item_mutex);
 	if (atomic64_read(&si->last_refreshed) < refresh_gen) {
-		ret = scoutfs_item_lookup_exact(sb, &key, &sinode,
-						sizeof(sinode), lock);
-		if (ret == 0) {
-			load_inode(inode, &sinode);
+		ret = lookup_inode_item(sb, &key, lock, &wrap);
+		if (ret > 0) {
+			load_inode(inode, &wrap.sinode, ret);
 			atomic64_set(&si->last_refreshed, refresh_gen);
 			scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
 			si->drop_invalidated = false;
+			ret = 0;
 		}
 	} else {
 		ret = 0;
@@ -810,13 +832,15 @@ int scoutfs_dirty_inode_item(struct inode *inode, struct scoutfs_lock *lock)
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
+	int inode_bytes;
 	int ret;
 
-	store_inode(&sinode, inode);
+	inode_bytes = max_inode_fmt_ver_bytes(sb);
+	store_inode(&sinode, inode, inode_bytes);
 
 	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
-	ret = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = scoutfs_item_update(sb, &key, &sinode, inode_bytes, lock);
 	if (!ret)
 		trace_scoutfs_dirty_inode(inode);
 	return ret;
@@ -1017,8 +1041,9 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	const u64 ino = scoutfs_ino(inode);
-	struct scoutfs_key key;
 	struct scoutfs_inode sinode;
+	struct scoutfs_key key;
+	int inode_bytes;
 	int ret;
 	int err;
 
@@ -1027,15 +1052,17 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 	/* set the meta version once per trans for any inode updates */
 	scoutfs_inode_set_meta_seq(inode);
 
+	inode_bytes = max_inode_fmt_ver_bytes(sb);
+
 	/* only race with other inode field stores once */
-	store_inode(&sinode, inode);
+	store_inode(&sinode, inode, inode_bytes);
 
 	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list);
 	BUG_ON(ret);
 
 	scoutfs_inode_init_key(&key, ino);
 
-	err = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
+	err = scoutfs_item_update(sb, &key, &sinode, inode_bytes, lock);
 	if (err) {
 		scoutfs_err(sb, "inode %llu update err %d", ino, err);
 		BUG_ON(err);
@@ -1399,9 +1426,10 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 				struct scoutfs_lock *lock)
 {
 	struct scoutfs_inode_info *si;
-	struct scoutfs_key key;
 	struct scoutfs_inode sinode;
+	struct scoutfs_key key;
 	struct inode *inode;
+	int inode_bytes;
 	int ret;
 
 	inode = new_inode(sb);
@@ -1431,14 +1459,16 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	inode->i_rdev = rdev;
 	set_inode_ops(inode);
 
-	store_inode(&sinode, inode);
+	inode_bytes = max_inode_fmt_ver_bytes(sb);
+
+	store_inode(&sinode, inode, inode_bytes);
 	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	ret = scoutfs_omap_inc(sb, ino);
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_item_create(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = scoutfs_item_create(sb, &key, &sinode, inode_bytes, lock);
 	if (ret < 0)
 		scoutfs_omap_dec(sb, ino);
 out:
@@ -1543,7 +1573,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 {
 	DECLARE_INODE_SB_INFO(sb, inf);
 	struct deleting_ino_entry del = {{NULL, }};
-	struct scoutfs_inode sinode;
+	struct scoutfs_inode_payload_wrapper wrap;
 	struct scoutfs_key key;
 	LIST_HEAD(ind_locks);
 	bool release = false;
@@ -1559,8 +1589,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 
 	scoutfs_inode_init_key(&key, ino);
 
-	ret = scoutfs_item_lookup_exact(sb, &key, &sinode, sizeof(sinode),
-					lock);
+	ret = lookup_inode_item(sb, &key, lock, &wrap);
 	if (ret < 0) {
 		if (ret == -ENOENT)
 			ret = 0;
@@ -1568,14 +1597,14 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 	}
 
 	/* XXX corruption, inode probably won't be freed without repair */
-	if (le32_to_cpu(sinode.nlink)) {
+	if (le32_to_cpu(wrap.sinode.nlink)) {
 		scoutfs_warn(sb, "Dangling orphan item for inode %llu.", ino);
 		ret = -EIO;
 		goto out;
 	}
 
-	mode = le32_to_cpu(sinode.mode);
-	size = le64_to_cpu(sinode.size);
+	mode = le32_to_cpu(wrap.sinode.mode);
+	size = le64_to_cpu(wrap.sinode.size);
 	trace_scoutfs_delete_inode(sb, ino, mode, size);
 
 	/* remove data items in their own transactions */
@@ -1593,7 +1622,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 	/* then delete the small known number of remaining inode items */
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
-	      prepare_index_deletion(sb, &ind_locks, ino, mode, &sinode) ?:
+	      prepare_index_deletion(sb, &ind_locks, ino, mode, &wrap.sinode) ?:
 	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq, false);
 	if (ret > 0)
 		goto retry;
@@ -1602,7 +1631,7 @@ retry:
 
 	release = true;
 
-	ret = remove_index_items(sb, ino, &sinode, &ind_locks);
+	ret = remove_index_items(sb, ino, &wrap.sinode, &ind_locks);
 	if (ret)
 		goto out;
 

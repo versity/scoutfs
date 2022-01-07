@@ -64,6 +64,11 @@ struct scoutfs_inode_info {
 	struct inode inode;
 };
 
+struct scoutfs_inode_payload_wrapper {
+	struct scoutfs_inode sinode;
+	u64 overflow_detection;
+};
+
 static inline struct scoutfs_inode_info *SCOUTFS_I(struct inode *inode)
 {
 	return container_of(inode, struct scoutfs_inode_info, inode);
