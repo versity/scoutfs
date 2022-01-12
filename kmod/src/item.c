@@ -685,6 +685,12 @@ static void erase_page_items(struct cached_page *pg,
  * to the dirty list after the left page, and by adding items to the
  * tail of right's dirty list in key sort order.
  *
+ * The max_seq of the source page might be larger than all the items
+ * while protecting an erased item from being reclaimed while an older
+ * read is in flight.  We don't know where it might be in the source
+ * page so we have to assume that it's in the key range being moved and
+ * update the destination page's max_seq accordingly.
+ *
  * The caller is responsible for page locking and managing the lru.
  */
 static void move_page_items(struct super_block *sb,
@@ -726,6 +732,9 @@ static void move_page_items(struct super_block *sb,
 
 		erase_item(left, from);
 	}
+
+	if (left->max_seq > right->max_seq)
+		right->max_seq = left->max_seq;
 }
 
 enum page_intersection_type {
