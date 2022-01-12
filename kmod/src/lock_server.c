@@ -153,30 +153,30 @@ enum {
  */
 static void add_client_entry(struct server_lock_node *snode,
 			     struct list_head *list,
-			     struct client_lock_entry *clent)
+			     struct client_lock_entry *c_ent)
 {
 	WARN_ON_ONCE(!mutex_is_locked(&snode->mutex));
 
-	if (list_empty(&clent->head))
-		list_add_tail(&clent->head, list);
+	if (list_empty(&c_ent->head))
+		list_add_tail(&c_ent->head, list);
 	else
-		list_move_tail(&clent->head, list);
+		list_move_tail(&c_ent->head, list);
 
-	clent->on_list = list == &snode->granted ? OL_GRANTED :
+	c_ent->on_list = list == &snode->granted ? OL_GRANTED :
 			 list == &snode->requested ? OL_REQUESTED :
 			 OL_INVALIDATED;
 }
 
 static void free_client_entry(struct lock_server_info *inf,
 			      struct server_lock_node *snode,
-			      struct client_lock_entry *clent)
+			      struct client_lock_entry *c_ent)
 {
 	WARN_ON_ONCE(!mutex_is_locked(&snode->mutex));
 
-	if (!list_empty(&clent->head))
-		list_del_init(&clent->head);
-	scoutfs_tseq_del(&inf->tseq_tree, &clent->tseq_entry);
-	kfree(clent);
+	if (!list_empty(&c_ent->head))
+		list_del_init(&c_ent->head);
+	scoutfs_tseq_del(&inf->tseq_tree, &c_ent->tseq_entry);
+	kfree(c_ent);
 }
 
 static bool invalid_mode(u8 mode)
@@ -339,13 +339,13 @@ static struct client_lock_entry *find_entry(struct server_lock_node *snode,
 					    struct list_head *list,
 					    u64 rid)
 {
-	struct client_lock_entry *clent;
+	struct client_lock_entry *c_ent;
 
 	WARN_ON_ONCE(!mutex_is_locked(&snode->mutex));
 
-	list_for_each_entry(clent, list, head) {
-		if (clent->rid == rid)
-			return clent;
+	list_for_each_entry(c_ent, list, head) {
+		if (c_ent->rid == rid)
+			return c_ent;
 	}
 
 	return NULL;
@@ -364,7 +364,7 @@ int scoutfs_lock_server_request(struct super_block *sb, u64 rid,
 				u64 net_id, struct scoutfs_net_lock *nl)
 {
 	DECLARE_LOCK_SERVER_INFO(sb, inf);
-	struct client_lock_entry *clent;
+	struct client_lock_entry *c_ent;
 	struct server_lock_node *snode;
 	int ret;
 
@@ -376,29 +376,29 @@ int scoutfs_lock_server_request(struct super_block *sb, u64 rid,
 		goto out;
 	}
 
-	clent = kzalloc(sizeof(struct client_lock_entry), GFP_NOFS);
-	if (!clent) {
+	c_ent = kzalloc(sizeof(struct client_lock_entry), GFP_NOFS);
+	if (!c_ent) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	INIT_LIST_HEAD(&clent->head);
-	clent->rid = rid;
-	clent->net_id = net_id;
-	clent->mode = nl->new_mode;
+	INIT_LIST_HEAD(&c_ent->head);
+	c_ent->rid = rid;
+	c_ent->net_id = net_id;
+	c_ent->mode = nl->new_mode;
 
 	snode = alloc_server_lock(inf, &nl->key);
 	if (snode == NULL) {
-		kfree(clent);
+		kfree(c_ent);
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	snode->stats[SLT_REQUEST]++;
 
-	clent->snode = snode;
-	add_client_entry(snode, &snode->requested, clent);
-	scoutfs_tseq_add(&inf->tseq_tree, &clent->tseq_entry);
+	c_ent->snode = snode;
+	add_client_entry(snode, &snode->requested, c_ent);
+	scoutfs_tseq_add(&inf->tseq_tree, &c_ent->tseq_entry);
 
 	ret = process_waiting_requests(sb, snode);
 out:
@@ -417,7 +417,7 @@ int scoutfs_lock_server_response(struct super_block *sb, u64 rid,
 				 struct scoutfs_net_lock *nl)
 {
 	DECLARE_LOCK_SERVER_INFO(sb, inf);
-	struct client_lock_entry *clent;
+	struct client_lock_entry *c_ent;
 	struct server_lock_node *snode;
 	int ret;
 
@@ -438,18 +438,18 @@ int scoutfs_lock_server_response(struct super_block *sb, u64 rid,
 
 	snode->stats[SLT_RESPONSE]++;
 
-	clent = find_entry(snode, &snode->invalidated, rid);
-	if (!clent) {
+	c_ent = find_entry(snode, &snode->invalidated, rid);
+	if (!c_ent) {
 		put_server_lock(inf, snode);
 		ret = -EINVAL;
 		goto out;
 	}
 
 	if (nl->new_mode == SCOUTFS_LOCK_NULL) {
-		free_client_entry(inf, snode, clent);
+		free_client_entry(inf, snode, c_ent);
 	} else {
-		clent->mode = nl->new_mode;
-		add_client_entry(snode, &snode->granted, clent);
+		c_ent->mode = nl->new_mode;
+		add_client_entry(snode, &snode->granted, c_ent);
 	}
 
 	ret = process_waiting_requests(sb, snode);
@@ -632,7 +632,7 @@ int scoutfs_lock_server_recover_response(struct super_block *sb, u64 rid,
 {
 	DECLARE_LOCK_SERVER_INFO(sb, inf);
 	struct client_lock_entry *existing;
-	struct client_lock_entry *clent;
+	struct client_lock_entry *c_ent;
 	struct server_lock_node *snode;
 	struct scoutfs_key key;
 	int ret = 0;
@@ -652,35 +652,35 @@ int scoutfs_lock_server_recover_response(struct super_block *sb, u64 rid,
 	}
 
 	for (i = 0; i < le16_to_cpu(nlr->nr); i++) {
-		clent = kzalloc(sizeof(struct client_lock_entry), GFP_NOFS);
-		if (!clent) {
+		c_ent = kzalloc(sizeof(struct client_lock_entry), GFP_NOFS);
+		if (!c_ent) {
 			ret = -ENOMEM;
 			goto out;
 		}
 
-		INIT_LIST_HEAD(&clent->head);
-		clent->rid = rid;
-		clent->net_id = 0;
-		clent->mode = nlr->locks[i].new_mode;
+		INIT_LIST_HEAD(&c_ent->head);
+		c_ent->rid = rid;
+		c_ent->net_id = 0;
+		c_ent->mode = nlr->locks[i].new_mode;
 
 		snode = alloc_server_lock(inf, &nlr->locks[i].key);
 		if (snode == NULL) {
-			kfree(clent);
+			kfree(c_ent);
 			ret = -ENOMEM;
 			goto out;
 		}
 
 		existing = find_entry(snode, &snode->granted, rid);
 		if (existing) {
-			kfree(clent);
+			kfree(c_ent);
 			put_server_lock(inf, snode);
 			ret = -EEXIST;
 			goto out;
 		}
 
-		clent->snode = snode;
-		add_client_entry(snode, &snode->granted, clent);
-		scoutfs_tseq_add(&inf->tseq_tree, &clent->tseq_entry);
+		c_ent->snode = snode;
+		add_client_entry(snode, &snode->granted, c_ent);
+		scoutfs_tseq_add(&inf->tseq_tree, &c_ent->tseq_entry);
 
 		put_server_lock(inf, snode);
 
@@ -707,7 +707,7 @@ out:
 int scoutfs_lock_server_farewell(struct super_block *sb, u64 rid)
 {
 	DECLARE_LOCK_SERVER_INFO(sb, inf);
-	struct client_lock_entry *clent;
+	struct client_lock_entry *c_ent;
 	struct client_lock_entry *tmp;
 	struct server_lock_node *snode;
 	struct scoutfs_key key;
@@ -724,9 +724,9 @@ int scoutfs_lock_server_farewell(struct super_block *sb, u64 rid)
 			    (list == &snode->requested) ? &snode->invalidated :
 			    NULL) {
 
-			list_for_each_entry_safe(clent, tmp, list, head) {
-				if (clent->rid == rid) {
-					free_client_entry(inf, snode, clent);
+			list_for_each_entry_safe(c_ent, tmp, list, head) {
+				if (c_ent->rid == rid) {
+					free_client_entry(inf, snode, c_ent);
 					freed = true;
 				}
 			}
@@ -787,15 +787,15 @@ static char *lock_on_list_string(u8 on_list)
 static void lock_server_tseq_show(struct seq_file *m,
 				  struct scoutfs_tseq_entry *ent)
 {
-	struct client_lock_entry *clent = container_of(ent,
+	struct client_lock_entry *c_ent = container_of(ent,
 						       struct client_lock_entry,
 						       tseq_entry);
-	struct server_lock_node *snode = clent->snode;
+	struct server_lock_node *snode = c_ent->snode;
 
 	seq_printf(m, SK_FMT" %s %s rid %016llx net_id %llu\n",
-		   SK_ARG(&snode->key), lock_mode_string(clent->mode),
-		   lock_on_list_string(clent->on_list), clent->rid,
-		   clent->net_id);
+		   SK_ARG(&snode->key), lock_mode_string(c_ent->mode),
+		   lock_on_list_string(c_ent->on_list), c_ent->rid,
+		   c_ent->net_id);
 }
 
 static void stats_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
@@ -857,7 +857,7 @@ void scoutfs_lock_server_destroy(struct super_block *sb)
 	DECLARE_LOCK_SERVER_INFO(sb, inf);
 	struct server_lock_node *snode;
 	struct server_lock_node *stmp;
-	struct client_lock_entry *clent;
+	struct client_lock_entry *c_ent;
 	struct client_lock_entry *ctmp;
 	LIST_HEAD(list);
 
@@ -873,8 +873,8 @@ void scoutfs_lock_server_destroy(struct super_block *sb)
 			list_splice_init(&snode->invalidated, &list);
 
 			mutex_lock(&snode->mutex);
-			list_for_each_entry_safe(clent, ctmp, &list, head) {
-				free_client_entry(inf, snode, clent);
+			list_for_each_entry_safe(c_ent, ctmp, &list, head) {
+				free_client_entry(inf, snode, c_ent);
 			}
 			mutex_unlock(&snode->mutex);
 
