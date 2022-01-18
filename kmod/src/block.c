@@ -924,6 +924,9 @@ int scoutfs_block_writer_write(struct super_block *sb,
 	struct blk_plug plug;
 	int ret = 0;
 
+	if (sb == NULL || wri == NULL)
+		return -EIO;
+
 	if (wri->nr_dirty_blocks == 0)
 		return 0;
 

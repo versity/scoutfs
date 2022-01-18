@@ -296,7 +296,7 @@ static struct server_lock_node *alloc_server_lock(struct lock_server_info *inf,
 			INIT_LIST_HEAD(&ins->invalidated);
 
 			snode = get_server_lock(inf, key, ins, false);
-			if (snode != ins)
+			if (snode != ins || snode == NULL)
 				kfree(ins);
 			else
 				scoutfs_tseq_add(&inf->stats_tseq_tree, &snode->stats_tseq_entry);
@@ -322,9 +322,11 @@ static void put_server_lock(struct lock_server_info *inf,
 	    list_empty(&snode->requested) &&
 	    list_empty(&snode->invalidated)) {
 		spin_lock(&inf->lock);
-		rb_erase(&snode->node, &inf->locks_root);
+		if (!RB_EMPTY_NODE(&snode->node)) {
+			rb_erase(&snode->node, &inf->locks_root);
+			should_free = true;
+		}
 		spin_unlock(&inf->lock);
-		should_free = true;
 	}
 
 	mutex_unlock(&snode->mutex);
@@ -740,7 +742,12 @@ int scoutfs_lock_server_farewell(struct super_block *sb, u64 rid)
 			if (ret)
 				goto out;
 		} else {
-			put_server_lock(inf, snode);
+			if (inf != NULL && snode != NULL)
+				put_server_lock(inf, snode);
+			else {
+				ret = -EIO;
+				goto out;
+			}
 		}
 	}
 	ret = 0;

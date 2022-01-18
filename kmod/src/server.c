@@ -3547,10 +3547,6 @@ static int server_farewell(struct super_block *sb,
 	fw->rid = rid;
 	fw->net_id = id;
 
-	spin_lock(&server->farewell_lock);
-	list_add_tail(&fw->entry, &server->farewell_requests);
-	spin_unlock(&server->farewell_lock);
-
 	/*
 	 * Tear down client lock server state and set that we recieved farewell
 	 * to ensure that we do not race between client and server trying to process
@@ -3563,6 +3559,11 @@ static int server_farewell(struct super_block *sb,
 		kfree(fw);
 		return ret;
 	}
+
+	spin_lock(&server->farewell_lock);
+	list_add_tail(&fw->entry, &server->farewell_requests);
+	spin_unlock(&server->farewell_lock);
+
 	scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_LOCKS);
 
 	queue_farewell_work(server);
