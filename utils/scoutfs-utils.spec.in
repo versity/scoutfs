@@ -55,7 +55,6 @@ install -m 755 -D src/scoutfs $RPM_BUILD_ROOT%{_sbindir}/scoutfs
 install -m 644 -D src/ioctl.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/ioctl.h
 install -m 644 -D src/format.h $RPM_BUILD_ROOT%{_includedir}/scoutfs/format.h
 install -m 755 -D fenced/scoutfs-fenced $RPM_BUILD_ROOT%{_libexecdir}/scoutfs-fenced/scoutfs-fenced
-install -m 755 -D fenced/local-force-unmount $RPM_BUILD_ROOT%{_libexecdir}/scoutfs-fenced/run/local-force-unmount
 install -m 644 -D fenced/scoutfs-fenced.service $RPM_BUILD_ROOT%{_unitdir}/scoutfs-fenced.service
 install -m 644 -D fenced/scoutfs-fenced.conf.example $RPM_BUILD_ROOT%{_sysconfdir}/scoutfs/scoutfs-fenced.conf.example
 

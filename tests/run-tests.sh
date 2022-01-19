@@ -227,8 +227,9 @@ test "$T_QUORUM" -le "$T_NR_MOUNTS" || \
 	 die "-q quorum mmembers must not be greater than -n mounts"
 
 # top level paths
-T_KMOD=$(realpath "$(dirname $0)/../kmod")
-T_UTILS=$(realpath "$T_KMOD/../utils")
+T_TESTS=$(realpath "$(dirname $0)")
+T_KMOD=$(realpath "$T_TESTS/../kmod")
+T_UTILS=$(realpath "$T_TESTS/../utils")
 
 test -d "$T_KMOD" || die "kmod/ repo dir $T_KMOD not directory"
 test -d "$T_UTILS" || die "utils/ repo dir $T_UTILS not directory"
@@ -382,7 +383,7 @@ cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
 conf="$T_RESULTS/scoutfs-fencd.conf"
 cat > $conf << EOF
 SCOUTFS_FENCED_DELAY=1
-SCOUTFS_FENCED_RUN=$T_UTILS/fenced/local-force-unmount
+SCOUTFS_FENCED_RUN=$T_TESTS/fenced-local-force-unmount.sh
 SCOUTFS_FENCED_RUN_ARGS=""
 EOF
 export SCOUTFS_FENCED_CONFIG_FILE="$conf"
