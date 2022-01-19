@@ -172,7 +172,7 @@ static bool test_shutting_down(struct server_info *server)
 static void set_shutting_down(struct server_info *server, bool val)
 {
 	server->shutting_down = val;
-	smp_rmb();
+	smp_wmb();
 }
 
 static void stop_server(struct server_info *server)
