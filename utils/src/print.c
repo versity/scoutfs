@@ -278,6 +278,8 @@ static int print_log_trees_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       "      data_freed: "ALCROOT_F"\n"
 		       "      srch_file: "SRF_FMT"\n"
 		       "      inode_count_delta: %lld\n"
+		       "      get_trans_seq: %lld\n"
+		       "      commit_trans_seq: %lld\n"
 		       "      max_item_seq: %llu\n"
 		       "      finalize_seq: %llu\n"
 		       "      rid: %016llx\n"
@@ -296,6 +298,8 @@ static int print_log_trees_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       ALCROOT_A(&lt->data_freed),
 		       SRF_A(&lt->srch_file),
 		       le64_to_cpu(lt->inode_count_delta),
+		       le64_to_cpu(lt->get_trans_seq),
+		       le64_to_cpu(lt->commit_trans_seq),
 		       le64_to_cpu(lt->max_item_seq),
 		       le64_to_cpu(lt->finalize_seq),
 		       le64_to_cpu(lt->rid),
