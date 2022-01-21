@@ -276,7 +276,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	set_item_info(si, cinode);
 }
 
-static void init_inode_key(struct scoutfs_key *key, u64 ino)
+void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 {
 	*key = (struct scoutfs_key) {
 		.sk_zone = SCOUTFS_FS_ZONE,
@@ -317,7 +317,7 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
 	if (atomic64_read(&si->last_refreshed) == refresh_gen)
 		return 0;
 
-	init_inode_key(&key, scoutfs_ino(inode));
+	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	mutex_lock(&si->item_mutex);
 	if (atomic64_read(&si->last_refreshed) < refresh_gen) {
@@ -803,7 +803,7 @@ int scoutfs_dirty_inode_item(struct inode *inode, struct scoutfs_lock *lock)
 
 	store_inode(&sinode, inode);
 
-	init_inode_key(&key, scoutfs_ino(inode));
+	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	ret = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
 	if (!ret)
@@ -1022,7 +1022,7 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list);
 	BUG_ON(ret);
 
-	init_inode_key(&key, ino);
+	scoutfs_inode_init_key(&key, ino);
 
 	err = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
 	if (err) {
@@ -1421,7 +1421,7 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	set_inode_ops(inode);
 
 	store_inode(&sinode, inode);
-	init_inode_key(&key, scoutfs_ino(inode));
+	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	ret = scoutfs_omap_inc(sb, ino);
 	if (ret < 0)
@@ -1546,7 +1546,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 		goto out;
 	}
 
-	init_inode_key(&key, ino);
+	scoutfs_inode_init_key(&key, ino);
 
 	ret = scoutfs_item_lookup_exact(sb, &key, &sinode, sizeof(sinode),
 					lock);
