@@ -3462,6 +3462,18 @@ static void farewell_worker(struct work_struct *work)
 		}
 	}
 
+	/*
+	 * Responses that are ready to send can be further delayed by
+	 * moving them back to the reqs list.
+	 */
+	list_for_each_entry_safe(fw, tmp, &send, entry) {
+		/* finish lock recovery before destroying locks, fenced if too long */
+		if (scoutfs_recov_is_pending(sb, fw->rid, SCOUTFS_RECOV_LOCKS)) {
+			list_move_tail(&fw->entry, &reqs);
+			quo_reqs++;
+		}
+	}
+
 	/* clean up resources for mounts before sending responses */
 	list_for_each_entry_safe(fw, tmp, &send, entry) {
 		ret = reclaim_rid(sb, fw->rid);
@@ -3656,8 +3668,14 @@ static void finished_recovery(struct super_block *sb)
 
 void scoutfs_server_recov_finish(struct super_block *sb, u64 rid, int which)
 {
+	DECLARE_SERVER_INFO(sb, server);
+
 	if (scoutfs_recov_finish(sb, rid, which) > 0)
 		finished_recovery(sb);
+
+	/* rid's farewell response might be sent after it finishes lock recov */
+	if (which & SCOUTFS_RECOV_LOCKS)
+		queue_farewell_work(server);
 }
 
 /*
