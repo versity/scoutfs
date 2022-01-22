@@ -118,8 +118,7 @@ u64 scoutfs_inode_data_version(struct inode *inode);
 void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off);
 int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock);
 
-int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
-			  int flags);
+int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock);
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat);
 int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);

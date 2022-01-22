@@ -296,8 +296,7 @@ void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
  * fields because they should have already had a locked refreshed inode
  * to be dereferencing its contents.
  */
-int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
-			  int flags)
+int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
@@ -721,7 +720,7 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
 		atomic64_set(&si->last_refreshed, 0);
 		inode->i_version = 0;
 
-		ret = scoutfs_inode_refresh(inode, lock, 0);
+		ret = scoutfs_inode_refresh(inode, lock);
 		if (ret == 0)
 			ret = scoutfs_omap_inc(sb, ino);
 		if (ret) {

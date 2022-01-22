@@ -1050,7 +1050,7 @@ int scoutfs_lock_inode(struct super_block *sb, enum scoutfs_lock_mode mode, int 
 		goto out;
 
 	if (flags & SCOUTFS_LKF_REFRESH_INODE) {
-		ret = scoutfs_inode_refresh(inode, *lock, flags);
+		ret = scoutfs_inode_refresh(inode, *lock);
 		if (ret < 0) {
 			scoutfs_unlock(sb, *lock, mode);
 			*lock = NULL;
