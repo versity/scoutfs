@@ -134,9 +134,6 @@ int scoutfs_net_submit_request_node(struct super_block *sb,
 				    u64 rid, u8 cmd, void *arg, u16 arg_len,
 				    scoutfs_net_response_t resp_func,
 				    void *resp_data, u64 *id_ret);
-void scoutfs_net_cancel_request(struct super_block *sb,
-				struct scoutfs_net_connection *conn,
-				u8 cmd, u64 id);
 int scoutfs_net_sync_request(struct super_block *sb,
 			     struct scoutfs_net_connection *conn,
 			     u8 cmd, void *arg, unsigned arg_len,

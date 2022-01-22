@@ -1772,23 +1772,6 @@ int scoutfs_net_response_node(struct super_block *sb,
 			   NULL, NULL, NULL);
 }
 
-/*
- * The response function that was submitted with the request is not
- * called if the request is canceled here.
- */
-void scoutfs_net_cancel_request(struct super_block *sb,
-				struct scoutfs_net_connection *conn,
-				u8 cmd, u64 id)
-{
-	struct message_send *msend;
-
-	spin_lock(&conn->lock);
-	msend = find_request(conn, cmd, id);
-	if (msend)
-		complete_send(conn, msend);
-	spin_unlock(&conn->lock);
-}
-
 struct sync_request_completion {
 	struct completion comp;
 	void *resp;
