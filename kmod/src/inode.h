@@ -80,7 +80,8 @@ int scoutfs_drop_inode(struct inode *inode);
 void scoutfs_evict_inode(struct inode *inode);
 void scoutfs_inode_queue_iput(struct inode *inode);
 
-struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf);
+#define SCOUTFS_IGF_LINKED (1 << 0) /* enoent if nlink == 0 */
+struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf);
 struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
 
 void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino);

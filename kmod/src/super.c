@@ -601,7 +601,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 
 	/* this interruptible iget lets hung mount be aborted with ctl-c */
-	inode = scoutfs_iget(sb, SCOUTFS_ROOT_INO, SCOUTFS_LKF_INTERRUPTIBLE);
+	inode = scoutfs_iget(sb, SCOUTFS_ROOT_INO, SCOUTFS_LKF_INTERRUPTIBLE, 0);
 	if (IS_ERR(inode)) {
 		ret = PTR_ERR(inode);
 		if (ret == -ERESTARTSYS)

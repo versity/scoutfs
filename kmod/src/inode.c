@@ -696,21 +696,20 @@ struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
 	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
 }
 
-struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
+struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf)
 {
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode_info *si;
-	struct inode *inode;
+	struct inode *inode = NULL;
 	int ret;
 
 	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, lkf, ino, &lock);
-	if (ret)
-		return ERR_PTR(ret);
+	if (ret < 0)
+		goto out;
 
-	inode = iget5_locked(sb, ino, scoutfs_iget_test, scoutfs_iget_set,
-			     &ino);
+	inode = iget5_locked(sb, ino, scoutfs_iget_test, scoutfs_iget_set, &ino);
 	if (!inode) {
-		inode = ERR_PTR(-ENOMEM);
+		ret = -ENOMEM;
 		goto out;
 	}
 
@@ -721,19 +720,32 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
 		inode->i_version = 0;
 
 		ret = scoutfs_inode_refresh(inode, lock);
-		if (ret == 0)
-			ret = scoutfs_omap_inc(sb, ino);
-		if (ret) {
-			iget_failed(inode);
-			inode = ERR_PTR(ret);
-		} else {
-			set_inode_ops(inode);
-			unlock_new_inode(inode);
+		if (ret < 0)
+			goto out;
+
+		if ((igf & SCOUTFS_IGF_LINKED) && inode->i_nlink == 0) {
+			ret = -ENOENT;
+			goto out;
 		}
+
+		ret = scoutfs_omap_inc(sb, ino);
+		if (ret < 0)
+			goto out;
+
+		set_inode_ops(inode);
+		unlock_new_inode(inode);
 	}
 
+	ret = 0;
 out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+
+	if (ret < 0) {
+		if (inode)
+			iget_failed(inode);
+		inode = ERR_PTR(ret);
+	}
+
 	return inode;
 }
 
@@ -1854,7 +1866,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		}
 
 		/* try to cached and evict unused inode to delete, can be racing */
-		inode = scoutfs_iget(sb, ino, 0);
+		inode = scoutfs_iget(sb, ino, 0, 0);
 		if (IS_ERR(inode)) {
 			ret = PTR_ERR(inode);
 			if (ret == -ENOENT)
