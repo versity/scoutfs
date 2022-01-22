@@ -26,7 +26,8 @@ inode_exists()
 {
 	local ino="$1"
 
-	handle_cat "$T_M0" "$ino" > "$T_TMP.handle_cat.log" 2>&1
+	scoutfs get-allocated-inos -i "$ino" -s -p "$T_M0" > $T_TMP.inos.log 2>&1
+	test "$?" == 0 -a "$(head -1 $T_TMP.inos.log)" == "$ino"
 }
 
 echo "== test our inode existance function"
