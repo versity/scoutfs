@@ -617,6 +617,33 @@ command is used first.
 .RE
 .PD
 
+.TP
+.BI "get-allocated-inos [-i|--ino INO] [-s|--single] [-p|--path PATH]"
+.sp
+This debugging command prints allocated inode numbers.  It only prints
+inodes
+found in the group that contains the starting inode.  The printed inode
+numbers aren't necessarily reachable.  They could be anywhere in the
+process from being unlinked to finally deleted when their items
+were found.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-i, --ino INO"
+The first 64bit inode number which could be printed.
+.TP
+.B "-s, --single"
+Only print the single starting inode when it is allocated, all other allocated
+inode numbers will be ignored.
+.TP
+.B "-p, --path PATH"
+A path within a ScoutFS filesystem.
+.RE
+.PD
+
+.TP
+
 .SH SEE ALSO
 .BR scoutfs (5),
 .BR xattr (7),
