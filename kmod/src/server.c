@@ -122,7 +122,6 @@ struct server_info {
 struct server_client_info {
 	u64 rid;
 	struct list_head head;
-	bool received_farewell;
 };
 
 static __le64 *first_valopt(struct scoutfs_volume_options *valopt)
@@ -172,7 +171,7 @@ static bool test_shutting_down(struct server_info *server)
 static void set_shutting_down(struct server_info *server, bool val)
 {
 	server->shutting_down = val;
-	smp_rmb();
+	smp_wmb();
 }
 
 static void stop_server(struct server_info *server)
@@ -1506,14 +1505,10 @@ static int server_lock(struct super_block *sb,
 		       struct scoutfs_net_connection *conn,
 		       u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct server_client_info *sci = scoutfs_net_client_info(conn);
 	u64 rid = scoutfs_net_client_rid(conn);
 
 	if (arg_len != sizeof(struct scoutfs_net_lock))
 		return -EINVAL;
-
-	if (sci->received_farewell)
-		return scoutfs_net_response(sb, conn, cmd, id, -EINVAL, NULL, 0);
 
 	return scoutfs_lock_server_request(sb, rid, id, arg);
 }
@@ -1523,14 +1518,10 @@ static int lock_response(struct super_block *sb,
 			 void *resp, unsigned int resp_len,
 			 int error, void *data)
 {
-	struct server_client_info *sci = scoutfs_net_client_info(conn);
 	u64 rid = scoutfs_net_client_rid(conn);
 
 	if (resp_len != sizeof(struct scoutfs_net_lock))
 		return -EINVAL;
-
-	if (sci->received_farewell)
-		return 0;
 
 	return scoutfs_lock_server_response(sb, rid, resp);
 }
@@ -1569,14 +1560,10 @@ static int lock_recover_response(struct super_block *sb,
 				 void *resp, unsigned int resp_len,
 				 int error, void *data)
 {
-	struct server_client_info *sci = scoutfs_net_client_info(conn);
 	u64 rid = scoutfs_net_client_rid(conn);
 
 	if (invalid_recover(resp, resp_len))
 		return -EINVAL;
-
-	if (sci->received_farewell)
-		return 0;
 
 	return scoutfs_lock_server_recover_response(sb, rid, resp);
 }
@@ -3462,6 +3449,18 @@ static void farewell_worker(struct work_struct *work)
 		}
 	}
 
+	/*
+	 * Responses that are ready to send can be further delayed by
+	 * moving them back to the reqs list.
+	 */
+	list_for_each_entry_safe(fw, tmp, &send, entry) {
+		/* finish lock recovery before destroying locks, fenced if too long */
+		if (scoutfs_recov_is_pending(sb, fw->rid, SCOUTFS_RECOV_LOCKS)) {
+			list_move_tail(&fw->entry, &reqs);
+			quo_reqs++;
+		}
+	}
+
 	/* clean up resources for mounts before sending responses */
 	list_for_each_entry_safe(fw, tmp, &send, entry) {
 		ret = reclaim_rid(sb, fw->rid);
@@ -3529,11 +3528,9 @@ static int server_farewell(struct super_block *sb,
 			   struct scoutfs_net_connection *conn,
 			   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct server_client_info *sci = scoutfs_net_client_info(conn);
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
 	u64 rid = scoutfs_net_client_rid(conn);
 	struct farewell_request *fw;
-	int ret;
 
 	if (arg_len != 0)
 		return -EINVAL;
@@ -3550,20 +3547,6 @@ static int server_farewell(struct super_block *sb,
 	spin_lock(&server->farewell_lock);
 	list_add_tail(&fw->entry, &server->farewell_requests);
 	spin_unlock(&server->farewell_lock);
-
-	/*
-	 * Tear down client lock server state and set that we recieved farewell
-	 * to ensure that we do not race between client and server trying to process
-	 * lock recovery at the same time (race). We also want to mark that the recovery
-	 * finished so that if client's try to send stuff later; the server doesnt care.
-	 */
-	sci->received_farewell = true;
-	ret = scoutfs_lock_server_farewell(sb, rid);
-	if (ret < 0) {
-		kfree(fw);
-		return ret;
-	}
-	scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_LOCKS);
 
 	queue_farewell_work(server);
 
@@ -3656,8 +3639,14 @@ static void finished_recovery(struct super_block *sb)
 
 void scoutfs_server_recov_finish(struct super_block *sb, u64 rid, int which)
 {
+	DECLARE_SERVER_INFO(sb, server);
+
 	if (scoutfs_recov_finish(sb, rid, which) > 0)
 		finished_recovery(sb);
+
+	/* rid's farewell response might be sent after it finishes lock recov */
+	if (which & SCOUTFS_RECOV_LOCKS)
+		queue_farewell_work(server);
 }
 
 /*

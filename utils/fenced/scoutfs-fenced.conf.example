@@ -1,3 +1,6 @@
+# delay, in seconds, between each check for pending fence requests.
 SCOUTFS_FENCED_DELAY=1
-SCOUTFS_FENCED_RUN=/usr/libexec/scoutfs-fenced/run/local-force-unmount
+# path to executable to run to service fence request
+#SCOUTFS_FENCED_RUN=
+# arguments to pass to binary
 SCOUTFS_FENCED_RUN_ARGS=""

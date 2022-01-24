@@ -262,7 +262,7 @@ void scoutfs_recov_shutdown(struct super_block *sb)
 	recinf->timeout_fn = NULL;
 	spin_unlock(&recinf->lock);
 
-	list_for_each_entry_safe(pend, tmp, &recinf->pending, head) {
+	list_for_each_entry_safe(pend, tmp, &list, head) {
 		list_del(&pend->head);
 		kfree(pend);
 	}

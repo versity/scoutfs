@@ -1320,6 +1320,84 @@ out:
 	return ret ?: count;
 }
 
+static long scoutfs_ioc_get_allocated_inos(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_get_allocated_inos __user *ugai = (void __user *)arg;
+	struct scoutfs_ioctl_get_allocated_inos gai;
+	struct scoutfs_lock *lock = NULL;
+	struct scoutfs_key key;
+	struct scoutfs_key end;
+	u64 __user *uinos;
+	u64 bytes;
+	u64 ino;
+	int nr;
+	int ret;
+
+	if (!(file->f_mode & FMODE_READ)) {
+		ret = -EBADF;
+		goto out;
+	}
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&gai, ugai, sizeof(gai))) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	if ((gai.inos_ptr & (sizeof(__u64) - 1)) || (gai.inos_bytes < sizeof(__u64))) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	scoutfs_inode_init_key(&key, gai.start_ino);
+	scoutfs_inode_init_key(&end, gai.start_ino | SCOUTFS_LOCK_INODE_GROUP_MASK);
+	uinos = (void __user *)gai.inos_ptr;
+	bytes = gai.inos_bytes;
+	nr = 0;
+
+	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, gai.start_ino, &lock);
+	if (ret < 0)
+		goto out;
+
+	while (bytes >= sizeof(*uinos)) {
+
+		ret = scoutfs_item_next(sb, &key, &end, NULL, 0, lock);
+		if (ret < 0) {
+			if (ret == -ENOENT)
+				ret = 0;
+			break;
+		}
+
+		if (key.sk_zone != SCOUTFS_FS_ZONE) {
+			ret = 0;
+			break;
+		}
+
+		/* all fs items are owned by allocated inodes, and _first is always ino */
+		ino = le64_to_cpu(key._sk_first);
+		if (put_user(ino, uinos)) {
+			ret = -EFAULT;
+			break;
+		}
+
+		uinos++;
+		bytes -= sizeof(*uinos);
+		if (++nr == INT_MAX)
+			break;
+
+		scoutfs_inode_init_key(&key, ino + 1);
+	}
+
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+out:
+	return ret ?: nr;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1353,6 +1431,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_resize_devices(file, arg);
 	case SCOUTFS_IOC_READ_XATTR_TOTALS:
 		return scoutfs_ioc_read_xattr_totals(file, arg);
+	case SCOUTFS_IOC_GET_ALLOCATED_INOS:
+		return scoutfs_ioc_get_allocated_inos(file, arg);
 	}
 
 	return -ENOTTY;

@@ -520,4 +520,43 @@ struct scoutfs_ioctl_xattr_total {
 #define SCOUTFS_IOC_READ_XATTR_TOTALS \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 15, struct scoutfs_ioctl_read_xattr_totals)
 
+/*
+ * This fills the caller's inos array with inode numbers that are in use
+ * after the start ino, within an internal inode group.
+ *
+ * This only makes a promise about the state of the inode numbers within
+ * the first and last numbers returned by one call.  At one time, all of
+ * those inodes were still allocated.   They could have changed before
+ * the call returned.   And any numbers outside of the first and last
+ * (or single) are undefined.
+ *
+ * This doesn't iterate over all allocated inodes, it only probes a
+ * single group that the start inode is within.   This interface was
+ * first introduced to support tests that needed to find out about a
+ * specific inode, while having some other similarly niche uses.   It is
+ * unsuitable for a consistent iteration over all the inode numbers in
+ * use.
+ *
+ * This test of inode items doesn't serialize with the inode lifetime
+ * mechanism.   It only tells you the numbers of inodes that were once
+ * active in the system and haven't yet been fully deleted.  The inode
+ * numbers returned could have been in the process of being deleted and
+ * were already unreachable even before the call started.
+ *
+ * @start_ino: the first inode number that could be returned
+ * @inos_ptr: pointer to an aligned array of 64bit inode numbers
+ * @inos_bytes: the number of bytes available in the inos_ptr array
+ *
+ * Returns errors or the count of inode numbers returned, quite possibly
+ * including 0.
+ */
+struct scoutfs_ioctl_get_allocated_inos {
+	__u64 start_ino;
+	__u64 inos_ptr;
+	__u64 inos_bytes;
+};
+
+#define SCOUTFS_IOC_GET_ALLOCATED_INOS \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 16, struct scoutfs_ioctl_get_allocated_inos)
+
 #endif

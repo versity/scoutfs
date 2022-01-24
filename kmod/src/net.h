@@ -63,7 +63,6 @@ struct scoutfs_net_connection {
 	atomic64_t recv_seq;
 
 	struct workqueue_struct *workq;
-	struct workqueue_struct *proc_workq;
 	struct work_struct listen_work;
 	struct work_struct connect_work;
 	struct work_struct send_work;
@@ -116,7 +115,6 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 		       scoutfs_net_notify_t notify_up,
 		       scoutfs_net_notify_t notify_down, size_t info_size,
 		       scoutfs_net_request_t *req_funcs, char *name_suffix);
-void *scoutfs_net_client_info(struct scoutfs_net_connection *conn);
 u64 scoutfs_net_client_rid(struct scoutfs_net_connection *conn);
 int scoutfs_net_connect(struct super_block *sb,
 			struct scoutfs_net_connection *conn,
@@ -136,9 +134,6 @@ int scoutfs_net_submit_request_node(struct super_block *sb,
 				    u64 rid, u8 cmd, void *arg, u16 arg_len,
 				    scoutfs_net_response_t resp_func,
 				    void *resp_data, u64 *id_ret);
-void scoutfs_net_cancel_request(struct super_block *sb,
-				struct scoutfs_net_connection *conn,
-				u8 cmd, u64 id);
 int scoutfs_net_sync_request(struct super_block *sb,
 			     struct scoutfs_net_connection *conn,
 			     u8 cmd, void *arg, unsigned arg_len,

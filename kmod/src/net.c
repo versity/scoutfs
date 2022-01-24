@@ -675,28 +675,18 @@ static void scoutfs_net_recv_worker(struct work_struct *work)
 
 		scoutfs_tseq_add(&ninf->msg_tseq_tree, &mrecv->tseq_entry);
 
-		/* 
-		 * We want to drain the proc_workq in order to ensure that
-		 * that the inflight lock recovery work is fully flushed out
-		 * so that we can prevent the client/server racing trying to
-		 * do lock recovery and processing farewell at the same time.
-		 */
-		if (nh.cmd == SCOUTFS_NET_CMD_FAREWELL && conn->listening_conn)
-			drain_workqueue(conn->proc_workq);
-
 		/*
-		 * Initial received greetings and farewell are processed
+		 * Initial received greetings are processed
 		 * synchronously before any other incoming messages.
 		 *
 		 * Incoming requests or responses to the lock client are
 		 * called synchronously to avoid reordering.
 		 */
 		if (nh.cmd == SCOUTFS_NET_CMD_GREETING ||
-		    (nh.cmd == SCOUTFS_NET_CMD_FAREWELL && conn->listening_conn) ||
 		    (nh.cmd == SCOUTFS_NET_CMD_LOCK && !conn->listening_conn))
 			scoutfs_net_proc_worker(&mrecv->proc_work);
 		else
-			queue_work(conn->proc_workq, &mrecv->proc_work);
+			queue_work(conn->workq, &mrecv->proc_work);
 	}
 
 	if (ret)
@@ -861,7 +851,6 @@ static void scoutfs_net_destroy_worker(struct work_struct *work)
 	}
 
 	destroy_workqueue(conn->workq);
-	destroy_workqueue(conn->proc_workq);
 	scoutfs_tseq_del(&ninf->conn_tseq_tree, &conn->tseq_entry);
 	kfree(conn->info);
 	trace_scoutfs_conn_destroy_free(conn);
@@ -1161,8 +1150,6 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 	/* wait for socket and proc work to finish, includes chained work */
 	drain_workqueue(conn->workq);
 
-	drain_workqueue(conn->proc_workq);
-
 	/* tear down the sock now that all work is done */
 	if (conn->sock) {
 		sock_release(conn->sock);
@@ -1360,20 +1347,10 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 		return NULL;
 	}
 
-	conn->workq = alloc_workqueue("scoutfs_net_workq_%s",
+	conn->workq = alloc_workqueue("scoutfs_net_%s",
 				      WQ_UNBOUND | WQ_NON_REENTRANT, 0,
 				      name_suffix);
 	if (!conn->workq) {
-		kfree(conn->info);
-		kfree(conn);
-		return NULL;
-	}
-
-	conn->proc_workq = alloc_workqueue("scoutfs_net_proc_workq_%s",
-					   WQ_UNBOUND | WQ_NON_REENTRANT, 0,
-					   name_suffix);
-	if (!conn->proc_workq) {
-		destroy_workqueue(conn->workq);
 		kfree(conn->info);
 		kfree(conn);
 		return NULL;
@@ -1409,14 +1386,6 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 	trace_scoutfs_conn_alloc(conn);
 
 	return conn;
-}
-
-/* Give the caller the client info of the connection. This is used by
- * server processing the server_farewell, and lock response/recovery.
- */
-void *scoutfs_net_client_info(struct scoutfs_net_connection *conn)
-{
-	return conn->info;
 }
 
 /*
@@ -1801,23 +1770,6 @@ int scoutfs_net_response_node(struct super_block *sb,
 	return submit_send(sb, conn, rid, cmd, SCOUTFS_NET_FLAG_RESPONSE,
 			   id, net_err_from_host(sb, error), resp, resp_len,
 			   NULL, NULL, NULL);
-}
-
-/*
- * The response function that was submitted with the request is not
- * called if the request is canceled here.
- */
-void scoutfs_net_cancel_request(struct super_block *sb,
-				struct scoutfs_net_connection *conn,
-				u8 cmd, u64 id)
-{
-	struct message_send *msend;
-
-	spin_lock(&conn->lock);
-	msend = find_request(conn, cmd, id);
-	if (msend)
-		complete_send(conn, msend);
-	spin_unlock(&conn->lock);
 }
 
 struct sync_request_completion {

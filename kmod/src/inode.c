@@ -276,7 +276,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	set_item_info(si, cinode);
 }
 
-static void init_inode_key(struct scoutfs_key *key, u64 ino)
+void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 {
 	*key = (struct scoutfs_key) {
 		.sk_zone = SCOUTFS_FS_ZONE,
@@ -296,8 +296,7 @@ static void init_inode_key(struct scoutfs_key *key, u64 ino)
  * fields because they should have already had a locked refreshed inode
  * to be dereferencing its contents.
  */
-int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
-			  int flags)
+int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
@@ -317,7 +316,7 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock,
 	if (atomic64_read(&si->last_refreshed) == refresh_gen)
 		return 0;
 
-	init_inode_key(&key, scoutfs_ino(inode));
+	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	mutex_lock(&si->item_mutex);
 	if (atomic64_read(&si->last_refreshed) < refresh_gen) {
@@ -697,21 +696,20 @@ struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
 	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
 }
 
-struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
+struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf)
 {
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode_info *si;
-	struct inode *inode;
+	struct inode *inode = NULL;
 	int ret;
 
 	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, lkf, ino, &lock);
-	if (ret)
-		return ERR_PTR(ret);
+	if (ret < 0)
+		goto out;
 
-	inode = iget5_locked(sb, ino, scoutfs_iget_test, scoutfs_iget_set,
-			     &ino);
+	inode = iget5_locked(sb, ino, scoutfs_iget_test, scoutfs_iget_set, &ino);
 	if (!inode) {
-		inode = ERR_PTR(-ENOMEM);
+		ret = -ENOMEM;
 		goto out;
 	}
 
@@ -721,20 +719,33 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf)
 		atomic64_set(&si->last_refreshed, 0);
 		inode->i_version = 0;
 
-		ret = scoutfs_inode_refresh(inode, lock, 0);
-		if (ret == 0)
-			ret = scoutfs_omap_inc(sb, ino);
-		if (ret) {
-			iget_failed(inode);
-			inode = ERR_PTR(ret);
-		} else {
-			set_inode_ops(inode);
-			unlock_new_inode(inode);
+		ret = scoutfs_inode_refresh(inode, lock);
+		if (ret < 0)
+			goto out;
+
+		if ((igf & SCOUTFS_IGF_LINKED) && inode->i_nlink == 0) {
+			ret = -ENOENT;
+			goto out;
 		}
+
+		ret = scoutfs_omap_inc(sb, ino);
+		if (ret < 0)
+			goto out;
+
+		set_inode_ops(inode);
+		unlock_new_inode(inode);
 	}
 
+	ret = 0;
 out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+
+	if (ret < 0) {
+		if (inode)
+			iget_failed(inode);
+		inode = ERR_PTR(ret);
+	}
+
 	return inode;
 }
 
@@ -803,7 +814,7 @@ int scoutfs_dirty_inode_item(struct inode *inode, struct scoutfs_lock *lock)
 
 	store_inode(&sinode, inode);
 
-	init_inode_key(&key, scoutfs_ino(inode));
+	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	ret = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
 	if (!ret)
@@ -1022,7 +1033,7 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list);
 	BUG_ON(ret);
 
-	init_inode_key(&key, ino);
+	scoutfs_inode_init_key(&key, ino);
 
 	err = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
 	if (err) {
@@ -1421,7 +1432,7 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	set_inode_ops(inode);
 
 	store_inode(&sinode, inode);
-	init_inode_key(&key, scoutfs_ino(inode));
+	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	ret = scoutfs_omap_inc(sb, ino);
 	if (ret < 0)
@@ -1546,7 +1557,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 		goto out;
 	}
 
-	init_inode_key(&key, ino);
+	scoutfs_inode_init_key(&key, ino);
 
 	ret = scoutfs_item_lookup_exact(sb, &key, &sinode, sizeof(sinode),
 					lock);
@@ -1855,7 +1866,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		}
 
 		/* try to cached and evict unused inode to delete, can be racing */
-		inode = scoutfs_iget(sb, ino, 0);
+		inode = scoutfs_iget(sb, ino, 0, 0);
 		if (IS_ERR(inode)) {
 			ret = PTR_ERR(inode);
 			if (ret == -ENOENT)
