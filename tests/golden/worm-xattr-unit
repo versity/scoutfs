@@ -1,0 +1,53 @@
+== worm xattr creation without .hide. fails
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== worm xattr creation on dir fails
+setfattr: /mnt/test/test/worm-xattr-unit: Invalid argument
+== worm xattr creation
+== get correct parsed timespec value
+== hidden scoutfs xattrs before expire
+== user xattr creation before expire fails
+setfattr: /mnt/test.0/test/worm-xattr-unit/file-1: Permission denied
+== worm xattr deletion before expire fails
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Permission denied
+== worm xattr update before expire fails
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Permission denied
+== other worm xattr create before expire fails
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Permission denied
+== file deletion before expire fails
+rm: cannot remove ‘/mnt/test/test/worm-xattr-unit/file-1’: Permission denied
+== file rename before expire fails
+mv: cannot move ‘/mnt/test/test/worm-xattr-unit/file-1’ to ‘/mnt/test/test/worm-xattr-unit/file-2’: Permission denied
+== file write before expire fails
+date: write error: Permission denied
+== file truncate before expire fails
+truncate: failed to truncate ‘/mnt/test/test/worm-xattr-unit/file-1’ at 0 bytes: Permission denied
+== file inode update before expire fails
+touch: setting times of ‘/mnt/test/test/worm-xattr-unit/file-1’: Permission denied
+== wait until expiration
+== file write after expire
+== file rename after expire
+== other worm xattr create after expire fails
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== xattr deletion after expire
+== invalid all zero expire value
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== invalid non integer expire value
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== invalid only dots dots expire value
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== invalid mixed dots secs expire value
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== invalid (u32)(u64) nsecs expire value
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== invalid negative (signed)(u64) secs expire value
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== cleanup
