@@ -18,6 +18,7 @@ enospc.sh
 srch-safe-merge-pos.sh
 srch-basic-functionality.sh
 simple-xattr-unit.sh
+retention-basic.sh
 totl-xattr-tag.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
