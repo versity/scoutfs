@@ -10,6 +10,7 @@ move-blocks.sh
 enospc.sh
 srch-basic-functionality.sh
 simple-xattr-unit.sh
+worm-xattr-unit.sh
 totl-xattr-tag.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
