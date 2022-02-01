@@ -529,6 +529,11 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 		goto out;
 	}
 
+	if (create && !si->staging && scoutfs_inode_worm_denied(inode)) {
+		ret = -EACCES;
+		goto out;
+	}
+
 	/* convert unwritten to written, could be staging */
 	if (create && ext.map && (ext.flags & SEF_UNWRITTEN)) {
 		un.start = iblock;
@@ -1188,6 +1193,10 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 				  to, &to_lock, NULL, NULL, NULL, NULL);
 	if (ret)
 		goto out;
+
+	if (scoutfs_inode_worm_denied(to)) {
+		return -EACCES;
+	}
 
 	if ((from_off & SCOUTFS_BLOCK_SM_MASK) ||
 	    (to_off & SCOUTFS_BLOCK_SM_MASK) ||

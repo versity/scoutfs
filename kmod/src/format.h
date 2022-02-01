@@ -856,7 +856,14 @@ struct scoutfs_inode {
 	struct scoutfs_timespec ctime;
 	struct scoutfs_timespec mtime;
 	struct scoutfs_timespec crtime;
+	__le64 worm_bits;
+	struct scoutfs_timespec worm_expiration;
 };
+
+#define SCOUTFS_WORM_V1_BIT (1 << 0)
+#define SCOUTFS_INODE_FMT_V2_BYTES sizeof(struct scoutfs_inode)
+#define SCOUTFS_INODE_FMT_V1_BYTES (SCOUTFS_INODE_FMT_V2_BYTES -    \
+    offsetof(struct scoutfs_inode, worm_bits))
 
 #define SCOUTFS_INO_FLAG_TRUNCATE 0x1
 

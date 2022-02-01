@@ -23,6 +23,11 @@ struct scoutfs_inode_info {
 	u64 offline_blocks;
 	u32 flags;
 	struct timespec crtime;
+	u64 worm_bits;
+	struct scoutfs_timespec worm_expiration;
+
+	/* Prevent readers from racing with xattr_set */
+	seqlock_t seqlock;
 
 	/*
 	 * Protects per-inode extent items, most particularly readers
@@ -143,5 +148,9 @@ void scoutfs_inode_start(struct super_block *sb);
 void scoutfs_inode_orphan_stop(struct super_block *sb);
 void scoutfs_inode_flush_iput(struct super_block *sb);
 void scoutfs_inode_destroy(struct super_block *sb);
+
+bool scoutfs_inode_worm_denied(struct inode *inode);
+void scoutfs_inode_set_worm(struct scoutfs_inode_info *si, __le64 worm_bits,
+			    struct scoutfs_timespec *ts);
 
 #endif

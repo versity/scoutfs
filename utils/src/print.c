@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <argp.h>
+#include <stdbool.h>
 
 #include "sparse.h"
 #include "parse.h"
@@ -69,6 +70,15 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 	       le32_to_cpu(inode->ctime.nsec),
 	       le64_to_cpu(inode->mtime.sec),
 	       le32_to_cpu(inode->mtime.nsec));
+
+	if (val_len == SCOUTFS_INODE_FMT_V1_BYTES) {
+		printf ("\n");
+	} else {
+		printf("      worm_bits %llx worm_expiration %llu.%08u\n",
+		       le64_to_cpu(inode->worm_bits),
+		       le64_to_cpu(inode->worm_expiration.sec),
+		       le32_to_cpu(inode->worm_expiration.nsec));
+	}
 }
 
 static void print_orphan(struct scoutfs_key *key, void *val, int val_len)

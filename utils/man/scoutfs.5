@@ -197,6 +197,17 @@ name, total value, and a count of contributing attributes can be read
 with the
 .IB READ_XATTR_TOTALS
 ioctl.
+.TP
+.B .worm.
+Attributes with the .worm. flag are used to maintain the worm policy
+set on a file. This is a time-based retention policy, which allows a user
+to set a policy to store data for a specified amount of time. When a time
+based retention policy is set, files can be created and read, but not
+modified or deleted. The only supported version at the moment is
+v1_expiration. The v1_expiration policy will also prevent the ROOT user
+from modifying or deleting of the file. The value of the extended attribute
+is sec.nsec timeval in wall clock GMT. The hidden tag must also be used,
+so that the worm attribute is kept private to this scoutfs volume.
 .RE
 
 .SH FORMAT VERSION

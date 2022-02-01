@@ -98,11 +98,13 @@ static int unknown_prefix(const char *name)
 #define HIDE_TAG	"hide."
 #define SRCH_TAG	"srch."
 #define TOTL_TAG	"totl."
+#define WORM_TAG	"worm."
 #define TAG_LEN		(sizeof(HIDE_TAG) - 1)
 
-int scoutfs_xattr_parse_tags(const char *name, unsigned int name_len,
-			     struct scoutfs_xattr_prefix_tags *tgs)
+int scoutfs_xattr_parse_tags(struct super_block *sb, const char *name,
+			     unsigned int name_len, struct scoutfs_xattr_prefix_tags *tgs)
 {
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	bool found;
 
 	memset(tgs, 0, sizeof(struct scoutfs_xattr_prefix_tags));
@@ -122,6 +124,9 @@ int scoutfs_xattr_parse_tags(const char *name, unsigned int name_len,
 				return -EINVAL;
 		} else if (!strncmp(name, TOTL_TAG, TAG_LEN)) {
 			if (++tgs->totl == 0)
+				return -EINVAL;
+		} else if (!strncmp(name, WORM_TAG, TAG_LEN)) {
+			if (++tgs->worm == 0 || sbi->fmt_vers < 2)
 				return -EINVAL;
 		} else {
 			/* only reason to use scoutfs. is tags */
@@ -482,6 +487,23 @@ void scoutfs_xattr_init_totl_key(struct scoutfs_key *key, u64 *name)
 }
 
 /*
+ * Parse for v1_expiration within the xattr
+ * the passed in character array must be NULL
+ * terminated and is.
+ */
+static int parse_worm_name(const char *name)
+{
+	static const char worm_name[] = "v1_expiration";
+	char *last_chr;
+
+	last_chr = strrchr(name, '.');
+	if (!last_chr)
+		return -EINVAL;
+
+	return strcmp(worm_name, last_chr + 1) == 0 ? 0 : -EINVAL;
+}
+
+/*
  * Parse a u64 in any base after null terminating it while forbidding
  * the leading + and trailing \n that kstrotull allows.
  */
@@ -496,6 +518,67 @@ static int parse_totl_u64(const char *s, int len, u64 *res)
 	str[len] = '\0';
 
 	return kstrtoull(str, 0, res) != 0 ? -EINVAL : 0;
+}
+
+static int parse_worm_u32(const char *s, int len, u32 *res)
+{
+        u64 tmp;
+        int ret;
+
+        ret = parse_totl_u64(s, len, &tmp);
+        if (ret == 0 && tmp > U32_MAX) {
+                tmp = 0;
+                ret = -EINVAL;
+        }
+
+        *res = tmp;
+        return ret;
+}
+
+static int parse_worm_timespec(struct scoutfs_timespec *ts, const char *name, int name_len)
+{
+	const char *start = name;
+	char *delim;
+	u64 sec;
+	u32 nsec;
+	int sec_len;
+	int nsec_len;
+	int ret;
+
+	memset(ts, 0, sizeof(struct scoutfs_timespec));
+
+	if (name_len < 3)
+		return -EINVAL;
+
+	delim = strnchr(name, name_len, '.');
+	if (!delim)
+		return -EINVAL;
+
+	if (delim == start || delim == (name + name_len - 1))
+		return -EINVAL;
+
+	sec_len = delim - name;
+	nsec_len = name_len - (sec_len + 1);
+
+	/* Check to make sure only one '.' */
+	if (strnchr(delim + 1, nsec_len, '.'))
+		return -EINVAL;
+
+	ret = parse_totl_u64(name, sec_len, &sec);
+	if (ret < 0)
+		return ret;
+
+	ret = parse_worm_u32(delim + 1, nsec_len, &nsec);
+	if (ret < 0)
+		return ret;
+
+	if (sec > S64_MAX || nsec >= NSEC_PER_SEC)
+		return -EINVAL;
+
+	ts->sec = cpu_to_le64(sec);
+	ts->nsec = cpu_to_le32(nsec);
+
+	return 0;
 }
 
 /*
@@ -582,22 +665,24 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 {
 	struct inode *inode = dentry->d_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	struct super_block *sb = inode->i_sb;
-	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_xattr_totl_val tval = {0,};
+	struct scoutfs_lock *totl_lock = NULL;
+	struct super_block *sb = inode->i_sb;
 	struct scoutfs_xattr_prefix_tags tgs;
+	const u64 ino = scoutfs_ino(inode);
+	struct scoutfs_timespec ts = {0,};
 	struct scoutfs_xattr *xat = NULL;
 	struct scoutfs_lock *lck = NULL;
-	struct scoutfs_lock *totl_lock = NULL;
 	size_t name_len = strlen(name);
 	struct scoutfs_key totl_key;
 	struct scoutfs_key key;
 	bool undo_srch = false;
 	bool undo_totl = false;
 	LIST_HEAD(ind_locks);
-	u8 found_parts;
-	unsigned int bytes;
 	unsigned int val_len;
+	unsigned int bytes;
+	u64 worm_bits = 0;
+	u8 found_parts;
 	u64 ind_seq;
 	u64 total;
 	u64 hash = 0;
@@ -620,14 +705,30 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 	if (unknown_prefix(name))
 		return -EOPNOTSUPP;
 
-	if (scoutfs_xattr_parse_tags(name, name_len, &tgs) != 0)
+	if (scoutfs_xattr_parse_tags(sb, name, name_len, &tgs) != 0)
 		return -EINVAL;
 
-	if ((tgs.hide | tgs.srch | tgs.totl) && !capable(CAP_SYS_ADMIN))
+	if ((tgs.hide | tgs.srch | tgs.totl | tgs.worm) && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
+
+	if (tgs.worm && !tgs.hide)
+		return -EINVAL;
 
 	if (tgs.totl && ((ret = parse_totl_key(&totl_key, name, name_len)) != 0))
 		return ret;
+
+	if (tgs.worm) {
+		ret = parse_worm_name(name);
+		if (ret != 0) {
+			return -EINVAL;
+		}
+		if (value) {
+			ret = parse_worm_timespec(&ts, value, size);
+			if (ret < 0)
+				return ret;
+			worm_bits = SCOUTFS_WORM_V1_BIT;
+		}
+	}
 
 	bytes = sizeof(struct scoutfs_xattr) + name_len + size;
 	/* alloc enough to read old totl value */
@@ -643,6 +744,11 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 		goto out;
 
 	down_write(&si->xattr_rwsem);
+
+	if (!S_ISREG(inode->i_mode) && tgs.worm) {
+		ret = -EINVAL;
+		goto unlock;
+	}
 
 	/* find an existing xattr to delete, including possible totl value */
 	ret = get_next_xattr(inode, &key, xat,
@@ -663,6 +769,11 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 	/* not an error to delete something that doesn't exist */
 	if (ret == -ENOENT && !value) {
 		ret = 0;
+		goto unlock;
+	}
+
+	if (scoutfs_inode_worm_denied(inode)) {
+		ret = -EACCES;
 		goto unlock;
 	}
 
@@ -751,6 +862,9 @@ retry:
 		ret = create_xattr_items(inode, id, xat, bytes, lck);
 	if (ret < 0)
 		goto release;
+
+	if (tgs.worm)
+		scoutfs_inode_set_worm(si, cpu_to_le64(worm_bits), &ts);
 
 	/* XXX do these want i_mutex or anything? */
 	inode_inc_iversion(inode);
@@ -842,7 +956,7 @@ ssize_t scoutfs_list_xattrs(struct inode *inode, char *buffer,
 			break;
 		}
 
-		is_hidden = scoutfs_xattr_parse_tags(xat->name, xat->name_len,
+		is_hidden = scoutfs_xattr_parse_tags(sb, xat->name, xat->name_len,
 						     &tgs) == 0 && tgs.hide;
 
 		if (show_hidden == is_hidden) {
@@ -938,8 +1052,7 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 		}
 
 		if (key.skx_part != 0 ||
-		    scoutfs_xattr_parse_tags(xat->name, xat->name_len,
-					     &tgs) != 0)
+		    scoutfs_xattr_parse_tags(sb, xat->name, xat->name_len, &tgs) != 0)
 			memset(&tgs, 0, sizeof(tgs));
 
 		if (tgs.totl) {
