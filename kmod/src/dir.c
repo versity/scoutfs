@@ -1029,6 +1029,11 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 		goto unlock;
 	}
 
+	if (scoutfs_inode_worm_denied(inode)) {
+		ret = -EACCES;
+		goto unlock;
+	}
+
 	if (should_orphan(inode)) {
 		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(inode),
 					  &orph_lock);
@@ -1691,6 +1696,12 @@ static int scoutfs_rename_common(struct inode *old_dir,
 
 	if ((flags & RENAME_NOREPLACE) && (new_inode != NULL)) {
 		ret = -EEXIST;
+		goto out_unlock;
+	}
+
+	if ((old_inode && scoutfs_inode_worm_denied(old_inode)) ||
+	    (new_inode && scoutfs_inode_worm_denied(new_inode))) {
+		ret = -EACCES;
 		goto out_unlock;
 	}
 

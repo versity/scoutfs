@@ -17,11 +17,12 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 struct scoutfs_xattr_prefix_tags {
 	unsigned long hide:1,
 		      srch:1,
-		      totl:1;
+		      totl:1,
+		      worm:1;
 };
 
-int scoutfs_xattr_parse_tags(const char *name, unsigned int name_len,
-			     struct scoutfs_xattr_prefix_tags *tgs);
+int scoutfs_xattr_parse_tags(struct super_block *sb, const char *name,
+			     unsigned int name_len, struct scoutfs_xattr_prefix_tags *tgs);
 
 void scoutfs_xattr_init_totl_key(struct scoutfs_key *key, u64 *name);
 int scoutfs_xattr_combine_totl(void *dst, int dst_len, void *src, int src_len);
