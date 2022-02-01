@@ -262,7 +262,10 @@ static int do_mkfs(struct mkfs_args *args)
 	inode.ctime.nsec = inode.atime.nsec;
 	inode.mtime.sec = inode.atime.sec;
 	inode.mtime.nsec = inode.atime.nsec;
-	btree_append_item(bt, &key, &inode, sizeof(inode));
+	if (args->fmt_vers == 1)
+		btree_append_item(bt, &key, &inode, SCOUTFS_INODE_FMT_V1_BYTES);
+	else
+		btree_append_item(bt, &key, &inode, SCOUTFS_INODE_FMT_V2_BYTES);
 
 	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, 1, blkno,
 			  SCOUTFS_BLOCK_LG_SHIFT, &bt->hdr);

@@ -856,7 +856,11 @@ struct scoutfs_inode {
 	struct scoutfs_timespec ctime;
 	struct scoutfs_timespec mtime;
 	struct scoutfs_timespec crtime;
+	struct scoutfs_timespec worm_level1_expire;
 };
+
+#define SCOUTFS_INODE_FMT_V1_BYTES offsetof(struct scoutfs_inode, worm_level1_expire)
+#define SCOUTFS_INODE_FMT_V2_BYTES sizeof(struct scoutfs_inode)
 
 #define SCOUTFS_INO_FLAG_TRUNCATE 0x1
 

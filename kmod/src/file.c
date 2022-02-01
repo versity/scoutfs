@@ -107,6 +107,11 @@ retry:
 	if (ret)
 		goto out;
 
+	if (scoutfs_inode_worm_denied(inode)) {
+		ret = -EACCES;
+		goto out;
+	}
+
 	ret = scoutfs_complete_truncate(inode, inode_lock);
 	if (ret)
 		goto out;

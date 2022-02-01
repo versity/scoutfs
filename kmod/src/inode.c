@@ -84,6 +84,7 @@ static void scoutfs_inode_ctor(void *obj)
 {
 	struct scoutfs_inode_info *si = obj;
 
+	seqlock_init(&si->seqlock);
 	init_rwsem(&si->extent_sem);
 	mutex_init(&si->item_mutex);
 	seqcount_init(&si->seqcount);
@@ -213,6 +214,30 @@ static u64 get_item_minor(struct scoutfs_inode_info *si, u8 type)
 	return si->item_minors[ind];
 }
 
+void scoutfs_inode_get_worm(struct inode *inode, struct timespec *ts)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned int seq;
+
+	do {
+		seq = read_seqbegin(&si->seqlock);
+		*ts = si->worm_expire;
+	} while (read_seqretry(&si->seqlock, seq));
+}
+
+void scoutfs_inode_set_worm(struct inode *inode, u64 expire_sec, u32 expire_nsec)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	/* we don't deal with native timespec truncating our 64bit .sec */
+	BUILD_BUG_ON(sizeof(si->worm_expire.tv_sec) != sizeof(expire_sec));
+
+	write_seqlock(&si->seqlock);
+	si->worm_expire.tv_sec = expire_sec;
+	si->worm_expire.tv_nsec = expire_nsec;
+	write_sequnlock(&si->seqlock);
+}
+
 /*
  * The caller has ensured that the fields in the incoming scoutfs inode
  * reflect both the inode item and the inode index items.  This happens
@@ -233,7 +258,7 @@ static void set_item_info(struct scoutfs_inode_info *si,
 	set_item_major(si, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE, sinode->data_seq);
 }
 
-static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
+static void load_inode(struct inode *inode, struct scoutfs_inode *cinode, int inode_bytes)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
@@ -262,6 +287,12 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	si->crtime.tv_sec = le64_to_cpu(cinode->crtime.sec);
 	si->crtime.tv_nsec = le32_to_cpu(cinode->crtime.nsec);
 
+	if (inode_bytes == SCOUTFS_INODE_FMT_V2_BYTES)
+		scoutfs_inode_set_worm(inode, le64_to_cpu(cinode->worm_level1_expire.sec),
+				       le32_to_cpu(cinode->worm_level1_expire.nsec));
+	else
+		scoutfs_inode_set_worm(inode, 0, 0);
+
 	/*
 	 * i_blocks is initialized from online and offline and is then
 	 * maintained as blocks come and go.
@@ -270,6 +301,36 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 				<< SCOUTFS_BLOCK_SM_SECTOR_SHIFT;
 
 	set_item_info(si, cinode);
+}
+
+/* Returns the max inode size given format version */
+static int max_inode_fmt_ver_bytes(struct super_block *sb)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	int ret = 0;
+
+	if (sbi->fmt_vers == 1)
+		ret = SCOUTFS_INODE_FMT_V1_BYTES;
+	else if (sbi->fmt_vers == 2)
+		ret = SCOUTFS_INODE_FMT_V2_BYTES;
+
+	return ret;
+}
+
+/* Returns if inode bytes is valid for our format version */
+static bool valid_inode_fmt_ver_bytes(struct super_block *sb, int bytes)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	int ver;
+
+	if (bytes == SCOUTFS_INODE_FMT_V1_BYTES)
+		ver = 1;
+	else if (bytes == SCOUTFS_INODE_FMT_V2_BYTES)
+		ver = 2;
+	else
+		ver = 0;
+
+	return ver > 0 && ver <= sbi->fmt_vers;
 }
 
 void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
@@ -281,12 +342,6 @@ void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 	};
 }
 
-/* Returns the max inode size given format version */
-static int max_inode_fmt_ver_bytes(struct super_block *sb)
-{
-	return sizeof(struct scoutfs_inode);
-}
-
 /*
  * Read an inode item into the caller's buffer and return the size that
  * we read.   Returns errors if the inode size is unsupported or doesn't
@@ -295,11 +350,10 @@ static int max_inode_fmt_ver_bytes(struct super_block *sb)
 static int lookup_inode_item(struct super_block *sb, struct scoutfs_key *key,
 			     struct scoutfs_inode *sinode, struct scoutfs_lock *lock)
 {
-	int inode_bytes = max_inode_fmt_ver_bytes(sb);
 	int ret;
 
 	ret = scoutfs_item_lookup_within(sb, key, sinode, sizeof(struct scoutfs_inode), lock);
-	if (ret >= 0 && ret != inode_bytes)
+	if (ret >= 0 && !valid_inode_fmt_ver_bytes(sb, ret))
 		return -EIO;
 
 	return ret;
@@ -478,6 +532,11 @@ retry:
 	ret = inode_change_ok(inode, attr);
 	if (ret)
 		goto out;
+
+	if (scoutfs_inode_worm_denied(inode)) {
+		ret = -EACCES;
+		goto out;
+	}
 
 	attr_size = (attr->ia_valid & ATTR_SIZE) ? attr->ia_size :
 		i_size_read(inode);
@@ -791,9 +850,10 @@ out:
 	return inode;
 }
 
-static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
+static void store_inode(struct scoutfs_inode *cinode, struct inode *inode, int inode_bytes)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct timespec ts;
 	u64 online_blocks;
 	u64 offline_blocks;
 
@@ -827,6 +887,15 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	cinode->crtime.sec = cpu_to_le64(si->crtime.tv_sec);
 	cinode->crtime.nsec = cpu_to_le32(si->crtime.tv_nsec);
 	memset(cinode->crtime.__pad, 0, sizeof(cinode->crtime.__pad));
+
+	if (inode_bytes == SCOUTFS_INODE_FMT_V2_BYTES) {
+		scoutfs_inode_get_worm(inode, &ts);
+
+		cinode->worm_level1_expire.sec = cpu_to_le64(ts.tv_sec);
+		cinode->worm_level1_expire.nsec = cpu_to_le32(ts.tv_nsec);
+		memset(cinode->worm_level1_expire.__pad, 0,
+		       sizeof(cinode->worm_level1_expire.__pad));
+	}
 }
 
 /*
@@ -1475,6 +1544,8 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	si->drop_invalidated = false;
 	si->flags = 0;
 
+	scoutfs_inode_set_worm(inode, 0, 0);
+
 	scoutfs_inode_set_meta_seq(inode);
 	scoutfs_inode_set_data_seq(inode);
 
@@ -2099,6 +2170,25 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 out:
 
 	return ret;
+}
+
+/*
+ * Return true if the inode is protected by worm and the current time is
+ * before the expiration time.
+ */
+bool scoutfs_inode_worm_denied(struct inode *inode)
+{
+	struct timespec expire;
+	struct timespec cur;
+
+	scoutfs_inode_get_worm(inode, &expire);
+	if (expire.tv_sec != 0 || expire.tv_nsec != 0) {
+		cur = CURRENT_TIME;
+		if (timespec64_compare(&cur, &expire) < 0)
+			return true;
+	}
+
+	return false;
 }
 
 int scoutfs_inode_setup(struct super_block *sb)

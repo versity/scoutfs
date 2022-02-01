@@ -69,6 +69,12 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 	       le32_to_cpu(inode->ctime.nsec),
 	       le64_to_cpu(inode->mtime.sec),
 	       le32_to_cpu(inode->mtime.nsec));
+
+	if (val_len == SCOUTFS_INODE_FMT_V2_BYTES) {
+		printf("      worm_level1_expire %llu.%08u\n",
+		       le64_to_cpu(inode->worm_level1_expire.sec),
+		       le32_to_cpu(inode->worm_level1_expire.nsec));
+	}
 }
 
 static void print_orphan(struct scoutfs_key *key, void *val, int val_len)
