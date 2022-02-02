@@ -2455,15 +2455,14 @@ static int server_commit_log_merge(struct super_block *sb,
 	}
 
 	/* find the completion's original saved request */
-	ret = next_log_merge_item(sb, &super->log_merge,
-				  SCOUTFS_LOG_MERGE_REQUEST_ZONE,
-				  rid, le64_to_cpu(comp->seq),
-				  &orig_req, sizeof(orig_req));
-	if (WARN_ON_ONCE(ret == 0 && (comp->rid != orig_req.rid ||
-				      comp->seq != orig_req.seq)))
-		ret = -ENOENT; /* inconsistency */
+	ret = next_log_merge_item(sb, &super->log_merge, SCOUTFS_LOG_MERGE_REQUEST_ZONE,
+				  rid, le64_to_cpu(comp->seq), &orig_req, sizeof(orig_req));
+	if (ret == 0 && (comp->rid != orig_req.rid || comp->seq != orig_req.seq))
+		ret = -ENOENT;
 	if (ret < 0) {
-		err_str = "finding orig request";
+		/* ENOENT is expected for resent processed completion */
+		if (ret != -ENOENT)
+			err_str = "finding orig request";
 		goto out;
 	}
 
@@ -2533,7 +2532,7 @@ static int server_commit_log_merge(struct super_block *sb,
 out:
 	mutex_unlock(&server->logs_mutex);
 
-	if (ret < 0)
+	if (ret < 0 && err_str)
 		scoutfs_err(sb, "error %d committing log merge: %s", ret, err_str);
 
 	err = scoutfs_server_apply_commit(sb, ret);
