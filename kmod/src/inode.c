@@ -330,6 +330,22 @@ static int max_inode_fmt_ver_bytes(struct super_block *sb)
 	return ret;
 }
 
+/* Returns if inode bytes is valid for our format version */
+static bool valid_inode_fmt_ver_bytes(struct super_block *sb, int bytes)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	int ver;
+
+	if (bytes == SCOUTFS_INODE_FMT_V1_BYTES)
+		ver = 1;
+	else if (bytes == SCOUTFS_INODE_FMT_V2_BYTES)
+		ver = 2;
+	else
+		ver = 0;
+
+	return ver > 0 && ver <= sbi->fmt_vers;
+}
+
 void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 {
 	*key = (struct scoutfs_key) {
@@ -343,13 +359,12 @@ static int lookup_inode_item(struct super_block *sb, struct scoutfs_key *key,
 			     struct scoutfs_lock *lock,
 			     struct scoutfs_inode_payload_wrapper *inode_payload)
 {
-	int inode_bytes = max_inode_fmt_ver_bytes(sb);
 	int ret;
 
 	ret = scoutfs_item_lookup(sb, key, &inode_payload->sinode,
 				  sizeof(struct scoutfs_inode_payload_wrapper), lock);
 
-	if (ret >= 0 && ret != inode_bytes)
+	if (ret >= 0 && !valid_inode_fmt_ver_bytes(sb, ret))
 		return -EIO;
 
 	return ret;
