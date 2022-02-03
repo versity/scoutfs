@@ -147,6 +147,10 @@ t_filter_dmesg()
 	# ignore systemd-journal rotating
 	re="$re|systemd-journald.*"
 
+	# format vers back/compat tries bad mounts
+	re="$re|scoutfs .* error.*outside of supported version.*"
+	re="$re|scoutfs .* error.*could not get .*super.*"
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob
 }

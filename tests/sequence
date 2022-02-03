@@ -13,6 +13,7 @@ setattr_more.sh
 offline-extent-waiting.sh
 move-blocks.sh
 large-fragmented-free.sh
+format-version-forward-back.sh
 enospc.sh
 srch-safe-merge-pos.sh
 srch-basic-functionality.sh
