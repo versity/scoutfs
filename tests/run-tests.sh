@@ -352,7 +352,8 @@ if [ -n "$T_INSMOD" ]; then
 	msg "removing and reinserting scoutfs module"
 	test -e /sys/module/scoutfs && cmd rmmod scoutfs
 	cmd modprobe libcrc32c
-	cmd insmod "$T_KMOD/src/scoutfs.ko"
+	T_MODULE="$T_KMOD/src/scoutfs.ko"
+	cmd insmod "$T_MODULE"
 fi
 
 if [ -n "$T_TRACE_MULT" ]; then
