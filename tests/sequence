@@ -7,6 +7,7 @@ simple-release-extents.sh
 setattr_more.sh
 offline-extent-waiting.sh
 move-blocks.sh
+format-version-forward-back.sh
 enospc.sh
 srch-basic-functionality.sh
 simple-xattr-unit.sh
