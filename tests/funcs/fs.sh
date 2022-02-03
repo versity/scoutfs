@@ -29,13 +29,12 @@ t_mount_rid()
 }
 
 #
-# Output the "f.$fsid.r.$rid" identifier string for the given mount
-# number, 0 is used by default if none is specified. 
+# Output the "f.$fsid.r.$rid" identifier string for the given path
+# in a mounted scoutfs volume.
 #
-t_ident()
+t_ident_from_mnt()
 {
-	local nr="${1:-0}"
-	local mnt="$(eval echo \$T_M$nr)"
+	local mnt="$1"
 	local fsid
 	local rid
 
@@ -46,6 +45,38 @@ t_ident()
 }
 
 #
+# Output the "f.$fsid.r.$rid" identifier string for the given mount
+# number, 0 is used by default if none is specified.
+#
+t_ident()
+{
+	local nr="${1:-0}"
+	local mnt="$(eval echo \$T_M$nr)"
+
+	t_ident_from_mnt "$mnt"
+}
+
+#
+# Output the sysfs path for a path in a mounted fs.
+#
+t_sysfs_path_from_ident()
+{
+	local ident="$1"
+
+	echo "/sys/fs/scoutfs/$ident"
+}
+
+#
+# Output the sysfs path for a path in a mounted fs.
+#
+t_sysfs_path_from_mnt()
+{
+	local mnt="$1"
+
+	t_sysfs_path_from_ident $(t_ident_from_mnt $mnt)
+}
+
+#
 # Output the mount's sysfs path, defaulting to mount 0 if none is
 # specified.
 #
@@ -53,7 +84,7 @@ t_sysfs_path()
 {
 	local nr="$1"
 
-	echo "/sys/fs/scoutfs/$(t_ident $nr)"
+	t_sysfs_path_from_ident $(t_ident $nr)
 }
 
 #
