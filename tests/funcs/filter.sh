@@ -79,5 +79,9 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error .*reading quorum block.*to update event.*"
 	re="$re|scoutfs .* error.*server failed to bind to.*"
 
+	# format vers back/compat tries bad mounts
+	re="$re|scoutfs .* error.*outside of supported version.*"
+	re="$re|scoutfs .* error.*could not get .*super.*"
+
 	egrep -v "($re)" 
 }
