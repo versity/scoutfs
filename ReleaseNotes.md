@@ -2,9 +2,9 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
-v1.x
+v1.1
 \
-*TBD*
+*Feb 4, 2022*
 
 
 * **Add scoutfs(1) change-quorum-config command**
