@@ -2,6 +2,11 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.2-rc
+\
+*TBD*
+
+---
 v1.1
 \
 *Feb 4, 2022*
