@@ -15,7 +15,7 @@ environment variable. If that variable is also absent the current working
 directory will be used.
 
 .TP
-.BI "change-format-version [-V, --format-version VERS] [-F|--offline META-DEVICE DATA-DEVICE]"
+.BI "change-format-version [-V, --format-version VERS] [-F|--offline] META-DEVICE DATA-DEVICE"
 .sp
 Change the format version of an existing file system.  The maxmimum
 supported version is used by default.   A specific version in the range
@@ -25,7 +25,7 @@ output of --help.
 .PD 0
 .TP
 .sp
-.B "-F, --offline META-DEVICE DATA-DEVICE"
+.B "-F, --offline"
 Change the format version by writing directly to the metadata and data
 devices.   Like mkfs, this writes directly to the devices without
 protection and must only be used on completely unmounted devices.   The
@@ -43,7 +43,7 @@ the super blocks on both devices.
 .PD
 
 .TP
-.BI "change-quorum-config {-Q|--quorum-slot} NR,ADDR,PORT [-F|--offline META-DEVICE DATA-DEVICE]"
+.BI "change-quorum-config {-Q|--quorum-slot NR,ADDR,PORT} [-F|--offline] META-DEVICE"
 .sp
 Change the quorum configuration for an existing file system.  The new
 configuration completely replaces the old configuration.   Any slots
@@ -61,7 +61,7 @@ multiple arguments as described in the
 .B mkfs
 command.
 .TP
-.B "-F, --offline META-DEVICE"
+.B "-F, --offline"
 Perform the change offline by updating the superblock in the metadata
 device.   The command will read the super block and refuse to make the
 change if it sees any evidence that the metadata device is currently in

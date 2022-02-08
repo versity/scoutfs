@@ -147,7 +147,7 @@ static struct argp_option options[] = {
 static struct argp argp = {
 	options,
 	parse_opt,
-	"",
+	"META-DEVICE",
 	"Change quorum slots and addresses of an existing ScoutFS filesystem"
 };
 
