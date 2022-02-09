@@ -222,7 +222,7 @@ static struct argp_option options[] = {
 static struct argp argp = {
 	options,
 	parse_opt,
-	"",
+	"META-DEVICE DATA-DEVICE",
 	"Change format version of an existing ScoutFS filesystem"
 };
 
