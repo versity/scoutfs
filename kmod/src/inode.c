@@ -1751,8 +1751,8 @@ static void schedule_orphan_dwork(struct inode_sb_info *inf)
 {
 #define ORPHAN_SCAN_MIN_MS (10 * MSEC_PER_SEC)
 #define ORPHAN_SCAN_JITTER_MS (40 * MSEC_PER_SEC)
-	unsigned long delay = msecs_to_jiffies(ORPHAN_SCAN_MIN_MS +
-					       prandom_u32_max(ORPHAN_SCAN_JITTER_MS));
+	unsigned long delay;
+
 	if (!inf->stopped) {
 		delay = msecs_to_jiffies(ORPHAN_SCAN_MIN_MS +
 					 prandom_u32_max(ORPHAN_SCAN_JITTER_MS));
