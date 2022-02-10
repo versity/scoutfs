@@ -83,7 +83,7 @@ t_fs_nrs()
 t_server_nr()
 {
 	for i in $(t_fs_nrs); do
-		if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader)" == "1" ]; then
+		if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader 2>&1)" == "1" ]; then
 			echo $i
 			return
 		fi
@@ -101,7 +101,7 @@ t_server_nr()
 t_first_client_nr()
 {
 	for i in $(t_fs_nrs); do
-		if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader)" == "0" ]; then
+		if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader 2>&1)" == "0" ]; then
 			echo $i
 			return
 		fi
