@@ -1850,8 +1850,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		}
 
 		/* get an omap that covers the orphaned ino */
-		group_nr = ino >> SCOUTFS_OPEN_INO_MAP_SHIFT;
-		bit_nr = ino & SCOUTFS_OPEN_INO_MAP_MASK;
+		scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 		if (le64_to_cpu(omap.args.group_nr) != group_nr) {
 			ret = scoutfs_client_open_ino_map(sb, group_nr, &omap);

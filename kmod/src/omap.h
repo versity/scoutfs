@@ -8,6 +8,7 @@ int scoutfs_omap_should_delete(struct super_block *sb, struct inode *inode,
 void scoutfs_omap_free_lock_data(struct scoutfs_omap_lock_data *ldata);
 int scoutfs_omap_client_handle_request(struct super_block *sb, u64 id,
 				       struct scoutfs_open_ino_map_args *args);
+void scoutfs_omap_calc_group_nrs(u64 ino, u64 *group_nr, int *bit_nr);
 
 int scoutfs_omap_add_rid(struct super_block *sb, u64 rid);
 int scoutfs_omap_remove_rid(struct super_block *sb, u64 rid);

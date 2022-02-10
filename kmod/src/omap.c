@@ -232,7 +232,7 @@ static void free_rids(struct omap_rid_list *list)
 	}
 }
 
-static void calc_group_nrs(u64 ino, u64 *group_nr, int *bit_nr)
+void scoutfs_omap_calc_group_nrs(u64 ino, u64 *group_nr, int *bit_nr)
 {
 	*group_nr = ino >> SCOUTFS_OPEN_INO_MAP_SHIFT;
 	*bit_nr = ino & SCOUTFS_OPEN_INO_MAP_MASK;
@@ -298,7 +298,7 @@ int scoutfs_omap_inc(struct super_block *sb, u64 ino)
 	bool found;
 	int ret = 0;
 
-	calc_group_nrs(ino, &group_nr, &bit_nr);
+	scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 retry:
 	found = false;
@@ -354,7 +354,7 @@ void scoutfs_omap_dec(struct super_block *sb, u64 ino)
 	u64 group_nr;
 	int bit_nr;
 
-	calc_group_nrs(ino, &group_nr, &bit_nr);
+	scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 	rcu_read_lock();
 	group = rhashtable_lookup(&ominf->group_ht, &group_nr, group_ht_params);
@@ -950,7 +950,7 @@ int scoutfs_omap_should_delete(struct super_block *sb, struct inode *inode,
 		goto out;
 	}
 
-	calc_group_nrs(ino, &group_nr, &bit_nr);
+	scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 	/* only one request to refresh the map at a time */
 	ret = get_current_lock_data(sb, lock, &ldata, group_nr);
