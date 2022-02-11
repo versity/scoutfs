@@ -6,8 +6,10 @@
 #include "format.h"
 
 struct scoutfs_mount_options {
-	int quorum_slot_nr;
 	char *metadev_path;
+	unsigned int orphan_scan_delay_ms;
+	int quorum_slot_nr;
+
 };
 
 void scoutfs_options_read(struct super_block *sb, struct scoutfs_mount_options *opts);

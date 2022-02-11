@@ -126,6 +126,7 @@ int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
 
 int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
 int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
+void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb);
 
 void scoutfs_inode_queue_writeback(struct inode *inode);
 int scoutfs_inode_walk_writeback(struct super_block *sb, bool write);

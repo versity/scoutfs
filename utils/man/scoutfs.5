@@ -21,6 +21,21 @@ contains the filesystem's metadata.
 .sp
 This option is required.
 .TP
+.B orphan_scan_delay_ms=<number>
+This option sets the average expected delay, in milliseconds, between
+each mount's scan of the global orphaned inode list.  Jitter is added to
+avoid contention so each individual delay between scans is a random
+value up to 20% less than or greater than this average expected delay.
+.sp
+The minimum value for this option is 100ms which is very short and is
+only reasonable for testing or experiments.   The default is 10000ms (10
+seconds) and the maximum is 60000ms (1 minute).
+.sp
+This option can be changed in an active mount by writing to its file in
+the options directory in the mount's sysfs directory.  Writing a new
+value will cause the next pending orphan scan to be rescheduled
+with the newly written delay time.
+.TP
 .B quorum_slot_nr=<number>
 The quorum_slot_nr option assigns a quorum member slot to the mount.
 The mount will use the slot assignment to claim exclusive ownership of

@@ -1745,18 +1745,26 @@ void scoutfs_inode_queue_iput(struct inode *inode)
 /*
  * All mounts are performing this work concurrently.  We introduce
  * significant jitter between them to try and keep them from all
- * bunching up and working on the same inodes.
+ * bunching up and working on the same inodes.  We always try to delay
+ * for at least one jiffy if precision tricks us into calculating no
+ * delay.
  */
-static void schedule_orphan_dwork(struct inode_sb_info *inf)
+void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb)
 {
-#define ORPHAN_SCAN_MIN_MS (10 * MSEC_PER_SEC)
-#define ORPHAN_SCAN_JITTER_MS (40 * MSEC_PER_SEC)
+	DECLARE_INODE_SB_INFO(sb, inf);
+	struct scoutfs_mount_options opts;
+	unsigned long low;
+	unsigned long high;
 	unsigned long delay;
 
 	if (!inf->stopped) {
-		delay = msecs_to_jiffies(ORPHAN_SCAN_MIN_MS +
-					 prandom_u32_max(ORPHAN_SCAN_JITTER_MS));
-		schedule_delayed_work(&inf->orphan_scan_dwork, delay);
+		scoutfs_options_read(sb, &opts);
+
+		low = (opts.orphan_scan_delay_ms * 80) / 100;
+		high = (opts.orphan_scan_delay_ms * 120) / 100;
+		delay = msecs_to_jiffies(low + prandom_u32_max(high - low)) ?: 1;
+
+		mod_delayed_work(system_wq, &inf->orphan_scan_dwork, delay);
 	}
 }
 
@@ -1885,7 +1893,7 @@ out:
 	if (ret < 0)
 		scoutfs_inc_counter(sb, orphan_scan_error);
 
-	schedule_orphan_dwork(inf);
+	scoutfs_inode_schedule_orphan_dwork(sb);
 }
 
 /*
@@ -2010,9 +2018,7 @@ int scoutfs_inode_setup(struct super_block *sb)
  */
 void scoutfs_inode_start(struct super_block *sb)
 {
-	DECLARE_INODE_SB_INFO(sb, inf);
-
-	schedule_orphan_dwork(inf);
+	scoutfs_inode_schedule_orphan_dwork(sb);
 }
 
 /*

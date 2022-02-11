@@ -26,16 +26,19 @@
 #include "msg.h"
 #include "options.h"
 #include "super.h"
+#include "inode.h"
 
 enum {
-	Opt_quorum_slot_nr,
 	Opt_metadev_path,
+	Opt_orphan_scan_delay_ms,
+	Opt_quorum_slot_nr,
 	Opt_err,
 };
 
 static const match_table_t tokens = {
-	{Opt_quorum_slot_nr, "quorum_slot_nr=%s"},
 	{Opt_metadev_path, "metadev_path=%s"},
+	{Opt_orphan_scan_delay_ms, "orphan_scan_delay_ms=%s"},
+	{Opt_quorum_slot_nr, "quorum_slot_nr=%s"},
 	{Opt_err, NULL}
 };
 
@@ -99,10 +102,15 @@ static void free_options(struct scoutfs_mount_options *opts)
 	kfree(opts->metadev_path);
 }
 
+#define MIN_ORPHAN_SCAN_DELAY_MS	100UL
+#define DEFAULT_ORPHAN_SCAN_DELAY_MS	(10 * MSEC_PER_SEC)
+#define MAX_ORPHAN_SCAN_DELAY_MS	(60 * MSEC_PER_SEC)
+
 static void init_default_options(struct scoutfs_mount_options *opts)
 {
 	memset(opts, 0, sizeof(*opts));
 	opts->quorum_slot_nr = -1;
+	opts->orphan_scan_delay_ms = DEFAULT_ORPHAN_SCAN_DELAY_MS;
 }
 
 /*
@@ -126,6 +134,30 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 		token = match_token(p, tokens, args);
 		switch (token) {
 
+		case Opt_metadev_path:
+			ret = parse_bdev_path(sb, &args[0], &opts->metadev_path);
+			if (ret < 0)
+				return ret;
+			break;
+
+		case Opt_orphan_scan_delay_ms:
+			if (opts->orphan_scan_delay_ms != -1) {
+				scoutfs_err(sb, "multiple orphan_scan_delay_ms options provided, only provide one.");
+				return -EINVAL;
+			}
+
+			ret = match_int(args, &nr);
+			if (ret < 0 ||
+			    nr < MIN_ORPHAN_SCAN_DELAY_MS || nr > MAX_ORPHAN_SCAN_DELAY_MS) {
+				scoutfs_err(sb, "invalid orphan_scan_delay_ms option, must be between %lu and %lu",
+					    MIN_ORPHAN_SCAN_DELAY_MS, MAX_ORPHAN_SCAN_DELAY_MS);
+				if (ret == 0)
+					ret = -EINVAL;
+				return ret;
+			}
+			opts->orphan_scan_delay_ms = nr;
+			break;
+
 		case Opt_quorum_slot_nr:
 			if (opts->quorum_slot_nr != -1) {
 				scoutfs_err(sb, "multiple quorum_slot_nr options provided, only provide one.");
@@ -141,12 +173,6 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 				return ret;
 			}
 			opts->quorum_slot_nr = nr;
-			break;
-
-		case Opt_metadev_path:
-			ret = parse_bdev_path(sb, &args[0], &opts->metadev_path);
-			if (ret < 0)
-				return ret;
 			break;
 
 		default:
@@ -227,9 +253,10 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 
 	scoutfs_options_read(sb, &opts);
 
+	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
+	seq_printf(seq, ",orphan_scan_delay_ms=%u", opts.orphan_scan_delay_ms);
 	if (opts.quorum_slot_nr >= 0)
 		seq_printf(seq, ",quorum_slot_nr=%d", opts.quorum_slot_nr);
-	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
 
 	return 0;
 }
@@ -245,6 +272,47 @@ static ssize_t metadev_path_show(struct kobject *kobj, struct kobj_attribute *at
 }
 SCOUTFS_ATTR_RO(metadev_path);
 
+static ssize_t orphan_scan_delay_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
+					 char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%u", opts.orphan_scan_delay_ms);
+}
+static ssize_t orphan_scan_delay_ms_store(struct kobject *kobj, struct kobj_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[20]; /* more than enough for octal -U32_MAX */
+	long val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtol(nullterm, 0, &val);
+	if (ret < 0 || val < MIN_ORPHAN_SCAN_DELAY_MS || val > MAX_ORPHAN_SCAN_DELAY_MS) {
+		scoutfs_err(sb, "invalid orphan_scan_delay_ms value written to options sysfs file, must be between %lu and %lu",
+			    MIN_ORPHAN_SCAN_DELAY_MS, MAX_ORPHAN_SCAN_DELAY_MS);
+		return -EINVAL;
+	}
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.orphan_scan_delay_ms = val;
+	write_sequnlock(&optinf->seqlock);
+
+	scoutfs_inode_schedule_orphan_dwork(sb);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(orphan_scan_delay_ms);
+
 static ssize_t quorum_slot_nr_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
@@ -258,6 +326,7 @@ SCOUTFS_ATTR_RO(quorum_slot_nr);
 
 static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(metadev_path),
+	SCOUTFS_ATTR_PTR(orphan_scan_delay_ms),
 	SCOUTFS_ATTR_PTR(quorum_slot_nr),
 	NULL,
 };
