@@ -395,12 +395,13 @@ int scoutfs_fence_wait_fenced(struct super_block *sb, long timeout_jiffies)
 int scoutfs_fence_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct mount_options *opts = &sbi->opts;
+	struct scoutfs_mount_options opts;
 	struct fence_info *fi;
 	int ret;
 
 	/* can only fence if we can be elected by quorum */
-	if (opts->quorum_slot_nr == -1) {
+	scoutfs_options_read(sb, &opts);
+	if (opts.quorum_slot_nr == -1) {
 		ret = 0;
 		goto out;
 	}

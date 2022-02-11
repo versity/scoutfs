@@ -477,11 +477,14 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	struct super_block *sb = client->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
-	struct mount_options *opts = &sbi->opts;
-	const bool am_quorum = opts->quorum_slot_nr >= 0;
+	struct scoutfs_mount_options opts;
 	struct scoutfs_net_greeting greet;
 	struct sockaddr_in sin;
+	bool am_quorum;
 	int ret;
+
+	scoutfs_options_read(sb, &opts);
+	am_quorum = opts.quorum_slot_nr >= 0;
 
 	/* can unmount once server farewell handling removes our item */
 	if (client->sending_farewell &&

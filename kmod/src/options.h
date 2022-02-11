@@ -5,23 +5,17 @@
 #include <linux/in.h>
 #include "format.h"
 
-enum scoutfs_mount_options {
-	Opt_quorum_slot_nr,
-	Opt_metadev_path,
-	Opt_err,
-};
-
-struct mount_options {
+struct scoutfs_mount_options {
 	int quorum_slot_nr;
 	char *metadev_path;
 };
 
-int scoutfs_parse_options(struct super_block *sb, char *options,
-			  struct mount_options *parsed);
-int scoutfs_options_setup(struct super_block *sb);
-void scoutfs_options_destroy(struct super_block *sb);
+void scoutfs_options_read(struct super_block *sb, struct scoutfs_mount_options *opts);
+int scoutfs_options_show(struct seq_file *seq, struct dentry *root);
 
-u32 scoutfs_option_u32(struct super_block *sb, int token);
-#define scoutfs_option_bool scoutfs_option_u32
+int scoutfs_options_early_setup(struct super_block *sb, char *options);
+int scoutfs_options_setup(struct super_block *sb);
+void scoutfs_options_stop(struct super_block *sb);
+void scoutfs_options_destroy(struct super_block *sb);
 
 #endif	/* _SCOUTFS_OPTIONS_H_ */

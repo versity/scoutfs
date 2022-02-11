@@ -3842,8 +3842,8 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct super_block *sb = server->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_super_block *super = &sbi->super;
-	struct mount_options *opts = &sbi->opts;
 	struct scoutfs_net_connection *conn = NULL;
+	struct scoutfs_mount_options opts;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
 	struct sockaddr_in sin;
 	bool alloc_init = false;
@@ -3852,7 +3852,8 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
-	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
+	scoutfs_options_read(sb, &opts);
+	scoutfs_quorum_slot_sin(super, opts.quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
 
 	scoutfs_block_writer_init(sb, &server->wri);

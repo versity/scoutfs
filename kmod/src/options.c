@@ -27,21 +27,26 @@
 #include "options.h"
 #include "super.h"
 
+enum {
+	Opt_quorum_slot_nr,
+	Opt_metadev_path,
+	Opt_err,
+};
+
 static const match_table_t tokens = {
 	{Opt_quorum_slot_nr, "quorum_slot_nr=%s"},
 	{Opt_metadev_path, "metadev_path=%s"},
 	{Opt_err, NULL}
 };
 
-struct options_sb_info {
-	struct dentry *debugfs_dir;
+struct options_info {
+	seqlock_t seqlock;
+	struct scoutfs_mount_options opts;
+	struct scoutfs_sysfs_attrs sysfs_attrs;
 };
 
-u32 scoutfs_option_u32(struct super_block *sb, int token)
-{
-	WARN_ON_ONCE(1);
-	return 0;
-}
+#define DECLARE_OPTIONS_INFO(sb, name) \
+	struct options_info *name = SCOUTFS_SB(sb)->options_info
 
 static int parse_bdev_path(struct super_block *sb, substring_t *substr,
 			      char **bdev_path_ret)
@@ -89,8 +94,24 @@ out:
 	return ret;
 }
 
-int scoutfs_parse_options(struct super_block *sb, char *options,
-			  struct mount_options *parsed)
+static void free_options(struct scoutfs_mount_options *opts)
+{
+	kfree(opts->metadev_path);
+}
+
+static void init_default_options(struct scoutfs_mount_options *opts)
+{
+	memset(opts, 0, sizeof(*opts));
+	opts->quorum_slot_nr = -1;
+}
+
+/*
+ * Parse the option string into our options struct.   This can allocate
+ * memory in the struct.  The caller is responsible for always calling
+ * free_options() when the struct is destroyed, including when we return
+ * an error.
+ */
+static int parse_options(struct super_block *sb, char *options, struct scoutfs_mount_options *opts)
 {
 	substring_t args[MAX_OPT_ARGS];
 	int nr;
@@ -98,49 +119,43 @@ int scoutfs_parse_options(struct super_block *sb, char *options,
 	char *p;
 	int ret;
 
-	/* Set defaults */
-	memset(parsed, 0, sizeof(*parsed));
-	parsed->quorum_slot_nr = -1;
-
 	while ((p = strsep(&options, ",")) != NULL) {
 		if (!*p)
 			continue;
 
 		token = match_token(p, tokens, args);
 		switch (token) {
-		case Opt_quorum_slot_nr:
 
-			if (parsed->quorum_slot_nr != -1) {
+		case Opt_quorum_slot_nr:
+			if (opts->quorum_slot_nr != -1) {
 				scoutfs_err(sb, "multiple quorum_slot_nr options provided, only provide one.");
 				return -EINVAL;
 			}
 
 			ret = match_int(args, &nr);
-			if (ret < 0 || nr < 0 ||
-			    nr >= SCOUTFS_QUORUM_MAX_SLOTS) {
+			if (ret < 0 || nr < 0 || nr >= SCOUTFS_QUORUM_MAX_SLOTS) {
 				scoutfs_err(sb, "invalid quorum_slot_nr option, must be between 0 and %u",
 					    SCOUTFS_QUORUM_MAX_SLOTS - 1);
 				if (ret == 0)
 					ret = -EINVAL;
 				return ret;
 			}
-			parsed->quorum_slot_nr = nr;
+			opts->quorum_slot_nr = nr;
 			break;
-		case Opt_metadev_path:
 
-			ret = parse_bdev_path(sb, &args[0],
-						 &parsed->metadev_path);
+		case Opt_metadev_path:
+			ret = parse_bdev_path(sb, &args[0], &opts->metadev_path);
 			if (ret < 0)
 				return ret;
 			break;
+
 		default:
 			scoutfs_err(sb, "Unknown or malformed option, \"%s\"", p);
 			return -EINVAL;
-			break;
 		}
 	}
 
-	if (!parsed->metadev_path) {
+	if (!opts->metadev_path) {
 		scoutfs_err(sb, "Required mount option \"metadev_path\" not found");
 		return -EINVAL;
 	}
@@ -148,40 +163,138 @@ int scoutfs_parse_options(struct super_block *sb, char *options,
 	return 0;
 }
 
-int scoutfs_options_setup(struct super_block *sb)
+void scoutfs_options_read(struct super_block *sb, struct scoutfs_mount_options *opts)
+{
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	unsigned int seq;
+
+	if (WARN_ON_ONCE(optinf == NULL)) {
+		/* trying to use options before early setup or after destroy */
+		init_default_options(opts);
+		return;
+	}
+
+	do {
+		seq = read_seqbegin(&optinf->seqlock);
+		memcpy(opts, &optinf->opts, sizeof(struct scoutfs_mount_options));
+	} while (read_seqretry(&optinf->seqlock, seq));
+}
+
+/*
+ * Early setup that parses and stores the options so that the rest of
+ * setup can use them.   Full options setup that relies on other
+ * components will be done later.
+ */
+int scoutfs_options_early_setup(struct super_block *sb, char *options)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct options_sb_info *osi;
+	struct scoutfs_mount_options opts;
+	struct options_info *optinf;
 	int ret;
 
-	osi = kzalloc(sizeof(struct options_sb_info), GFP_KERNEL);
-	if (!osi)
-		return -ENOMEM;
+	init_default_options(&opts);
 
-	sbi->options = osi;
+	ret = parse_options(sb, options, &opts);
+	if (ret < 0)
+		goto out;
 
-	osi->debugfs_dir = debugfs_create_dir("options", sbi->debug_root);
-	if (!osi->debugfs_dir) {
+	optinf = kzalloc(sizeof(struct options_info), GFP_KERNEL);
+	if (!optinf) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
+	seqlock_init(&optinf->seqlock);
+	scoutfs_sysfs_init_attrs(sb, &optinf->sysfs_attrs);
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts = opts;
+	write_sequnlock(&optinf->seqlock);
+
+	sbi->options_info = optinf;
 	ret = 0;
 out:
-	if (ret)
+	if (ret < 0)
+		free_options(&opts);
+
+	return ret;
+}
+
+int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
+{
+	struct super_block *sb = root->d_sb;
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	if (opts.quorum_slot_nr >= 0)
+		seq_printf(seq, ",quorum_slot_nr=%d", opts.quorum_slot_nr);
+	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
+
+	return 0;
+}
+
+static ssize_t metadev_path_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%s", opts.metadev_path);
+}
+SCOUTFS_ATTR_RO(metadev_path);
+
+static ssize_t quorum_server_nr_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", opts.quorum_slot_nr);
+}
+SCOUTFS_ATTR_RO(quorum_server_nr);
+
+static struct attribute *options_attrs[] = {
+	SCOUTFS_ATTR_PTR(metadev_path),
+	SCOUTFS_ATTR_PTR(quorum_server_nr),
+	NULL,
+};
+
+int scoutfs_options_setup(struct super_block *sb)
+{
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	int ret;
+
+	ret = scoutfs_sysfs_create_attrs(sb, &optinf->sysfs_attrs, options_attrs, "mount_options");
+	if (ret < 0)
 		scoutfs_options_destroy(sb);
 	return ret;
+}
+
+/*
+ * We remove the sysfs files early in unmount so that they can't try to call other subsystems
+ * as they're being destroyed.
+ */
+void scoutfs_options_stop(struct super_block *sb)
+{
+	DECLARE_OPTIONS_INFO(sb, optinf);
+
+	if (optinf)
+		scoutfs_sysfs_destroy_attrs(sb, &optinf->sysfs_attrs);
 }
 
 void scoutfs_options_destroy(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct options_sb_info *osi = sbi->options;
+	DECLARE_OPTIONS_INFO(sb, optinf);
 
-	if (osi) {
-		if (osi->debugfs_dir)
-			debugfs_remove_recursive(osi->debugfs_dir);
-		kfree(osi);
-		sbi->options = NULL;
+	scoutfs_options_stop(sb);
+
+	if (optinf) {
+		free_options(&optinf->opts);
+		kfree(optinf);
+		sbi->options_info = NULL;
 	}
 }

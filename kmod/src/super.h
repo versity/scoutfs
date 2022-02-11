@@ -44,6 +44,7 @@ struct scoutfs_sb_info {
 
 	spinlock_t next_ino_lock;
 
+	struct options_info *options_info;
 	struct data_info *data_info;
 	struct inode_sb_info *inode_sb_info;
 	struct btree_info *btree_info;
@@ -73,10 +74,6 @@ struct scoutfs_sb_info {
 
 	struct scoutfs_counters *counters;
 	struct scoutfs_triggers *triggers;
-
-	struct mount_options opts;
-	struct options_sb_info *options;
-	struct scoutfs_sysfs_attrs mopts_ssa;
 
 	struct dentry *debug_root;
 
