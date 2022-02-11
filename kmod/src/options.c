@@ -245,7 +245,7 @@ static ssize_t metadev_path_show(struct kobject *kobj, struct kobj_attribute *at
 }
 SCOUTFS_ATTR_RO(metadev_path);
 
-static ssize_t quorum_server_nr_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+static ssize_t quorum_slot_nr_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
 	struct scoutfs_mount_options opts;
@@ -254,11 +254,11 @@ static ssize_t quorum_server_nr_show(struct kobject *kobj, struct kobj_attribute
 
 	return snprintf(buf, PAGE_SIZE, "%d\n", opts.quorum_slot_nr);
 }
-SCOUTFS_ATTR_RO(quorum_server_nr);
+SCOUTFS_ATTR_RO(quorum_slot_nr);
 
 static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(metadev_path),
-	SCOUTFS_ATTR_PTR(quorum_server_nr),
+	SCOUTFS_ATTR_PTR(quorum_slot_nr),
 	NULL,
 };
 
