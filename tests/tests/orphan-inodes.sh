@@ -30,6 +30,13 @@ inode_exists()
 	test "$?" == 0 -a "$(head -1 $T_TMP.inos.log)" == "$ino"
 }
 
+t_save_all_sysfs_mount_options orphan_scan_delay_ms
+restore_delays()
+{
+	t_restore_all_sysfs_mount_options orphan_scan_delay_ms
+}
+trap restore_delays EXIT
+
 echo "== test our inode existance function"
 path="$T_D0/file"
 touch "$path"
@@ -46,7 +53,8 @@ inode_exists $ino || echo "$ino didn't exist"
 echo "== orphan from failed evict deletion is picked up"
 # pending kill signal stops evict from getting locks and deleting
 silent_kill $pid
-sleep 55
+t_set_sysfs_mount_option 0 orphan_scan_delay_ms 1000
+sleep 5
 inode_exists $ino && echo "$ino still exists"
 
 echo "== orphaned inos in all mounts all deleted"
@@ -72,9 +80,63 @@ while test -d $(echo /sys/fs/scoutfs/*/fence/* | cut -d " " -f 1); do
 	sleep .5
 done
 # wait for orphan scans to run
-sleep 55
+t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
+# also have to wait for delayed log merge work from mount
+sleep 15
 for ino in $inos; do
 	inode_exists $ino && echo "$ino still exists"
+done
+
+RUNTIME=30
+echo "== ${RUNTIME}s of racing evict deletion, orphan scanning, and open by handle"
+
+# exclude last client mount
+last=""
+for nr in $(t_fs_nrs); do
+	last=$nr
+done
+
+END=$((SECONDS + RUNTIME))
+while [ $SECONDS -lt $END ]; do
+	# hold open per-mount unlinked files
+	pids=""
+	ino_args=""
+	for nr in $(t_fs_nrs); do
+		test $nr == $last && continue
+
+		eval path="\$T_D${nr}/racing-$nr"
+		touch "$path"
+		ino_args="$ino_args -i $(stat -c %i $path)"
+
+		sleep 1000000 < "$path" &
+		sleep .1 # wait for sleep to start and open input :/
+		pids="$pids $!"
+		rm -f "$path"
+	done
+
+	# remount excluded last client to force log merging and make orphan visible
+	sync
+	t_umount $last
+	t_mount $last
+
+	# get all mounts scanning orphans at high frequency
+	t_set_all_sysfs_mount_options orphan_scan_delay_ms 100
+
+	# spin having tasks in each mount trying to open/fsetxattr all inos
+	for nr in $(t_fs_nrs); do
+		test $nr == $last && continue
+
+		eval path="\$T_M${nr}"
+		handle_fsetxattr -e $ino_args -m "$path" -s 2 &
+	done
+
+	# trigger eviction deletion of each file in each mount
+	silent_kill $pids
+
+	wait || t_fail "handle_fsetxattr failed"
+
+	# slow down orphan scanning for the next iteration
+	t_set_all_sysfs_mount_options orphan_scan_delay_ms $(((RUNTIME * 2) * 1000))
 done
 
 t_pass
