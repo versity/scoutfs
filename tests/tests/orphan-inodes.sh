@@ -38,6 +38,7 @@ inode_exists $ino || echo "$ino didn't exist"
 
 echo "== unlinked and opened inodes still exist"
 sleep 1000000 < "$path" &
+sleep .1 # wait for background sleep to run and open stdin
 pid="$!"
 rm -f "$path"
 inode_exists $ino || echo "$ino didn't exist"
@@ -56,6 +57,7 @@ for nr in $(t_fs_nrs); do
 	touch "$path"
 	inos="$inos $(stat -c %i $path)"
 	sleep 1000000 < "$path" &
+	sleep .1 # wait for background sleep to run and open stdin
 	pids="$pids $!"
 	rm -f "$path"
 done
