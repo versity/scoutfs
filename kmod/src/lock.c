@@ -142,7 +142,7 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 	struct scoutfs_inode_info *si;
 	struct inode *inode;
 
-	inode = scoutfs_ilookup(sb, ino);
+	inode = scoutfs_ilookup_nowait_nonewfree(sb, ino);
 	if (inode) {
 		si = SCOUTFS_I(inode);
 
@@ -255,7 +255,7 @@ static void lock_free(struct lock_info *linfo, struct scoutfs_lock *lock)
 	BUG_ON(!list_empty(&lock->shrink_head));
 	BUG_ON(!list_empty(&lock->cov_list));
 
-	scoutfs_omap_free_lock_data(lock->omap_data);
+	kfree(lock->inode_deletion_data);
 	kfree(lock);
 }
 
@@ -291,7 +291,6 @@ static struct scoutfs_lock *lock_alloc(struct super_block *sb,
 	lock->mode = SCOUTFS_LOCK_NULL;
 
 	atomic64_set(&lock->forest_bloom_nr, 0);
-	spin_lock_init(&lock->omap_spinlock);
 
 	trace_scoutfs_lock_alloc(sb, lock);
 

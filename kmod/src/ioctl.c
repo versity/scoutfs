@@ -387,7 +387,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 	if (sblock > eblock)
 		return -EINVAL;
 
-	inode = scoutfs_ilookup(sb, args.ino);
+	inode = scoutfs_ilookup_nowait_nonewfree(sb, args.ino);
 	if (!inode) {
 		ret = -ESTALE;
 		goto out;

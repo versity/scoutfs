@@ -82,7 +82,9 @@ void scoutfs_inode_queue_iput(struct inode *inode);
 
 #define SCOUTFS_IGF_LINKED (1 << 0) /* enoent if nlink == 0 */
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf);
-struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
+struct inode *scoutfs_ilookup_nowait(struct super_block *sb, u64 ino);
+struct inode *scoutfs_ilookup_nowait_nonewfree(struct super_block *sb, u64 ino);
+
 
 void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino);
 void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
