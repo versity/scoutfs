@@ -983,9 +983,6 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	u64 last;
 	s64 ret;
 
-	mutex_lock(&inode->i_mutex);
-	down_write(&si->extent_sem);
-
 	/* XXX support more flags */
         if (mode & ~(FALLOC_FL_KEEP_SIZE)) {
 		ret = -EOPNOTSUPP;
@@ -1003,18 +1000,22 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		goto out;
 	}
 
+	mutex_lock(&inode->i_mutex);
+
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret)
-		goto out;
+		goto out_mutex;
 
 	inode_dio_wait(inode);
+
+	down_write(&si->extent_sem);
 
 	if (!(mode & FALLOC_FL_KEEP_SIZE) &&
 	    (offset + len > i_size_read(inode))) {
                 ret = inode_newsize_ok(inode, offset + len);
                 if (ret)
-                        goto out;
+                        goto out_extent;
         }
 
 	iblock = offset >> SCOUTFS_BLOCK_SM_SHIFT;
@@ -1024,7 +1025,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 
 		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, true);
 		if (ret)
-			goto out;
+			goto out_extent;
 
 		ret = fallocate_extents(sb, inode, iblock, last, lock);
 
@@ -1050,17 +1051,19 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		}
 
 		if (ret <= 0)
-			goto out;
+			goto out_extent;
 
 		iblock += ret;
 		ret = 0;
 	}
 
-out:
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+out_extent:
 	up_write(&si->extent_sem);
+out_mutex:
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 	mutex_unlock(&inode->i_mutex);
 
+out:
 	trace_scoutfs_data_fallocate(sb, ino, mode, offset, len, ret);
 	return ret;
 }
