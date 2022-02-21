@@ -56,8 +56,11 @@ t_filter_dmesg()
 	re="$re|scoutfs .*: all clients recovered"
 	re="$re|scoutfs .* error: client rid.*lock recovery timed out"
 
-	# some tests mount w/o options
+	# we test bad devices and options
 	re="$re|scoutfs .* error: Required mount option \"metadev_path\" not found"
+	re="$re|scoutfs .* error: meta_super META flag not set"
+	re="$re|scoutfs .* error: could not open metadev:.*"
+	re="$re|scoutfs .* error: Unknown or malformed option,.*"
 
 	# in debugging kernels we can slow things down a bit
 	re="$re|hrtimer: interrupt took .*"
