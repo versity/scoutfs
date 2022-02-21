@@ -134,8 +134,8 @@ int scoutfs_parse_options(struct super_block *sb, char *options,
 				return ret;
 			break;
 		default:
-			scoutfs_err(sb, "Unknown or malformed option, \"%s\"",
-				    p);
+			scoutfs_err(sb, "Unknown or malformed option, \"%s\"", p);
+			return -EINVAL;
 			break;
 		}
 	}
