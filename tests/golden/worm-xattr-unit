@@ -1,0 +1,41 @@
+== test creation of worm xattr without .hide
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation of worm xattr on a directory
+setfattr: /mnt/test/test/worm-xattr-unit: Invalid argument
+== test creation of worm xattr
+== test value is set correctly
+== test deletion of xattr 1 sec after setting
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Permission denied
+== test setting xattr to a previous time after setting
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Permission denied
+== test deletion before expiration
+rm: cannot remove ‘/mnt/test/test/worm-xattr-unit/file-1’: Permission denied
+== Try to move the file prior to expiration
+mv: cannot move ‘/mnt/test/test/worm-xattr-unit/file-1’ to ‘/mnt/test/test/worm-xattr-unit/file-2’: Permission denied
+== Try to write to file before expiration
+date: write error: Permission denied
+== wait til expiration
+== Try to write to file after expiration
+== Try to move the file after expiration
+== test deletion after expiration
+== test creation with non integer value of a.a
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with non integer value of ....
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with non integer value of ...
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with no nsec value of 11.
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with no sec value of .11
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with . at start and end value .11.
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with invalid format of two characters
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with too large of a nsecs value 1.18446744073709551615
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with nsecs > NSECS_PER_SEC value 1.1000000000
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== test creation with sec > U64_MAX value of 184467440737095516159.1
+setfattr: /mnt/test/test/worm-xattr-unit/file-1: Invalid argument
+== removing files after expiration
