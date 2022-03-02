@@ -21,6 +21,7 @@
 #include <linux/log2.h>
 #include <linux/falloc.h>
 #include <linux/writeback.h>
+#include <linux/aio.h>
 
 #include "format.h"
 #include "super.h"
@@ -471,6 +472,7 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 	ext->map = blkno;
 	ext->flags = 0;
 	ret = 0;
+
 out:
 	if (ret < 0 && blkno > 0) {
 		err = scoutfs_free_data(sb, datinf->alloc, datinf->wri,
@@ -488,8 +490,68 @@ out:
 	return ret;
 }
 
+static int alloc_block_dio(struct super_block *sb, struct inode *inode,
+			   struct scoutfs_extent *ext, struct buffer_head *bh,
+			   u64 iblock, struct scoutfs_lock *lock)
+{
+	DECLARE_DATA_INFO(sb, datinf);
+	const u64 ino = scoutfs_ino(inode);
+	struct data_ext_args args = {
+		.ino = ino,
+		.inode = inode,
+		.lock = lock,
+	};
+	u64 blkno = 0;
+	u64 blocks = 0;
+	u64 count = 0;
+	u64 last;
+	u8 ext_fl = 0;
+	int ret = 0;
+	bool first = true;
+	int err;
+
+	last = (bh->b_size - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
+
+	while(blocks < last) {
+		if (ext->len >= last && first)
+			count = min_t(u64, last, SCOUTFS_FALLOCATE_ALLOC_LIMIT);
+		else
+			count = min_t(u64, last - blocks, SCOUTFS_FALLOCATE_ALLOC_LIMIT);
+
+		mutex_lock(&datinf->mutex);
+		ret = scoutfs_alloc_data(sb, datinf->alloc, datinf->wri,
+					 &datinf->dalloc, count, &blkno, &count);
+		if (ret == 0) {
+			ret = scoutfs_ext_set(sb, &data_ext_ops, &args, iblock,
+					      count, blkno,
+					      ext_fl | SEF_UNWRITTEN);
+			if (ret < 0) {
+				err = scoutfs_free_data(sb, datinf->alloc,
+							datinf->wri,
+							&datinf->data_freed,
+							blkno, count);
+				BUG_ON(err); /* inconsistent */
+			}
+		}
+
+		mutex_unlock(&datinf->mutex);
+
+		if (ret < 0)
+			break;
+
+		blocks += count;
+		first = false;
+		ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
+				       iblock, 1, ext);
+		if (ret < 0)
+			break;
+	}
+
+	return ret;
+}
+
 static int scoutfs_get_block(struct inode *inode, sector_t iblock,
-			     struct buffer_head *bh, int create)
+			     struct buffer_head *bh, int create, bool dio_flag)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	const u64 ino = scoutfs_ino(inode);
@@ -530,7 +592,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 	}
 
 	/* convert unwritten to written, could be staging */
-	if (create && ext.map && (ext.flags & SEF_UNWRITTEN)) {
+	if (create && ext.map && !dio_flag && (ext.flags & SEF_UNWRITTEN)) {
 		un.start = iblock;
 		un.len = 1;
 		un.map = ext.map + (iblock - ext.start);
@@ -542,11 +604,26 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 			set_buffer_new(bh);
 		}
 		goto out;
+	} else if (create && ext.map && dio_flag) {
+		un.start = iblock;
+		un.len = 1;
+		un.map = ext.map + (iblock - ext.start);
+		un.flags = ext.flags;
+		ret = scoutfs_ext_set(sb, &data_ext_ops, &args,
+				      un.start, un.len, un.map, un.flags);
+		if (ret == 0) {
+			ext = un;
+			set_buffer_new(bh);
+		}
+		goto out;
 	}
 
 	/* allocate and map blocks containing our logical block */
 	if (create && !ext.map) {
-		ret = alloc_block(sb, inode, &ext, iblock, lock);
+		if (dio_flag)
+			ret = alloc_block_dio(sb, inode, &ext, bh, iblock, lock);
+		else
+			ret = alloc_block(sb, inode, &ext, iblock, lock);
 		if (ret == 0)
 			set_buffer_new(bh);
 	} else {
@@ -580,7 +657,7 @@ static int scoutfs_get_block_read(struct inode *inode, sector_t iblock,
 	int ret;
 
 	down_read(&si->extent_sem);
-	ret = scoutfs_get_block(inode, iblock, bh, create);
+	ret = scoutfs_get_block(inode, iblock, bh, create, false);
 	up_read(&si->extent_sem);
 
 	return ret;
@@ -593,9 +670,59 @@ static int scoutfs_get_block_write(struct inode *inode, sector_t iblock,
 	int ret;
 
 	down_write(&si->extent_sem);
-	ret = scoutfs_get_block(inode, iblock, bh, create);
+	ret = scoutfs_get_block(inode, iblock, bh, create, false);
 	up_write(&si->extent_sem);
 
+	return ret;
+}
+
+
+static int scoutfs_get_block_write_dio(struct inode *inode, sector_t iblock,
+				       struct buffer_head *bh, int create)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *lock = NULL;
+	LIST_HEAD(ind_locks);
+	int ret;
+
+	lock = scoutfs_per_task_get(&si->pt_data_lock);
+	if (WARN_ON_ONCE(!lock)) {
+		return -EINVAL;
+	}
+
+	if (inode)
+		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks,
+						    true, false);
+	else
+		ret = scoutfs_hold_trans(sb, false);
+	if (ret)
+		goto out;
+
+	if (inode)
+		ret = scoutfs_dirty_inode_item(inode, lock);
+
+	if (ret < 0)
+		goto out_unlock;
+
+	down_write(&si->extent_sem);
+	ret = scoutfs_get_block(inode, iblock, bh, create, true);
+	up_write(&si->extent_sem);
+
+	if (inode) {
+		scoutfs_inode_set_data_seq(inode);
+		scoutfs_inode_inc_data_version(inode);
+		inode_inc_iversion(inode);
+
+		if (ret > 0)
+			i_size_write(inode, ret);
+		scoutfs_update_inode_item(inode, lock, &ind_locks);
+	}
+
+out_unlock:
+	scoutfs_release_trans(sb);
+	scoutfs_inode_index_unlock(sb, &ind_locks);
+out:
 	return ret;
 }
 
@@ -857,6 +984,154 @@ static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 		writepages_sync_none(mapping,
 				     pos + ret - BACKGROUND_WRITEBACK_BYTES,
 				     pos + ret - 1);
+
+	return ret;
+}
+
+static s64 convert_unwritten_items(struct super_block *sb, struct inode *inode,
+			           u64 ino, u64 iblock, u64 last,
+			           struct scoutfs_lock *lock)
+{
+	struct data_ext_args args = {
+		.ino = ino,
+		.inode = inode,
+		.lock = lock,
+	};
+	struct scoutfs_extent ext;
+	struct scoutfs_extent un;
+	u64 offset;
+	s64 ret;
+	int i;
+
+	ret = 0;
+
+	for (i = 0; iblock <= last; i++) {
+		if (i == EXTENTS_PER_HOLD) {
+			ret = iblock;
+			break;
+		}
+
+		ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
+				       iblock, 1, &ext);
+		if (ret < 0) {
+			if (ret == -ENOENT)
+				ret = 0;
+			break;
+		}
+
+		/* done if we went past the region */
+		if (ext.start > last) {
+			ret = 0;
+			break;
+		}
+
+		/* nothing to do when already marked written */
+		if (!(ext.flags & SEF_UNWRITTEN)) {
+			iblock = ext.start + ext.len;
+			continue;
+		}
+
+		iblock = max(ext.start, iblock);
+		offset = iblock - ext.start;
+
+		un.start = iblock;
+		un.map = ext.map ? ext.map + offset : 0;
+		un.len = min(ext.len - offset, last - iblock + 1);
+		un.flags = ext.flags & ~(SEF_OFFLINE|SEF_UNWRITTEN);
+
+		ret = scoutfs_ext_set(sb, &data_ext_ops, &args,
+				      un.start, un.len, un.map, un.flags);
+		if (ret < 0)
+			break;
+
+		iblock += un.len;
+	}
+
+	return ret;
+}
+
+static ssize_t
+convert_unwritten_extent(struct inode *inode, loff_t offset, ssize_t count)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	const u64 ino = scoutfs_ino(inode);
+	struct scoutfs_lock *lock = NULL;
+	LIST_HEAD(ind_locks);
+	u64 iblock;
+	u64 last;
+	ssize_t ret = 0;
+
+	lock = scoutfs_per_task_get(&si->pt_data_lock);
+	if (WARN_ON_ONCE(!lock)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	iblock = offset >> SCOUTFS_BLOCK_SM_SHIFT;
+	last = (offset + count - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
+	while(iblock <= last) {
+		if (inode)
+			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks,
+							    true, false);
+		else
+			ret = scoutfs_hold_trans(sb, false);
+		if (ret)
+			break; 
+
+		if (inode)
+			ret = scoutfs_dirty_inode_item(inode, lock);
+		else
+			ret = 0;
+
+		if (ret == 0) {
+			down_write(&si->extent_sem);
+			ret = convert_unwritten_items(sb, inode, ino, iblock,
+						      last, lock);
+			up_write(&si->extent_sem);
+		}
+
+		if (ret < 0)
+			goto out;
+
+		if (inode) {
+			scoutfs_inode_set_data_seq(inode);
+			scoutfs_inode_inc_data_version(inode);
+			inode_inc_iversion(inode);
+
+			if (ret > 0)
+				i_size_write(inode, ret);
+			scoutfs_update_inode_item(inode, lock, &ind_locks);
+		}
+		scoutfs_release_trans(sb);
+		if (inode)
+			scoutfs_inode_index_unlock(sb, &ind_locks);
+
+		if (ret <= 0)
+			break;
+
+		iblock = ret;
+	}
+
+out:
+	return ret;
+}
+
+static ssize_t
+scoutfs_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
+		  loff_t offset, unsigned long nr_segs)
+{
+	struct file *file = iocb->ki_filp;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = mapping->host;
+	ssize_t ret;
+
+	ret = blockdev_direct_IO(rw, iocb, inode, iov, offset, nr_segs,
+				 scoutfs_get_block_write_dio);
+	if (ret > 0 && (rw & WRITE))
+	{
+		ret = convert_unwritten_extent(inode, offset, ret);
+	}
 
 	return ret;
 }
@@ -1804,6 +2079,7 @@ const struct address_space_operations scoutfs_file_aops = {
 	.writepages		= scoutfs_writepages,
 	.write_begin		= scoutfs_write_begin,
 	.write_end		= scoutfs_write_end,
+	.direct_IO		= scoutfs_direct_IO,
 };
 
 const struct file_operations scoutfs_file_fops = {
