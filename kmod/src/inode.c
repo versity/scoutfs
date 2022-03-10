@@ -1411,10 +1411,14 @@ out:
 /*
  * Allocate and initialize a new inode.  The caller is responsible for
  * creating links to it and updating it.  @dir can be null.
+ *
+ * This is called with locks and a transaction because it creates the
+ * inode item.   We can't call iput on the new inode on error.   We
+ * return the inode to the caller *including on error* for them to put
+ * once they've released the transaction.
  */
-struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
-				umode_t mode, dev_t rdev, u64 ino,
-				struct scoutfs_lock *lock)
+int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, dev_t rdev,
+		      u64 ino, struct scoutfs_lock *lock, struct inode **inode_ret)
 {
 	struct scoutfs_inode_info *si;
 	struct scoutfs_key key;
@@ -1423,8 +1427,10 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	int ret;
 
 	inode = new_inode(sb);
-	if (!inode)
-		return ERR_PTR(-ENOMEM);
+	if (!inode) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	si = SCOUTFS_I(inode);
 	si->ino = ino;
@@ -1460,12 +1466,9 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	if (ret < 0)
 		scoutfs_omap_clear(sb, ino);
 out:
-	if (ret) {
-		iput(inode);
-		inode = ERR_PTR(ret);
-	}
+	*inode_ret = inode;
 
-	return inode;
+	return ret;
 }
 
 static void init_orphan_key(struct scoutfs_key *key, u64 ino)

@@ -106,9 +106,8 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 			       struct list_head *ind_locks);
 
 int scoutfs_alloc_ino(struct super_block *sb, bool is_dir, u64 *ino_ret);
-struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
-				umode_t mode, dev_t rdev, u64 ino,
-				struct scoutfs_lock *lock);
+int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, dev_t rdev,
+		      u64 ino, struct scoutfs_lock *lock, struct inode **inode_ret);
 
 void scoutfs_inode_set_meta_seq(struct inode *inode);
 void scoutfs_inode_set_data_seq(struct inode *inode);
