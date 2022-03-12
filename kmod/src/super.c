@@ -132,44 +132,6 @@ out:
 	return ret;
 }
 
-static int scoutfs_show_options(struct seq_file *seq, struct dentry *root)
-{
-	struct super_block *sb = root->d_sb;
-	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
-
-	if (opts->quorum_slot_nr >= 0)
-		seq_printf(seq, ",quorum_slot_nr=%d", opts->quorum_slot_nr);
-	seq_printf(seq, ",metadev_path=%s", opts->metadev_path);
-
-	return 0;
-}
-
-static ssize_t metadev_path_show(struct kobject *kobj,
-				 struct kobj_attribute *attr, char *buf)
-{
-	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
-	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
-
-	return snprintf(buf, PAGE_SIZE, "%s", opts->metadev_path);
-}
-SCOUTFS_ATTR_RO(metadev_path);
-
-static ssize_t quorum_server_nr_show(struct kobject *kobj,
-			      struct kobj_attribute *attr, char *buf)
-{
-	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
-	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
-
-	return snprintf(buf, PAGE_SIZE, "%d\n", opts->quorum_slot_nr);
-}
-SCOUTFS_ATTR_RO(quorum_server_nr);
-
-static struct attribute *mount_options_attrs[] = {
-	SCOUTFS_ATTR_PTR(metadev_path),
-	SCOUTFS_ATTR_PTR(quorum_server_nr),
-	NULL,
-};
-
 static int scoutfs_sync_fs(struct super_block *sb, int wait)
 {
 	trace_scoutfs_sync_fs(sb, wait);
@@ -246,13 +208,11 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_destroy_triggers(sb);
 	scoutfs_fence_destroy(sb);
 	scoutfs_options_destroy(sb);
-	scoutfs_sysfs_destroy_attrs(sb, &sbi->mopts_ssa);
 	debugfs_remove(sbi->debug_root);
 	scoutfs_destroy_counters(sb);
 	scoutfs_destroy_sysfs(sb);
 	scoutfs_metadev_close(sb);
 
-	kfree(sbi->opts.metadev_path);
 	kfree(sbi);
 
 	sb->s_fs_info = NULL;
@@ -282,7 +242,7 @@ static const struct super_operations scoutfs_super_ops = {
 	.destroy_inode = scoutfs_destroy_inode,
 	.sync_fs = scoutfs_sync_fs,
 	.statfs = scoutfs_statfs,
-	.show_options = scoutfs_show_options,
+	.show_options = scoutfs_options_show,
 	.put_super = scoutfs_put_super,
 	.umount_begin = scoutfs_umount_begin,
 };
@@ -511,9 +471,9 @@ out:
 
 static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 {
-	struct scoutfs_sb_info *sbi;
-	struct mount_options opts;
+	struct scoutfs_mount_options opts;
 	struct block_device *meta_bdev;
+	struct scoutfs_sb_info *sbi;
 	struct inode *inode;
 	int ret;
 
@@ -541,13 +501,12 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	spin_lock_init(&sbi->next_ino_lock);
 	spin_lock_init(&sbi->data_wait_root.lock);
 	sbi->data_wait_root.root = RB_ROOT;
-	scoutfs_sysfs_init_attrs(sb, &sbi->mopts_ssa);
 
-	ret = scoutfs_parse_options(sb, data, &opts);
-	if (ret)
-		goto out;
-
-	sbi->opts = opts;
+	/* parse options early for use during setup */
+	ret = scoutfs_options_early_setup(sb, data);
+	if (ret < 0)
+		return ret;
+	scoutfs_options_read(sb, &opts);
 
 	ret = sb_set_blocksize(sb, SCOUTFS_BLOCK_SM_SIZE);
 	if (ret != SCOUTFS_BLOCK_SM_SIZE) {
@@ -556,9 +515,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 
-	meta_bdev =
-		blkdev_get_by_path(sbi->opts.metadev_path,
-				   SCOUTFS_META_BDEV_MODE, sb);
+	meta_bdev = blkdev_get_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sb);
 	if (IS_ERR(meta_bdev)) {
 		scoutfs_err(sb, "could not open metadev: error %ld",
 			    PTR_ERR(meta_bdev));
@@ -578,8 +535,6 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_setup_sysfs(sb) ?:
 	      scoutfs_setup_counters(sb) ?:
 	      scoutfs_options_setup(sb) ?:
-	      scoutfs_sysfs_create_attrs(sb, &sbi->mopts_ssa,
-				mount_options_attrs, "mount_options") ?:
 	      scoutfs_setup_triggers(sb) ?:
 	      scoutfs_fence_setup(sb) ?:
 	      scoutfs_block_setup(sb) ?:
@@ -652,6 +607,7 @@ static void scoutfs_kill_sb(struct super_block *sb)
 	}
 
 	if (SCOUTFS_HAS_SBI(sb)) {
+		scoutfs_options_stop(sb);
 		scoutfs_inode_orphan_stop(sb);
 		scoutfs_lock_unmount_begin(sb);
 	}

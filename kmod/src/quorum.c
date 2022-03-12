@@ -116,6 +116,7 @@ struct quorum_info {
 	struct socket *sock;
 	bool shutdown;
 
+	int our_quorum_slot_nr;
 	unsigned long flags;
 	int votes_needed;
 
@@ -160,9 +161,7 @@ static ktime_t heartbeat_timeout(void)
 static int create_socket(struct super_block *sb)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct mount_options *opts = &sbi->opts;
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct socket *sock = NULL;
 	struct sockaddr_in sin;
 	int addrlen;
@@ -176,7 +175,7 @@ static int create_socket(struct super_block *sb)
 
 	sock->sk->sk_allocation = GFP_NOFS;
 
-	scoutfs_quorum_slot_sin(super, opts->quorum_slot_nr, &sin);
+	scoutfs_quorum_slot_sin(super, qinf->our_quorum_slot_nr, &sin);
 
 	addrlen = sizeof(sin);
 	ret = kernel_bind(sock, (struct sockaddr *)&sin, addrlen);
@@ -207,7 +206,6 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 			     int only)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
-	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	ktime_t now;
 	int i;
@@ -216,7 +214,7 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 		.fsid = super->hdr.fsid,
 		.term = cpu_to_le64(term),
 		.type = type,
-		.from = opts->quorum_slot_nr,
+		.from = qinf->our_quorum_slot_nr,
 	};
 	struct kvec kv =  {
 		.iov_base = &qmes,
@@ -238,7 +236,7 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(super, i) ||
-		    (only >= 0 && i != only) || i == opts->quorum_slot_nr)
+		    (only >= 0 && i != only) || i == qinf->our_quorum_slot_nr)
 			continue;
 
 		scoutfs_quorum_slot_sin(super, i, &sin);
@@ -476,8 +474,8 @@ static int write_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_
  */
 static int update_quorum_block(struct super_block *sb, int event, u64 term, bool check_rid)
 {
-	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
-	u64 blkno = SCOUTFS_QUORUM_BLKNO + opts->quorum_slot_nr;
+	DECLARE_QUORUM_INFO(sb, qinf);
+	u64 blkno = SCOUTFS_QUORUM_BLKNO + qinf->our_quorum_slot_nr;
 	struct scoutfs_quorum_block blk;
 	int ret;
 
@@ -622,7 +620,6 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 {
 	struct quorum_info *qinf = container_of(work, struct quorum_info, work);
 	struct super_block *sb = qinf->sb;
-	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
 	struct quorum_status qst;
@@ -724,7 +721,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			qst.term++;
 			qst.vote_for = -1;
 			qst.vote_bits = 0;
-			set_bit(opts->quorum_slot_nr, &qst.vote_bits);
+			set_bit(qinf->our_quorum_slot_nr, &qst.vote_bits);
 			send_msg_others(sb, SCOUTFS_QUORUM_MSG_REQUEST_VOTE,
 					qst.term);
 			qst.timeout = election_timeout();
@@ -954,7 +951,6 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 			   char *buf)
 {
 	DECLARE_QUORUM_INFO_KOBJ(kobj, qinf);
-	struct mount_options *opts = &SCOUTFS_SB(qinf->sb)->opts;
 	struct quorum_status qst;
 	struct last_msg last;
 	struct timespec64 ts;
@@ -971,7 +967,7 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 	ret = 0;
 
 	snprintf_ret(buf, size, &ret, "quorum_slot_nr %u\n",
-		     opts->quorum_slot_nr);
+		     qinf->our_quorum_slot_nr);
 	snprintf_ret(buf, size, &ret, "term %llu\n",
 		     qst.term);
 	snprintf_ret(buf, size, &ret, "role %d (%s)\n",
@@ -1048,7 +1044,6 @@ static inline bool valid_ipv4_port(__be16 port)
 static int verify_quorum_slots(struct super_block *sb)
 {
 	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
-	struct mount_options *opts = &SCOUTFS_SB(sb)->opts;
 	char slots[(SCOUTFS_QUORUM_MAX_SLOTS * 3) + 1];
 	DECLARE_QUORUM_INFO(sb, qinf);
 	struct sockaddr_in other;
@@ -1099,7 +1094,7 @@ static int verify_quorum_slots(struct super_block *sb)
 		return -EINVAL;
 	}
 
-	if (!quorum_slot_present(super, opts->quorum_slot_nr)) {
+	if (!quorum_slot_present(super, qinf->our_quorum_slot_nr)) {
 		char *str = slots;
 		*str = '\0';
 		for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
@@ -1114,7 +1109,7 @@ static int verify_quorum_slots(struct super_block *sb)
 			}
 		}
 		scoutfs_err(sb, "quorum_slot_nr=%u option references unused slot, must be one of the following configured slots:%s",
-			    opts->quorum_slot_nr, slots);
+			    qinf->our_quorum_slot_nr, slots);
 		return -EINVAL;
 	}
 
@@ -1137,11 +1132,12 @@ static int verify_quorum_slots(struct super_block *sb)
 int scoutfs_quorum_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct mount_options *opts = &sbi->opts;
+	struct scoutfs_mount_options opts;
 	struct quorum_info *qinf;
 	int ret;
 
-	if (opts->quorum_slot_nr < 0)
+	scoutfs_options_read(sb, &opts);
+	if (opts.quorum_slot_nr < 0)
 		return 0;
 
 	qinf = kzalloc(sizeof(struct quorum_info), GFP_KERNEL);
@@ -1153,6 +1149,8 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	spin_lock_init(&qinf->show_lock);
 	INIT_WORK(&qinf->work, scoutfs_quorum_worker);
 	scoutfs_sysfs_init_attrs(sb, &qinf->ssa);
+	/* static for the lifetime of the mount */
+	qinf->our_quorum_slot_nr = opts.quorum_slot_nr;
 
 	sbi->quorum_info = qinf;
 	qinf->sb = sb;

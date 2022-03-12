@@ -720,7 +720,7 @@ static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 				      struct list_head *ind_locks)
 {
 	struct super_block *sb = dir->i_sb;
-	struct inode *inode;
+	struct inode *inode = NULL;
 	u64 ind_seq;
 	int ret = 0;
 	u64 ino;
@@ -765,11 +765,9 @@ retry:
 	if (ret)
 		goto out_unlock;
 
-	inode = scoutfs_new_inode(sb, dir, mode, rdev, ino, *inode_lock);
-	if (IS_ERR(inode)) {
-		ret = PTR_ERR(inode);
+	ret = scoutfs_new_inode(sb, dir, mode, rdev, ino, *inode_lock, &inode);
+	if (ret < 0)
 		goto out;
-	}
 
 	ret = scoutfs_dirty_inode_item(dir, *dir_lock);
 out:
@@ -787,6 +785,8 @@ out_unlock:
 			*orph_lock = NULL;
 		}
 
+		if (!IS_ERR_OR_NULL(inode))
+			iput(inode);
 		inode = ERR_PTR(ret);
 	}
 
@@ -1319,11 +1319,11 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 	insert_inode_hash(inode);
 	/* XXX need to set i_op/fop before here for sec callbacks */
 	d_instantiate(dentry, inode);
+	inode = NULL;
+	ret = 0;
 out:
 	if (ret < 0) {
 		/* XXX remove inode items */
-		if (!IS_ERR_OR_NULL(inode))
-			iput(inode);
 
 		symlink_item_ops(sb, SYM_DELETE, scoutfs_ino(inode), inode_lock,
 				 NULL, name_len);
@@ -1333,6 +1333,9 @@ out:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
+
+	if (!IS_ERR_OR_NULL(inode))
+		iput(inode);
 
 	return ret;
 }
@@ -1923,10 +1926,8 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	si = SCOUTFS_I(inode);
 
 	ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
-	if (ret < 0) {
-		iput(inode);
+	if (ret < 0)
 		goto out; /* XXX returning error but items created */
-	}
 
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	si->crtime = inode->i_mtime;
@@ -1939,7 +1940,6 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
-	iput(inode);
 
 out:
 	scoutfs_release_trans(sb);
@@ -1947,6 +1947,9 @@ out:
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
+
+	if (!IS_ERR_OR_NULL(inode))
+		iput(inode);
 
 	return ret;
 }

@@ -30,27 +30,22 @@
 /*
  * As a client removes an inode from its cache with an nlink of 0 it
  * needs to decide if it is the last client using the inode and should
- * fully delete all its items.  It needs to know if other mounts still
- * have the inode in use.
+ * fully delete all the inode's items.  It needs to know if other mounts
+ * still have the inode in use.
  *
- * We need a way to communicate between mounts that an inode is open.
+ * We need a way to communicate between mounts that an inode is in use.
  * We don't want to pay the synchronous per-file locking round trip
  * costs associated with per-inode open locks that you'd typically see
- * in systems to solve this problem.
+ * in systems to solve this problem.  The first prototypes of this
+ * tracked open file handles so this was coined the open map, though it
+ * now tracks cached inodes.
  *
- * Instead clients maintain open bitmaps that cover groups of inodes.
- * As inodes enter the cache their bit is set, and as the inode is
- * evicted the bit is cleared.  As an inode is evicted messages are sent
- * around the cluster to get the current bitmaps for that inode's group
- * from all active mounts.  If the inode's bit is clear then it can be
- * deleted.
- *
- * We associate the open bitmaps with our cluster locking of inode
- * groups to cache these open bitmaps.  As long as we have the lock then
- * nlink can't be changed on any remote mounts.  Specifically, it can't
- * increase from 0 so any clear bits can gain references on remote
- * mounts.  As long as we have the lock, all clear bits in the group for
- * inodes with 0 nlink can be deleted.
+ * Clients maintain bitmaps that cover groups of inodes.  As inodes
+ * enter the cache their bit is set and as the inode is evicted the bit
+ * is cleared.  As deletion is attempted, either by scanning orphans or
+ * evicting an inode with an nlink of 0, messages are sent around the
+ * cluster to get the current bitmaps for that inode's group from all
+ * active mounts.  If the inode's bit is clear then it can be deleted.
  *
  * This layer maintains a list of client rids to send messages to.  The
  * server calls us as clients enter and leave the cluster.    We can't
@@ -85,14 +80,12 @@ struct omap_info {
 	struct omap_info *name = SCOUTFS_SB(sb)->omap_info
 
 /*
- * The presence of an inode in the inode cache increases the count of
- * its inode number's position within its lock group.  These structs
- * track the counts for all the inodes in a lock group and maintain a
- * bitmap whose bits are set for each non-zero count.
+ * The presence of an inode in the inode sets its bit in the lock
+ * group's bitmap.
  *
  * We don't want to add additional global synchronization of inode cache
  * maintenance so these are tracked in an rcu hash table.  Once their
- * total count reaches zero they're removed from the hash and queued for
+ * total reaches zero they're removed from the hash and queued for
  * freeing and readers should ignore them.
  */
 struct omap_group {
@@ -102,7 +95,6 @@ struct omap_group {
 	u64 nr;
 	spinlock_t lock;
 	unsigned int total;
-	unsigned int *counts;
 	__le64 bits[SCOUTFS_OPEN_INO_MAP_LE64S];
 };
 
@@ -111,8 +103,7 @@ do {											\
 	__typeof__(group) _grp = (group);						\
 	__typeof__(bit_nr) _nr = (bit_nr);						\
 											\
-	trace_scoutfs_omap_group_##which(sb, _grp, _grp->nr, _grp->total, _nr,		\
-				        _nr < 0 ? -1 : _grp->counts[_nr]);		\
+	trace_scoutfs_omap_group_##which(sb, _grp, _grp->nr, _grp->total, _nr);		\
 } while (0)
 
 /*
@@ -131,18 +122,6 @@ struct omap_request {
 	u64 client_rid;
 	u64 client_id;
 	struct omap_rid_list rids;
-	struct scoutfs_open_ino_map map;
-};
-
-/*
- * In each inode group cluster lock we store data to track the open ino
- * map which tracks all the inodes that the cluster lock covers.  When
- * the seq shows that the map is stale we send a request to update it.
- */
-struct scoutfs_omap_lock_data {
-	u64 seq;
-	bool req_in_flight;
-	wait_queue_head_t waitq;
 	struct scoutfs_open_ino_map map;
 };
 
@@ -232,7 +211,7 @@ static void free_rids(struct omap_rid_list *list)
 	}
 }
 
-static void calc_group_nrs(u64 ino, u64 *group_nr, int *bit_nr)
+void scoutfs_omap_calc_group_nrs(u64 ino, u64 *group_nr, int *bit_nr)
 {
 	*group_nr = ino >> SCOUTFS_OPEN_INO_MAP_SHIFT;
 	*bit_nr = ino & SCOUTFS_OPEN_INO_MAP_MASK;
@@ -242,21 +221,13 @@ static struct omap_group *alloc_group(struct super_block *sb, u64 group_nr)
 {
 	struct omap_group *group;
 
-	BUILD_BUG_ON((sizeof(group->counts[0]) * SCOUTFS_OPEN_INO_MAP_BITS) > PAGE_SIZE);
-
 	group = kzalloc(sizeof(struct omap_group), GFP_NOFS);
 	if (group) {
 		group->sb = sb;
 		group->nr = group_nr;
 		spin_lock_init(&group->lock);
 
-		group->counts = (void *)get_zeroed_page(GFP_NOFS);
-		if (!group->counts) {
-			kfree(group);
-			group = NULL;
-		} else {
-			trace_group(sb, alloc, group, -1);
-		}
+		trace_group(sb, alloc, group, -1);
 	}
 
 	return group;
@@ -265,7 +236,6 @@ static struct omap_group *alloc_group(struct super_block *sb, u64 group_nr)
 static void free_group(struct super_block *sb, struct omap_group *group)
 {
 	trace_group(sb, free, group, -1);
-	free_page((unsigned long)group->counts);
 	kfree(group);
 }
 
@@ -283,13 +253,16 @@ static const struct rhashtable_params group_ht_params = {
 };
 
 /*
- * Track an cached inode in its group.  Our increment can be racing with
- * a final decrement that removes the group from the hash, sets total to
+ * Track an cached inode in its group.  Our set can be racing with a
+ * final clear that removes the group from the hash, sets total to
  * UINT_MAX, and calls rcu free.  We can retry until the dead group is
  * no longer visible in the hash table and we can insert a new allocated
  * group.
+ *
+ * The caller must ensure that the bit is clear, -EEXIST will be
+ * returned otherwise.
  */
-int scoutfs_omap_inc(struct super_block *sb, u64 ino)
+int scoutfs_omap_set(struct super_block *sb, u64 ino)
 {
 	DECLARE_OMAP_INFO(sb, ominf);
 	struct omap_group *group;
@@ -298,7 +271,7 @@ int scoutfs_omap_inc(struct super_block *sb, u64 ino)
 	bool found;
 	int ret = 0;
 
-	calc_group_nrs(ino, &group_nr, &bit_nr);
+	scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 retry:
 	found = false;
@@ -308,10 +281,10 @@ retry:
 		spin_lock(&group->lock);
 		if (group->total < UINT_MAX) {
 			found = true;
-			if (group->counts[bit_nr]++ == 0) {
-				set_bit_le(bit_nr, group->bits);
+			if (WARN_ON_ONCE(test_and_set_bit_le(bit_nr, group->bits)))
+				ret = -EEXIST;
+			else
 				group->total++;
-			}
 		}
 		trace_group(sb, inc, group, bit_nr);
 		spin_unlock(&group->lock);
@@ -342,29 +315,50 @@ retry:
 	return ret;
 }
 
+bool scoutfs_omap_test(struct super_block *sb, u64 ino)
+{
+	DECLARE_OMAP_INFO(sb, ominf);
+	struct omap_group *group;
+	bool ret = false;
+	u64 group_nr;
+	int bit_nr;
+
+	scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
+
+	rcu_read_lock();
+	group = rhashtable_lookup(&ominf->group_ht, &group_nr, group_ht_params);
+	if (group) {
+		spin_lock(&group->lock);
+		ret = !!test_bit_le(bit_nr, group->bits);
+		spin_unlock(&group->lock);
+	}
+	rcu_read_unlock();
+
+	return ret;
+}
+
 /*
- * Decrement a previously incremented ino count.  Not finding a count
- * implies imbalanced inc/dec or bugs freeing groups.  We only free
- * groups here as the last dec drops the group's total count to 0.
+ * Clear a previously set ino bit.  Trying to clear a bit that's already
+ * clear implies imbalanced set/clear or bugs freeing groups.  We only
+ * free groups here as the last clear drops the group's total to 0.
  */
-void scoutfs_omap_dec(struct super_block *sb, u64 ino)
+void scoutfs_omap_clear(struct super_block *sb, u64 ino)
 {
 	DECLARE_OMAP_INFO(sb, ominf);
 	struct omap_group *group;
 	u64 group_nr;
 	int bit_nr;
 
-	calc_group_nrs(ino, &group_nr, &bit_nr);
+	scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 	rcu_read_lock();
 	group = rhashtable_lookup(&ominf->group_ht, &group_nr, group_ht_params);
 	if (group) {
 		spin_lock(&group->lock);
-		WARN_ON_ONCE(group->counts[bit_nr] == 0);
+		WARN_ON_ONCE(!test_bit_le(bit_nr, group->bits));
 		WARN_ON_ONCE(group->total == 0);
 		WARN_ON_ONCE(group->total == UINT_MAX);
-		if (--group->counts[bit_nr] == 0) {
-			clear_bit_le(bit_nr, group->bits);
+		if (test_and_clear_bit_le(bit_nr, group->bits)) {
 			if (--group->total == 0) {
 				group->total = UINT_MAX;
 				rhashtable_remove_fast(&ominf->group_ht, &group->ht_head,
@@ -664,8 +658,7 @@ int scoutfs_omap_server_handle_request(struct super_block *sb, u64 rid, u64 id,
 
 /*
  * The client is receiving a request from the server for its map for the
- * given group.  Look up the group and copy the bits to the map for
- * non-zero open counts.
+ * given group.  Look up the group and copy the bits to the map.
  *
  * The mount originating the request for this bitmap has the inode group
  * write locked.  We can't be adding links to any inodes in the group
@@ -812,179 +805,6 @@ void scoutfs_omap_server_shutdown(struct super_block *sb)
 		kfree(req);
 
 	synchronize_rcu();
-}
-
-static bool omap_req_in_flight(struct scoutfs_lock *lock, struct scoutfs_omap_lock_data *ldata)
-{
-	bool in_flight;
-
-	spin_lock(&lock->omap_spinlock);
-	in_flight = ldata->req_in_flight;
-	spin_unlock(&lock->omap_spinlock);
-
-	return in_flight;
-}
-
-/*
- * Make sure the map covered by the cluster lock is current.  The caller
- * holds the cluster lock so once we store lock_data on the cluster lock
- * it won't be freed and the write_seq in the cluster lock won't change.
- *
- * The omap_spinlock protects the omap_data in the cluster lock.  We
- * have to drop it if we have to block to allocate lock_data, send a
- * request for a new map, or wait for a request in flight to finish.
- */
-static int get_current_lock_data(struct super_block *sb, struct scoutfs_lock *lock,
-				 struct scoutfs_omap_lock_data **ldata_ret, u64 group_nr)
-{
-	struct scoutfs_omap_lock_data *ldata;
-	bool send_req;
-	int ret = 0;
-
-	spin_lock(&lock->omap_spinlock);
-
-	ldata = lock->omap_data;
-	if (ldata == NULL) {
-		spin_unlock(&lock->omap_spinlock);
-		ldata = kzalloc(sizeof(struct scoutfs_omap_lock_data), GFP_NOFS);
-		spin_lock(&lock->omap_spinlock);
-
-		if (!ldata) {
-			ret = -ENOMEM;
-			goto out;
-		}
-
-		if (lock->omap_data == NULL) {
-			ldata->seq = lock->write_seq - 1; /* ensure refresh */
-			init_waitqueue_head(&ldata->waitq);
-
-			lock->omap_data = ldata;
-		} else {
-			kfree(ldata);
-			ldata = lock->omap_data;
-		}
-	}
-
-	while (ldata->seq != lock->write_seq) {
-		/* only one waiter sends a request at a time */
-		if (!ldata->req_in_flight) {
-			ldata->req_in_flight = true;
-			send_req = true;
-		} else {
-			send_req = false;
-		}
-
-		spin_unlock(&lock->omap_spinlock);
-		if (send_req)
-			ret = scoutfs_client_open_ino_map(sb, group_nr, &ldata->map);
-		else
-			wait_event(ldata->waitq, !omap_req_in_flight(lock, ldata));
-		spin_lock(&lock->omap_spinlock);
-
-		/* only sender can return error, other waiters retry */
-		if (send_req) {
-			ldata->req_in_flight = false;
-			if (ret == 0)
-				ldata->seq = lock->write_seq;
-			wake_up(&ldata->waitq);
-			if (ret < 0)
-				goto out;
-		}
-	}
-
-out:
-	spin_unlock(&lock->omap_spinlock);
-
-	if (ret == 0)
-		*ldata_ret = ldata;
-	else
-		*ldata_ret = NULL;
-
-	return ret;
-}
-
-/*
- * Return 1 and give the caller their locks when they should delete the
- * inode items.  It's safe to delete the inode items when it is no
- * longer reachable and nothing is referencing it.
- *
- * The inode is unreachable when nlink hits zero.  Cluster locks protect
- * modification and testing of nlink.  We use the ino_lock_cov covrage
- * to short circuit the common case of having a locked inode that hasn't
- * been deleted.  If it isn't locked, we have to acquire the lock to
- * refresh the inode to see its current nlink. 
- *
- * Then we use an open inode bitmap that covers all the inodes in the
- * lock group to determine if the inode is present in any other mount's
- * caches.  We refresh it by asking the server for all clients' maps and
- * then store it in the lock.  As long as we hold the lock nothing can
- * increase nlink from zero and let people get a reference to the inode.
- */
-int scoutfs_omap_should_delete(struct super_block *sb, struct inode *inode,
-			       struct scoutfs_lock **lock_ret, struct scoutfs_lock **orph_lock_ret)
-{
-	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	struct scoutfs_lock *orph_lock = NULL;
-	struct scoutfs_lock *lock = NULL;
-	const u64 ino = scoutfs_ino(inode);
-	struct scoutfs_omap_lock_data *ldata;
-	u64 group_nr;
-	int bit_nr;
-	int ret;
-	int err;
-
-	/* lock group and omap constants are defined independently */
-	BUILD_BUG_ON(SCOUTFS_OPEN_INO_MAP_BITS != SCOUTFS_LOCK_INODE_GROUP_NR);
-
-	if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink > 0) {
-		ret = 0;
-		goto out;
-	}
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE, SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
-	if (ret < 0)
-		goto out;
-
-	if (inode->i_nlink > 0) {
-		ret = 0;
-		goto out;
-	}
-
-	calc_group_nrs(ino, &group_nr, &bit_nr);
-
-	/* only one request to refresh the map at a time */
-	ret = get_current_lock_data(sb, lock, &ldata, group_nr);
-	if (ret < 0)
-		goto out;
-
-	/* can delete caller's zero nlink inode if it's not cached in other mounts */
-	ret = !test_bit_le(bit_nr, ldata->map.bits);
-out:
-	trace_scoutfs_omap_should_delete(sb, ino, inode->i_nlink, ret);
-
-	if (ret > 0) {
-		err = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, ino, &orph_lock);
-		if (err < 0)
-			ret = err;
-	}
-
-	if (ret <= 0) {
-		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-		lock = NULL;
-	}
-
-	*lock_ret = lock;
-	*orph_lock_ret = orph_lock;
-	return ret;
-}
-
-void scoutfs_omap_free_lock_data(struct scoutfs_omap_lock_data *ldata)
-{
-	if (ldata) {
-		WARN_ON_ONCE(ldata->req_in_flight);
-		WARN_ON_ONCE(waitqueue_active(&ldata->waitq));
-		kfree(ldata);
-	}
 }
 
 int scoutfs_omap_setup(struct super_block *sb)

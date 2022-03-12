@@ -362,3 +362,49 @@ t_wait_for_leader() {
 		done
 	done
 }
+
+t_set_sysfs_mount_option() {
+	local nr="$1"
+	local name="$2"
+	local val="$3"
+	local opt="$(t_sysfs_path $nr)/mount_options/$name"
+
+	echo "$val" > "$opt"
+}
+
+t_set_all_sysfs_mount_options() {
+	local name="$1"
+	local val="$2"
+	local i
+
+	for i in $(t_fs_nrs); do
+		t_set_sysfs_mount_option $i $name $val
+	done
+}
+
+declare -A _saved_opts
+t_save_all_sysfs_mount_options() {
+	local name="$1"
+	local ind
+	local opt
+	local i
+
+	for i in $(t_fs_nrs); do
+		opt="$(t_sysfs_path $i)/mount_options/$name"
+		ind="$name_$i"
+
+		_saved_opts[$ind]="$(cat $opt)"
+	done
+}
+
+t_restore_all_sysfs_mount_options() {
+	local name="$1"
+	local ind
+	local i
+
+	for i in $(t_fs_nrs); do
+		ind="$name_$i"
+
+		t_set_sysfs_mount_option $i $name "${_saved_opts[$ind]}"
+	done
+}

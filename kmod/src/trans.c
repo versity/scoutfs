@@ -640,6 +640,7 @@ void scoutfs_shutdown_trans(struct super_block *sb)
 			tri->write_workq = NULL;
 		}
 
+		scoutfs_alloc_prepare_commit(sb, &tri->alloc, &tri->wri);
 		scoutfs_block_writer_forget_all(sb, &tri->wri);
 
 		kfree(tri);

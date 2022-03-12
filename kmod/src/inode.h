@@ -82,7 +82,9 @@ void scoutfs_inode_queue_iput(struct inode *inode);
 
 #define SCOUTFS_IGF_LINKED (1 << 0) /* enoent if nlink == 0 */
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf);
-struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino);
+struct inode *scoutfs_ilookup_nowait(struct super_block *sb, u64 ino);
+struct inode *scoutfs_ilookup_nowait_nonewfree(struct super_block *sb, u64 ino);
+
 
 void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino);
 void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
@@ -104,9 +106,8 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 			       struct list_head *ind_locks);
 
 int scoutfs_alloc_ino(struct super_block *sb, bool is_dir, u64 *ino_ret);
-struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
-				umode_t mode, dev_t rdev, u64 ino,
-				struct scoutfs_lock *lock);
+int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, dev_t rdev,
+		      u64 ino, struct scoutfs_lock *lock, struct inode **inode_ret);
 
 void scoutfs_inode_set_meta_seq(struct inode *inode);
 void scoutfs_inode_set_data_seq(struct inode *inode);
@@ -126,6 +127,7 @@ int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
 
 int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
 int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
+void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb);
 
 void scoutfs_inode_queue_writeback(struct inode *inode);
 int scoutfs_inode_walk_writeback(struct super_block *sb, bool write);

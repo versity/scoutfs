@@ -152,11 +152,11 @@
 	EXPAND_COUNTER(net_recv_messages)			\
 	EXPAND_COUNTER(net_unknown_request)			\
 	EXPAND_COUNTER(orphan_scan)				\
+	EXPAND_COUNTER(orphan_scan_attempts)			\
 	EXPAND_COUNTER(orphan_scan_cached)			\
 	EXPAND_COUNTER(orphan_scan_error)			\
 	EXPAND_COUNTER(orphan_scan_item)			\
 	EXPAND_COUNTER(orphan_scan_omap_set)			\
-	EXPAND_COUNTER(orphan_scan_read)			\
 	EXPAND_COUNTER(quorum_elected)				\
 	EXPAND_COUNTER(quorum_fence_error)			\
 	EXPAND_COUNTER(quorum_fence_leader)			\

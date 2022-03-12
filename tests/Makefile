@@ -6,6 +6,7 @@ BIN := src/createmany			\
 	src/dumb_renameat2		\
 	src/dumb_setxattr		\
 	src/handle_cat			\
+	src/handle_fsetxattr		\
 	src/bulk_create_paths		\
 	src/stage_tmpfile		\
 	src/find_xattrs			\

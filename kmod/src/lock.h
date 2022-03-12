@@ -11,7 +11,7 @@
 
 #define SCOUTFS_LOCK_NR_MODES		SCOUTFS_LOCK_INVALID
 
-struct scoutfs_omap_lock;
+struct inode_deletion_lock_data;
 
 /*
  * A few fields (start, end, refresh_gen, write_seq, granted_mode)
@@ -47,9 +47,8 @@ struct scoutfs_lock {
 	/* the forest tracks which log tree last saw bloom bit updates */
 	atomic64_t forest_bloom_nr;
 
-	/* open ino mapping has a valid map for a held write lock */
-	spinlock_t omap_spinlock;
-	struct scoutfs_omap_lock_data *omap_data;
+	/* inode deletion tracks some state per lock */
+	struct inode_deletion_lock_data *inode_deletion_data;
 };
 
 struct scoutfs_lock_coverage {

@@ -66,10 +66,6 @@ struct inode_sb_info {
 
 	struct delayed_work orphan_scan_dwork;
 
-	/* serialize multiple inode ->evict trying to delete same ino's items */
-	spinlock_t deleting_items_lock;
-	struct list_head deleting_items_list;
-
 	struct work_struct iput_work;
 	struct llist_head iput_llist;
 };
@@ -662,22 +658,12 @@ void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off)
 	} while (read_seqcount_retry(&si->seqcount, seq));
 }
 
-/*
- * We have inversions between getting cluster locks while performing
- * final deletion on a freeing inode and waiting on a freeing inode
- * while holding a cluster lock.
- *
- * We can avoid these deadlocks by hiding freeing inodes in our hash
- * lookup function.  We're fine with either returning null or populating
- * a new inode overlapping with eviction freeing a previous instance of
- * the inode.
- */
 static int scoutfs_iget_test(struct inode *inode, void *arg)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	u64 *ino = arg;
 
-	return (si->ino == *ino) && !(inode->i_state & I_FREEING);
+	return si->ino == *ino;
 }
 
 static int scoutfs_iget_set(struct inode *inode, void *arg)
@@ -691,11 +677,35 @@ static int scoutfs_iget_set(struct inode *inode, void *arg)
 	return 0;
 }
 
-struct inode *scoutfs_ilookup(struct super_block *sb, u64 ino)
+/*
+ * There's a risk of a deadlock between lock invalidation and eviction.
+ * Invalidation blocks locks while looking up inodes.  Eviction blocks
+ * inode lookups while trying to get a lock.
+ *
+ * We have an inode lookup variant which will never block waiting for an
+ * inode.   This is more aggressive than base ilookup5_nowait() which
+ * will, you know, wait for inodes that are being freed.   We have our
+ * test function hide those inodes from find_inode so that it won't wait
+ * on them.
+ *
+ * These semantics are sufficiently weird that we use a big giant scary
+ * looking function name to deter use.
+ */
+static int ilookup_test_nonewfree(struct inode *inode, void *arg)
 {
-	return ilookup5(sb, ino, scoutfs_iget_test, &ino);
+	return scoutfs_iget_test(inode, arg) &&
+	       !(inode->i_state & (I_NEW | I_WILL_FREE | I_FREEING));
+}
+struct inode *scoutfs_ilookup_nowait_nonewfree(struct super_block *sb, u64 ino)
+{
+	return ilookup5_nowait(sb, ino, ilookup_test_nonewfree, &ino);
 }
 
+/*
+ * Final iput can delete an unused inode's items which can take multiple
+ * locked transactions.  iget (which can call iput in error cases) and
+ * iput must not be called with locks or transactions held.
+ */
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf)
 {
 	struct scoutfs_lock *lock = NULL;
@@ -703,32 +713,36 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf)
 	struct inode *inode = NULL;
 	int ret;
 
-	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, lkf, ino, &lock);
-	if (ret < 0)
-		goto out;
-
+	/* wait for vfs inode (I_FREEING in particular) before acquiring cluster lock */
 	inode = iget5_locked(sb, ino, scoutfs_iget_test, scoutfs_iget_set, &ino);
 	if (!inode) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
+	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, lkf, ino, &lock);
+	if (ret < 0)
+		goto out;
+
 	if (inode->i_state & I_NEW) {
 		/* XXX ensure refresh, instead clear in drop_inode? */
 		si = SCOUTFS_I(inode);
 		atomic64_set(&si->last_refreshed, 0);
 		inode->i_version = 0;
+	}
 
-		ret = scoutfs_inode_refresh(inode, lock);
-		if (ret < 0)
-			goto out;
+	ret = scoutfs_inode_refresh(inode, lock);
+	if (ret < 0)
+		goto out;
 
-		if ((igf & SCOUTFS_IGF_LINKED) && inode->i_nlink == 0) {
-			ret = -ENOENT;
-			goto out;
-		}
+	/* check nlink both for new and after refreshing */
+	if ((igf & SCOUTFS_IGF_LINKED) && inode->i_nlink == 0) {
+		ret = -ENOENT;
+		goto out;
+	}
 
-		ret = scoutfs_omap_inc(sb, ino);
+	if (inode->i_state & I_NEW) {
+		ret = scoutfs_omap_set(sb, ino);
 		if (ret < 0)
 			goto out;
 
@@ -741,8 +755,12 @@ out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 
 	if (ret < 0) {
-		if (inode)
-			iget_failed(inode);
+		if (inode) {
+			if (inode->i_state & I_NEW)
+				iget_failed(inode);
+			else
+				iput(inode);
+		}
 		inode = ERR_PTR(ret);
 	}
 
@@ -1393,10 +1411,14 @@ out:
 /*
  * Allocate and initialize a new inode.  The caller is responsible for
  * creating links to it and updating it.  @dir can be null.
+ *
+ * This is called with locks and a transaction because it creates the
+ * inode item.   We can't call iput on the new inode on error.   We
+ * return the inode to the caller *including on error* for them to put
+ * once they've released the transaction.
  */
-struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
-				umode_t mode, dev_t rdev, u64 ino,
-				struct scoutfs_lock *lock)
+int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, dev_t rdev,
+		      u64 ino, struct scoutfs_lock *lock, struct inode **inode_ret)
 {
 	struct scoutfs_inode_info *si;
 	struct scoutfs_key key;
@@ -1405,8 +1427,10 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	int ret;
 
 	inode = new_inode(sb);
-	if (!inode)
-		return ERR_PTR(-ENOMEM);
+	if (!inode) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	si = SCOUTFS_I(inode);
 	si->ino = ino;
@@ -1434,20 +1458,17 @@ struct inode *scoutfs_new_inode(struct super_block *sb, struct inode *dir,
 	store_inode(&sinode, inode);
 	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
-	ret = scoutfs_omap_inc(sb, ino);
+	ret = scoutfs_omap_set(sb, ino);
 	if (ret < 0)
 		goto out;
 
 	ret = scoutfs_item_create(sb, &key, &sinode, sizeof(sinode), lock);
 	if (ret < 0)
-		scoutfs_omap_dec(sb, ino);
+		scoutfs_omap_clear(sb, ino);
 out:
-	if (ret) {
-		iput(inode);
-		inode = ERR_PTR(ret);
-	}
+	*inode_ret = inode;
 
-	return inode;
+	return ret;
 }
 
 static void init_orphan_key(struct scoutfs_key *key, u64 ino)
@@ -1482,44 +1503,6 @@ int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_
 	return scoutfs_item_delete_force(sb, &key, lock);
 }
 
-struct deleting_ino_entry {
-	struct list_head head;
-	u64 ino;
-};
-
-static bool added_deleting_ino(struct inode_sb_info *inf, struct deleting_ino_entry *del, u64 ino)
-{
-	struct deleting_ino_entry *tmp;
-	bool added = true;
-
-	spin_lock(&inf->deleting_items_lock);
-
-	list_for_each_entry(tmp, &inf->deleting_items_list, head) {
-		if (tmp->ino == ino) {
-			added = false;
-			break;
-		}
-	}
-
-	if (added) {
-		del->ino = ino;
-		list_add_tail(&del->head, &inf->deleting_items_list);
-	}
-
-	spin_unlock(&inf->deleting_items_lock);
-
-	return added;
-}
-
-static void del_deleting_ino(struct inode_sb_info *inf, struct deleting_ino_entry *del)
-{
-	if (del->ino) {
-		spin_lock(&inf->deleting_items_lock);
-		list_del_init(&del->head);
-		spin_unlock(&inf->deleting_items_lock);
-	}
-}
-
 /*
  * Remove all the items associated with a given inode.  This is only
  * called once nlink has dropped to zero and nothing has the inode open
@@ -1528,22 +1511,10 @@ static void del_deleting_ino(struct inode_sb_info *inf, struct deleting_ino_entr
  * orphan item will continue triggering attempts to finish previous
  * partial deletion until all deletion is complete and the orphan item
  * is removed.
- *
- * Currently this can be called multiple times for multiple cached
- * inodes for a given ino number (ilookup avoids freeing inodes to avoid
- * cluster lock<->inode flag waiting inversions).  Some items are not
- * safe to delete concurrently, for example concurrent data truncation
- * could free extents multiple times.  We use a very silly list of inos
- * being deleted.  Duplicates just return success.  If the first
- * deletion ends up failing orphan deletion will come back around later
- * and retry.
  */
-static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
-			      struct scoutfs_lock *orph_lock)
+static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_inode *sinode,
+			      struct scoutfs_lock *lock, struct scoutfs_lock *orph_lock)
 {
-	DECLARE_INODE_SB_INFO(sb, inf);
-	struct deleting_ino_entry del = {{NULL, }};
-	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
 	LIST_HEAD(ind_locks);
 	bool release = false;
@@ -1552,30 +1523,10 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 	u64 size;
 	int ret;
 
-	if (!added_deleting_ino(inf, &del, ino)) {
-		ret = 0;
-		goto out;
-	}
-
 	scoutfs_inode_init_key(&key, ino);
 
-	ret = scoutfs_item_lookup_exact(sb, &key, &sinode, sizeof(sinode),
-					lock);
-	if (ret < 0) {
-		if (ret == -ENOENT)
-			ret = 0;
-		goto out;
-	}
-
-	/* XXX corruption, inode probably won't be freed without repair */
-	if (le32_to_cpu(sinode.nlink)) {
-		scoutfs_warn(sb, "Dangling orphan item for inode %llu.", ino);
-		ret = -EIO;
-		goto out;
-	}
-
-	mode = le32_to_cpu(sinode.mode);
-	size = le64_to_cpu(sinode.size);
+	mode = le32_to_cpu(sinode->mode);
+	size = le64_to_cpu(sinode->size);
 	trace_scoutfs_delete_inode(sb, ino, mode, size);
 
 	/* remove data items in their own transactions */
@@ -1593,7 +1544,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_lo
 	/* then delete the small known number of remaining inode items */
 retry:
 	ret = scoutfs_inode_index_start(sb, &ind_seq) ?:
-	      prepare_index_deletion(sb, &ind_locks, ino, mode, &sinode) ?:
+	      prepare_index_deletion(sb, &ind_locks, ino, mode, sinode) ?:
 	      scoutfs_inode_index_try_lock_hold(sb, &ind_locks, ind_seq, false);
 	if (ret > 0)
 		goto retry;
@@ -1602,7 +1553,7 @@ retry:
 
 	release = true;
 
-	ret = remove_index_items(sb, ino, &sinode, &ind_locks);
+	ret = remove_index_items(sb, ino, sinode, &ind_locks);
 	if (ret)
 		goto out;
 
@@ -1612,15 +1563,21 @@ retry:
 			goto out;
 	}
 
-	ret = scoutfs_item_delete(sb, &key, lock);
-	if (ret)
+	/* make sure inode item and orphan are deleted together */
+	ret = scoutfs_item_dirty(sb, &key, lock);
+	if (ret < 0)
 		goto out;
 
 	ret = scoutfs_inode_orphan_delete(sb, ino, orph_lock);
-	if (ret == 0)
-		scoutfs_forest_dec_inode_count(sb);
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_item_delete(sb, &key, lock);
+	BUG_ON(ret != 0); /* dirtying should have guaranteed success */
+
+	scoutfs_forest_dec_inode_count(sb);
+
 out:
-	del_deleting_ino(inf, &del);
 	if (release)
 		scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
@@ -1628,48 +1585,192 @@ out:
 	return ret;
 }
 
+struct inode_deletion_lock_data {
+	wait_queue_head_t waitq;
+	atomic64_t seq;
+	struct scoutfs_open_ino_map map;
+	unsigned long trying[DIV_ROUND_UP(SCOUTFS_OPEN_INO_MAP_BITS, BITS_PER_LONG)];
+};
+
 /*
- * iput_final has already written out the dirty pages to the inode
- * before we get here.  We're left with a clean inode that we have to
- * tear down.  We use locking and open inode number bitmaps to decide if
- * we should finally destroy an inode that is no longer open nor
- * reachable through directory entries.
+ * Get a lock data struct that has the current omap from this hold of
+ * the lock.  The lock data is saved on the lock so it can be used
+ * multiple times until the lock is refreshed.  Only one task will send
+ * an omap request at a time, and errors are only returned by each task
+ * as it gets a response to its send.
+ */
+static int get_current_lock_data(struct super_block *sb, struct scoutfs_lock *lock,
+				 struct inode_deletion_lock_data **ldata_ret, u64 group_nr)
+{
+	struct inode_deletion_lock_data *ldata;
+	u64 seq;
+	int ret;
+
+	/* we're storing omap maps in locks, they need to cover the same number of inodes */
+	BUILD_BUG_ON(SCOUTFS_OPEN_INO_MAP_BITS != SCOUTFS_LOCK_INODE_GROUP_NR);
+
+	/* allocate a new lock data struct as needed */
+	while ((ldata = cmpxchg(&lock->inode_deletion_data, NULL, NULL)) == NULL) {
+		ldata = kzalloc(sizeof(struct inode_deletion_lock_data), GFP_NOFS);
+		if (!ldata) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		atomic64_set(&ldata->seq, lock->write_seq - 1); /* ensure refresh */
+		init_waitqueue_head(&ldata->waitq);
+
+		/* the lock kfrees the inode_deletion_data pointer along with the lock */
+		if (cmpxchg(&lock->inode_deletion_data, NULL, ldata) == NULL)
+			break;
+		else
+			kfree(ldata);
+	}
+
+	/* make sure that the lock's data is current */
+	while ((seq = atomic64_read(&ldata->seq)) != lock->write_seq) {
+		if (seq != U64_MAX && atomic64_cmpxchg(&ldata->seq, seq, U64_MAX) == seq) {
+			/* ask the server for current omap */
+			ret = scoutfs_client_open_ino_map(sb, group_nr, &ldata->map);
+			if (ret == 0)
+				atomic64_set(&ldata->seq, lock->write_seq);
+			else
+				atomic64_set(&ldata->seq, lock->write_seq - 1);
+			wake_up(&ldata->waitq);
+			if (ret < 0)
+				goto out;
+		} else {
+			/* wait for someone else who's sent a request */
+			wait_event(ldata->waitq, atomic64_read(&ldata->seq) != U64_MAX);
+		}
+	}
+
+	ret = 0;
+out:
+	if (ret < 0)
+		ldata = NULL;
+	*ldata_ret = ldata;
+	return ret;
+}
+
+/*
+ * Try to delete all the items for an unused inode number.  This is the
+ * relatively slow path that uses cluster locks, network requests, and
+ * IO to ensure correctness.  Callers should try hard to avoid calling
+ * when there's no work to do.
  *
- * Because lookup ignores freeing inodes we can get here from multiple
- * instances of an inode that is being deleted.  Orphan scanning in
- * particular can race with deletion.   delete_inode_items() resolves
- * concurrent attempts.
+ * Inode references are added under cluster locks.  In-memory vfs cache
+ * references are added under read cluster locks and are visible in omap
+ * bitmaps.  Directory entry references are added under write cluster
+ * locks and are visible in the inode's nlink.  Orphan items exist
+ * whenever nlink == 0 and are maintained under write cluster locks.
+ * Directory entries can be added to an inode with nlink == 0 to
+ * instantiate tmpfile inodes into the name space.  Cached inodes will
+ * not be created for inodes with an nlink of 0.
+ *
+ * Combining all this we know that it's safe to delete an inode's items
+ * when we hold an exclusive write cluster lock, the inode has nlink ==
+ * 0, and an omap request protected by the lock doesn't have the inode's
+ * bit set.
+ *
+ * This is called by orphan scanning and vfs inode cache eviction after
+ * they've checked that the inode could really be deleted.  We serialize
+ * on a bit in the lock data so that we only have one deletion attempt
+ * per inode under this mount's cluster lock.
+ */
+static int try_delete_inode_items(struct super_block *sb, u64 ino)
+{
+	struct inode_deletion_lock_data *ldata = NULL;
+	struct scoutfs_lock *orph_lock = NULL;
+	struct scoutfs_lock *lock = NULL;
+	struct scoutfs_inode sinode;
+	struct scoutfs_key key;
+	u64 group_nr;
+	int bit_nr;
+	int ret;
+
+	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino, &lock);
+	if (ret < 0)
+		goto out;
+
+	scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
+
+	ret = get_current_lock_data(sb, lock, &ldata, group_nr);
+	if (ret < 0)
+		goto out;
+
+	/* only one local attempt per inode at a time */
+	if (test_and_set_bit(bit_nr, ldata->trying)) {
+		ret = 0;
+		goto out;
+	}
+
+	/* can't delete if it's cached in local or remote mounts */
+	if (scoutfs_omap_test(sb, ino) || test_bit_le(bit_nr, ldata->map.bits)) {
+		ret = 0;
+		goto out;
+	}
+
+	scoutfs_inode_init_key(&key, ino);
+	ret = scoutfs_item_lookup_exact(sb, &key, &sinode, sizeof(sinode), lock);
+	if (ret < 0) {
+		if (ret == -ENOENT)
+			ret = 0;
+		goto out;
+	}
+
+	if (le32_to_cpu(sinode.nlink) > 0) {
+		ret = 0;
+		goto out;
+	}
+
+	ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, ino, &orph_lock);
+	if (ret < 0)
+		goto out;
+
+	ret = delete_inode_items(sb, ino, &sinode, lock, orph_lock);
+out:
+	if (ldata)
+		clear_bit(bit_nr, ldata->trying);
+
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
+
+	return ret;
+}
+
+/*
+ * As we drop an inode we need to decide to try and delete its items or
+ * not, which is expensive.  The two common cases we want to get right
+ * both have cluster lock coverage and don't want to delete.   Dropping
+ * unused inodes during read lock invalidation has the current lock and
+ * sees a nonzero nlink and knows not to delete.  Final iput after a
+ * local unlink also has a lock, sees a zero nlink, and tries to perform
+ * item deletion in the task that dropped the last link, as users
+ * expect. 
+ *
+ * Evicting an inode outside of cluster locking is the odd slow path
+ * that involves lock contention during use the worst cross-mount
+ * open-unlink/delete case.
  */
 void scoutfs_evict_inode(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	const u64 ino = scoutfs_ino(inode);
-	struct scoutfs_lock *orph_lock;
-	struct scoutfs_lock *lock;
-	int ret;
 
-	trace_scoutfs_evict_inode(inode->i_sb, scoutfs_ino(inode),
-				  inode->i_nlink, is_bad_inode(inode));
+	trace_scoutfs_evict_inode(sb, ino, inode->i_nlink, is_bad_inode(inode));
 
-	if (is_bad_inode(inode))
-		goto clear;
+	if (!is_bad_inode(inode)) {
+		truncate_inode_pages_final(&inode->i_data);
 
-	truncate_inode_pages_final(&inode->i_data);
+		/* clear before trying to delete tests */
+		scoutfs_omap_clear(sb, ino);
 
-	ret = scoutfs_omap_should_delete(sb, inode, &lock, &orph_lock);
-	if (ret > 0) {
-		ret = delete_inode_items(inode->i_sb, scoutfs_ino(inode), lock, orph_lock);
-		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-		scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
-	}
-	if (ret < 0) {
-		scoutfs_err(sb, "error %d while checking to delete inode nr %llu, it might linger.",
-			    ret, ino);
+		if (!scoutfs_lock_is_covered(sb, &si->ino_lock_cov) || inode->i_nlink == 0)
+			try_delete_inode_items(sb, scoutfs_ino(inode));
 	}
 
-	scoutfs_omap_dec(sb, ino);
-
-clear:
 	clear_inode(inode);
 }
 
@@ -1745,18 +1846,26 @@ void scoutfs_inode_queue_iput(struct inode *inode)
 /*
  * All mounts are performing this work concurrently.  We introduce
  * significant jitter between them to try and keep them from all
- * bunching up and working on the same inodes.
+ * bunching up and working on the same inodes.  We always try to delay
+ * for at least one jiffy if precision tricks us into calculating no
+ * delay.
  */
-static void schedule_orphan_dwork(struct inode_sb_info *inf)
+void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb)
 {
-#define ORPHAN_SCAN_MIN_MS (10 * MSEC_PER_SEC)
-#define ORPHAN_SCAN_JITTER_MS (40 * MSEC_PER_SEC)
-	unsigned long delay = msecs_to_jiffies(ORPHAN_SCAN_MIN_MS +
-					       prandom_u32_max(ORPHAN_SCAN_JITTER_MS));
+	DECLARE_INODE_SB_INFO(sb, inf);
+	struct scoutfs_mount_options opts;
+	unsigned long low;
+	unsigned long high;
+	unsigned long delay;
+
 	if (!inf->stopped) {
-		delay = msecs_to_jiffies(ORPHAN_SCAN_MIN_MS +
-					 prandom_u32_max(ORPHAN_SCAN_JITTER_MS));
-		schedule_delayed_work(&inf->orphan_scan_dwork, delay);
+		scoutfs_options_read(sb, &opts);
+
+		low = (opts.orphan_scan_delay_ms * 80) / 100;
+		high = (opts.orphan_scan_delay_ms * 120) / 100;
+		delay = msecs_to_jiffies(low + prandom_u32_max(high - low)) ?: 1;
+
+		mod_delayed_work(system_wq, &inf->orphan_scan_dwork, delay);
 	}
 }
 
@@ -1764,11 +1873,10 @@ static void schedule_orphan_dwork(struct inode_sb_info *inf)
  * Find and delete inodes whose only remaining reference is the
  * persistent orphan item that was created as they were unlinked.
  *
- * Orphan items are created as the final directory entry referring to an
- * inode is deleted.  They're deleted as the final cached inode is
- * evicted and the inode items are destroyed.  They can linger if all
- * the cached inodes pinning the inode fail to delete as they are
- * evicted from the cache -- either through crashing or errors.
+ * Orphan items are maintained for inodes that have an nlink of 0.
+ * Typically this is from unlink, but tmpfiles are created with orphans.
+ * They're deleted as the final cached inode is evicted and the inode
+ * items are destroyed.
  *
  * This work runs in all mounts in the background looking for those
  * orphaned inodes that weren't fully deleted.
@@ -1777,20 +1885,16 @@ static void schedule_orphan_dwork(struct inode_sb_info *inf)
  * only find orphan items that made it to the fs root after being merged
  * from a mount's log btree.  This naturally avoids orphan items that
  * exist while inodes have been unlinked but are still cached, including
- * O_TMPFILE inodes that are actively used during normal operations.
+ * tmpfile inodes that are actively used during normal operations.
  * Scanning the read-only persistent fs root uses cached blocks and
  * avoids the lock contention we'd cause if we tried to use the
  * consistent item cache.  The downside is that it adds a bit of
- * latency.  If an orphan was created in error it'll take until the
- * mount's log btree is finalized and merged.  A crash will have the log
- * btree merged after it is fenced.
+ * latency.
  *
- * Once we find candidate orphan items we can first check our local
- * inode cache for inodes that are already on their way to eviction and
- * can be skipped.  Then we ask the server for the open map containing
- * the inode.  Only if we don't have it cached, and no one else does, do
- * we try and read it into our cache and evict it to trigger the final
- * inode deletion process.
+ * Once we find candidate orphan items we first check our local omap for
+ * a locally cached inode.  Then we ask the server for the open map
+ * containing the inode.  Only if we don't see any cached users do we do
+ * the expensive work of acquiring locks to try and delete the items.
  */
 static void inode_orphan_scan_worker(struct work_struct *work)
 {
@@ -1802,7 +1906,6 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key last;
 	struct scoutfs_key key;
-	struct inode *inode;
 	u64 group_nr;
 	int bit_nr;
 	u64 ino;
@@ -1841,17 +1944,14 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		scoutfs_inc_counter(sb, orphan_scan_item);
 		ino = le64_to_cpu(key.sko_ino);
 
-		/* locally cached inodes will already be deleted */
-		inode = scoutfs_ilookup(sb, ino);
-		if (inode) {
+		/* locally cached inodes will try to delete as they evict */
+		if (scoutfs_omap_test(sb, ino)) {
 			scoutfs_inc_counter(sb, orphan_scan_cached);
-			iput(inode);
 			continue;
 		}
 
 		/* get an omap that covers the orphaned ino */
-		group_nr = ino >> SCOUTFS_OPEN_INO_MAP_SHIFT;
-		bit_nr = ino & SCOUTFS_OPEN_INO_MAP_MASK;
+		scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 		if (le64_to_cpu(omap.args.group_nr) != group_nr) {
 			ret = scoutfs_client_open_ino_map(sb, group_nr, &omap);
@@ -1859,25 +1959,15 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 				goto out;
 		}
 
-		/* don't need to evict if someone else has it open (cached) */
+		/* remote cached inodes will also try to delete */
 		if (test_bit_le(bit_nr, omap.bits)) {
 			scoutfs_inc_counter(sb, orphan_scan_omap_set);
 			continue;
 		}
 
-		/* try to cached and evict unused inode to delete, can be racing */
-		inode = scoutfs_iget(sb, ino, 0, 0);
-		if (IS_ERR(inode)) {
-			ret = PTR_ERR(inode);
-			if (ret == -ENOENT)
-				continue;
-			else
-				goto out;
-		}
-
-		scoutfs_inc_counter(sb, orphan_scan_read);
-		SCOUTFS_I(inode)->drop_invalidated = true;
-		iput(inode);
+		/* seemingly orphaned and unused, get locks and check for sure */
+		scoutfs_inc_counter(sb, orphan_scan_attempts);
+		ret = try_delete_inode_items(sb, ino);
 	}
 
 	ret = 0;
@@ -1886,7 +1976,7 @@ out:
 	if (ret < 0)
 		scoutfs_inc_counter(sb, orphan_scan_error);
 
-	schedule_orphan_dwork(inf);
+	scoutfs_inode_schedule_orphan_dwork(sb);
 }
 
 /*
@@ -1994,8 +2084,6 @@ int scoutfs_inode_setup(struct super_block *sb)
 	spin_lock_init(&inf->dir_ino_alloc.lock);
 	spin_lock_init(&inf->ino_alloc.lock);
 	INIT_DELAYED_WORK(&inf->orphan_scan_dwork, inode_orphan_scan_worker);
-	spin_lock_init(&inf->deleting_items_lock);
-	INIT_LIST_HEAD(&inf->deleting_items_list);
 	INIT_WORK(&inf->iput_work, iput_worker);
 	init_llist_head(&inf->iput_llist);
 
@@ -2011,9 +2099,7 @@ int scoutfs_inode_setup(struct super_block *sb)
  */
 void scoutfs_inode_start(struct super_block *sb)
 {
-	DECLARE_INODE_SB_INFO(sb, inf);
-
-	schedule_orphan_dwork(inf);
+	scoutfs_inode_schedule_orphan_dwork(sb);
 }
 
 /*
