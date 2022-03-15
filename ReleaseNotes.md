@@ -2,9 +2,31 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
-v1.2-rc
+v1.3-rc
 \
 *TBD*
+
+---
+v1.2
+\
+*Mar 14, 2022*
+
+* **Fix deadlock between fallocate() and read() system calls**
+\
+  Fixed a lock inversion that could cause two tasks to deadlock if they
+  performed fallocate() and read() on a file at the same time.   The
+  deadlock was uninterruptible so the machine needed to be rebooted.  This
+  was relatively rare as fallocate() is usually used to prepare files
+  before they're used.
+
+* **Fix instability from heavy file deletion workloads**
+\
+  Fixed rare circumstances under which background file deletion cleanup
+  tasks could try to delete a file while it is being deleted by another
+  task.  Heavy load across multiple nodes, either many files being deleted
+  or large files being deleted, increased the chances of this happening.
+  Heavy staging could cause this problem because staging can create many
+  internal temporary files that need to be deleted.
 
 ---
 v1.1
