@@ -610,6 +610,21 @@ out:
 }
 
 /*
+ * The main quorum task maintains its private status.  It seemed cleaner
+ * to occasionally copy the status for showing in sysfs/debugfs files
+ * than to have the two lock access to shared status.  The show copy is
+ * updated after being modified before the quorum task sleeps for a
+ * significant amount of time, either waiting on timeouts or interacting
+ * with the server.
+ */
+static void update_show_status(struct quorum_info *qinf, struct quorum_status *qst)
+{
+	spin_lock(&qinf->show_lock);
+	qinf->show_status = *qst;
+	spin_unlock(&qinf->show_lock);
+}
+
+/*
  * The quorum work always runs in the background of quorum member
  * mounts.  It's responsible for starting and stopping the server if
  * it's elected leader, and the server can call back into it to let it
@@ -651,6 +666,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 	while (!(qinf->shutdown || scoutfs_forcing_unmount(sb))) {
 
+		update_show_status(qinf, &qst);
+
 		ret = recv_msg(sb, &msg, qst.timeout);
 		if (ret < 0) {
 			if (ret != -ETIMEDOUT && ret != -EAGAIN) {
@@ -681,10 +698,6 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			scoutfs_inc_counter(sb, quorum_send_resignation);
 		}
 
-		spin_lock(&qinf->show_lock);
-		qinf->show_status = qst;
-		spin_unlock(&qinf->show_lock);
-
 		trace_scoutfs_quorum_loop(sb, qst.role, qst.term, qst.vote_for,
 					  qst.vote_bits,
 					  ktime_to_timespec64(qst.timeout));
@@ -695,6 +708,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			if (qst.role == LEADER) {
 				scoutfs_warn(sb, "saw msg type %u from %u for term %llu while leader in term %llu, shutting down server.",
 					     msg.type, msg.from, msg.term, qst.term);
+				update_show_status(qinf, &qst);
 				scoutfs_server_stop(sb);
 			}
 			qst.role = FOLLOWER;
@@ -758,6 +772,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 					qst.term);
 			qst.timeout = heartbeat_interval();
 
+			update_show_status(qinf, &qst);
+
 			/* record that we've been elected before starting up server */
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_ELECT, qst.term, true);
 			if (ret < 0)
@@ -816,6 +832,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			scoutfs_inc_counter(sb, quorum_send_vote);
 		}
 	}
+
+	update_show_status(qinf, &qst);
 
 	/* always try to stop a running server as we stop */
 	if (test_bit(QINF_FLAG_SERVER, &qinf->flags)) {
