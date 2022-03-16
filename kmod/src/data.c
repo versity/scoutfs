@@ -1748,13 +1748,14 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	iblock = start >> SCOUTFS_BLOCK_SM_SHIFT;
 	last = (start + len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
 
-	while (iblock <= last) {
+	while (true) {
 		ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
 				       iblock, 1, &ext);
 		if (ret < 0) {
-			if (ret == -ENOENT)
+			if (ret == -ENOENT) {
 				ret = 0;
-			last_flags = FIEMAP_EXTENT_LAST;
+				last_flags = FIEMAP_EXTENT_LAST;
+			}
 			break;
 		}
 
