@@ -76,6 +76,20 @@ t_fs_nrs()
 }
 
 #
+# outputs "1" if the fs number has "1" in its quorum/is_leader file.
+# All other cases output 0, including the fs nr being a client which
+# won't have a quorum/ dir.
+#
+t_fs_is_leader()
+{
+	if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader 2>/dev/null)" == "1" ]; then
+		echo "1"
+	else
+		echo "0"
+	fi
+}
+
+#
 # Output the mount nr of the current server.  This takes no steps to
 # ensure that the server doesn't shut down and have some other mount
 # take over.  
@@ -83,7 +97,7 @@ t_fs_nrs()
 t_server_nr()
 {
 	for i in $(t_fs_nrs); do
-		if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader)" == "1" ]; then
+		if [ "$(t_fs_is_leader $i)" == "1" ]; then
 			echo $i
 			return
 		fi
@@ -101,7 +115,7 @@ t_server_nr()
 t_first_client_nr()
 {
 	for i in $(t_fs_nrs); do
-		if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader)" == "0" ]; then
+		if [ "$(t_fs_is_leader $i)" == "0" ]; then
 			echo $i
 			return
 		fi
