@@ -663,8 +663,8 @@ static int scoutfs_get_block_read(struct inode *inode, sector_t iblock,
 	return ret;
 }
 
-static int scoutfs_get_block_write(struct inode *inode, sector_t iblock,
-				   struct buffer_head *bh, int create)
+int scoutfs_get_block_write(struct inode *inode, sector_t iblock,
+			    struct buffer_head *bh, int create)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	int ret;

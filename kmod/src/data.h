@@ -49,6 +49,8 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 			u64 start, u64 len);
 long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len);
+int scoutfs_get_block_write(struct inode *inode, sector_t iblock,
+			    struct buffer_head *bh, int create);
 int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 				     struct scoutfs_lock *lock);
 int scoutfs_data_move_blocks(struct inode *from, u64 from_off,

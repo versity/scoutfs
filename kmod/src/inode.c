@@ -19,6 +19,7 @@
 #include <linux/pagemap.h>
 #include <linux/sched.h>
 #include <linux/list_sort.h>
+#include <linux/buffer_head.h>
 
 #include "format.h"
 #include "super.h"
@@ -354,15 +355,22 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	LIST_HEAD(ind_locks);
 	int ret;
 
 	if (!S_ISREG(inode->i_mode))
 		return 0;
 
+	scoutfs_per_task_add(&si->pt_data_lock, &pt_ent, lock);
+	ret = block_truncate_page(inode->i_mapping, new_size, scoutfs_get_block_write);
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	if (ret)
+		goto out;
+
 	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true, false);
 	if (ret)
-		return ret;
+		goto out;
 
 	if (new_size != i_size_read(inode))
 		scoutfs_inode_inc_data_version(inode);
@@ -378,6 +386,7 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 	scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 
+out:
 	return ret;
 }
 
