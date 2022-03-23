@@ -1318,6 +1318,17 @@ bool scoutfs_alloc_meta_low(struct super_block *sb,
 	return lo;
 }
 
+void scoutfs_alloc_meta_remaining(struct scoutfs_alloc *alloc, u32 *avail_total, u32 *freed_space)
+{
+	unsigned int seq;
+
+	do {
+		seq = read_seqbegin(&alloc->seqlock);
+		*avail_total = le32_to_cpu(alloc->avail.first_nr);
+		*freed_space = list_block_space(alloc->freed.first_nr);
+	} while (read_seqretry(&alloc->seqlock, seq));
+}
+
 bool scoutfs_alloc_test_flag(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 flag)
 {
