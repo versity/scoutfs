@@ -55,8 +55,20 @@ test -x "$SCOUTFS_FENCED_RUN" || \
 	error_exit "SCOUTFS_FENCED_RUN '$SCOUTFS_FENCED_RUN' isn't executable"
 
 #
-# main loop watching for fence request across all filesystems 
+# Main loop watching for fence request across all filesystems.   The
+# server can shut down without waiting for pending fence requests to
+# finish.  All of the interaction with the fence directory and files can
+# fail at any moment.  We will generate log messages when the dir or
+# files disappear.
 #
+
+# generate failure messages to stderr while still echoing 0 for the caller
+careful_cat()
+{
+	local path="$@"
+
+	cat "$@" || echo 0
+}
 
 while sleep $SCOUTFS_FENCED_DELAY; do
 	for fence in /sys/fs/scoutfs/*/fence/*; do
@@ -66,7 +78,8 @@ while sleep $SCOUTFS_FENCED_DELAY; do
 		fi
 
 		# skip requests that have been handled
-		if [ $(cat "$fence/fenced") == 1 -o $(cat "$fence/error") == 1 ]; then
+		if [ "$(careful_cat $fence/fenced)" == 1 -o \
+		     "$(careful_cat $fence/error)" == 1 ]; then
 			continue
 		fi
 
@@ -81,10 +94,10 @@ while sleep $SCOUTFS_FENCED_DELAY; do
 		export SCOUTFS_FENCED_REQ_RID="$rid"
 		export SCOUTFS_FENCED_REQ_IP="$ip"
 
-		$run $SCOUTFS_FENCED_RUN_ARGS
+		$SCOUTFS_FENCED_RUN $SCOUTFS_FENCED_RUN_ARGS
 		rc=$?
 		if [ "$rc" != 0 ]; then
-			log_message "server $srv fencing rid $rid saw error status $rc from $run"
+			log_message "server $srv fencing rid $rid saw error status $rc"
 			echo 1 > "$fence/error"
 			continue
 		fi

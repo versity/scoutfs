@@ -1,5 +1,18 @@
 #!/usr/bin/bash
 
+#
+# This fencing script is used for testing clusters of multiple mounts on
+# a single host.  It finds mounts to fence by looking for their rids and
+# only knows how to "fence" by using forced unmount.
+#
+
+echo "$0 running rid '$SCOUTFS_FENCED_REQ_RID' ip '$SCOUTFS_FENCED_REQ_IP' args '$@'"
+
+log() {
+	echo "$@" > /dev/stderr
+	exit 1
+}
+
 echo_fail() {
 	echo "$@" > /dev/stderr
 	exit 1
@@ -7,29 +20,24 @@ echo_fail() {
 
 rid="$SCOUTFS_FENCED_REQ_RID"
 
-#
-# Look for a local mount with the rid to fence.  Typically we'll at
-# least find the mount with the server that requested the fence that
-# we're processing.   But it's possible that mounts are unmounted
-# before, or while, we're running.
-#
-mnts=$(findmnt -l -n -t scoutfs -o TARGET) || \
-	echo_fail "findmnt -t scoutfs failed" > /dev/stderr
+for fs in /sys/fs/scoutfs/*; do
+	[ ! -d "$fs" ] && continue
 
-for mnt in $mnts; do
-	mnt_rid=$(scoutfs statfs -p "$mnt" -s rid) || \
-		echo_fail "scoutfs statfs $mnt failed"
-
-	if [ "$mnt_rid" == "$rid" ]; then
-		umount -f "$mnt" || \
-			echo_fail "umout -f $mnt"
-
-		exit 0
+	fs_rid="$(cat $fs/rid)" || \
+		echo_fail "failed to get rid in $fs"
+	if [ "$fs_rid" != "$rid" ]; then
+		continue
 	fi
+
+	nr="$(cat $fs/data_device_maj_min)" || \
+		echo_fail "failed to get data device major:minor in $fs"
+
+	mnts=$(findmnt -l -n -t scoutfs -o TARGET -S $nr) || \
+		echo_fail "findmnt -t scoutfs -S $nr failed"
+	for mnt in $mnts; do
+		umount -f "$mnt" || \
+			echo_fail "umout -f $mnt failed"
+	done
 done
 
-#
-# If the mount doesn't exist on this host then it can't access the
-# devices by definition and can be considered fenced.
-#
 exit 0
