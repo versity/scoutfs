@@ -2449,7 +2449,7 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,
 			      struct scoutfs_block_writer *wri,
 			      struct scoutfs_key *key,
-			      struct scoutfs_btree_root *root, int alloc_low)
+			      struct scoutfs_btree_root *root, int free_budget)
 {
 	u64 blknos[SCOUTFS_BTREE_MAX_HEIGHT];
 	struct scoutfs_block *bl = NULL;
@@ -2459,10 +2459,14 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 	struct scoutfs_avl_node *node;
 	struct scoutfs_avl_node *next;
 	struct scoutfs_key par_next;
+	int nr_freed = 0;
 	int nr_par;
 	int level;
 	int ret;
 	int i;
+
+	if (WARN_ON_ONCE(free_budget <= 0))
+		return -EINVAL;
 
 	if (WARN_ON_ONCE(root->height > ARRAY_SIZE(blknos)))
 		return -EIO; /* XXX corruption */
@@ -2538,8 +2542,7 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 		while (node) {
 
 			/* make sure we can always free parents after leaves */
-			if (scoutfs_alloc_meta_low(sb, alloc,
-						   alloc_low + nr_par + 1)) {
+			if ((nr_freed + 1 + nr_par) > free_budget) {
 				ret = 0;
 				goto out;
 			}
@@ -2553,6 +2556,7 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 						le64_to_cpu(ref.blkno));
 			if (ret < 0)
 				goto out;
+			nr_freed++;
 
 			node = scoutfs_avl_next(&bt->item_root, node);
 			if (node) {
@@ -2568,6 +2572,7 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 							       blknos[i]);
 			ret = scoutfs_free_meta(sb, alloc, wri, blknos[i]);
 			BUG_ON(ret); /* checked meta low, freed should fit */
+			nr_freed++;
 		}
 
 		/* restart walk past the subtree we just freed */

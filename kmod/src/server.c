@@ -2305,7 +2305,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 
 		ret = scoutfs_btree_free_blocks(sb, &server->alloc,
 						&server->wri, &fr.key,
-						&fr.root, 10);
+						&fr.root, COMMIT_HOLD_ALLOC_BUDGET / 2);
 		if (ret < 0) {
 			err_str = "freeing log btree";
 			break;
