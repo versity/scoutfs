@@ -45,6 +45,18 @@ check_read_write()
 	fi
 }
 
+# verify that fenced ran our testing fence script
+verify_fenced_run()
+{
+	local rids="$@"
+	local rid
+
+	for rid in $rids; do
+		grep -q ".* running rid '$rid'.* args 'ignored run args'" "$T_FENCED_LOG" || \
+			t_fail "fenced didn't execute RUN script for rid $rid"
+	done
+}
+
 echo "== make sure all mounts can see each other"
 check_read_write
 
@@ -62,12 +74,14 @@ done
 while t_rid_is_fencing $rid; do
 	sleep .5
 done
+verify_fenced_run $rid
 t_mount $cl
 check_read_write
 
 echo "== force unmount all non-server, connection timeout, fence nop, mount"
 sv=$(t_server_nr)
 pattern="nonsense"
+rids=""
 sync
 for cl in $(t_fs_nrs); do
 	if [ $cl == $sv ]; then
@@ -75,6 +89,7 @@ for cl in $(t_fs_nrs); do
 	fi
 
 	rid=$(t_mount_rid $cl)
+	rids="$rids $rid"
 	pattern="$pattern|$rid"
 	echo "cl $cl sv $sv rid $rid" >> "$T_TMP.log"
 
@@ -89,6 +104,7 @@ done
 while test -d $(echo /sys/fs/scoutfs/*/fence/* | cut -d " " -f 1); do
 	sleep .5
 done
+verify_fenced_run $rids
 # remount all the clients
 for cl in $(t_fs_nrs); do
 	if [ $cl == $sv ]; then
@@ -109,11 +125,17 @@ t_wait_for_leader
 while t_rid_is_fencing $rid; do
 	sleep .5
 done
+verify_fenced_run $rid
 t_mount $sv
 check_read_write
 
 echo "== force unmount everything, new server fences all previous"
 sync
+rids=""
+# get rids before forced unmount breaks scoutfs statfs
+for nr in $(t_fs_nrs); do
+	rids="$rids $(t_mount_rid $nr)"
+done
 for nr in $(t_fs_nrs); do
 	t_force_umount $nr
 done
@@ -122,6 +144,7 @@ t_mount_all
 while test -d $(echo /sys/fs/scoutfs/*/fence/* | cut -d " " -f 1); do
 	sleep .5
 done
+verify_fenced_run $rids
 check_read_write
 
 t_pass

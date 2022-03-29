@@ -380,13 +380,14 @@ cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
 # Build a fenced config that runs scripts out of the repository rather
 # than the default system directory
 #
-conf="$T_RESULTS/scoutfs-fencd.conf"
+conf="$T_RESULTS/scoutfs-fenced.conf"
 cat > $conf << EOF
 SCOUTFS_FENCED_DELAY=1
 SCOUTFS_FENCED_RUN=$T_TESTS/fenced-local-force-unmount.sh
-SCOUTFS_FENCED_RUN_ARGS=""
+SCOUTFS_FENCED_RUN_ARGS="ignored run args"
 EOF
 export SCOUTFS_FENCED_CONFIG_FILE="$conf"
+T_FENCED_LOG="$T_RESULTS/fenced.log"
 
 #
 # Run the agent in the background, log its output, an kill it if we
@@ -394,7 +395,7 @@ export SCOUTFS_FENCED_CONFIG_FILE="$conf"
 #
 fenced_log()
 {
-	echo "[$(timestamp)] $*" >> "$T_RESULTS/fenced.stdout.log"
+	echo "[$(timestamp)] $*" >> "$T_FENCED_LOG"
 }
 fenced_pid=""
 kill_fenced()
@@ -405,7 +406,7 @@ kill_fenced()
 	fi
 }
 trap kill_fenced EXIT
-$T_UTILS/fenced/scoutfs-fenced > "$T_RESULTS/fenced.stdout.log" 2> "$T_RESULTS/fenced.stderr.log" &
+$T_UTILS/fenced/scoutfs-fenced > "$T_FENCED_LOG" 2>&1 &
 fenced_pid=$!
 fenced_log "started fenced pid $fenced_pid in the background"
 
