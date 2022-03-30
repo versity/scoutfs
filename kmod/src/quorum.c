@@ -105,6 +105,8 @@ enum quorum_role { FOLLOWER, CANDIDATE, LEADER };
 struct quorum_status {
 	enum quorum_role role;
 	u64 term;
+	u64 server_start_term;
+	int server_event;
 	int vote_for;
 	unsigned long vote_bits;
 	ktime_t timeout;
@@ -117,7 +119,6 @@ struct quorum_info {
 	bool shutdown;
 
 	int our_quorum_slot_nr;
-	unsigned long flags;
 	int votes_needed;
 
 	spinlock_t show_lock;
@@ -127,8 +128,6 @@ struct quorum_info {
 
 	struct scoutfs_sysfs_attrs ssa;
 };
-
-#define QINF_FLAG_SERVER 0
 
 #define DECLARE_QUORUM_INFO(sb, name) \
 	struct quorum_info *name = SCOUTFS_SB(sb)->quorum_info
@@ -495,16 +494,6 @@ static int update_quorum_block(struct super_block *sb, int event, u64 term, bool
 }
 
 /*
- * The calling server has fenced previous leaders and reclaimed their
- * resources.  We can now update our fence event with a greater term to
- * stop future leaders from doing the same.
- */
-int scoutfs_quorum_fence_complete(struct super_block *sb, u64 term)
-{
-	return update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_FENCE, term, true);
-}
-
-/*
  * The calling server has been elected and has started running but can't
  * yet assume that it has exclusive access to the metadata device.  We
  * read all the quorum blocks looking for previously elected leaders to
@@ -593,15 +582,9 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, u64 term)
 	}
 
 out:
-	if (fence_started) {
-		err = scoutfs_fence_wait_fenced(sb, msecs_to_jiffies(SCOUTFS_QUORUM_FENCE_TO_MS));
-		if (ret == 0)
-			ret = err;
-	} else {
-		err = scoutfs_quorum_fence_complete(sb, term);
-		if (ret == 0)
-			ret = err;
-	}
+	err = scoutfs_fence_wait_fenced(sb, msecs_to_jiffies(SCOUTFS_QUORUM_FENCE_TO_MS));
+	if (ret == 0)
+		ret = err;
 
 	if (ret < 0)
 		scoutfs_inc_counter(sb, quorum_fence_error);
@@ -627,9 +610,8 @@ static void update_show_status(struct quorum_info *qinf, struct quorum_status *q
 /*
  * The quorum work always runs in the background of quorum member
  * mounts.  It's responsible for starting and stopping the server if
- * it's elected leader, and the server can call back into it to let it
- * know that it has shut itself down (perhaps due to error) so that the
- * work should stop sending heartbeats.
+ * it's elected leader.  While it's leader it sends heartbeats to
+ * suppress other quorum work from standing for election.
  */
 static void scoutfs_quorum_worker(struct work_struct *work)
 {
@@ -637,7 +619,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	struct super_block *sb = qinf->sb;
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
-	struct quorum_status qst;
+	struct quorum_status qst = {0,};
 	int ret;
 	int err;
 
@@ -646,9 +628,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 	/* start out as a follower */
 	qst.role = FOLLOWER;
-	qst.term = 0;
 	qst.vote_for = -1;
-	qst.vote_bits = 0;
 
 	/* read our starting term from greatest in all events in all slots */
 	read_greatest_term(sb, &qst.term);
@@ -684,20 +664,6 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		    msg.term < qst.term)
 			msg.type = SCOUTFS_QUORUM_MSG_INVALID;
 
-		/* if the server has shutdown we become follower */
-		if (!test_bit(QINF_FLAG_SERVER, &qinf->flags) &&
-		    qst.role == LEADER) {
-			qst.role = FOLLOWER;
-			qst.vote_for = -1;
-			qst.vote_bits = 0;
-			qst.timeout = election_timeout();
-			scoutfs_inc_counter(sb, quorum_server_shutdown);
-
-			send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
-					qst.term);
-			scoutfs_inc_counter(sb, quorum_send_resignation);
-		}
-
 		trace_scoutfs_quorum_loop(sb, qst.role, qst.term, qst.vote_for,
 					  qst.vote_bits,
 					  ktime_to_timespec64(qst.timeout));
@@ -708,8 +674,6 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			if (qst.role == LEADER) {
 				scoutfs_warn(sb, "saw msg type %u from %u for term %llu while leader in term %llu, shutting down server.",
 					     msg.type, msg.from, msg.term, qst.term);
-				update_show_status(qinf, &qst);
-				scoutfs_server_stop(sb);
 			}
 			qst.role = FOLLOWER;
 			qst.term = msg.term;
@@ -731,6 +695,13 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		/* followers and candidates start new election on timeout */
 		if (qst.role != LEADER &&
 		    ktime_after(ktime_get(), qst.timeout)) {
+			/* .. but only if their server has stopped */
+			if (!scoutfs_server_is_down(sb)) {
+				qst.timeout = election_timeout();
+				scoutfs_inc_counter(sb, quorum_candidate_server_stopping);
+				continue;
+			}
+
 			qst.role = CANDIDATE;
 			qst.term++;
 			qst.vote_for = -1;
@@ -779,24 +750,62 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			if (ret < 0)
 				goto out;
 
-			/* make very sure server is fully shut down */
-			scoutfs_server_stop(sb);
-			/* set server bit before server shutdown could clear */
-			set_bit(QINF_FLAG_SERVER, &qinf->flags);
+			qst.server_start_term = qst.term;
+			qst.server_event = SCOUTFS_QUORUM_EVENT_ELECT;
+			scoutfs_server_start(sb, qst.term);
+		}
 
-			ret = scoutfs_server_start(sb, qst.term);
-			if (ret < 0) {
-				clear_bit(QINF_FLAG_SERVER, &qinf->flags);
-				/* store our increased term */
-				err = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP, qst.term,
-							  true);
-				if (err < 0) {
-					ret = err;
-					goto out;
-				}
-				ret = 0;
-				continue;
+		/*
+		 * This leader's server is up, having finished fencing
+		 * previous leaders.  We update the fence event with the
+		 * current term to let future leaders know that previous
+		 * servers have been fenced.
+		 */
+		if (qst.role == LEADER && qst.server_event != SCOUTFS_QUORUM_EVENT_FENCE &&
+		    scoutfs_server_is_up(sb)) {
+			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_FENCE, qst.term, true);
+			if (ret < 0)
+				goto out;
+			qst.server_event = SCOUTFS_QUORUM_EVENT_FENCE;
+		}
+
+		/*
+		 * Stop a running server if we're no longer leader in
+		 * its term.
+		 */
+		if (!(qst.role == LEADER && qst.term == qst.server_start_term) &&
+		    scoutfs_server_is_running(sb)) {
+			scoutfs_server_stop(sb);
+		}
+
+		/*
+		 * A previously running server has stopped.  The quorum
+		 * protocol might have shut it down by changing roles or
+		 * it might have stopped on its own, perhaps on errors.
+		 * If we're still a leader then we become a follower and
+		 * send resignations to encourage the next election.
+		 * Always update the _STOP event to stop connections and
+		 * fencing.
+		 */
+		if (qst.server_start_term > 0 && scoutfs_server_is_down(sb)) {
+			if (qst.role == LEADER) {
+				qst.role = FOLLOWER;
+				qst.vote_for = -1;
+				qst.vote_bits = 0;
+				qst.timeout = election_timeout();
+				scoutfs_inc_counter(sb, quorum_server_shutdown);
+
+				send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
+						qst.server_start_term);
+				scoutfs_inc_counter(sb, quorum_send_resignation);
 			}
+
+			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP,
+						  qst.server_start_term, true);
+			if (ret < 0)
+				goto out;
+
+			qst.server_start_term = 0;
 		}
 
 		/* leaders regularly send heartbeats to delay elections */
@@ -836,11 +845,16 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	update_show_status(qinf, &qst);
 
 	/* always try to stop a running server as we stop */
-	if (test_bit(QINF_FLAG_SERVER, &qinf->flags)) {
-		scoutfs_server_stop(sb);
-		scoutfs_fence_stop(sb);
-		send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
-				qst.term);
+	if (scoutfs_server_is_running(sb)) {
+		scoutfs_server_stop_wait(sb);
+		send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION, qst.term);
+
+		if (qst.server_start_term > 0) {
+			err = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP,
+						  qst.server_start_term, true);
+			if (err < 0 && ret == 0)
+				ret = err;
+		}
 	}
 
 	/* record that this slot no longer has an active quorum */
@@ -850,21 +864,6 @@ out:
 		scoutfs_err(sb, "quorum service saw error %d, shutting down.  This mount is no longer participating in quorum.  It should be remounted to restore service.",
 			    ret);
 	}
-}
-
-/*
- * The calling server has shutdown and is no longer using shared
- * resources.  Clear the bit so that we stop sending heartbeats and
- * allow the next server to be elected.  Update the stop event so that
- * it won't be considered available by clients or fenced by the next
- * leader.
- */
-void scoutfs_quorum_server_shutdown(struct super_block *sb, u64 term)
-{
-	DECLARE_QUORUM_INFO(sb, qinf);
-
-	clear_bit(QINF_FLAG_SERVER, &qinf->flags);
-	update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP, term, true);
 }
 
 /*
@@ -988,6 +987,8 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 		     qinf->our_quorum_slot_nr);
 	snprintf_ret(buf, size, &ret, "term %llu\n",
 		     qst.term);
+	snprintf_ret(buf, size, &ret, "server_start_term %llu\n", qst.server_start_term);
+	snprintf_ret(buf, size, &ret, "server_event %d\n", qst.server_event);
 	snprintf_ret(buf, size, &ret, "role %d (%s)\n",
 		     qst.role, role_str(qst.role));
 	snprintf_ret(buf, size, &ret, "vote_for %d\n",
