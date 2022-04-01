@@ -1292,7 +1292,7 @@ restart:
 				if (ret) {
 					scoutfs_err(sb, "client fence returned err %d, shutting down server",
 						    ret);
-					scoutfs_server_abort(sb);
+					scoutfs_server_stop(sb);
 				}
 			}
 			destroy_conn(acc);

@@ -157,6 +157,7 @@
 	EXPAND_COUNTER(orphan_scan_error)			\
 	EXPAND_COUNTER(orphan_scan_item)			\
 	EXPAND_COUNTER(orphan_scan_omap_set)			\
+	EXPAND_COUNTER(quorum_candidate_server_stopping)	\
 	EXPAND_COUNTER(quorum_elected)				\
 	EXPAND_COUNTER(quorum_fence_error)			\
 	EXPAND_COUNTER(quorum_fence_leader)			\

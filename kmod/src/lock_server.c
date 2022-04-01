@@ -749,7 +749,7 @@ out:
 	if (ret < 0) {
 		scoutfs_err(sb, "lock server err %d during client rid %016llx farewell, shutting down",
 			    ret, rid);
-		scoutfs_server_abort(sb);
+		scoutfs_server_stop(sb);
 	}
 
 	return ret;

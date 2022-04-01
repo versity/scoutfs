@@ -77,9 +77,12 @@ u64 scoutfs_server_seq(struct super_block *sb);
 u64 scoutfs_server_next_seq(struct super_block *sb);
 void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq);
 
-int scoutfs_server_start(struct super_block *sb, u64 term);
-void scoutfs_server_abort(struct super_block *sb);
+void scoutfs_server_start(struct super_block *sb, u64 term);
 void scoutfs_server_stop(struct super_block *sb);
+void scoutfs_server_stop_wait(struct super_block *sb);
+bool scoutfs_server_is_running(struct super_block *sb);
+bool scoutfs_server_is_up(struct super_block *sb);
+bool scoutfs_server_is_down(struct super_block *sb);
 
 int scoutfs_server_setup(struct super_block *sb);
 void scoutfs_server_destroy(struct super_block *sb);

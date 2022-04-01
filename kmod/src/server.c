@@ -59,9 +59,7 @@ struct server_info {
 
 	struct workqueue_struct *wq;
 	struct work_struct work;
-	int err;
-	bool shutting_down;
-	struct completion start_comp;
+	int status;
 	u64 term;
 	struct scoutfs_net_connection *conn;
 
@@ -155,30 +153,68 @@ static bool get_volopt_val(struct server_info *server, int nr, u64 *val)
 	return is_set;
 }
 
+enum {
+	SERVER_NOP = 0,
+	SERVER_STARTING,
+	SERVER_UP,
+	SERVER_STOPPING,
+	SERVER_DOWN,
+};
+
+bool scoutfs_server_is_running(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	long was = cmpxchg(&server->status, SERVER_NOP, SERVER_NOP);
+
+	return was == SERVER_STARTING || was == SERVER_UP;
+}
+
+bool scoutfs_server_is_up(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+
+	return cmpxchg(&server->status, SERVER_NOP, SERVER_NOP) == SERVER_UP;
+}
+
+bool scoutfs_server_is_down(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+
+	return cmpxchg(&server->status, SERVER_NOP, SERVER_NOP) == SERVER_DOWN;
+}
+
+static bool server_is_stopping(struct server_info *server)
+{
+	return cmpxchg(&server->status, SERVER_NOP, SERVER_NOP) == SERVER_STOPPING;
+}
+
+static void stop_server(struct server_info *server)
+{
+	long was = cmpxchg(&server->status, SERVER_NOP, SERVER_NOP);
+
+	if ((was == SERVER_STARTING || was == SERVER_UP) &&
+	    cmpxchg(&server->status, was, SERVER_STOPPING) == was)
+		wake_up(&server->waitq);
+}
+
+static void server_up(struct server_info *server)
+{
+	cmpxchg(&server->status, SERVER_STARTING, SERVER_UP);
+}
+
+static void server_down(struct server_info *server)
+{
+	long was = cmpxchg(&server->status, SERVER_NOP, SERVER_NOP);
+
+	if (was != SERVER_DOWN)
+		cmpxchg(&server->status, was, SERVER_DOWN);
+}
 
 struct commit_waiter {
 	struct completion comp;
 	struct llist_node node;
 	int ret;
 };
-
-static bool test_shutting_down(struct server_info *server)
-{
-	smp_rmb();
-	return server->shutting_down;
-}
-
-static void set_shutting_down(struct server_info *server, bool val)
-{
-	server->shutting_down = val;
-	smp_wmb();
-}
-
-static void stop_server(struct server_info *server)
-{
-	set_shutting_down(server, true);
-	wake_up(&server->waitq);
-}
 
 /*
  * Hold the shared rwsem that lets multiple holders modify blocks in the
@@ -2051,8 +2087,8 @@ static void server_log_merge_free_work(struct work_struct *work)
 	bool commit = false;
 	int ret = 0;
 
-	/* shutdown waits for us, we'll eventually load set shutting_down */
-	while (!server->shutting_down) {
+	while (!server_is_stopping(server)) {
+
 		scoutfs_server_hold_commit(sb);
 		mutex_lock(&server->logs_mutex);
 		commit = true;
@@ -3180,7 +3216,7 @@ out:
  */
 static void queue_farewell_work(struct server_info *server)
 {
-	if (!test_shutting_down(server))
+	if (!server_is_stopping(server))
 		queue_work(server->wq, &server->farewell_work);
 }
 
@@ -3693,14 +3729,14 @@ static void fence_pending_recov_worker(struct work_struct *work)
 	}
 
 	if (ret < 0)
-		scoutfs_server_abort(sb);
+		stop_server(server);
 }
 
 static void recovery_timeout(struct super_block *sb)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
-	if (!test_shutting_down(server))
+	if (!server_is_stopping(server))
 		queue_work(server->wq, &server->fence_pending_recov_work);
 }
 
@@ -3765,7 +3801,7 @@ out:
 
 static void queue_reclaim_work(struct server_info *server, unsigned long delay)
 {
-	if (!test_shutting_down(server))
+	if (!server_is_stopping(server))
 		queue_delayed_work(server->wq, &server->reclaim_dwork, delay);
 }
 
@@ -3800,7 +3836,7 @@ static void reclaim_worker(struct work_struct *work)
 	if (error == true) {
 		scoutfs_err(sb, "saw error indicator on fence request for rid %016llx, shutting down server",
 			    rid);
-		scoutfs_server_abort(sb);
+		stop_server(server);
 		ret = -ESHUTDOWN;
 		goto out;
 	}
@@ -3809,7 +3845,7 @@ static void reclaim_worker(struct work_struct *work)
 	if (ret < 0) {
 		scoutfs_err(sb, "failure to reclaim fenced rid %016llx: err %d, shutting down server",
 			    rid, ret);
-		scoutfs_server_abort(sb);
+		stop_server(server);
 		goto out;
 	}
 
@@ -3817,16 +3853,7 @@ static void reclaim_worker(struct work_struct *work)
 	scoutfs_fence_free(sb, rid);
 	scoutfs_server_recov_finish(sb, rid, SCOUTFS_RECOV_ALL);
 
-	/* tell quorum we've finished fencing all previous leaders */
-	if (reason == SCOUTFS_FENCE_QUORUM_BLOCK_LEADER &&
-	    !scoutfs_fence_reason_pending(sb, reason)) {
-		ret = scoutfs_quorum_fence_complete(sb, server->term);
-		if (ret < 0)
-			goto out;
-	}
-
 	ret = 0;
-
 out:
 	/* queue next reclaim immediately if we're making progress */
 	if (ret == 0)
@@ -3942,12 +3969,12 @@ static void scoutfs_server_worker(struct work_struct *work)
 	scoutfs_net_listen(sb, conn);
 
 	scoutfs_info(sb, "server ready at "SIN_FMT, SIN_ARG(&sin));
-	complete(&server->start_comp);
+	server_up(server);
 
 	queue_reclaim_work(server, 0);
 
 	/* interruptible mostly to avoid stuck messages */
-	wait_event_interruptible(server->waitq, test_shutting_down(server));
+	wait_event_interruptible(server->waitq, server_is_stopping(server));
 
 shutdown:
 	scoutfs_info(sb, "server shutting down at "SIN_FMT, SIN_ARG(&sin));
@@ -3981,60 +4008,44 @@ out:
 	scoutfs_fence_stop(sb);
 	scoutfs_net_free_conn(sb, conn);
 
-	/* let quorum know that we've shutdown */
-	scoutfs_quorum_server_shutdown(sb, server->term);
+	server_down(server);
 
 	scoutfs_info(sb, "server stopped at "SIN_FMT, SIN_ARG(&sin));
 	trace_scoutfs_server_work_exit(sb, 0, ret);
-
-	server->err = ret;
-	complete(&server->start_comp);
 }
 
 /*
- * Wait for the server to successfully start.  If this returns error then
- * the super block's fence_term has been set to the new server's term so
- * that it won't be fenced.
+ * Start the server but don't wait for it to complete.
  */
-int scoutfs_server_start(struct super_block *sb, u64 term)
+void scoutfs_server_start(struct super_block *sb, u64 term)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
-	server->err = 0;
-	set_shutting_down(server, false);
-	server->term = term;
-	init_completion(&server->start_comp);
-
-	queue_work(server->wq, &server->work);
-
-	wait_for_completion(&server->start_comp);
-	return server->err;
+	if (cmpxchg(&server->status, SERVER_DOWN, SERVER_STARTING) == SERVER_DOWN) {
+		server->term = term;
+		queue_work(server->wq, &server->work);
+	}
 }
 
 /*
  * Start shutdown on the server but don't want for it to finish.
- */
-void scoutfs_server_abort(struct super_block *sb)
-{
-	DECLARE_SERVER_INFO(sb, server);
-
-	stop_server(server);
-}
-
-/*
- * Once the server is stopped we give the caller our election info
- * which might have been modified while we were running.
  */
 void scoutfs_server_stop(struct super_block *sb)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	stop_server(server);
+}
 
-	cancel_work_sync(&server->work);
-	cancel_work_sync(&server->farewell_work);
-	cancel_work_sync(&server->commit_work);
-	cancel_work_sync(&server->log_merge_free_work);
+/*
+ * Start shutdown on the server and wait for it to finish.
+ */
+void scoutfs_server_stop_wait(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+
+	stop_server(server);
+	flush_work_sync(&server->work);
 }
 
 int scoutfs_server_setup(struct super_block *sb)
@@ -4050,6 +4061,7 @@ int scoutfs_server_setup(struct super_block *sb)
 	spin_lock_init(&server->lock);
 	init_waitqueue_head(&server->waitq);
 	INIT_WORK(&server->work, scoutfs_server_worker);
+	server->status = SERVER_DOWN;
 	init_rwsem(&server->commit_rwsem);
 	init_llist_head(&server->commit_waiters);
 	INIT_WORK(&server->commit_work, scoutfs_server_commit_func);
