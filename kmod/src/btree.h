@@ -125,7 +125,7 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,
 			      struct scoutfs_block_writer *wri,
 			      struct scoutfs_key *key,
-			      struct scoutfs_btree_root *root, int alloc_low);
+			      struct scoutfs_btree_root *root, int free_budget);
 
 void scoutfs_btree_put_iref(struct scoutfs_btree_item_ref *iref);
 
