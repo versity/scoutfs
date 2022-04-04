@@ -488,28 +488,28 @@ ssize_t scoutfs_getxattr(struct dentry *dentry, const char *name, void *buffer,
 
 	ret = get_next_xattr(inode, &key, xat, xat_bytes, name, name_len, 0, 0, lck);
 
-	up_read(&si->xattr_rwsem);
-	scoutfs_unlock(sb, lck, SCOUTFS_LOCK_READ);
-
 	if (ret < 0) {
 		if (ret == -ENOENT)
 			ret = -ENODATA;
-		goto out;
+		goto unlock;
 	}
 
 	/* the caller just wants to know the size */
 	if (size == 0) {
 		ret = le16_to_cpu(xat->val_len);
-		goto out;
+		goto unlock;
 	}
 
 	/* the caller's buffer wasn't big enough */
 	if (size < le16_to_cpu(xat->val_len)) {
 		ret = -ERANGE;
-		goto out;
+		goto unlock;
 	}
 
 	ret = copy_xattr_value(sb, &key, xat, xat_bytes, buffer, size, lck);
+unlock:
+	up_read(&si->xattr_rwsem);
+	scoutfs_unlock(sb, lck, SCOUTFS_LOCK_READ);
 out:
 	kfree(xat);
 	return ret;
