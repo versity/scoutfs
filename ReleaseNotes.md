@@ -2,9 +2,32 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
-v1.3-rc
+v1.3
 \
-*TBD*
+*Apr 7, 2022*
+
+* **Fix rare server instability under heavy load**
+\
+  Fixed a case of server instability under heavy load due to concurrent
+  work fully exhausting metadata block allocation pools reserved for a
+  single server transaction.  This would cause brief interruption as the
+  server shutdown and the next server started up and made progress as
+  pending work was retried.
+
+* **Fix slow fencing preventing server startup**
+\
+  If a server had to process many fence requests with a slow fencing
+  mechanism it could be interrupted before it finished.  The server
+  now makes sure heartbeat messages are sent while it is making progress
+  on fencing requests so that other quorum members don't interrupt the
+  process.
+
+* **Performance improvement in getxattr and setxattr**
+\
+  Kernel allocation patterns in the getxattr and setxattr
+  implementations were causing significant contention between CPUs.  Their
+  allocation strategy was changed so that concurrent tasks can call these
+  xattr methods without degrading performance.
 
 ---
 v1.2
