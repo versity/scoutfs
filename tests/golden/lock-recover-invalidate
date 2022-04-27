@@ -1,0 +1,3 @@
+== starting background invalidating read/write load
+== 60s of lock recovery during invalidating load
+== stopping background load
