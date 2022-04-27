@@ -289,6 +289,7 @@ static struct scoutfs_lock *lock_alloc(struct super_block *sb,
 	lock->sb = sb;
 	init_waitqueue_head(&lock->waitq);
 	lock->mode = SCOUTFS_LOCK_NULL;
+	lock->invalidating_mode = SCOUTFS_LOCK_NULL;
 
 	atomic64_set(&lock->forest_bloom_nr, 0);
 
@@ -666,7 +667,9 @@ struct inv_req {
  *
  * Before we start invalidating the lock we set the lock to the new
  * mode, preventing further incompatible users of the old mode from
- * using the lock while we're invalidating.
+ * using the lock while we're invalidating.  We record the previously
+ * granted mode so that we can send lock recover responses with the old
+ * granted mode during invalidation.
  */
 static void lock_invalidate_worker(struct work_struct *work)
 {
@@ -691,7 +694,8 @@ static void lock_invalidate_worker(struct work_struct *work)
 		if (!lock_counts_match(nl->new_mode, lock->users))
 			continue;
 
-		/* set the new mode, no incompatible users during inval */
+		/* set the new mode, no incompatible users during inval, recov needs old */
+		lock->invalidating_mode = lock->mode;
 		lock->mode = nl->new_mode;
 
 		/* move everyone that's ready to our private list */
@@ -733,6 +737,8 @@ static void lock_invalidate_worker(struct work_struct *work)
 
 		list_del(&ireq->head);
 		kfree(ireq);
+
+		lock->invalidating_mode = SCOUTFS_LOCK_NULL;
 
 		if (list_empty(&lock->inv_list)) {
 			/* finish if another request didn't arrive */
@@ -824,6 +830,7 @@ int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
 {
 	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_net_lock_recover *nlr;
+	enum scoutfs_lock_mode mode;
 	struct scoutfs_lock *lock;
 	struct scoutfs_lock *next;
 	struct rb_node *node;
@@ -844,10 +851,15 @@ int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
 
 	for (i = 0; lock && i < SCOUTFS_NET_LOCK_MAX_RECOVER_NR; i++) {
 
+		if (lock->invalidating_mode != SCOUTFS_LOCK_NULL)
+			mode = lock->invalidating_mode;
+		else
+			mode = lock->mode;
+
 		nlr->locks[i].key = lock->start;
 		nlr->locks[i].write_seq = cpu_to_le64(lock->write_seq);
-		nlr->locks[i].old_mode = lock->mode;
-		nlr->locks[i].new_mode = lock->mode;
+		nlr->locks[i].old_mode = mode;
+		nlr->locks[i].new_mode = mode;
 
 		node = rb_next(&lock->node);
 		if (node)

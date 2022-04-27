@@ -39,6 +39,7 @@ struct scoutfs_lock {
 	struct list_head cov_list;
 
 	enum scoutfs_lock_mode mode;
+	enum scoutfs_lock_mode invalidating_mode;
 	unsigned int waiters[SCOUTFS_LOCK_NR_MODES];
 	unsigned int users[SCOUTFS_LOCK_NR_MODES];
 
