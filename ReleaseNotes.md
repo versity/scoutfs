@@ -2,6 +2,19 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.4
+\
+*May 6, 2022*
+
+* **Fix possible client crash during server failover**
+\
+  Fixed a narrow window during server failover and lock recovery that
+  could cause a client mount to believe that it had an inconsistent item
+  cache and panic.  This required very specific lock state and messaging
+  patterns between multiple mounts and multiple servers which made it
+  unlikely to occur in the field.
+
+---
 v1.3
 \
 *Apr 7, 2022*
