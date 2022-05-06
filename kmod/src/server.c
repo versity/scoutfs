@@ -246,10 +246,16 @@ static void server_down(struct server_info *server)
 
 /*
  * The per-holder allocation block use budget balances batching
- * efficiency and concurrency.  We can easily have a few holders per
- * client trying to make concurrent updates in a commit.
+ * efficiency and concurrency.  The larger this gets, the fewer
+ * concurrent server operations can be performed in one commit.  Commits
+ * are immediately written after being dirtied so this really only
+ * limits immediate concurrency under load, not batching over time as
+ * one might expect if commits were long lived.
+ *
+ * The upper bound is determined by the server commit hold path that can
+ * dirty the most blocks.
  */
-#define COMMIT_HOLD_ALLOC_BUDGET 250
+#define COMMIT_HOLD_ALLOC_BUDGET 500
 
 struct commit_hold {
 	struct list_head entry;
