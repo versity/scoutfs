@@ -3,6 +3,8 @@
 
 int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock);
+int scoutfs_item_lookup_within(struct super_block *sb, struct scoutfs_key *key,
+			       void *val, int val_len, struct scoutfs_lock *lock);
 int scoutfs_item_lookup_exact(struct super_block *sb, struct scoutfs_key *key,
 			      void *val, int val_len,
 			      struct scoutfs_lock *lock);

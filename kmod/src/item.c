@@ -1697,8 +1697,8 @@ static int copy_val(void *dst, int dst_len, void *src, int src_len)
  * The amount of bytes copied is returned which can be 0 or truncated if
  * the caller's buffer isn't big enough.
  */
-int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
-			void *val, int val_len, struct scoutfs_lock *lock)
+static int item_lookup(struct super_block *sb, struct scoutfs_key *key,
+		       void *val, int val_len, int len_limit, struct scoutfs_lock *lock)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct cached_item *item;
@@ -1718,6 +1718,8 @@ int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
 	item = item_rbtree_walk(&pg->item_root, key, NULL, NULL, NULL);
 	if (!item || item->deletion)
 		ret = -ENOENT;
+	else if (len_limit > 0 && item->val_len > len_limit)
+		ret = -EIO;
 	else
 		ret = copy_val(val, val_len, item->val, item->val_len);
 
@@ -1726,13 +1728,30 @@ out:
 	return ret;
 }
 
+int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
+			void *val, int val_len, struct scoutfs_lock *lock)
+{
+	return item_lookup(sb, key, val, val_len, 0, lock);
+}
+
+/*
+ * Return -EIO if the item we find has a value larger than the caller's
+ * val_len, rather than truncating and returning the size of the copied
+ * value.
+ */
+int scoutfs_item_lookup_within(struct super_block *sb, struct scoutfs_key *key,
+			       void *val, int val_len, struct scoutfs_lock *lock)
+{
+	return item_lookup(sb, key, val, val_len, val_len, lock);
+}
+
 int scoutfs_item_lookup_exact(struct super_block *sb, struct scoutfs_key *key,
 			      void *val, int val_len,
 			      struct scoutfs_lock *lock)
 {
 	int ret;
 
-	ret = scoutfs_item_lookup(sb, key, val, val_len, lock);
+	ret = item_lookup(sb, key, val, val_len, 0, lock);
 	if (ret == val_len)
 		ret = 0;
 	else if (ret >= 0)
