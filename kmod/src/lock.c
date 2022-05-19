@@ -69,6 +69,13 @@
  * relative to that lock state we resend.
  */
 
+struct work_list {
+	struct work_struct work;
+	spinlock_t lock;
+	struct list_head list;
+};
+
+
 /*
  * allocated per-super, freed on unmount.
  */
@@ -83,10 +90,8 @@ struct lock_info {
 	struct list_head lru_list;
 	unsigned long long lru_nr;
 	struct workqueue_struct *workq;
-	struct work_struct inv_work;
-	struct list_head inv_list;
-	struct work_struct shrink_work;
-	struct list_head shrink_list;
+	struct work_list inv_wlist;
+	struct work_list shrink_wlist;
 	atomic64_t next_refresh_gen;
 
 	struct dentry *tseq_dentry;
@@ -109,6 +114,21 @@ static bool lock_mode_can_read(enum scoutfs_lock_mode mode)
 static bool lock_mode_can_write(enum scoutfs_lock_mode mode)
 {
 	return mode == SCOUTFS_LOCK_WRITE || mode == SCOUTFS_LOCK_WRITE_ONLY;
+}
+
+static void init_work_list(struct work_list *wlist, work_func_t func)
+{
+	spin_lock_init(&wlist->lock);
+	INIT_WORK(&wlist->work, func);
+	INIT_LIST_HEAD(&wlist->list);
+}
+
+static void queue_nonempty_work_list(struct lock_info *linfo, struct work_list *wlist)
+{
+	assert_spin_locked(&wlist->lock);
+
+	if (!list_empty(&wlist->list))
+		queue_work(linfo->workq, &wlist->work);
 }
 
 /*
@@ -276,7 +296,7 @@ static struct scoutfs_lock *lock_alloc(struct super_block *sb,
 	RB_CLEAR_NODE(&lock->range_node);
 	INIT_LIST_HEAD(&lock->lru_head);
 	INIT_LIST_HEAD(&lock->inv_head);
-	INIT_LIST_HEAD(&lock->inv_list);
+	INIT_LIST_HEAD(&lock->inv_req_list);
 	INIT_LIST_HEAD(&lock->shrink_head);
 	spin_lock_init(&lock->cov_list_lock);
 	INIT_LIST_HEAD(&lock->cov_list);
@@ -541,18 +561,6 @@ static void put_lock(struct lock_info *linfo,struct scoutfs_lock *lock)
 }
 
 /*
- * The caller has made a change (set a lock mode) which can let one of the
- * invalidating locks make forward progress.
- */
-static void queue_inv_work(struct lock_info *linfo)
-{
-	assert_spin_locked(&linfo->lock);
-
-	if (!list_empty(&linfo->inv_list))
-		queue_work(linfo->workq, &linfo->inv_work);
-}
-
-/*
  * The given lock is processing a received a grant response.  Trigger a
  * bug if the cache is inconsistent.
  *
@@ -671,7 +679,7 @@ struct inv_req {
  */
 static void lock_invalidate_worker(struct work_struct *work)
 {
-	struct lock_info *linfo = container_of(work, struct lock_info, inv_work);
+	struct lock_info *linfo = container_of(work, struct lock_info, inv_wlist.work);
 	struct super_block *sb = linfo->sb;
 	struct scoutfs_net_lock *nl;
 	struct scoutfs_lock *lock;
@@ -683,9 +691,10 @@ static void lock_invalidate_worker(struct work_struct *work)
 	scoutfs_inc_counter(sb, lock_invalidate_work);
 
 	spin_lock(&linfo->lock);
+	spin_lock(&linfo->inv_wlist.lock);
 
-	list_for_each_entry_safe(lock, tmp, &linfo->inv_list, inv_head) {
-		ireq = list_first_entry(&lock->inv_list, struct inv_req, head);
+	list_for_each_entry_safe(lock, tmp, &linfo->inv_wlist.list, inv_head) {
+		ireq = list_first_entry(&lock->inv_req_list, struct inv_req, head);
 		nl = &ireq->nl;
 
 		/* wait until incompatible holders unlock */
@@ -700,6 +709,7 @@ static void lock_invalidate_worker(struct work_struct *work)
 		list_move_tail(&lock->inv_head, &ready);
 	}
 
+	spin_unlock(&linfo->inv_wlist.lock);
 	spin_unlock(&linfo->lock);
 
 	if (list_empty(&ready))
@@ -707,7 +717,7 @@ static void lock_invalidate_worker(struct work_struct *work)
 
 	/* invalidate once the lock is read */
 	list_for_each_entry(lock, &ready, inv_head) {
-		ireq = list_first_entry(&lock->inv_list, struct inv_req, head);
+		ireq = list_first_entry(&lock->inv_req_list, struct inv_req, head);
 		nl = &ireq->nl;
 
 		/* only lock protocol, inv can't call subsystems after shutdown */
@@ -727,9 +737,10 @@ static void lock_invalidate_worker(struct work_struct *work)
 
 	/* and finish all the invalidated locks */
 	spin_lock(&linfo->lock);
+	spin_lock(&linfo->inv_wlist.lock);
 
 	list_for_each_entry_safe(lock, tmp, &ready, inv_head) {
-		ireq = list_first_entry(&lock->inv_list, struct inv_req, head);
+		ireq = list_first_entry(&lock->inv_req_list, struct inv_req, head);
 
 		trace_scoutfs_lock_invalidated(sb, lock);
 
@@ -738,20 +749,21 @@ static void lock_invalidate_worker(struct work_struct *work)
 
 		lock->invalidating_mode = SCOUTFS_LOCK_NULL;
 
-		if (list_empty(&lock->inv_list)) {
+		if (list_empty(&lock->inv_req_list)) {
 			/* finish if another request didn't arrive */
 			list_del_init(&lock->inv_head);
 			lock->invalidate_pending = 0;
 			wake_up(&lock->waitq);
 		} else {
 			/* another request arrived, back on the list and requeue */
-			list_move_tail(&lock->inv_head, &linfo->inv_list);
-			queue_inv_work(linfo);
+			list_move_tail(&lock->inv_head, &linfo->inv_wlist.list);
+			queue_nonempty_work_list(linfo, &linfo->inv_wlist);
 		}
 
 		put_lock(linfo, lock);
 	}
 
+	spin_unlock(&linfo->inv_wlist.lock);
 	spin_unlock(&linfo->lock);
 }
 
@@ -798,12 +810,14 @@ int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 		ireq->lock = lock;
 		ireq->net_id = net_id;
 		ireq->nl = *nl;
-		if (list_empty(&lock->inv_list)) {
-			list_add_tail(&lock->inv_head, &linfo->inv_list);
+		if (list_empty(&lock->inv_req_list)) {
+			spin_lock(&linfo->inv_wlist.lock);
+			list_add_tail(&lock->inv_head, &linfo->inv_wlist.list);
 			lock->invalidate_pending = 1;
-			queue_inv_work(linfo);
+			queue_nonempty_work_list(linfo, &linfo->inv_wlist);
+			spin_unlock(&linfo->inv_wlist.lock);
 		}
-		list_add_tail(&ireq->head, &lock->inv_list);
+		list_add_tail(&ireq->head, &lock->inv_req_list);
 	}
 	spin_unlock(&linfo->lock);
 
@@ -1296,7 +1310,11 @@ void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock, enum scou
 
 	trace_scoutfs_lock_unlock(sb, lock);
 	wake_up(&lock->waitq);
-	queue_inv_work(linfo);
+
+	spin_lock(&linfo->inv_wlist.lock);
+	queue_nonempty_work_list(linfo, &linfo->inv_wlist);
+	spin_unlock(&linfo->inv_wlist.lock);
+
 	put_lock(linfo, lock);
 
 	spin_unlock(&linfo->lock);
@@ -1389,8 +1407,7 @@ bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
  */
 static void lock_shrink_worker(struct work_struct *work)
 {
-	struct lock_info *linfo = container_of(work, struct lock_info,
-					       shrink_work);
+	struct lock_info *linfo = container_of(work, struct lock_info, shrink_wlist.work);
 	struct super_block *sb = linfo->sb;
 	struct scoutfs_net_lock nl;
 	struct scoutfs_lock *lock;
@@ -1400,9 +1417,9 @@ static void lock_shrink_worker(struct work_struct *work)
 
 	scoutfs_inc_counter(sb, lock_shrink_work);
 
-	spin_lock(&linfo->lock);
-	list_splice_init(&linfo->shrink_list, &list);
-	spin_unlock(&linfo->lock);
+	spin_lock(&linfo->shrink_wlist.lock);
+	list_splice_init(&linfo->shrink_wlist.list, &list);
+	spin_unlock(&linfo->shrink_wlist.lock);
 
 	list_for_each_entry_safe(lock, tmp, &list, shrink_head) {
 		list_del_init(&lock->shrink_head);
@@ -1460,13 +1477,12 @@ static unsigned long lock_scan_objects(struct shrinker *shrink,
 	struct scoutfs_lock *tmp;
 	unsigned long freed = 0;
 	unsigned long nr = sc->nr_to_scan;
-	bool added = false;
 
 	scoutfs_inc_counter(sb, lock_scan_objects);
 
 	spin_lock(&linfo->lock);
+	spin_lock(&linfo->shrink_wlist.lock);
 
-restart:
 	list_for_each_entry_safe(lock, tmp, &linfo->lru_list, lru_head) {
 
 		BUG_ON(!lock_idle(lock));
@@ -1478,22 +1494,17 @@ restart:
 
 		__lock_del_lru(linfo, lock);
 		lock->request_pending = 1;
-		list_add_tail(&lock->shrink_head, &linfo->shrink_list);
-		added = true;
 		freed++;
+		list_add_tail(&lock->shrink_head, &linfo->shrink_wlist.list);
 
 		scoutfs_inc_counter(sb, lock_shrink_attempted);
 		trace_scoutfs_lock_shrink(sb, lock);
-
-		/* could have bazillions of idle locks */
-		if (cond_resched_lock(&linfo->lock))
-			goto restart;
 	}
 
-	spin_unlock(&linfo->lock);
+	queue_nonempty_work_list(linfo, &linfo->shrink_wlist);
 
-	if (added)
-		queue_work(linfo->workq, &linfo->shrink_work);
+	spin_unlock(&linfo->shrink_wlist.lock);
+	spin_unlock(&linfo->lock);
 
 	trace_scoutfs_lock_shrink_exit(sb, sc->nr_to_scan, freed);
 	return freed;
@@ -1537,7 +1548,7 @@ void scoutfs_lock_unmount_begin(struct super_block *sb)
 
 	if (linfo) {
 		linfo->unmounting = true;
-		flush_work(&linfo->inv_work);
+		flush_work(&linfo->inv_wlist.work);
 	}
 }
 
@@ -1546,7 +1557,7 @@ void scoutfs_lock_flush_invalidate(struct super_block *sb)
 	DECLARE_LOCK_INFO(sb, linfo);
 
 	if (linfo)
-		flush_work(&linfo->inv_work);
+		flush_work(&linfo->inv_wlist.work);
 }
 
 static u64 get_held_lock_refresh_gen(struct super_block *sb, struct scoutfs_key *start)
@@ -1615,7 +1626,7 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 
 	/* stop the shrinker from queueing work */
 	KC_UNREGISTER_SHRINKER(&linfo->shrinker);
-	flush_work(&linfo->shrink_work);
+	flush_work(&linfo->shrink_wlist.work);
 
 	/* cause current and future lock calls to return errors */
 	spin_lock(&linfo->lock);
@@ -1694,7 +1705,7 @@ void scoutfs_lock_destroy(struct super_block *sb)
 		lock = rb_entry(node, struct scoutfs_lock, node);
 		node = rb_next(node);
 
-		list_for_each_entry_safe(ireq, ireq_tmp, &lock->inv_list, head) {
+		list_for_each_entry_safe(ireq, ireq_tmp, &lock->inv_req_list, head) {
 			list_del_init(&ireq->head);
 			put_lock(linfo, ireq->lock);
 			kfree(ireq);
@@ -1703,12 +1714,19 @@ void scoutfs_lock_destroy(struct super_block *sb)
 		lock->request_pending = 0;
 		if (!list_empty(&lock->lru_head))
 			__lock_del_lru(linfo, lock);
+
+		spin_lock(&linfo->inv_wlist.lock);
 		if (!list_empty(&lock->inv_head)) {
 			list_del_init(&lock->inv_head);
 			lock->invalidate_pending = 0;
 		}
+		spin_unlock(&linfo->inv_wlist.lock);
+
+		spin_lock(&linfo->shrink_wlist.lock);
 		if (!list_empty(&lock->shrink_head))
 			list_del_init(&lock->shrink_head);
+		spin_unlock(&linfo->shrink_wlist.lock);
+
 		lock_remove(linfo, lock);
 		lock_free(linfo, lock);
 	}
@@ -1737,10 +1755,8 @@ int scoutfs_lock_setup(struct super_block *sb)
 			       lock_scan_objects);
 	KC_REGISTER_SHRINKER(&linfo->shrinker, "scoutfs-lock:" SCSBF, SCSB_ARGS(sb));
 	INIT_LIST_HEAD(&linfo->lru_list);
-	INIT_WORK(&linfo->inv_work, lock_invalidate_worker);
-	INIT_LIST_HEAD(&linfo->inv_list);
-	INIT_WORK(&linfo->shrink_work, lock_shrink_worker);
-	INIT_LIST_HEAD(&linfo->shrink_list);
+	init_work_list(&linfo->inv_wlist, lock_invalidate_worker);
+	init_work_list(&linfo->shrink_wlist, lock_shrink_worker);
 	atomic64_set(&linfo->next_refresh_gen, 0);
 	scoutfs_tseq_tree_init(&linfo->tseq_tree, lock_tseq_show);
 
