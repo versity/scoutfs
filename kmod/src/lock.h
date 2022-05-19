@@ -32,7 +32,7 @@ struct scoutfs_lock {
 		      invalidate_pending:1;
 
 	struct list_head inv_head;  /* entry in linfo's list of locks with invalidations */
-	struct list_head inv_list;  /* list of lock's invalidation requests */
+	struct list_head inv_req_list;  /* list of lock's invalidation requests */
 	struct list_head shrink_head;
 
 	spinlock_t cov_list_lock;
