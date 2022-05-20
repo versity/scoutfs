@@ -19,6 +19,7 @@ struct inode_deletion_lock_data;
  */
 struct scoutfs_lock {
 	struct super_block *sb;
+	spinlock_t lock;
 	struct scoutfs_key start;
 	struct scoutfs_key end;
 	struct rb_node node;
