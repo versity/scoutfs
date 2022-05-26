@@ -1,6 +1,8 @@
 #ifndef _SCOUTFS_LOCK_H_
 #define _SCOUTFS_LOCK_H_
 
+#include <linux/rhashtable.h>
+
 #include "key.h"
 #include "tseq.h"
 
@@ -21,9 +23,10 @@ struct scoutfs_lock {
 	struct super_block *sb;
 	atomic_t refcount;
 	spinlock_t lock;
+	struct rcu_head rcu_head;
 	struct scoutfs_key start;
 	struct scoutfs_key end;
-	struct rb_node node;
+	struct rhash_head ht_head;
 	struct rb_node range_node;
 	u64 refresh_gen;
 	u64 write_seq;
