@@ -32,6 +32,7 @@ struct scoutfs_lock {
 	u64 write_seq;
 	u64 dirty_trans_seq;
 	struct list_head lru_head;
+	int lru_on_list;
 	wait_queue_head_t waitq;
 	unsigned long request_pending:1,
 		      invalidate_pending:1;
