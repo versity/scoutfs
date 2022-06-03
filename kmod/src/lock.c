@@ -85,7 +85,9 @@ struct lock_info {
 	struct rhashtable ht;
 	struct rb_root lock_range_tree;
 	struct shrinker shrinker;
-	struct list_head lru_list;
+	struct list_head lru_active;
+	struct list_head lru_reclaim;
+	long lru_imbalance;
 	unsigned long long lru_nr;
 	struct workqueue_struct *workq;
 	struct work_list inv_wlist;
@@ -345,24 +347,102 @@ static bool lock_counts_match(int granted, unsigned int *counts)
 	return true;
 }
 
-static void __lock_add_lru(struct lock_info *linfo, struct scoutfs_lock *lock)
+enum { LOCK_LRU_ACTIVE, LOCK_LRU_RECLAIM };
+
+/*
+ * Restore balance between the active and reclaim lru lists.  This is
+ * called after single operations on the lists could have created
+ * imbalance so we can always restore balance with one operation.
+ *
+ * @lru_imbalance is the difference between the number of entries on the
+ * active list and the number on the reclaim list.  It's positive if
+ * there are more entries on the active list.
+ */
+static void lock_lru_rebalance(struct lock_info *linfo)
 {
+	struct scoutfs_lock *lock;
+
 	assert_spin_locked(&linfo->lock);
 
-	if (list_empty(&lock->lru_head)) {
-		list_add_tail(&lock->lru_head, &linfo->lru_list);
-		linfo->lru_nr++;
+	if (linfo->lru_imbalance > 1) {
+		BUG_ON(list_empty(&linfo->lru_active));
+		lock = list_first_entry(&linfo->lru_active, struct scoutfs_lock, lru_head);
+		list_move_tail(&lock->lru_head, &linfo->lru_reclaim);
+		lock->lru_on_list = LOCK_LRU_RECLAIM;
+		linfo->lru_imbalance -= 2;
+
+	} else if (linfo->lru_imbalance < -1) {
+		BUG_ON(list_empty(&linfo->lru_reclaim));
+		lock = list_last_entry(&linfo->lru_reclaim, struct scoutfs_lock, lru_head);
+		list_move(&lock->lru_head, &linfo->lru_active);
+		lock->lru_on_list = LOCK_LRU_ACTIVE;
+		linfo->lru_imbalance += 2;
+	}
+
+	BUG_ON(linfo->lru_imbalance < -1 || linfo->lru_imbalance > 1);
+}
+
+static void lock_lru_insert(struct lock_info *linfo, struct scoutfs_lock *lock)
+{
+	assert_spin_locked(&linfo->lock);
+	BUG_ON(!list_empty(&lock->lru_head));
+
+	list_add_tail(&lock->lru_head, &linfo->lru_active);
+	lock->lru_on_list = LOCK_LRU_ACTIVE;
+	linfo->lru_imbalance++;
+	linfo->lru_nr++;
+
+	lock_lru_rebalance(linfo);
+}
+
+/*
+ * As we use a lock we move it to the end of the active list if it was
+ * on the reclaim list.
+ *
+ * This is meant to reduce contention on use of active locks.  It
+ * doesn't maintain a precise ordering of lock access times and only
+ * ensures that reclaim has to go through the oldest half of locks
+ * before it can get to any of the newest half.  That does mean that the
+ * first lock in the newest half could well be the most recently used.
+ *
+ * The caller only has a reference to the lock.  We use an unlocked test
+ * of which list it's on to avoid acquiring the global lru lock.  We
+ * don't mind if the load is rarely racey.  It's always safe to reclaim
+ * and reacquire locks, so the LRU being rarely a bit off doesn't
+ * matter.  Shrinking costs the most for locks that are actively in use,
+ * and in that case there are lots of chances for the load to be
+ * consistent and move a lock to protect it from shrinking.
+ */
+static void lock_lru_update(struct lock_info *linfo, struct scoutfs_lock *lock)
+{
+	BUG_ON(atomic_read(&lock->refcount) < 3);
+	BUG_ON(list_empty(&lock->lru_head));
+
+	if (lock->lru_on_list != LOCK_LRU_ACTIVE) {
+		spin_lock(&linfo->lock);
+		if (lock->lru_on_list != LOCK_LRU_ACTIVE) {
+			list_move_tail(&lock->lru_head, &linfo->lru_active);
+			lock->lru_on_list = LOCK_LRU_ACTIVE;
+			linfo->lru_imbalance += 2;
+			lock_lru_rebalance(linfo);
+		}
+		spin_unlock(&linfo->lock);
 	}
 }
 
-static void __lock_del_lru(struct lock_info *linfo, struct scoutfs_lock *lock)
+static void lock_lru_remove(struct lock_info *linfo, struct scoutfs_lock *lock)
 {
 	assert_spin_locked(&linfo->lock);
+	BUG_ON(list_empty(&lock->lru_head));
 
-	if (!list_empty(&lock->lru_head)) {
-		list_del_init(&lock->lru_head);
-		linfo->lru_nr--;
-	}
+	list_del_init(&lock->lru_head);
+	if (lock->lru_on_list == LOCK_LRU_ACTIVE)
+		linfo->lru_imbalance--;
+	else
+		linfo->lru_imbalance++;
+	linfo->lru_nr--;
+
+	lock_lru_rebalance(linfo);
 }
 
 /*
@@ -471,7 +551,7 @@ retry:
 			ret = -EINVAL;
 		} else {
 			scoutfs_tseq_add(&linfo->tseq_tree, &lock->tseq_entry);
-			__lock_add_lru(linfo, lock);
+			lock_lru_insert(linfo, lock);
 			atomic_add(2, &lock->refcount);
 		}
 
@@ -499,7 +579,7 @@ static void lock_remove(struct lock_info *linfo, struct scoutfs_lock *lock)
 	spin_lock(&linfo->lock);
 	rb_erase(&lock->range_node, &linfo->lock_range_tree);
 	RB_CLEAR_NODE(&lock->range_node);
-	__lock_del_lru(linfo, lock);
+	lock_lru_remove(linfo, lock);
 	spin_unlock(&linfo->lock);
 
 	scoutfs_tseq_del(&linfo->tseq_tree, &lock->tseq_entry);
@@ -576,12 +656,8 @@ static struct scoutfs_lock *find_lock(struct super_block *sb, struct scoutfs_key
 		lock = get_lock(lock);
 	rcu_read_unlock();
 
-	if (lock) {
-		spin_lock(&linfo->lock);
-		__lock_del_lru(linfo, lock);
-		__lock_add_lru(linfo, lock);
-		spin_unlock(&linfo->lock);
-	}
+	if (lock)
+		lock_lru_update(linfo, lock);
 
 	return lock;
 }
@@ -1525,17 +1601,21 @@ static void lock_shrink_worker(struct work_struct *work)
 }
 
 /*
- * Start the shrinking process for locks on the lru.  Locks are always
- * on the lru so we skip any locks that are being used by any other
- * references.  Lock put/free defines nesting of the linfo spinlock
- * inside the lock's spinlock so we're careful to honor that here.  Our
- * reference to the lock protects its presence on the lru so we can
- * always resume iterating from it after dropping and reacquiring the
- * linfo lock.
+ * Start the shrinking process for locks on the lru.  The reclaim and
+ * active lists are walked from head to tail.   We hand locks off to the
+ * shrink worker if we can get a reference and acquire the lock's
+ * spinlock and find it idle.
  *
- * We don't want to block or allocate here so all we do is get the lock,
- * mark it request pending, and kick off the work.  The work sends a
- * null request and eventually the lock is freed by its response.
+ * The global linfo spinlock is ordered under the lock's spinlock as a
+ * convenience to freeing null locks.   We use trylock to check each
+ * lock and just skip locks when trylock fails.   It seemed easier and
+ * more reliable than stopping and restarting iteration around spinlock
+ * reacquisition.
+ *
+ * This is only a best effort scan to start freeing locks.  We return
+ * after having queued work that will do the blocking work to kick off
+ * the null requests, and even then it will be some time before we get
+ * the responses and free the null locks.
  *
  * Only a racing lock attempt that isn't matched can prevent the lock
  * from being freed.  It'll block waiting to send its request for its
@@ -1549,6 +1629,7 @@ static int scoutfs_lock_shrink(struct shrinker *shrink,
 					       shrinker);
 	struct super_block *sb = linfo->sb;
 	struct scoutfs_lock *lock = NULL;
+	struct list_head *list;
 	unsigned long nr;
 	int ret;
 
@@ -1558,31 +1639,35 @@ static int scoutfs_lock_shrink(struct shrinker *shrink,
 
 	spin_lock(&linfo->lock);
 
-	lock = list_first_entry_or_null(&linfo->lru_list, struct scoutfs_lock, lru_head);
-	while (lock && nr > 0) {
-
+	list = &linfo->lru_reclaim;
+	list_for_each_entry(lock, list, lru_head) {
 		if (get_lock(lock)) {
-			spin_unlock(&linfo->lock);
-
-			spin_lock(&lock->lock);
-			if (lock->mode != SCOUTFS_LOCK_NULL && atomic_read(&lock->refcount) == 3) {
-				lock->request_pending = 1;
-				spin_lock(&linfo->shrink_wlist.lock);
-				list_add_tail(&lock->shrink_head, &linfo->shrink_wlist.list);
-				spin_unlock(&linfo->shrink_wlist.lock);
-				get_lock(lock);
-				nr--;
+			if (spin_trylock(&lock->lock)) {
+				if (lock->mode != SCOUTFS_LOCK_NULL &&
+				    !lock->request_pending &&
+				    !lock->invalidate_pending &&
+				    atomic_read(&lock->refcount) == 3) {
+					lock->request_pending = 1;
+					spin_lock(&linfo->shrink_wlist.lock);
+					list_add_tail(&lock->shrink_head,
+							&linfo->shrink_wlist.list);
+					spin_unlock(&linfo->shrink_wlist.lock);
+					get_lock(lock);
+					nr--;
+				}
+				spin_unlock(&lock->lock);
 			}
-			spin_unlock(&lock->lock);
 			put_lock(linfo, lock);
-
-			spin_lock(&linfo->lock);
 		}
 
-		if (lock->lru_head.next != &linfo->lru_list)
-			lock = list_next_entry(lock, lru_head);
-		else
-			lock = NULL;
+		if (nr == 0)
+			break;
+
+		/* switch to active at last reclaim entry, _for_each_ stops if active empty */
+		if (lock->lru_head.next == &linfo->lru_reclaim) {
+			list = &linfo->lru_active;
+			lock = list_first_entry(list, struct scoutfs_lock, lru_head);
+		}
 	}
 
 	spin_unlock(&linfo->lock);
@@ -1807,7 +1892,8 @@ int scoutfs_lock_setup(struct super_block *sb)
 	linfo->shrinker.shrink = scoutfs_lock_shrink;
 	linfo->shrinker.seeks = DEFAULT_SEEKS;
 	register_shrinker(&linfo->shrinker);
-	INIT_LIST_HEAD(&linfo->lru_list);
+	INIT_LIST_HEAD(&linfo->lru_active);
+	INIT_LIST_HEAD(&linfo->lru_reclaim);
 	init_work_list(&linfo->inv_wlist, lock_invalidate_worker);
 	init_work_list(&linfo->shrink_wlist, lock_shrink_worker);
 	atomic64_set(&linfo->next_refresh_gen, 0);
