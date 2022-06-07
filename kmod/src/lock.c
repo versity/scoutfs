@@ -123,14 +123,6 @@ static void init_work_list(struct work_list *wlist, work_func_t func)
 	INIT_LIST_HEAD(&wlist->list);
 }
 
-static void queue_nonempty_work_list(struct lock_info *linfo, struct work_list *wlist)
-{
-	assert_spin_locked(&wlist->lock);
-
-	if (!list_empty(&wlist->list))
-		queue_work(linfo->workq, &wlist->work);
-}
-
 /*
  * Returns true if a lock with the granted mode can satisfy a requested
  * mode.  This is directional.  A read lock is satisfied by a write lock
@@ -914,7 +906,7 @@ retry:
 			/* another request arrived, back on the list and requeue */
 			spin_lock(&linfo->inv_wlist.lock);
 			list_move_tail(&lock->inv_head, &linfo->inv_wlist.list);
-			queue_nonempty_work_list(linfo, &linfo->inv_wlist);
+			queue_work(linfo->workq, &linfo->inv_wlist.work);
 			spin_unlock(&linfo->inv_wlist.lock);
 		}
 
@@ -971,7 +963,7 @@ int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 			spin_lock(&linfo->inv_wlist.lock);
 			list_add_tail(&lock->inv_head, &linfo->inv_wlist.list);
 			lock->invalidate_pending = 1;
-			queue_nonempty_work_list(linfo, &linfo->inv_wlist);
+			queue_work(linfo->workq, &linfo->inv_wlist.work);
 			spin_unlock(&linfo->inv_wlist.lock);
 		}
 		list_add_tail(&ireq->head, &lock->inv_req_list);
@@ -1462,9 +1454,8 @@ void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock, enum scou
 
 	trace_scoutfs_lock_unlock(sb, lock);
 
-	spin_lock(&linfo->inv_wlist.lock);
-	queue_nonempty_work_list(linfo, &linfo->inv_wlist);
-	spin_unlock(&linfo->inv_wlist.lock);
+	if (!list_empty(&lock->inv_req_list))
+		queue_work(linfo->workq, &linfo->inv_wlist.work);
 
 	spin_unlock(&lock->lock);
 	wake_up(&lock->waitq);
@@ -1673,7 +1664,8 @@ static int scoutfs_lock_shrink(struct shrinker *shrink,
 	spin_unlock(&linfo->lock);
 
 	spin_lock(&linfo->shrink_wlist.lock);
-	queue_nonempty_work_list(linfo, &linfo->shrink_wlist);
+	if (!list_empty(&linfo->shrink_wlist.list))
+		queue_work(linfo->workq, &linfo->shrink_wlist.work);
 	spin_unlock(&linfo->shrink_wlist.lock);
 
 out:
