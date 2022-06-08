@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <ctype.h>
 #include <uuid/uuid.h>
 #include <sys/socket.h>
@@ -989,9 +990,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 struct print_args {
 	char *meta_device;
+	bool skip_likely_huge;
 };
 
-static int print_volume(int fd)
+static int print_volume(int fd, struct print_args *args)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct print_recursion_args pa;
@@ -1041,23 +1043,26 @@ static int print_volume(int fd)
 			ret = err;
 	}
 
-	for (i = 0; i < array_size(super->meta_alloc); i++) {
-		snprintf(str, sizeof(str), "meta_alloc[%u]", i);
-		err = print_btree(fd, super, str, &super->meta_alloc[i].root,
+	if (!args->skip_likely_huge) {
+		for (i = 0; i < array_size(super->meta_alloc); i++) {
+			snprintf(str, sizeof(str), "meta_alloc[%u]", i);
+			err = print_btree(fd, super, str, &super->meta_alloc[i].root,
+					  print_alloc_item, NULL);
+			if (err && !ret)
+				ret = err;
+		}
+
+		err = print_btree(fd, super, "data_alloc", &super->data_alloc.root,
 				  print_alloc_item, NULL);
 		if (err && !ret)
 			ret = err;
 	}
 
-	err = print_btree(fd, super, "data_alloc", &super->data_alloc.root,
-			  print_alloc_item, NULL);
-	if (err && !ret)
-		ret = err;
-
 	err = print_btree(fd, super, "srch_root", &super->srch_root,
 			  print_srch_root_item, NULL);
 	if (err && !ret)
 		ret = err;
+
 	err = print_btree(fd, super, "logs_root", &super->logs_root,
 			  print_log_trees_item, NULL);
 	if (err && !ret)
@@ -1065,19 +1070,23 @@ static int print_volume(int fd)
 
 	pa.super = super;
 	pa.fd = fd;
-	err = print_btree_leaf_items(fd, super, &super->srch_root.ref,
-				     print_srch_root_files, &pa);
-	if (err && !ret)
-		ret = err;
+	if (!args->skip_likely_huge) {
+		err = print_btree_leaf_items(fd, super, &super->srch_root.ref,
+					     print_srch_root_files, &pa);
+		if (err && !ret)
+			ret = err;
+	}
 	err = print_btree_leaf_items(fd, super, &super->logs_root.ref,
 				     print_log_trees_roots, &pa);
 	if (err && !ret)
 		ret = err;
 
-	err = print_btree(fd, super, "fs_root", &super->fs_root,
-			  print_fs_item, NULL);
-	if (err && !ret)
-		ret = err;
+	if (!args->skip_likely_huge) {
+		err = print_btree(fd, super, "fs_root", &super->fs_root,
+				  print_fs_item, NULL);
+		if (err && !ret)
+			ret = err;
+	}
 
 out:
 	free(super);
@@ -1098,7 +1107,7 @@ static int do_print(struct print_args *args)
 		return ret;
 	}
 
-	ret = print_volume(fd);
+	ret = print_volume(fd, args);
 	close(fd);
 	return ret;
 };
@@ -1108,6 +1117,9 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	struct print_args *args = state->input;
 
 	switch (key) {
+	case 'S':
+		args->skip_likely_huge = true;
+		break;
 	case ARGP_KEY_ARG:
 		if (!args->meta_device)
 			args->meta_device = strdup_or_error(state, arg);
@@ -1125,8 +1137,13 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
+static struct argp_option options[] = {
+	{ "skip-likely-huge", 'S', NULL, 0, "Skip large structures to minimize output size"},
+	{ NULL }
+};
+
 static struct argp argp = {
-	NULL,
+	options,
 	parse_opt,
 	"META-DEV",
 	"Print metadata structures"

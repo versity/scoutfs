@@ -597,7 +597,7 @@ format.
 .PD
 
 .TP
-.BI "print META-DEVICE"
+.BI "print {-S|--skip-likely-huge} META-DEVICE"
 .sp
 Prints out all of the metadata in the file system.  This makes no effort
 to ensure that the structures are consistent as they're traversed and
@@ -607,6 +607,20 @@ output.
 .PD 0
 .TP
 .sp
+.B "-S, --skip-likely-huge"
+Skip printing structures that are likely to be very large.  The
+structures that are skipped tend to be global and whose size tends to be
+related to the size of the volume.   Examples of skipped structures include
+the global fs items, srch files, and metadata and data
+allocators.  Similar structures that are not skipped are related to the
+number of mounts and are maintained at a relatively reasonable size.
+These include per-mount log trees, srch files, allocators, and the
+metadata allocators used by server commits.
+.sp
+Skipping the larger structures limits the print output to a relatively
+constant size rather than being a large multiple of the used metadata
+space of the volume making the output much more useful for inspection.
+.TP
 .B "META-DEVICE"
 The path to the metadata device for the filesystem whose metadata will be
 printed.  Since this command reads via the host's buffer cache, it may not
