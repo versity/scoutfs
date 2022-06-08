@@ -85,6 +85,21 @@ static u64 smallest_order_length(u64 len)
 }
 
 /*
+ * An extent modification dirties three distinct leaves of an allocator
+ * btree as it adds and removes the blkno and size sorted items for the
+ * old and new lengths of the extent.  Dirtying the paths to these
+ * leaves can grow the tree and grow/shrink neighbours at each level.
+ * We over-estimate the number of blocks allocated and freed (the paths
+ * share a root, growth doesn't free) to err on the simpler and safer
+ * side.  The overhead is minimal given the relatively large list blocks
+ * and relatively short allocator trees.
+ */
+static u32 extent_mod_blocks(u32 height)
+{
+	return ((1 + height) * 2) * 3;
+}
+
+/*
  * Free extents don't have flags and are stored in two indexes sorted by
  * block location and by length order, largest first.  The location key
  * field is set to the final block in the extent so that we can find
@@ -877,6 +892,14 @@ static int find_zone_extent(struct super_block *sb, struct scoutfs_alloc_root *r
  * -ENOENT is returned if we run out of extents in the source tree
  * before moving the total.
  *
+ * If meta_reserved is non-zero then -EINPROGRESS can be returned if the
+ * current meta allocator's avail blocks or room for freed blocks would
+ * have fallen under the reserved amount.  The could have been
+ * successfully dirtied in this case but the number of blocks moved is
+ * not returned.  The caller is expected to deal with the partial
+ * progress by commiting the dirty trees and examining the resulting
+ * modified trees to see if they need to continue moving extents.
+ *
  * The caller can specify that extents in the source tree should first
  * be found based on their zone bitmaps.  We'll first try to find
  * extents in the exclusive zones, then vacant zones, and then we'll
@@ -891,7 +914,7 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
 		       struct scoutfs_alloc_root *src, u64 total,
-		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks)
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_reserved)
 {
 	struct alloc_ext_args args = {
 		.alloc = alloc,
@@ -940,6 +963,14 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		}
 		if (ret < 0)
 			break;
+
+		if (meta_reserved != 0 &&
+		    scoutfs_alloc_meta_low(sb, alloc, meta_reserved +
+					   extent_mod_blocks(src->root.height) +
+					   extent_mod_blocks(dst->root.height))) {
+			ret = -EINPROGRESS;
+			break;
+		}
 
 		/* searching set start/len, finish initializing alloced extent */
 		ext.map = found.map ? ext.start - found.start + found.map : 0;
@@ -1065,15 +1096,6 @@ out:
  * than completely exhausting the avail list or overflowing the freed
  * list.
  *
- * An extent modification dirties three distinct leaves of an allocator
- * btree as it adds and removes the blkno and size sorted items for the
- * old and new lengths of the extent.  Dirtying the paths to these
- * leaves can grow the tree and grow/shrink neighbours at each level.
- * We over-estimate the number of blocks allocated and freed (the paths
- * share a root, growth doesn't free) to err on the simpler and safer
- * side.  The overhead is minimal given the relatively large list blocks
- * and relatively short allocator trees.
- *
  * The caller tells us how many extents they're about to modify and how
  * many other additional blocks they may cow manually.  And finally, the
  * caller could be the first to dirty the avail and freed blocks in the
@@ -1082,7 +1104,7 @@ out:
 static bool list_has_blocks(struct super_block *sb, struct scoutfs_alloc *alloc,
 			    struct scoutfs_alloc_root *root, u32 extents, u32 addl_blocks)
 {
-	u32 tree_blocks = (((1 + root->root.height) * 2) * 3) * extents;
+	u32 tree_blocks = extent_mod_blocks(root->root.height) * extents;
 	u32 most = 1 + tree_blocks + addl_blocks;
 
 	if (le32_to_cpu(alloc->avail.first_nr) < most) {

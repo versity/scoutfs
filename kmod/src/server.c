@@ -689,23 +689,18 @@ static int alloc_move_refill_zoned(struct super_block *sb, struct scoutfs_alloc_
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri, dst, src,
 				  min(target - le64_to_cpu(dst->total_len),
 				      le64_to_cpu(src->total_len)),
-				  exclusive, vacant, zone_blocks);
-}
-
-static inline int alloc_move_refill(struct super_block *sb, struct scoutfs_alloc_root *dst,
-				    struct scoutfs_alloc_root *src, u64 lo, u64 target)
-{
-	return alloc_move_refill_zoned(sb, dst, src, lo, target, NULL, NULL, 0);
+				  exclusive, vacant, zone_blocks, 0);
 }
 
 static int alloc_move_empty(struct super_block *sb,
 			    struct scoutfs_alloc_root *dst,
-			    struct scoutfs_alloc_root *src)
+			    struct scoutfs_alloc_root *src, u64 meta_reserved)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri,
-				  dst, src, le64_to_cpu(src->total_len), NULL, NULL, 0);
+				  dst, src, le64_to_cpu(src->total_len), NULL, NULL, 0,
+				  meta_reserved);
 }
 
 /*
@@ -1344,7 +1339,7 @@ static int server_get_log_trees(struct super_block *sb,
 		goto unlock;
 	}
 
-	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed);
+	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 0);
 	if (ret < 0) {
 		err_str = "emptying committed data_freed";
 		goto unlock;
@@ -1544,9 +1539,11 @@ static int server_get_roots(struct super_block *sb,
  * read and we finalize the tree so that it will be merged.  We reclaim
  * all the allocator items.
  *
- * The caller holds the commit rwsem which means we do all this work in
- * one server commit.  We'll need to keep the total amount of blocks in
- * trees in check.
+ * The caller holds the commit rwsem which means we have to do our work
+ * in one commit.  The alocator btrees can be very large and very
+ * fragmented.  We return -EINPROGRESS if we couldn't fully reclaim the
+ * allocators in one commit.   The caller should apply the current
+ * commit and call again in a new commit.
  *
  * By the time we're evicting a client they've either synced their data
  * or have been forcefully removed.  The free blocks in the allocator
@@ -1606,9 +1603,9 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	}
 
 	/*
-	 * All of these can return errors after having modified the
-	 * allocator trees.  We have to try and update the roots in the
-	 * log item.
+	 * All of these can return errors, perhaps indicating successful
+	 * partial progress, after having modified the allocator trees.
+	 * We always have to update the roots in the log item.
 	 */
 	mutex_lock(&server->alloc_mutex);
 	ret = (err_str = "splice meta_freed to other_freed",
@@ -1618,18 +1615,21 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri, server->other_freed,
 					 &lt.meta_avail)) ?:
 	      (err_str = "empty data_avail",
-	       alloc_move_empty(sb, &super->data_alloc, &lt.data_avail)) ?:
+	       alloc_move_empty(sb, &super->data_alloc, &lt.data_avail, 100)) ?:
 	      (err_str = "empty data_freed",
-	       alloc_move_empty(sb, &super->data_alloc, &lt.data_freed));
+	       alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 100));
 	mutex_unlock(&server->alloc_mutex);
 
-	/* the transaction is no longer open */
-	lt.commit_trans_seq = lt.get_trans_seq;
+	/* only finalize, allowing merging, once the allocators are fully freed */
+	if (ret == 0) {
+		/* the transaction is no longer open */
+		lt.commit_trans_seq = lt.get_trans_seq;
 
-	/* the mount is no longer writing to the zones */
-	zero_data_alloc_zone_bits(&lt);
-	le64_add_cpu(&lt.flags, SCOUTFS_LOG_TREES_FINALIZED);
-	lt.finalize_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
+		/* the mount is no longer writing to the zones */
+		zero_data_alloc_zone_bits(&lt);
+		le64_add_cpu(&lt.flags, SCOUTFS_LOG_TREES_FINALIZED);
+		lt.finalize_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
+	}
 
 	err = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
@@ -1638,7 +1638,7 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 out:
 	mutex_unlock(&server->logs_mutex);
 
-	if (ret < 0)
+	if (ret < 0 && ret != -EINPROGRESS)
 		scoutfs_err(sb, "server error %d reclaiming log trees for rid %016llx: %s",
 			    ret, rid, err_str);
 
@@ -3536,26 +3536,37 @@ struct farewell_request {
  * Reclaim all the resources for a mount which has gone away.  It's sent
  * us a farewell promising to leave or we actively fenced it.
  *
- * It's safe to call this multiple times for a given rid.  Each
- * individual action knows to recognize that it's already been performed
- * and return success.
+ * This can be called multiple times across different servers for
+ * different reclaim attempts.  The existence of the mounted_client item
+ * triggers reclaim and must be deleted last.  Each step knows that it
+ * can be called multiple times and safely recognizes that its work
+ * might have already been done.
+ *
+ * Some steps (reclaiming large fragmented allocators) may need multiple
+ * calls to complete.  They return -EINPROGRESS which tells us to apply
+ * the server commit and retry.
  */
 static int reclaim_rid(struct super_block *sb, u64 rid)
 {
 	COMMIT_HOLD(hold);
 	int ret;
+	int err;
 
-	server_hold_commit(sb, &hold);
+	do {
+		server_hold_commit(sb, &hold);
 
-	/* delete mounted client last, recovery looks for it */
-	ret = scoutfs_lock_server_farewell(sb, rid) ?:
-	      reclaim_open_log_tree(sb, rid) ?:
-	      cancel_srch_compact(sb, rid) ?:
-	      cancel_log_merge(sb, rid) ?:
-	      scoutfs_omap_remove_rid(sb, rid) ?:
-	      delete_mounted_client(sb, rid);
+		err = scoutfs_lock_server_farewell(sb, rid) ?:
+		      reclaim_open_log_tree(sb, rid) ?:
+		      cancel_srch_compact(sb, rid) ?:
+		      cancel_log_merge(sb, rid) ?:
+		      scoutfs_omap_remove_rid(sb, rid) ?:
+		      delete_mounted_client(sb, rid);
 
-	return server_apply_commit(sb, &hold, ret);
+		ret = server_apply_commit(sb, &hold, err == -EINPROGRESS ? 0 : err);
+
+	} while (err == -EINPROGRESS && ret == 0);
+
+	return ret;
 }
 
 /*
