@@ -991,6 +991,8 @@ static void scoutfs_net_listen_worker(struct work_struct *work)
 		if (ret < 0)
 			break;
 
+		acc_sock->sk->sk_allocation = GFP_NOFS;
+
 		/* inherit accepted request funcs from listening conn */
 		acc_conn = scoutfs_net_alloc_conn(sb, conn->notify_up,
 						  conn->notify_down,
@@ -1052,6 +1054,8 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 	ret = sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
+
+	sock->sk->sk_allocation = GFP_NOFS;
 
 	/* caller specified connect timeout */
 	tv.tv_sec = conn->connect_timeout_ms / MSEC_PER_SEC;
@@ -1449,6 +1453,8 @@ int scoutfs_net_bind(struct super_block *sb,
 	ret = sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
+
+	sock->sk->sk_allocation = GFP_NOFS;
 
 	optval = 1;
 	ret = kernel_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
