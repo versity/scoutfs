@@ -1267,6 +1267,7 @@ static int server_get_log_trees(struct super_block *sb,
 	char *err_str = NULL;
 	u64 nr;
 	int ret;
+	int err;
 
 	if (arg_len != 0) {
 		ret = -EINVAL;
@@ -1310,16 +1311,27 @@ static int server_get_log_trees(struct super_block *sb,
 		goto unlock;
 	}
 
+	if (ret != -ENOENT) {
+		/* need to sync lt with respect to changes in other structures */
+		scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid), le64_to_cpu(lt.nr));
+		ret = scoutfs_btree_dirty(sb, &server->alloc, &server->wri,
+					  &super->logs_root, &key);
+		if (ret < 0) {
+			err_str = "dirtying lt btree key";
+			goto unlock;
+		}
+	}
+
 	/* drops and re-acquires the mutex and commit if it has to wait */
 	ret = finalize_and_start_log_merge(sb, &lt, rid, &hold);
 	if (ret < 0)
-		goto unlock;
+		goto update;
 
 	if (get_volopt_val(server, SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR, &data_zone_blocks)) {
 		ret = get_data_alloc_zone_bits(sb, rid, exclusive, vacant, data_zone_blocks);
 		if (ret < 0) {
 			err_str = "getting alloc zone bits";
-			goto unlock;
+			goto update;
 		}
 	} else {
 		data_zone_blocks = 0;
@@ -1336,13 +1348,13 @@ static int server_get_log_trees(struct super_block *sb,
 					&lt.meta_freed);
 	if (ret < 0) {
 		err_str = "splicing committed meta_freed";
-		goto unlock;
+		goto update;
 	}
 
 	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 0);
 	if (ret < 0) {
 		err_str = "emptying committed data_freed";
-		goto unlock;
+		goto update;
 	}
 
 	ret = scoutfs_alloc_fill_list(sb, &server->alloc, &server->wri,
@@ -1351,7 +1363,7 @@ static int server_get_log_trees(struct super_block *sb,
 				      SCOUTFS_SERVER_META_FILL_TARGET);
 	if (ret < 0) {
 		err_str = "filling meta_avail";
-		goto unlock;
+		goto update;
 	}
 
 	if (le64_to_cpu(server->meta_avail->total_len) <= scoutfs_server_reserved_meta_blocks(sb))
@@ -1364,7 +1376,7 @@ static int server_get_log_trees(struct super_block *sb,
 				      exclusive, vacant, data_zone_blocks);
 	if (ret < 0) {
 		err_str = "refilling data_avail";
-		goto unlock;
+		goto update;
 	}
 
 	if (le64_to_cpu(lt.data_avail.total_len) < SCOUTFS_SERVER_DATA_FILL_LO)
@@ -1384,7 +1396,7 @@ static int server_get_log_trees(struct super_block *sb,
 		if (ret < 0) {
 			zero_data_alloc_zone_bits(&lt);
 			err_str = "setting data_avail zone bits";
-			goto unlock;
+			goto update;
 		}
 
 		lt.data_alloc_zone_blocks = cpu_to_le64(data_zone_blocks);
@@ -1393,13 +1405,18 @@ static int server_get_log_trees(struct super_block *sb,
 	/* give the transaction a new seq (must have been ==) */
 	lt.get_trans_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
 
+update:
 	/* update client's log tree's item */
-	scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid),
-				   le64_to_cpu(lt.nr));
-	ret = scoutfs_btree_force(sb, &server->alloc, &server->wri,
+	scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid), le64_to_cpu(lt.nr));
+	err = scoutfs_btree_force(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
-	if (ret < 0)
-		err_str = "updating log trees";
+	BUG_ON(err < 0); /* can duplicate extents.. move dst in super, still in in lt src */
+	if (err < 0) {
+		if (ret == 0) {
+			ret = err;
+			err_str = "updating log trees";
+		}
+	}
 
 unlock:
 	if (unlock_alloc)
