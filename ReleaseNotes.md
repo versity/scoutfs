@@ -2,6 +2,25 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.5
+\
+*Jun 21, 2022*
+
+* **Fix persistent error during server startup**
+\
+  Fixed a case where the server would always hit a consistent error on
+  seartup, preventing the system from mounting.  This required a rare
+  but valid state across the clients.
+
+* **Fix a client hang that would lead to fencing**
+\
+  The client module's use of in-kernel networking was missing annotation
+  that could lead to communication hanging.  The server would fence the
+  client when it stopped communicating.  This could be identified by the
+  server fencing a client after it disconnected with no attempt by the
+  client to reconnect.
+
+---
 v1.4
 \
 *May 6, 2022*
