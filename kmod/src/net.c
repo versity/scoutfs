@@ -1345,10 +1345,12 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 	if (!conn)
 		return NULL;
 
-	conn->info = kzalloc(info_size, GFP_NOFS);
-	if (!conn->info) {
-		kfree(conn);
-		return NULL;
+	if (info_size) {
+		conn->info = kzalloc(info_size, GFP_NOFS);
+		if (!conn->info) {
+			kfree(conn);
+			return NULL;
+		}
 	}
 
 	conn->workq = alloc_workqueue("scoutfs_net_%s",
