@@ -355,6 +355,7 @@ static int submit_send(struct super_block *sb,
 		}
 		if (rid != 0) {
 			spin_unlock(&conn->lock);
+			kfree(msend);
 			return -ENOTCONN;
 		}
 	}
