@@ -157,6 +157,15 @@ static int free_rid(struct omap_rid_list *list, struct omap_rid_entry *entry)
 	return nr;
 }
 
+static void free_rid_list(struct omap_rid_list *list)
+{
+	struct omap_rid_entry *entry;
+	struct omap_rid_entry *tmp;
+
+	list_for_each_entry_safe(entry, tmp, &list->head, head)
+		free_rid(list, entry);
+}
+
 static int copy_rids(struct omap_rid_list *to, struct omap_rid_list *from, spinlock_t *from_lock)
 {
 	struct omap_rid_entry *entry;
@@ -804,6 +813,10 @@ void scoutfs_omap_server_shutdown(struct super_block *sb)
 	llist_for_each_entry_safe(req, tmp, requests, llnode)
 		kfree(req);
 
+	spin_lock(&ominf->lock);
+	free_rid_list(&ominf->rids);
+	spin_unlock(&ominf->lock);
+
 	synchronize_rcu();
 }
 
@@ -863,6 +876,10 @@ void scoutfs_omap_destroy(struct super_block *sb)
 		WARN_ON_ONCE(rhashtable_walk_peek(&iter) != NULL);
 		rhashtable_walk_stop(&iter);
 		rhashtable_walk_exit(&iter);
+
+		spin_lock(&ominf->lock);
+		free_rid_list(&ominf->rids);
+		spin_unlock(&ominf->lock);
 
 		rhashtable_destroy(&ominf->group_ht);
 		rhashtable_destroy(&ominf->req_ht);
