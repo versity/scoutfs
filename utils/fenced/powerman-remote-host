@@ -1,0 +1,139 @@
+#!/usr/bin/bash
+# /usr/libexec/scoutfs-fenced/run/powerman-remote-host
+
+# powerman configuration
+SCOUTFS_PM_CONFIG_FILE=${SCOUTFS_PM_CONFIG_FILE:-/etc/scoutfs/scoutfs-pm.conf}
+SCOUTFS_PM_HOSTS_FILE=${SCOUTFS_PM_HOSTS_FILE:-/etc/scoutfs/scoutfs-pm-hosts.conf}
+
+## hosts file format
+## SCOUTFS_HOST_IP POWERMAN_NODE_NAME
+## ex:
+#  192.168.1.1     dm1
+
+# command setup
+PM_CMD="/usr/bin/pm"
+SSH_CMD="ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no"
+LOGGER="/bin/logger -p local3.crit -t scoutfs-fenced"
+
+$LOGGER "ipmi fence script invoked: IP: $SCOUTFS_FENCED_REQ_IP RID: $SCOUTFS_FENCED_REQ_RID TEST: $IPMITEST"
+
+echo_fail() {
+    echo "$@" >&2
+    $LOGGER "fence failed: $@"
+    exit 1
+}
+
+echo_log() {
+    echo "$@" >&2
+    $LOGGER "fence info: $@"
+}
+
+echo_test_pass() {
+    echo -e "\xE2\x9C\x94 $@"
+}
+
+echo_test_fail() {
+    echo -e "\xE2\x9D\x8C $@"
+}
+
+test -n "$SCOUTFS_PM_CONFIG_FILE" || \
+    echo_fail "SCOUTFS_PM_CONFIG_FILE isn't set"
+test -r "$SCOUTFS_PM_CONFIG_FILE" || \
+    echo_fail "$SCOUTFS_PM_CONFIG_FILE isn't readable file"
+. "$SCOUTFS_PM_CONFIG_FILE"
+test -n "$SCOUTFS_PM_HOSTS_FILE" || \
+    echo_fail "SCOUTFS_PM_HOSTS_FILE isn't set"
+test -r "$SCOUTFS_PM_HOSTS_FILE" || \
+    echo_fail "$SCOUTFS_PM_HOSTS_FILE isn't readable file"
+test -x "$PM_CMD" || \
+    echo_fail "$PMCMD not found, need to install powerman?"
+
+export ip="$SCOUTFS_FENCED_REQ_IP"
+fence_rid="$SCOUTFS_FENCED_REQ_RID"
+
+getPMhost () {
+    host=$(awk -v ip="$1" '$1 == ip {print $2}' "$SCOUTFS_PM_HOSTS_FILE") || \
+        echo_fail "lookup pm host failed"
+    echo "$host"
+}
+
+powerOffHost() {
+    $PM_CMD $PM_OPTS "$1" -0 || \
+        echo_fail "pm power off $host failed"
+
+    pmoutput=$($PM_CMD $PM_OPTS "$1" -q | grep "$1") || \
+        echo_fail "powerman power stat $1 failed"
+
+    if [[ ! "$pmoutput" =~ off ]]; then
+        echo_fail "powerman stat $1 not off"
+    fi
+
+    $LOGGER "powerman fence power down $1 success"
+
+    exit 0
+}
+
+if [ -n "$PMTEST" ]; then
+    for i in $(awk '!/^($|[[:space:]]*#)/ {print $1}' "$SCOUTFS_PM_HOSTS_FILE"); do
+        if ! $SSH_CMD "$i" /bin/true; then
+            echo_test_fail "ssh $i"
+        else
+            echo_test_pass "ssh $i"
+        fi
+	host=$(getPMhost "$i")
+        if [ -z "$host" ]; then
+            echo_test_fail "pm config $i $host"
+        else
+            if ! $PM_CMD $PM_OPTS "$host" -q; then
+                echo_test_fail "pm $i"
+            else
+                echo_test_pass "pm $i"
+            fi
+        fi
+    done
+    exit 0
+fi
+
+if [ -z "$ip" ]; then
+    echo_fail "no IP given for fencing"
+fi
+
+host=$(getPMhost "$ip")
+if [ -z "$host" ]; then
+    echo_fail "no host found for fence IP"
+fi
+
+# first check via ssh if the mount still exists
+# if ssh succeeds, we will only power down the node if mounted
+if ! output=$($SSH_CMD "$ip" "echo BEGIN; LC_ALL=C egrep -m 1 '(^0x*|^$rid$)' /sys/kernel/boot_params/version /sys/fs/scoutfs/f*r*/rid; echo END"); then
+    # ssh not working, just power down host
+    powerOffHost "$host"
+fi
+
+if [[ ! "$output" =~ BEGIN ]]; then
+    # ssh failure
+    echo_log "no BEGIN"
+    powerOffHost "$host"
+fi
+
+if [[ ! "$output" =~ \/boot_params\/ ]]; then
+    # ssh failure
+    echo_log "no boot params"
+    powerOffHost "$host"
+fi
+
+if [[ ! "$output" =~ END ]]; then
+    # ssh failure
+    echo_log "no END"
+    powerOffHost "$host"
+fi
+
+if [[ "$output" =~ "rid:$rid" ]]; then
+    # rid still mounted, power down
+    echo_log "rid $rid still mounted"
+    powerOffHost "$host"
+fi
+
+$LOGGER "powerman fence host $ip/$host success (rid $rid not mounted)"
+exit 0
+

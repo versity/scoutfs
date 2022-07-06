@@ -1,0 +1,140 @@
+#!/usr/bin/bash
+# /usr/libexec/scoutfs-fenced/run/ipmi-remote-host
+
+# ipmi configuration
+SCOUTFS_IPMI_CONFIG_FILE=${SCOUTFS_IPMI_CONFIG_FILE:-/etc/scoutfs/scoutfs-ipmi.conf}
+SCOUTFS_IPMI_HOSTS_FILE=${SCOUTFS_IPMI_HOSTS_FILE:-/etc/scoutfs/scoutfs-ipmi-hosts.conf}
+
+## hosts file format
+## SCOUTFS_HOST_IP IPMI_ADDRESS
+## ex:
+#  192.168.1.1     192.168.10.1
+
+# command setup
+IPMI_POWER="/sbin/ipmipower"
+SSH_CMD="ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=no"
+LOGGER="/bin/logger -p local3.crit -t scoutfs-fenced"
+
+$LOGGER "ipmi fence script invoked: IP: $SCOUTFS_FENCED_REQ_IP RID: $SCOUTFS_FENCED_REQ_RID TEST: $IPMITEST"
+
+echo_fail() {
+    echo "$@" >&2
+    $LOGGER "fence failed: $@"
+    exit 1
+}
+
+echo_log() {
+    echo "$@" >&2
+    $LOGGER "fence info: $@"
+}
+
+echo_test_pass() {
+    echo -e "\xE2\x9C\x94 $@"
+}
+
+echo_test_fail() {
+    echo -e "\xE2\x9D\x8C $@"
+}
+
+test -n "$SCOUTFS_IPMI_CONFIG_FILE" || \
+    echo_fail "SCOUTFS_IPMI_CONFIG_FILE isn't set"
+test -r "$SCOUTFS_IPMI_CONFIG_FILE" || \
+    echo_fail "$SCOUTFS_IPMI_CONFIG_FILE isn't readable file"
+. "$SCOUTFS_IPMI_CONFIG_FILE"
+test -n "$SCOUTFS_IPMI_HOSTS_FILE" || \
+    echo_fail "SCOUTFS_IPMI_HOSTS_FILE isn't set"
+test -r "$SCOUTFS_IPMI_HOSTS_FILE" || \
+    echo_fail "$SCOUTFS_IPMI_HOSTS_FILE isn't readable file"
+test -x "$IPMI_POWER" || \
+    echo_fail "$IPMI_POWER not found, need to install freeimpi?"
+
+export ip="$SCOUTFS_FENCED_REQ_IP"
+export rid="$SCOUTFS_FENCED_REQ_RID"
+
+getIPMIhost () {
+    host=$(awk -v ip="$1" '$1 == ip {print $2}' "$SCOUTFS_IPMI_HOSTS_FILE") || \
+        echo_fail "lookup ipmi host failed"
+    echo "$host"
+}
+
+powerOffHost() {
+    # older versions of ipmipower inverted wait-until-off/wait-until-on, so specify both
+    $IPMI_POWER $IPMI_OPTS -h "$1" --wait-until-off --wait-until-on --off || \
+        echo_fail "ipmi power off $1 failed"
+
+    ipmioutput=$($IPMI_POWER $IPMI_OPTS -h "$1" --stat) || \
+        echo_fail "ipmi power stat $1 failed"
+
+    if [[ ! "$ipmioutput" =~ off ]]; then
+        echo_fail "ipmi stat $1 not off"
+    fi
+
+    $LOGGER "ipmi fence power down $1 success"
+
+    exit 0
+}
+
+if [ -n "$IPMITEST" ]; then
+    for i in $(awk '!/^($|[[:space:]]*#)/ {print $1}' "$SCOUTFS_IPMI_HOSTS_FILE"); do
+        if ! $SSH_CMD "$i" /bin/true; then
+            echo_test_fail "ssh $i"
+        else
+            echo_test_pass "ssh $i"
+        fi
+	host=$(getIPMIhost "$i")
+        if [ -z "$host" ]; then
+            echo_test_fail "ipmi config $i $host"
+        else
+            if ! $IPMI_POWER $IPMI_OPTS -h "$host" --stat; then
+                echo_test_fail "ipmi $i"
+            else
+                echo_test_pass "ipmi $i"
+            fi
+        fi
+    done
+    exit 0
+fi
+
+if [ -z "$ip" ]; then
+    echo_fail "no IP given for fencing"
+fi
+
+host=$(getIPMIhost "$ip")
+if [ -z "$host" ]; then
+    echo_fail "no IPMI host found for fence IP"
+fi
+
+# first check via ssh if the mount still exists
+# if ssh succeeds, we will only power down the node if mounted
+if ! output=$($SSH_CMD "$ip" "echo BEGIN; LC_ALL=C egrep -m 1 '(^0x*|^$rid$)' /sys/kernel/boot_params/version /sys/fs/scoutfs/f*r*/rid; echo END"); then
+    # ssh not working, just power down host
+    powerOffHost "$host"
+fi
+
+if [[ ! "$output" =~ BEGIN ]]; then
+    # ssh failure
+    echo_log "no BEGIN"
+    powerOffHost "$host"
+fi
+
+if [[ ! "$output" =~ \/boot_params\/ ]]; then
+    # ssh failure
+    echo_log "no boot params"
+    powerOffHost "$host"
+fi
+
+if [[ ! "$output" =~ END ]]; then
+    # ssh failure
+    echo_log "no END"
+    powerOffHost "$host"
+fi
+
+if [[ "$output" =~ "rid:$rid" ]]; then
+    # rid still mounted, power down
+    echo_log "rid $rid still mounted"
+    powerOffHost "$host"
+fi
+
+$LOGGER "ipmi fence host $ip/$host success (rid $rid not mounted)"
+exit 0
+
