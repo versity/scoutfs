@@ -2,6 +2,22 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.6
+\
+*Jul 7, 2022*
+
+* **Fix memory leaks in rare corner cases**
+\
+  Analysis tools found a few corner cases that leaked small structures,
+  generally around error handling or startup and shutdown.
+
+* **Add --skip-likely-huge scoutfs print command option**
+\
+  Add an option to scoutfs print to reduce the size of the output
+  so that it can be used to see system-wide metadata without being
+  overwhelmed by file-level details.
+
+---
 v1.5
 \
 *Jun 21, 2022*
