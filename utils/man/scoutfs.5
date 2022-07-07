@@ -212,6 +212,38 @@ name, total value, and a count of contributing attributes can be read
 with the
 .IB READ_XATTR_TOTALS
 ioctl.
+.TP
+.B .worm.
+Attributes with the .worm. flag are used to control WORM (write once,
+read many) access restrictions, typically used to comply with operational
+regulations.  The only currently supported mechanism is controlled by a
+single .worm. attribute whose name ends in ".level1_expire".  Additional
+levels with different enfrocement policies may be added and would be
+controlled by different attributes.
+.sp
+The level1 policy is enabled by setting an attribute on a file that
+contains the .worm. tag and whose name ends in ".level1_expire".  The
+attribute name must also include the .hide. tag.  As with other scoutfs
+tagged attributes, the name may include any other string between the
+tags and the final required suffix.  Only one level1 expiration
+attribute may be set at a time.
+.sp
+The value of the attribute contains a string representing the kernel
+time at which the policy enforcement will expire.  The time is formated
+as "seconds.nanoseconds" in GMT.  The attribute must be set with the
+CAP_SYS_ADMIN capability, perhaps via the root user.  Setting an
+expiration value of "0.0" will always fail.  The policy can only be set
+on regular files.
+.sp
+The file is protected once the expiration attribute is set and can not
+be modified until the expiration time has passed.  The file data, its
+inode fields, directory entries that link to its inode, untrusted
+"user." attributes, and non-hidden scoutfs attributes are all protected
+and modification attempts will fail with with permission denied.
+Trusted system-level attributes like "security." and hidden scoutfs
+attributes may still be modified to support ongoing archiving
+operations.  The worm attribute itself can not be modified once it is
+set and can only be removed once the expiration time has passed.
 .RE
 
 .SH FORMAT VERSION
@@ -291,6 +323,20 @@ The version that a mount is using is shown in the
 .I format_version
 file in the mount's sysfs directory, typically
 .I /sys/fs/scoutfs/f.FSID.r.RID/
+.RE
+.sp
+The defined format versions are:
+.RS
+.TP
+.sp
+.B 1
+Initial format version.
+.TP
+.B 2
+Added level1 WORM file protection for regular files.  The
+".level1_expire" worm tagged extended attribute was added and the inode
+item size was increased to store the parsed expiration time from the
+extended attribute.
 .RE
 
 .SH CORRUPTION DETECTION

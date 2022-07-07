@@ -35,7 +35,7 @@ t_fail()
 t_quiet()
 {
 	echo "# $*" >> "$T_TMPDIR/quiet.log"
-	"$@" > "$T_TMPDIR/quiet.log" 2>&1 || \
+	"$@" >> "$T_TMPDIR/quiet.log" 2>&1 || \
 		t_fail "quiet command failed"
 }
 

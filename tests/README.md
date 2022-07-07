@@ -112,6 +112,7 @@ used during the test.
 | T\_EX\_META\_DEV | scratch meta bdev    | -f              | /dev/vdd          |
 | T\_EX\_DATA\_DEV | scratch meta bdev    | -e              | /dev/vdc          |
 | T\_M[0-9]        | mount paths          | mounted per run | /mnt/test.[0-9]/  |
+| T\_MODULE        | built kernel module  | created per run | ../kmod/src/..ko  |
 | T\_NR\_MOUNTS    | number of mounts     | -n              | 3                 |
 | T\_O[0-9]        | mount options        | created per run | -o server\_addr=  |
 | T\_QUORUM        | quorum count         | -q              | 2                 |
