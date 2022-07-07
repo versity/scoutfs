@@ -496,7 +496,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	ret = assign_random_id(sbi);
 	if (ret < 0)
-		return ret;
+		goto out;
 
 	spin_lock_init(&sbi->next_ino_lock);
 	spin_lock_init(&sbi->data_wait_root.lock);
@@ -505,7 +505,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	/* parse options early for use during setup */
 	ret = scoutfs_options_early_setup(sb, data);
 	if (ret < 0)
-		return ret;
+		goto out;
 	scoutfs_options_read(sb, &opts);
 
 	ret = sb_set_blocksize(sb, SCOUTFS_BLOCK_SM_SIZE);
