@@ -1227,6 +1227,82 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 }
 
 /*
+ * The calling get_log_trees ran out of available blocks in its commit's
+ * metadata allocator while moving extents from the log tree's
+ * data_freed into the core data_avail.  This finishes moving the
+ * extents in as many additional commits as it takes.   The logs mutex
+ * is nested inside holding commits so we recheck the persistent item
+ * each time we commit to make sure it's still what we think.   The
+ * caller is still going to send the item to the client so we update the
+ * caller's each time we make progress.  This is a best-effort attempt
+ * to clean up and it's valid to leave extents in data_freed we don't
+ * return errors to the caller.  The client will continue the work later
+ * in get_log_trees or as the rid is reclaimed.
+ */
+static void try_drain_data_freed(struct super_block *sb, struct scoutfs_log_trees *lt)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	const u64 rid = le64_to_cpu(lt->rid);
+	const u64 nr = le64_to_cpu(lt->nr);
+	struct scoutfs_log_trees drain;
+	struct scoutfs_key key;
+	COMMIT_HOLD(hold);
+	int ret = 0;
+	int err;
+
+	scoutfs_key_init_log_trees(&key, rid, nr);
+
+	while (lt->data_freed.total_len != 0) {
+		server_hold_commit(sb, &hold);
+		mutex_lock(&server->logs_mutex);
+
+		ret = find_log_trees_item(sb, &super->logs_root, false, rid, U64_MAX, &drain);
+		if (ret < 0)
+			break;
+
+		/* careful to only keep draining the caller's specific open trans */
+		if (drain.nr != lt->nr || drain.get_trans_seq != lt->get_trans_seq ||
+		    drain.commit_trans_seq != lt->commit_trans_seq || drain.flags != lt->flags) {
+			ret = -ENOENT;
+			break;
+		}
+
+		ret = scoutfs_btree_dirty(sb, &server->alloc, &server->wri,
+					  &super->logs_root, &key);
+		if (ret < 0)
+			break;
+
+		/* moving can modify and return errors, always update caller and item */
+		mutex_lock(&server->alloc_mutex);
+		ret = alloc_move_empty(sb, &super->data_alloc, &drain.data_freed,
+				       COMMIT_HOLD_ALLOC_BUDGET / 2);
+		mutex_unlock(&server->alloc_mutex);
+		if (ret == -EINPROGRESS)
+			ret = 0;
+
+		*lt = drain;
+		err = scoutfs_btree_force(sb, &server->alloc, &server->wri,
+					  &super->logs_root, &key, &drain, sizeof(drain));
+		BUG_ON(err < 0); /* dirtying must guarantee success */
+
+		mutex_unlock(&server->logs_mutex);
+
+		ret = server_apply_commit(sb, &hold, ret);
+		if (ret < 0) {
+			ret = 0; /* don't try to abort, ignoring ret */
+			break;
+		}
+	}
+
+	/* try to cleanly abort and write any partial dirty btree blocks, but ignore result */
+	if (ret < 0) {
+		mutex_unlock(&server->logs_mutex);
+		server_apply_commit(sb, &hold, 0);
+	}
+}
+
+/*
  * Give the client roots to all the trees that they'll use to build
  * their transaction.
  *
@@ -1351,7 +1427,9 @@ static int server_get_log_trees(struct super_block *sb,
 		goto update;
 	}
 
-	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 0);
+	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 100);
+	if (ret == -EINPROGRESS)
+		ret = 0;
 	if (ret < 0) {
 		err_str = "emptying committed data_freed";
 		goto update;
@@ -1428,6 +1506,10 @@ out:
 	if (ret < 0)
 		scoutfs_err(sb, "error %d getting log trees for rid %016llx: %s",
 			    ret, rid, err_str);
+
+	/* try to drain excessive data_freed with additional commits, if needed, ignoring err */
+	if (ret == 0)
+		try_drain_data_freed(sb, &lt);
 
 	return scoutfs_net_response(sb, conn, cmd, id, ret, &lt, sizeof(lt));
 }
