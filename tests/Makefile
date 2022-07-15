@@ -10,7 +10,8 @@ BIN := src/createmany			\
 	src/bulk_create_paths		\
 	src/stage_tmpfile		\
 	src/find_xattrs			\
-	src/create_xattr_loop
+	src/create_xattr_loop		\
+	src/fragmented_data_extents
 
 DEPS := $(wildcard src/*.d)
 

@@ -9,6 +9,7 @@ fallocate.sh
 setattr_more.sh
 offline-extent-waiting.sh
 move-blocks.sh
+large-fragmented-free.sh
 enospc.sh
 srch-basic-functionality.sh
 simple-xattr-unit.sh
