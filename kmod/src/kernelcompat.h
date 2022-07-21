@@ -46,4 +46,8 @@ static inline int dir_emit_dots(struct file *file, void *dirent,
 }
 #endif
 
+#ifndef KC_DIR_EMIT_DOTS
+#define percpu_counter_add_batch __percpu_counter_add
+#endif
+
 #endif

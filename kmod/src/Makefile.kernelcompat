@@ -34,3 +34,13 @@ endif
 ifneq (,$(shell grep 'FMODE_KABI_ITERATE' include/linux/fs.h))
 ccflags-y += -DKC_FMODE_KABI_ITERATE
 endif
+
+#
+# v4.11-12447-g104b4e5139fe
+#
+# Renamed __percpu_counter_add to percpu_counter_add_batch to clarify
+# that the __ wasn't less safe, just took an extra parameter.
+#
+ifneq (,$(shell grep 'percpu_counter_add_batch' include/linux/percpu_counter.h))
+ccflags-y += -DKC_PERCPU_COUNTER_ADD_BATCH
+endif
