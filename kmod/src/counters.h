@@ -232,12 +232,12 @@ struct scoutfs_counters {
 #define SCOUTFS_PCPU_COUNTER_BATCH (1 << 30)
 
 #define scoutfs_inc_counter(sb, which)					\
-	__percpu_counter_add(&SCOUTFS_SB(sb)->counters->which, 1,	\
-			     SCOUTFS_PCPU_COUNTER_BATCH)
+	percpu_counter_add_batch(&SCOUTFS_SB(sb)->counters->which, 1,	\
+				 SCOUTFS_PCPU_COUNTER_BATCH)
 
 #define scoutfs_add_counter(sb, which, cnt)				\
-	__percpu_counter_add(&SCOUTFS_SB(sb)->counters->which, cnt,	\
-			     SCOUTFS_PCPU_COUNTER_BATCH)
+	percpu_counter_add_batch(&SCOUTFS_SB(sb)->counters->which, cnt,	\
+				 SCOUTFS_PCPU_COUNTER_BATCH)
 
 void __init scoutfs_init_counters(void);
 int scoutfs_setup_counters(struct super_block *sb);
