@@ -131,7 +131,7 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
 		       struct scoutfs_alloc_root *src, u64 total,
-		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_reserved);
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_budget);
 int scoutfs_alloc_insert(struct super_block *sb, struct scoutfs_alloc *alloc,
 			 struct scoutfs_block_writer *wri, struct scoutfs_alloc_root *root,
 			 u64 start, u64 len);

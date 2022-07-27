@@ -694,13 +694,13 @@ static int alloc_move_refill_zoned(struct super_block *sb, struct scoutfs_alloc_
 
 static int alloc_move_empty(struct super_block *sb,
 			    struct scoutfs_alloc_root *dst,
-			    struct scoutfs_alloc_root *src, u64 meta_reserved)
+			    struct scoutfs_alloc_root *src, u64 meta_budget)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri,
 				  dst, src, le64_to_cpu(src->total_len), NULL, NULL, 0,
-				  meta_reserved);
+				  meta_budget);
 }
 
 /*
