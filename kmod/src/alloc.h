@@ -159,6 +159,8 @@ int scoutfs_alloc_splice_list(struct super_block *sb,
 bool scoutfs_alloc_meta_low(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 nr);
 void scoutfs_alloc_meta_remaining(struct scoutfs_alloc *alloc, u32 *avail_total, u32 *freed_space);
+bool scoutfs_alloc_meta_low_since(struct scoutfs_alloc *alloc, u32 avail_start, u32 freed_start,
+				  u32 budget, u32 nr);
 bool scoutfs_alloc_test_flag(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 flag);
 

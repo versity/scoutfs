@@ -1351,6 +1351,27 @@ void scoutfs_alloc_meta_remaining(struct scoutfs_alloc *alloc, u32 *avail_total,
 	} while (read_seqretry(&alloc->seqlock, seq));
 }
 
+/*
+ * Returns true if the caller's consumption of nr from either avail or
+ * freed would end up exceeding their budget relative to the starting
+ * remaining snapshot they took.
+ */
+bool scoutfs_alloc_meta_low_since(struct scoutfs_alloc *alloc, u32 avail_start, u32 freed_start,
+				  u32 budget, u32 nr)
+{
+	u32 avail_use;
+	u32 freed_use;
+	u32 avail;
+	u32 freed;
+
+	scoutfs_alloc_meta_remaining(alloc, &avail, &freed);
+
+	avail_use = avail_start - avail;
+	freed_use = freed_start - freed;
+
+	return ((avail_use + nr) > budget) || ((freed_use + nr) > budget);
+}
+
 bool scoutfs_alloc_test_flag(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 flag)
 {
