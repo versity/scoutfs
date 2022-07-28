@@ -1685,6 +1685,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
+	bool clear_trying = false;
 	u64 group_nr;
 	int bit_nr;
 	int ret;
@@ -1704,6 +1705,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 		ret = 0;
 		goto out;
 	}
+	clear_trying = true;
 
 	/* can't delete if it's cached in local or remote mounts */
 	if (scoutfs_omap_test(sb, ino) || test_bit_le(bit_nr, ldata->map.bits)) {
@@ -1730,7 +1732,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 
 	ret = delete_inode_items(sb, ino, &sinode, lock, orph_lock);
 out:
-	if (ldata)
+	if (clear_trying)
 		clear_bit(bit_nr, ldata->trying);
 
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
