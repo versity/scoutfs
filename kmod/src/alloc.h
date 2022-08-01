@@ -131,7 +131,7 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
 		       struct scoutfs_alloc_root *src, u64 total,
-		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_reserved);
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_budget);
 int scoutfs_alloc_insert(struct super_block *sb, struct scoutfs_alloc *alloc,
 			 struct scoutfs_block_writer *wri, struct scoutfs_alloc_root *root,
 			 u64 start, u64 len);
@@ -159,6 +159,8 @@ int scoutfs_alloc_splice_list(struct super_block *sb,
 bool scoutfs_alloc_meta_low(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 nr);
 void scoutfs_alloc_meta_remaining(struct scoutfs_alloc *alloc, u32 *avail_total, u32 *freed_space);
+bool scoutfs_alloc_meta_low_since(struct scoutfs_alloc *alloc, u32 avail_start, u32 freed_start,
+				  u32 budget, u32 nr);
 bool scoutfs_alloc_test_flag(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 flag);
 
