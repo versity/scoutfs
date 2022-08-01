@@ -437,11 +437,10 @@ static void block_remove_all(struct super_block *sb)
  * possible.  Final freeing, verifying checksums, and unlinking errored
  * blocks are all done by future users of the blocks.
  */
-static void block_end_io(struct super_block *sb, int rw,
+static void block_end_io(struct super_block *sb, unsigned int opf,
 			 struct block_private *bp, int err)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
-	bool is_read = !(rw & WRITE);
 
 	if (err) {
 		scoutfs_inc_counter(sb, block_cache_end_io_error);
@@ -451,7 +450,7 @@ static void block_end_io(struct super_block *sb, int rw,
 	if (!atomic_dec_and_test(&bp->io_count))
 		return;
 
-	if (is_read && !test_bit(BLOCK_BIT_ERROR, &bp->bits))
+	if (!op_is_write(opf) && !test_bit(BLOCK_BIT_ERROR, &bp->bits))
 		set_bit(BLOCK_BIT_UPTODATE, &bp->bits);
 
 	clear_bit(BLOCK_BIT_IO_BUSY, &bp->bits);
@@ -464,13 +463,13 @@ static void block_end_io(struct super_block *sb, int rw,
 		wake_up(&binf->waitq);
 }
 
-static void block_bio_end_io(struct bio *bio, int err)
+static void KC_DECLARE_BIO_END_IO(block_bio_end_io, struct bio *bio)
 {
 	struct block_private *bp = bio->bi_private;
 	struct super_block *sb = bp->sb;
 
 	TRACE_BLOCK(end_io, bp);
-	block_end_io(sb, bio->bi_rw, bp, err);
+	block_end_io(sb, kc_bio_get_opf(bio), bp, kc_bio_get_errno(bio));
 	bio_put(bio);
 }
 
@@ -478,7 +477,7 @@ static void block_bio_end_io(struct bio *bio, int err)
  * Kick off IO for a single block.
  */
 static int block_submit_bio(struct super_block *sb, struct block_private *bp,
-			    int rw)
+			    unsigned int opf)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct bio *bio = NULL;
@@ -511,8 +510,9 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 				break;
 			}
 
-			bio->bi_sector = sector + (off >> 9);
-			bio->bi_bdev = sbi->meta_bdev;
+			kc_bio_set_opf(bio, opf);
+			kc_bio_set_sector(bio, sector + (off >> 9));
+			bio_set_dev(bio, sbi->meta_bdev);
 			bio->bi_end_io = block_bio_end_io;
 			bio->bi_private = bp;
 
@@ -529,18 +529,18 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 			BUG();
 
 		if (!bio_add_page(bio, page, PAGE_SIZE, 0)) {
-			submit_bio(rw, bio);
+			submit_bio(bio);
 			bio = NULL;
 		}
 	}
 
 	if (bio)
-		submit_bio(rw, bio);
+		submit_bio(bio);
 
 	blk_finish_plug(&plug);
 
 	/* let racing end_io know we're done */
-	block_end_io(sb, rw, bp, ret);
+	block_end_io(sb, opf, bp, ret);
 
 	return ret;
 }
@@ -641,7 +641,7 @@ static struct block_private *block_read(struct super_block *sb, u64 blkno)
 
 	if (!test_bit(BLOCK_BIT_UPTODATE, &bp->bits) &&
 	     test_and_clear_bit(BLOCK_BIT_NEW, &bp->bits)) {
-		ret = block_submit_bio(sb, bp, READ);
+		ret = block_submit_bio(sb, bp, REQ_OP_READ);
 		if (ret < 0)
 			goto out;
 	}
@@ -940,7 +940,7 @@ int scoutfs_block_writer_write(struct super_block *sb,
 		/* retry previous write errors */
 		clear_bit(BLOCK_BIT_ERROR, &bp->bits);
 
-		ret = block_submit_bio(sb, bp, WRITE);
+		ret = block_submit_bio(sb, bp, REQ_OP_WRITE);
 		if (ret < 0)
 			break;
 	}
@@ -1137,11 +1137,11 @@ struct sm_block_completion {
 	int err;
 };
 
-static void sm_block_bio_end_io(struct bio *bio, int err)
+static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
 {
 	struct sm_block_completion *sbc = bio->bi_private;
 
-	sbc->err = err;
+	sbc->err = kc_bio_get_errno(bio);
 	complete(&sbc->comp);
 	bio_put(bio);
 }
@@ -1156,9 +1156,8 @@ static void sm_block_bio_end_io(struct bio *bio, int err)
  * only layer that sees the full block buffer so we pass the calculated
  * crc to the caller for them to check in their context.
  */
-static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw, u64 blkno,
-		       struct scoutfs_block_header *hdr, size_t len,
-		       __le32 *blk_crc)
+static int sm_block_io(struct super_block *sb, struct block_device *bdev, unsigned int opf,
+		       u64 blkno, struct scoutfs_block_header *hdr, size_t len, __le32 *blk_crc)
 {
 	struct scoutfs_block_header *pg_hdr;
 	struct sm_block_completion sbc;
@@ -1172,7 +1171,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 		return -EIO;
 
 	if (WARN_ON_ONCE(len > SCOUTFS_BLOCK_SM_SIZE) ||
-	    WARN_ON_ONCE(!(rw & WRITE) && !blk_crc))
+	    WARN_ON_ONCE(!op_is_write(opf) && !blk_crc))
 		return -EINVAL;
 
 	page = alloc_page(GFP_NOFS);
@@ -1181,7 +1180,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 
 	pg_hdr = page_address(page);
 
-	if (rw & WRITE) {
+	if (op_is_write(opf)) {
 		memcpy(pg_hdr, hdr, len);
 		if (len < SCOUTFS_BLOCK_SM_SIZE)
 			memset((char *)pg_hdr + len, 0,
@@ -1195,8 +1194,9 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 		goto out;
 	}
 
-	bio->bi_sector = blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9);
-	bio->bi_bdev = bdev;
+	bio->bi_opf = opf | REQ_SYNC;
+	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
+	bio_set_dev(bio, bdev);
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
 	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
@@ -1204,12 +1204,12 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 	init_completion(&sbc.comp);
 	sbc.err = 0;
 
-	submit_bio((rw & WRITE) ? WRITE_SYNC : READ_SYNC, bio);
+	submit_bio(bio);
 
 	wait_for_completion(&sbc.comp);
 	ret = sbc.err;
 
-	if (ret == 0 && !(rw & WRITE)) {
+	if (ret == 0 && !op_is_write(opf)) {
 		memcpy(hdr, pg_hdr, len);
 		*blk_crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
@@ -1223,14 +1223,14 @@ int scoutfs_block_read_sm(struct super_block *sb,
 			  struct scoutfs_block_header *hdr, size_t len,
 			  __le32 *blk_crc)
 {
-	return sm_block_io(sb, bdev, READ, blkno, hdr, len, blk_crc);
+	return sm_block_io(sb, bdev, REQ_OP_READ, blkno, hdr, len, blk_crc);
 }
 
 int scoutfs_block_write_sm(struct super_block *sb,
 			   struct block_device *bdev, u64 blkno,
 			   struct scoutfs_block_header *hdr, size_t len)
 {
-	return sm_block_io(sb, bdev, WRITE, blkno, hdr, len, NULL);
+	return sm_block_io(sb, bdev, REQ_OP_WRITE, blkno, hdr, len, NULL);
 }
 
 int scoutfs_block_setup(struct super_block *sb)
