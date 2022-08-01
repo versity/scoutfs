@@ -101,3 +101,12 @@ endif
 ifneq (,$(shell grep 'percpu_counter_add_batch' include/linux/percpu_counter.h))
 ccflags-y += -DKC_PERCPU_COUNTER_ADD_BATCH
 endif
+
+#
+# v4.11-4550-g7dea19f9ee63
+#
+# Introduced memalloc_nofs_{save,restore} preferred instead of _noio_.
+#
+ifneq (,$(shell grep 'memalloc_nofs_save' include/linux/sched/mm.h))
+ccflags-y += -DKC_MEMALLOC_NOFS_SAVE
+endif
