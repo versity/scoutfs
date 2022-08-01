@@ -50,4 +50,9 @@ static inline int dir_emit_dots(struct file *file, void *dirent,
 #define percpu_counter_add_batch __percpu_counter_add
 #endif
 
+#ifndef KC_MEMALLOC_NOFS_SAVE
+#define memalloc_nofs_save memalloc_noio_save
+#define memalloc_nofs_restore memalloc_noio_restore
+#endif
+
 #endif

@@ -21,6 +21,7 @@
 #include <linux/blkdev.h>
 #include <linux/rhashtable.h>
 #include <linux/random.h>
+#include <linux/sched/mm.h>
 
 #include "format.h"
 #include "super.h"
@@ -128,7 +129,7 @@ static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 {
 	struct block_private *bp;
-	unsigned int noio_flags;
+	unsigned int nofs_flags;
 
 	/*
 	 * If we had multiple blocks per page we'd need to be a little
@@ -156,9 +157,9 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 		 * spurious reclaim-on dependencies and warnings.
 		 */
 		lockdep_off();
-		noio_flags = memalloc_noio_save();
+		nofs_flags = memalloc_nofs_save();
 		bp->virt = __vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM, PAGE_KERNEL);
-		memalloc_noio_restore(noio_flags);
+		memalloc_nofs_restore(nofs_flags);
 		lockdep_on();
 
 		if (!bp->virt) {
