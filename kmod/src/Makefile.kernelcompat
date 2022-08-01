@@ -110,3 +110,23 @@ endif
 ifneq (,$(shell grep 'memalloc_nofs_save' include/linux/sched/mm.h))
 ccflags-y += -DKC_MEMALLOC_NOFS_SAVE
 endif
+
+#
+# v4.7-12414-g1eff9d322a44
+#
+# Renamed bi_rw to bi_opf to force old code to catch up.  We use it as a
+# single switch between old and new bio structures.
+#
+ifneq (,$(shell grep 'bi_opf' include/linux/blk_types.h))
+ccflags-y += -DKC_BIO_BI_OPF
+endif
+
+#
+# v4.12-rc2-201-g4e4cbee93d56
+#
+# Moves to bi_status BLK_STS_ API instead of having a mix of error
+# end_io args or bi_error.
+#
+ifneq (,$(shell grep 'bi_status' include/linux/blk_types.h))
+ccflags-y += -DKC_BIO_BI_STATUS
+endif

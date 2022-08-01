@@ -122,4 +122,49 @@ static inline int dir_emit_dots(struct file *file, void *dirent,
 #define memalloc_nofs_restore memalloc_noio_restore
 #endif
 
+#ifdef KC_BIO_BI_OPF
+#define kc_bio_get_opf(bio)		\
+({					\
+	(bio)->bi_opf;			\
+})
+#define kc_bio_set_opf(bio, opf)	\
+do {					\
+	(bio)->bi_opf = opf;		\
+} while (0)
+#define kc_bio_set_sector(bio, sect)	\
+do {					\
+	(bio)->bi_iter.bi_sector = sect;\
+} while (0)
+#define kc_submit_bio(bio) submit_bio(bio)
+#else
+#define kc_bio_get_opf(bio)		\
+({					\
+	(bio)->bi_rw;			\
+})
+#define kc_bio_set_opf(bio, opf)	\
+do {					\
+	(bio)->bi_rw = opf;		\
+} while (0)
+#define kc_bio_set_sector(bio, sect)	\
+do {					\
+	(bio)->bi_sector = sect;	\
+} while (0)
+#define kc_submit_bio(bio)		\
+do {					\
+	submit_bio((bio)->bi_rw, bio);	\
+} while (0)
+#define bio_set_dev(bio, bdev)		\
+do {					\
+	(bio)->bi_bdev = (bdev);	\
+} while (0)
+#endif
+
+#ifdef KC_BIO_BI_STATUS
+#define KC_DECLARE_BIO_END_IO(name, bio)	name(bio)
+#define kc_bio_get_errno(bio)			({ blk_status_to_errno((bio)->bi_status); })
+#else
+#define KC_DECLARE_BIO_END_IO(name, bio)	name(bio, int _error_arg)
+#define kc_bio_get_errno(bio)			({ (int)((void)(bio), _error_arg); })
+#endif
+
 #endif
