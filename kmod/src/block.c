@@ -31,6 +31,7 @@
 #include "scoutfs_trace.h"
 #include "alloc.h"
 #include "triggers.h"
+#include "util.h"
 
 /*
  * The scoutfs block cache manages metadata blocks that can be larger
@@ -58,7 +59,7 @@ struct block_info {
 	atomic64_t access_counter;
 	struct rhashtable ht;
 	wait_queue_head_t waitq;
-	struct shrinker shrinker;
+	KC_DEFINE_SHRINKER(shrinker);
 	struct work_struct free_work;
 	struct llist_head free_llist;
 };
@@ -1070,6 +1071,16 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
 	return wri->nr_dirty_blocks * SCOUTFS_BLOCK_LG_SIZE;
 }
 
+static unsigned long block_count_objects(struct shrinker *shrink, struct shrink_control *sc)
+{
+	struct block_info *binf = KC_SHRINKER_CONTAINER_OF(shrink, struct block_info);
+	struct super_block *sb = binf->sb;
+
+	scoutfs_inc_counter(sb, block_cache_count_objects);
+
+	return shrinker_min_t_long((u64)atomic_read(&binf->total_inserted));
+}
+
 /*
  * Remove a number of cached blocks that haven't been used recently.
  *
@@ -1090,24 +1101,18 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
  * atomically remove blocks when the only references are ours and the
  * hash table.
  */
-static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
+static unsigned long block_scan_objects(struct shrinker *shrink, struct shrink_control *sc)
 {
-	struct block_info *binf = container_of(shrink, struct block_info,
-					       shrinker);
+	struct block_info *binf = KC_SHRINKER_CONTAINER_OF(shrink, struct block_info);
 	struct super_block *sb = binf->sb;
 	struct rhashtable_iter iter;
 	struct block_private *bp;
 	bool stop = false;
-	unsigned long nr;
+	unsigned long freed = 0;
+	unsigned long nr = sc->nr_to_scan;
 	u64 recently;
 
-	nr = sc->nr_to_scan;
-	if (nr == 0)
-		goto out;
-
-	scoutfs_inc_counter(sb, block_cache_shrink);
-
-	nr = DIV_ROUND_UP(nr, SCOUTFS_BLOCK_LG_PAGES_PER);
+	scoutfs_inc_counter(sb, block_cache_scan_objects);
 
 	recently = accessed_recently(binf);
 	rhashtable_walk_enter(&binf->ht, &iter);
@@ -1152,6 +1157,7 @@ static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
 			if (block_remove_solo(sb, bp)) {
 				scoutfs_inc_counter(sb, block_cache_shrink_remove);
 				TRACE_BLOCK(shrink, bp);
+				freed++;
 				nr--;
 			}
 			block_put(sb, bp);
@@ -1160,12 +1166,11 @@ static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
 
 	rhashtable_walk_stop(&iter);
 	rhashtable_walk_exit(&iter);
-out:
+
 	if (stop)
-		return -1;
+		return SHRINK_STOP;
 	else
-		return min_t(u64, INT_MAX,
-			     (u64)atomic_read(&binf->total_inserted) * SCOUTFS_BLOCK_LG_PAGES_PER);
+		return freed;
 }
 
 struct sm_block_completion {
@@ -1291,9 +1296,9 @@ int scoutfs_block_setup(struct super_block *sb)
 	atomic_set(&binf->total_inserted, 0);
 	atomic64_set(&binf->access_counter, 0);
 	init_waitqueue_head(&binf->waitq);
-	binf->shrinker.shrink = block_shrink;
-	binf->shrinker.seeks = DEFAULT_SEEKS;
-	register_shrinker(&binf->shrinker);
+	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
+			       block_scan_objects);
+	KC_REGISTER_SHRINKER(&binf->shrinker);
 	INIT_WORK(&binf->free_work, block_free_work);
 	init_llist_head(&binf->free_llist);
 
@@ -1313,7 +1318,7 @@ void scoutfs_block_destroy(struct super_block *sb)
 	struct block_info *binf = SCOUTFS_SB(sb)->block_info;
 
 	if (binf) {
-		unregister_shrinker(&binf->shrinker);
+		KC_UNREGISTER_SHRINKER(&binf->shrinker);
 		block_remove_all(sb);
 		flush_work(&binf->free_work);
 		rhashtable_destroy(&binf->ht);

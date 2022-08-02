@@ -30,6 +30,8 @@
 	EXPAND_COUNTER(block_cache_free)			\
 	EXPAND_COUNTER(block_cache_free_work)			\
 	EXPAND_COUNTER(block_cache_remove_stale)		\
+	EXPAND_COUNTER(block_cache_count_objects)		\
+	EXPAND_COUNTER(block_cache_scan_objects)		\
 	EXPAND_COUNTER(block_cache_shrink)			\
 	EXPAND_COUNTER(block_cache_shrink_next)			\
 	EXPAND_COUNTER(block_cache_shrink_recent)		\
@@ -88,6 +90,8 @@
 	EXPAND_COUNTER(forest_read_items)			\
 	EXPAND_COUNTER(forest_roots_next_hint)			\
 	EXPAND_COUNTER(forest_set_bloom_bits)			\
+	EXPAND_COUNTER(item_cache_count_objects)		\
+	EXPAND_COUNTER(item_cache_scan_objects)			\
 	EXPAND_COUNTER(item_clear_dirty)			\
 	EXPAND_COUNTER(item_create)				\
 	EXPAND_COUNTER(item_delete)				\
@@ -121,6 +125,7 @@
 	EXPAND_COUNTER(item_update)				\
 	EXPAND_COUNTER(item_write_dirty)			\
 	EXPAND_COUNTER(lock_alloc)				\
+	EXPAND_COUNTER(lock_count_objects)			\
 	EXPAND_COUNTER(lock_free)				\
 	EXPAND_COUNTER(lock_grant_request)			\
 	EXPAND_COUNTER(lock_grant_response)			\
@@ -134,6 +139,7 @@
 	EXPAND_COUNTER(lock_lock_error)				\
 	EXPAND_COUNTER(lock_nonblock_eagain)			\
 	EXPAND_COUNTER(lock_recover_request)			\
+	EXPAND_COUNTER(lock_scan_objects)			\
 	EXPAND_COUNTER(lock_shrink_attempted)			\
 	EXPAND_COUNTER(lock_shrink_aborted)			\
 	EXPAND_COUNTER(lock_shrink_work)			\
