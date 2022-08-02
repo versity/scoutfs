@@ -30,6 +30,8 @@
 	EXPAND_COUNTER(block_cache_free)			\
 	EXPAND_COUNTER(block_cache_free_work)			\
 	EXPAND_COUNTER(block_cache_remove_stale)		\
+	EXPAND_COUNTER(block_cache_count_objects)		\
+	EXPAND_COUNTER(block_cache_scan_objects)		\
 	EXPAND_COUNTER(block_cache_shrink)			\
 	EXPAND_COUNTER(block_cache_shrink_next)			\
 	EXPAND_COUNTER(block_cache_shrink_recent)		\

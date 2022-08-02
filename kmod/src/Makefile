@@ -46,6 +46,10 @@ scoutfs-y +=			\
 	volopt.o		\
 	xattr.o
 
+ifdef KC_BUILD_KERNELCOMPAT
+scoutfs-y += kernelcompat.o
+endif
+
 #
 # The raw types aren't available in userspace headers.  Make sure all
 # the types we use in the headers are the exported __ versions.

@@ -91,4 +91,36 @@ do {					\
 #define kc_bio_get_errno(bio)			({ (int)((void)(bio), _error_arg); })
 #endif
 
+#ifndef KC_SHRINKER_SHRINK
+#define KC_DEFINE_SHRINKER(name) struct shrinker name
+#define KC_INIT_SHRINKER_FUNCS(type, name, shrink, count, scan) do {	\
+	__typeof__(shrink) _shrink = (shrink);				\
+	_shrink->count_objects = count;					\
+	_shrink->scan_objects = scan;					\
+} while (0)
+#else
+#include <linux/shrinker.h>
+struct kc_shrinker_funcs {
+	unsigned long (*count_objects)(struct shrinker *, struct shrink_control *sc);
+	unsigned long (*scan_objects)(struct shrinker *, struct shrink_control *sc);
+};
+/* using adjacent member of an unnamed struct */
+#define KC_DEFINE_SHRINKER(name)				\
+	{							\
+		struct kc_shrinker_funcs shrinker_funcs;	\
+		struct shinker name;				\
+	}
+#define KC_SHRINKER_FUNCS(shrinker) \
+	((void *)((long)(shrink) - sizeof(struct kc_shrinker_funcs)))
+#define KC_INIT_SHRINKER_FUNCS(type, name, shrink, count, scan) do {				\
+	BUILD_BUG_ON(offsetof(cont, shrink_funcs) + sizeof(struct kc_shrinker_funcs)) !=	\
+		     offsetof(cont, name) + sizeof(struct kc_shrinker_funcs);			\
+	struct kc_shrinker_funcs *_funcs = KC_SHRINKER_FUNCS(shrink)				\
+	__typeof__(shrink) _shrink = (shrink);							\
+	_funcs->count_objects = count;								\
+	_funcs->scan_objects = scan;								\
+	_shrink->shrink = kc_shrink_wrapper;							\
+} while (0)
+#endif
+
 #endif
