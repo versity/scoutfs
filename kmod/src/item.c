@@ -27,6 +27,7 @@
 #include "trans.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
+#include "util.h"
 
 /*
  * The item cache maintains a consistent view of items that are read
@@ -76,7 +77,7 @@ struct item_cache_info {
 	/* almost always read, barely written */
 	struct super_block *sb;
 	struct item_percpu_pages __percpu *pcpu_pages;
-	struct shrinker shrinker;
+	KC_DEFINE_SHRINKER(shrinker);
 	struct notifier_block notifier;
 
 	/* often walked, but per-cpu refs are fast path */
@@ -2530,27 +2531,35 @@ retry:
 	put_pg(sb, right);
 }
 
+static unsigned long item_cache_count_objects(struct shrinker *shrink,
+					      struct shrink_control *sc)
+{
+	struct item_cache_info *cinf = KC_SHRINKER_CONTAINER_OF(shrink, struct item_cache_info);
+	struct super_block *sb = cinf->sb;
+
+	scoutfs_inc_counter(sb, item_cache_count_objects);
+
+	return shrinker_min_long(cinf->lru_pages);
+}
+
 /*
  * Shrink the size the item cache.  We're operating against the fast
  * path lock ordering and we skip pages if we can't acquire locks.  We
  * can run into dirty pages or pages with items that weren't visible to
  * the earliest active reader which must be skipped.
  */
-static int item_lru_shrink(struct shrinker *shrink,
-			   struct shrink_control *sc)
+static unsigned long item_cache_scan_objects(struct shrinker *shrink,
+					     struct shrink_control *sc)
 {
-	struct item_cache_info *cinf = container_of(shrink,
-						    struct item_cache_info,
-						    shrinker);
+	struct item_cache_info *cinf = KC_SHRINKER_CONTAINER_OF(shrink, struct item_cache_info);
 	struct super_block *sb = cinf->sb;
 	struct cached_page *tmp;
 	struct cached_page *pg;
+	unsigned long freed = 0;
 	u64 first_reader_seq;
-	int nr;
+	int nr = sc->nr_to_scan;
 
-	if (sc->nr_to_scan == 0)
-		goto out;
-	nr = sc->nr_to_scan;
+	scoutfs_inc_counter(sb, item_cache_scan_objects);
 
 	/* can't invalidate pages with items that weren't visible to first reader */
 	first_reader_seq = first_active_reader_seq(cinf);
@@ -2582,6 +2591,7 @@ static int item_lru_shrink(struct shrinker *shrink,
 		rbtree_erase(&pg->node, &cinf->pg_root);
 		invalidate_pcpu_page(pg);
 		write_unlock(&pg->rwlock);
+		freed++;
 
 		put_pg(sb, pg);
 
@@ -2591,8 +2601,8 @@ static int item_lru_shrink(struct shrinker *shrink,
 
 	write_unlock(&cinf->rwlock);
 	spin_unlock(&cinf->lru_lock);
-out:
-	return min_t(unsigned long, cinf->lru_pages, INT_MAX);
+
+	return freed;
 }
 
 static int item_cpu_callback(struct notifier_block *nfb,
@@ -2638,9 +2648,9 @@ int scoutfs_item_setup(struct super_block *sb)
 	for_each_possible_cpu(cpu)
 		init_pcpu_pages(cinf, cpu);
 
-	cinf->shrinker.shrink = item_lru_shrink;
-	cinf->shrinker.seeks = DEFAULT_SEEKS;
-	register_shrinker(&cinf->shrinker);
+	KC_INIT_SHRINKER_FUNCS(&cinf->shrinker, item_cache_count_objects,
+			       item_cache_scan_objects);
+	KC_REGISTER_SHRINKER(&cinf->shrinker);
         cinf->notifier.notifier_call = item_cpu_callback;
         register_hotcpu_notifier(&cinf->notifier);
 
@@ -2663,7 +2673,7 @@ void scoutfs_item_destroy(struct super_block *sb)
 		BUG_ON(!list_empty(&cinf->active_list));
 
 		unregister_hotcpu_notifier(&cinf->notifier);
-		unregister_shrinker(&cinf->shrinker);
+		KC_UNREGISTER_SHRINKER(&cinf->shrinker);
 
 		for_each_possible_cpu(cpu)
 			drop_pcpu_pages(sb, cinf, cpu);

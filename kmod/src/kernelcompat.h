@@ -167,4 +167,48 @@ do {					\
 #define kc_bio_get_errno(bio)			({ (int)((void)(bio), _error_arg); })
 #endif
 
+#ifndef KC_SHRINKER_SHRINK
+
+#define KC_DEFINE_SHRINKER(name) struct shrinker name
+#define KC_INIT_SHRINKER_FUNCS(name, countfn, scanfn) do {	\
+	__typeof__(name) _shrink = (name);			\
+	_shrink->count_objects = (countfn);			\
+	_shrink->scan_objects = (scanfn);			\
+	_shrink->seeks = DEFAULT_SEEKS;			\
+} while (0)
+
+#define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(ptr, type, shrinker)
+#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(ptr))
+#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr))
+#define KC_SHRINKER_FN(ptr) (ptr)
+#else
+
+#include <linux/shrinker.h>
+#ifndef SHRINK_STOP
+#define SHRINK_STOP (~0UL)
+#define SHRINK_EMPTY (~0UL - 1)
+#endif
+
+int kc_shrink_wrapper_fn(struct shrinker *shrink, struct shrink_control *sc);
+struct kc_shrinker_wrapper {
+	unsigned long (*count_objects)(struct shrinker *, struct shrink_control *sc);
+	unsigned long (*scan_objects)(struct shrinker *, struct shrink_control *sc);
+	struct shrinker shrink;
+};
+
+#define KC_DEFINE_SHRINKER(name) struct kc_shrinker_wrapper name;
+#define KC_INIT_SHRINKER_FUNCS(name, countfn, scanfn) do {	\
+	struct kc_shrinker_wrapper *_wrap = (name);		\
+	_wrap->count_objects = (countfn);			\
+	_wrap->scan_objects = (scanfn);				\
+	_wrap->shrink.shrink = kc_shrink_wrapper_fn;		\
+	_wrap->shrink.seeks = DEFAULT_SEEKS;			\
+} while (0)
+#define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(container_of(ptr, struct kc_shrinker_wrapper, shrink), type, shrinker)
+#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(ptr.shrink))
+#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr.shrink))
+#define KC_SHRINKER_FN(ptr) (ptr.shrink)
+
+#endif /* KC_SHRINKER_SHRINK */
+
 #endif

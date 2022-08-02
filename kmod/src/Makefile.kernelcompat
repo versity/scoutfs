@@ -130,3 +130,12 @@ endif
 ifneq (,$(shell grep 'bi_status' include/linux/blk_types.h))
 ccflags-y += -DKC_BIO_BI_STATUS
 endif
+
+#
+# v3.11-8765-ga0b02131c5fc
+#
+# Remove the old ->shrink() API, ->{scan,count}_objects is preferred.
+#
+ifneq (,$(shell grep '(*shrink)' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_SHRINK
+endif
