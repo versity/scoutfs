@@ -40,6 +40,7 @@ generic/092
 generic/098
 generic/101
 generic/104
+generic/105
 generic/106
 generic/107
 generic/117
@@ -51,6 +52,7 @@ generic/184
 generic/221
 generic/228
 generic/236
+generic/237
 generic/245
 generic/249
 generic/257
@@ -63,6 +65,7 @@ generic/308
 generic/309
 generic/313
 generic/315
+generic/319
 generic/322
 generic/335
 generic/336
@@ -72,6 +75,7 @@ generic/342
 generic/343
 generic/348
 generic/360
+generic/375
 generic/376
 generic/377
 Not
@@ -282,4 +286,4 @@ shared/004
 shared/032
 shared/051
 shared/289
-Passed all 75 tests
+Passed all 79 tests
