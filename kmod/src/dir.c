@@ -1242,10 +1242,10 @@ const struct inode_operations scoutfs_symlink_iops = {
 	.put_link       = scoutfs_put_link,
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.removexattr	= generic_removexattr,
 };
 
 /*
@@ -1978,10 +1978,10 @@ const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.rename		= scoutfs_rename,
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.removexattr	= generic_removexattr,
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
 	},

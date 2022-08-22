@@ -79,16 +79,6 @@ static void init_xattr_key(struct scoutfs_key *key, u64 ino, u32 name_hash,
 #define SCOUTFS_XATTR_PREFIX		"scoutfs."
 #define SCOUTFS_XATTR_PREFIX_LEN	(sizeof(SCOUTFS_XATTR_PREFIX) - 1)
 
-static int unknown_prefix(const char *name)
-{
-	return strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN) &&
-	       strncmp(name, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN) &&
-	       strncmp(name, XATTR_SYSTEM_PREFIX, XATTR_SYSTEM_PREFIX_LEN) &&
-	       strncmp(name, XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN)&&
-	       strncmp(name, SCOUTFS_XATTR_PREFIX, SCOUTFS_XATTR_PREFIX_LEN);
-}
-
-
 #define HIDE_TAG	"hide."
 #define SRCH_TAG	"srch."
 #define TOTL_TAG	"totl."
@@ -455,8 +445,7 @@ out:
  * Copy the value for the given xattr name into the caller's buffer, if it
  * fits.  Return the bytes copied or -ERANGE if it doesn't fit.
  */
-ssize_t scoutfs_getxattr(struct dentry *dentry, const char *name, void *buffer,
-			 size_t size)
+static int scoutfs_xattr_get(struct dentry *dentry, const char *name, void *buffer, size_t size)
 {
 	struct inode *inode = dentry->d_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -467,9 +456,6 @@ ssize_t scoutfs_getxattr(struct dentry *dentry, const char *name, void *buffer,
 	unsigned int xat_bytes;
 	size_t name_len;
 	int ret;
-
-	if (unknown_prefix(name))
-		return -EOPNOTSUPP;
 
 	name_len = strlen(name);
 	if (name_len > SCOUTFS_XATTR_MAX_NAME_LEN)
@@ -661,9 +647,6 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 	    (flags & ~(XATTR_CREATE | XATTR_REPLACE)))
 		return -EINVAL;
 
-	if (unknown_prefix(name))
-		return -EOPNOTSUPP;
-
 	if (scoutfs_xattr_parse_tags(name, name_len, &tgs) != 0)
 		return -EINVAL;
 
@@ -831,19 +814,67 @@ out:
 	return ret;
 }
 
-int scoutfs_setxattr(struct dentry *dentry, const char *name,
-		     const void *value, size_t size, int flags)
+/*
+ * Future kernels have this amazing hack to rewind the name to get the
+ * skipped prefix.  We're back in the stone ages without the handler
+ * arg, so we Just Know that this is possible.  This will become a
+ * compat hook to either call the kernel's xattr_full_name(handler), or
+ * our hack to use the flags as the prefix length.
+ */
+static const char *full_name_hack(void *handler, const char *name, int len)
 {
-	if (size == 0)
-		value = ""; /* set empty value */
+	return name - len;
+}
 
+static int scoutfs_xattr_get_handler(struct dentry *dentry, const char *name,
+				     void *value, size_t size, int handler_flags)
+{
+	name = full_name_hack(NULL, name, handler_flags);
+	return scoutfs_xattr_get(dentry, name, value, size);
+}
+
+static int scoutfs_xattr_set_handler(struct dentry *dentry, const char *name,
+				     const void *value, size_t size, int flags, int handler_flags)
+{
+	name = full_name_hack(NULL, name, handler_flags);
 	return scoutfs_xattr_set(dentry, name, value, size, flags);
 }
 
-int scoutfs_removexattr(struct dentry *dentry, const char *name)
-{
-	return scoutfs_xattr_set(dentry, name, NULL, 0, XATTR_REPLACE);
-}
+static const struct xattr_handler scoutfs_xattr_user_handler = {
+	.prefix = XATTR_USER_PREFIX,
+	.flags = XATTR_USER_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+static const struct xattr_handler scoutfs_xattr_scoutfs_handler = {
+	.prefix = SCOUTFS_XATTR_PREFIX,
+	.flags = SCOUTFS_XATTR_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+static const struct xattr_handler scoutfs_xattr_trusted_handler = {
+	.prefix = XATTR_TRUSTED_PREFIX,
+	.flags = XATTR_TRUSTED_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+static const struct xattr_handler scoutfs_xattr_security_handler = {
+	.prefix = XATTR_SECURITY_PREFIX,
+	.flags = XATTR_SECURITY_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+const struct xattr_handler *scoutfs_xattr_handlers[] = {
+	&scoutfs_xattr_user_handler,
+	&scoutfs_xattr_scoutfs_handler,
+	&scoutfs_xattr_trusted_handler,
+	&scoutfs_xattr_security_handler,
+	NULL
+};
 
 ssize_t scoutfs_list_xattrs(struct inode *inode, char *buffer,
 			    size_t size, __u32 *hash_pos, __u64 *id_pos,

@@ -136,20 +136,20 @@ void scoutfs_destroy_inode(struct inode *inode)
 static const struct inode_operations scoutfs_file_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.removexattr	= generic_removexattr,
 	.fiemap		= scoutfs_data_fiemap,
 };
 
 static const struct inode_operations scoutfs_special_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.removexattr	= generic_removexattr,
 };
 
 /*

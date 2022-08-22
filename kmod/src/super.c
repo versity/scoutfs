@@ -47,6 +47,7 @@
 #include "omap.h"
 #include "volopt.h"
 #include "fence.h"
+#include "xattr.h"
 #include "scoutfs_trace.h"
 
 static struct dentry *scoutfs_debugfs_root;
@@ -483,6 +484,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_op = &scoutfs_super_ops;
 	sb->s_export_op = &scoutfs_export_ops;
+	sb->s_xattr = scoutfs_xattr_handlers;
 	sb->s_flags |= MS_I_VERSION;
 
 	/* btree blocks use long lived bh->b_data refs */
