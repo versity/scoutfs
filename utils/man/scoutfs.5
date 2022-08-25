@@ -15,11 +15,26 @@ general mount options described in the
 .BR mount (8)
 manual page.
 .TP
+.B acl
+The acl mount option enables support for POSIX Access Control Lists
+as detailed in
+.BR acl (5) .
+Support for POSIX ACLs is the default.
+.TP
 .B metadev_path=<device>
 The metadev_path option specifies the path to the block device that
 contains the filesystem's metadata.
 .sp
 This option is required.
+.TP
+.B noacl
+The noacl mount option disables the default support for POSIX Access
+Control Lists.  Any existing system.posix_acl_default and
+system.posix_acl_access extended attributes remain in inodes.   They
+will appear in listings from
+.BR listxattr (5)
+but specific retrieval or reomval operations will fail.  They will be
+used for enforcement again if ACL support is later enabled.
 .TP
 .B orphan_scan_delay_ms=<number>
 This option sets the average expected delay, in milliseconds, between

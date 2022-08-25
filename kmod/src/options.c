@@ -29,14 +29,18 @@
 #include "inode.h"
 
 enum {
+	Opt_acl,
 	Opt_metadev_path,
+	Opt_noacl,
 	Opt_orphan_scan_delay_ms,
 	Opt_quorum_slot_nr,
 	Opt_err,
 };
 
 static const match_table_t tokens = {
+	{Opt_acl, "acl"},
 	{Opt_metadev_path, "metadev_path=%s"},
+	{Opt_noacl, "noacl"},
 	{Opt_orphan_scan_delay_ms, "orphan_scan_delay_ms=%s"},
 	{Opt_quorum_slot_nr, "quorum_slot_nr=%s"},
 	{Opt_err, NULL}
@@ -134,10 +138,18 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 		token = match_token(p, tokens, args);
 		switch (token) {
 
+		case Opt_acl:
+			sb->s_flags |= MS_POSIXACL;
+			break;
+
 		case Opt_metadev_path:
 			ret = parse_bdev_path(sb, &args[0], &opts->metadev_path);
 			if (ret < 0)
 				return ret;
+			break;
+
+		case Opt_noacl:
+			sb->s_flags &= ~MS_POSIXACL;
 			break;
 
 		case Opt_orphan_scan_delay_ms:
@@ -250,10 +262,15 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 {
 	struct super_block *sb = root->d_sb;
 	struct scoutfs_mount_options opts;
+	const bool is_acl = !!(sb->s_flags & MS_POSIXACL);
 
 	scoutfs_options_read(sb, &opts);
 
+	if (is_acl)
+		seq_puts(seq, ",acl");
 	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
+	if (!is_acl)
+		seq_puts(seq, ",noacl");
 	seq_printf(seq, ",orphan_scan_delay_ms=%u", opts.orphan_scan_delay_ms);
 	if (opts.quorum_slot_nr >= 0)
 		seq_printf(seq, ",quorum_slot_nr=%d", opts.quorum_slot_nr);

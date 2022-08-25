@@ -36,6 +36,7 @@
 #include "omap.h"
 #include "forest.h"
 #include "btree.h"
+#include "acl.h"
 
 /*
  * XXX
@@ -140,6 +141,7 @@ static const struct inode_operations scoutfs_file_iops = {
 	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+	.get_acl	= scoutfs_get_acl,
 	.fiemap		= scoutfs_data_fiemap,
 };
 
@@ -150,6 +152,7 @@ static const struct inode_operations scoutfs_special_iops = {
 	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+	.get_acl	= scoutfs_get_acl,
 };
 
 /*
@@ -507,10 +510,15 @@ retry:
 	if (ret)
 		goto out;
 
+	ret = scoutfs_acl_chmod_locked(inode, attr, lock, &ind_locks);
+	if (ret < 0)
+		goto release;
+
 	setattr_copy(inode, attr);
 	inode_inc_iversion(inode);
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 
+release:
 	scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 out:

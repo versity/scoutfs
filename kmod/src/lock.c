@@ -18,6 +18,7 @@
 #include <linux/mm.h>
 #include <linux/sort.h>
 #include <linux/ctype.h>
+#include <linux/posix_acl.h>
 
 #include "super.h"
 #include "lock.h"
@@ -155,6 +156,8 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 		/* can't touch during unmount, dcache destroys w/o locks */
 		if (!linfo->unmounting)
 			d_prune_aliases(inode);
+
+		forget_all_cached_acls(inode);
 
 		si->drop_invalidated = true;
 		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink > 0) {

@@ -15,6 +15,7 @@
 #include <linux/dcache.h>
 #include <linux/xattr.h>
 #include <linux/crc32c.h>
+#include <linux/posix_acl.h>
 
 #include "format.h"
 #include "inode.h"
@@ -26,6 +27,7 @@
 #include "xattr.h"
 #include "lock.h"
 #include "hash.h"
+#include "acl.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -902,11 +904,27 @@ static const struct xattr_handler scoutfs_xattr_security_handler = {
 	.set = scoutfs_xattr_set_handler,
 };
 
+static const struct xattr_handler scoutfs_xattr_acl_access_handler = {
+	.prefix = XATTR_NAME_POSIX_ACL_ACCESS,
+	.flags  = ACL_TYPE_ACCESS,
+	.get    = scoutfs_acl_get_xattr,
+	.set    = scoutfs_acl_set_xattr,
+};
+
+static const struct xattr_handler scoutfs_xattr_acl_default_handler = {
+	.prefix = XATTR_NAME_POSIX_ACL_DEFAULT,
+	.flags  = ACL_TYPE_DEFAULT,
+	.get    = scoutfs_acl_get_xattr,
+	.set    = scoutfs_acl_set_xattr,
+};
+
 const struct xattr_handler *scoutfs_xattr_handlers[] = {
 	&scoutfs_xattr_user_handler,
 	&scoutfs_xattr_scoutfs_handler,
 	&scoutfs_xattr_trusted_handler,
 	&scoutfs_xattr_security_handler,
+	&scoutfs_xattr_acl_access_handler,
+	&scoutfs_xattr_acl_default_handler,
 	NULL
 };
 
