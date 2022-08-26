@@ -2,6 +2,29 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.7
+\
+*Aug 26, 2022*
+
+* **Fixed possible persistent errors moving freed data extents**
+\
+  Fixed a case where the server could hit persistent errors trying to
+  move a client's freed extents in one commit.  The client had to free
+  a large number of extents that occupied distant positions in the
+  global free extent btree.  Very large fragmented files could cause
+  this.  The server now moves the freed extents in multiple commits and
+  can always ensure forward progress.
+
+* **Fixed possible persistent errors from freed duplicate extents**
+\
+  Background orphan deletion wasn't properly synchronizing with
+  foreground tasks deleting very large files.  If a deletion took long
+  enough then background deletion could also attempt to delete inode items
+  while the deletion was making progress.  This could create duplicate
+  deletions of data extent items which causes the server to abort when
+  it later discovers the duplicate extents as it merges free lists.
+
+---
 v1.6
 \
 *Jul 7, 2022*
