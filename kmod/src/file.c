@@ -47,6 +47,9 @@ ssize_t scoutfs_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	DECLARE_DATA_WAIT(dw);
 	int ret;
 
+	if (!is_sync_kiocb(iocb))
+		return -EINVAL;
+
 retry:
 	/* protect checked extents from release */
 	mutex_lock(&inode->i_mutex);
@@ -96,6 +99,9 @@ ssize_t scoutfs_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	DECLARE_DATA_WAIT(dw);
 	int ret;
+
+	if (!is_sync_kiocb(iocb))
+		return -EINVAL;
 
 	if (iocb->ki_left == 0) /* Does this even happen? */
 		return 0;

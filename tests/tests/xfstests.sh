@@ -64,19 +64,29 @@ generic/029	# mmap missing
 generic/030	# mmap missing
 generic/075	# file content mismatch failures (fds, etc)
 generic/080	# mmap missing
+generic/091	# skip fsx tests
+generic/094	# odirect streaming pre-alloc treated as failure in xfstests
 generic/103	# enospc causes trans commit failures
 generic/105	# needs trigage: something about acls
 generic/108	# mount fails on failing device?
 generic/112	# file content mismatch failures (fds, etc)
+generic/113	# block aio dio runs
+generic/114	# block aio dio runs
 generic/120	# (can't exec 'cause no mmap)
 generic/126	# (can't exec 'cause no mmap)
 generic/141	# mmap missing
+generic/198	# block aio dio runs
+generic/207	# block aio dio runs
+generic/210	# block aio dio runs
 generic/213	# enospc causes trans commit failures
 generic/215	# mmap missing
+generic/225	# odirect streaming pre-alloc treated as failure in xfstests
 generic/237	# wrong error return from failing setfacl?
+generic/240	# block aio dio runs
 generic/246	# mmap missing
 generic/247	# mmap missing
 generic/248	# mmap missing
+generic/263	# do not support allocate mode FALLOC_FL_PUNCH_HOLE, FALLOC_FL_KEEP_SIZE, FALLOC_FL_ZERO_RANGE...
 generic/319	# utils output change?  update branch?
 generic/321	# requires selinux enabled for '+' in ls?
 generic/325	# mmap missing
