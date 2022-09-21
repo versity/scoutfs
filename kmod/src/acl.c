@@ -258,7 +258,7 @@ int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *v
 			return PTR_ERR(acl);
 
 		if (acl) {
-			ret = posix_acl_valid(&init_user_ns, acl);
+			ret = kc_posix_acl_valid(&init_user_ns, acl);
 			if (ret)
 				goto out;
 		}

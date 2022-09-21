@@ -46,4 +46,10 @@ static inline int dir_emit_dots(struct file *file, void *dirent,
 }
 #endif
 
+#ifdef KC_POSIX_ACL_VALID_USER_NS
+#define kc_posix_acl_valid(user_ns, acl) posix_acl_valid(user_ns, acl)
+#else
+#define kc_posix_acl_valid(user_ns, acl) posix_acl_valid(acl)
+#endif
+
 #endif
