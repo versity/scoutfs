@@ -1,7 +1,21 @@
 #ifndef _SCOUTFS_XATTR_H_
 #define _SCOUTFS_XATTR_H_
 
+struct scoutfs_xattr_prefix_tags {
+	unsigned long hide:1,
+		      srch:1,
+		      totl:1;
+};
+
 extern const struct xattr_handler *scoutfs_xattr_handlers[];
+
+int scoutfs_xattr_get_locked(struct inode *inode, const char *name, void *buffer, size_t size,
+			     struct scoutfs_lock *lck);
+int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_len,
+			     const void *value, size_t size, int flags,
+			     const struct scoutfs_xattr_prefix_tags *tgs,
+			     struct scoutfs_lock *lck, struct scoutfs_lock *totl_lock,
+			     struct list_head *ind_locks);
 
 ssize_t scoutfs_listxattr(struct dentry *dentry, char *buffer, size_t size);
 ssize_t scoutfs_list_xattrs(struct inode *inode, char *buffer,
@@ -9,12 +23,6 @@ ssize_t scoutfs_list_xattrs(struct inode *inode, char *buffer,
 			    bool e_range, bool show_hidden);
 int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 		       struct scoutfs_lock *lock);
-
-struct scoutfs_xattr_prefix_tags {
-	unsigned long hide:1,
-		      srch:1,
-		      totl:1;
-};
 
 int scoutfs_xattr_parse_tags(const char *name, unsigned int name_len,
 			     struct scoutfs_xattr_prefix_tags *tgs);
