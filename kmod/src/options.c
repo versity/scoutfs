@@ -114,7 +114,7 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 {
 	memset(opts, 0, sizeof(*opts));
 	opts->quorum_slot_nr = -1;
-	opts->orphan_scan_delay_ms = DEFAULT_ORPHAN_SCAN_DELAY_MS;
+	opts->orphan_scan_delay_ms = -1;
 }
 
 /*
@@ -192,6 +192,9 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 			return -EINVAL;
 		}
 	}
+
+	if (opts->orphan_scan_delay_ms == -1)
+		opts->orphan_scan_delay_ms = DEFAULT_ORPHAN_SCAN_DELAY_MS;
 
 	if (!opts->metadev_path) {
 		scoutfs_err(sb, "Required mount option \"metadev_path\" not found");
