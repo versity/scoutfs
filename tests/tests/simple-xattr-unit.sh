@@ -36,7 +36,8 @@ test_xattr_lengths() {
 	else
 		echo "$name=\"$val\"" > "$T_TMP.good"
 	fi
-	cmp "$T_TMP.good" "$T_TMP.got" || exit 1
+	cmp "$T_TMP.good" "$T_TMP.got" || \
+		t_fail "cmp failed name len $name_len val len $val_len"
 
 	setfattr -x $name "$FILE"
 }

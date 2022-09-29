@@ -8,6 +8,7 @@ CFLAGS_scoutfs_trace.o = -I$(src) # define_trace.h double include
 -include $(src)/Makefile.kernelcompat
  
 scoutfs-y +=			\
+	acl.o			\
 	avl.o			\
 	alloc.o			\
 	block.o			\

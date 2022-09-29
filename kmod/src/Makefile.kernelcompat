@@ -34,3 +34,12 @@ endif
 ifneq (,$(shell grep 'FMODE_KABI_ITERATE' include/linux/fs.h))
 ccflags-y += -DKC_FMODE_KABI_ITERATE
 endif
+
+#
+# v4.7-rc2-23-g0d4d717f2583
+#
+# Added user_ns argument to posix_acl_valid
+#
+ifneq (,$(shell grep 'posix_acl_valid.*user_ns,' include/linux/posix_acl.h))
+ccflags-y += -DKC_POSIX_ACL_VALID_USER_NS
+endif

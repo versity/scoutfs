@@ -15,6 +15,7 @@
 #include <linux/dcache.h>
 #include <linux/xattr.h>
 #include <linux/crc32c.h>
+#include <linux/posix_acl.h>
 
 #include "format.h"
 #include "inode.h"
@@ -26,6 +27,7 @@
 #include "xattr.h"
 #include "lock.h"
 #include "hash.h"
+#include "acl.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -78,16 +80,6 @@ static void init_xattr_key(struct scoutfs_key *key, u64 ino, u32 name_hash,
 
 #define SCOUTFS_XATTR_PREFIX		"scoutfs."
 #define SCOUTFS_XATTR_PREFIX_LEN	(sizeof(SCOUTFS_XATTR_PREFIX) - 1)
-
-static int unknown_prefix(const char *name)
-{
-	return strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN) &&
-	       strncmp(name, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN) &&
-	       strncmp(name, XATTR_SYSTEM_PREFIX, XATTR_SYSTEM_PREFIX_LEN) &&
-	       strncmp(name, XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN)&&
-	       strncmp(name, SCOUTFS_XATTR_PREFIX, SCOUTFS_XATTR_PREFIX_LEN);
-}
-
 
 #define HIDE_TAG	"hide."
 #define SRCH_TAG	"srch."
@@ -455,21 +447,16 @@ out:
  * Copy the value for the given xattr name into the caller's buffer, if it
  * fits.  Return the bytes copied or -ERANGE if it doesn't fit.
  */
-ssize_t scoutfs_getxattr(struct dentry *dentry, const char *name, void *buffer,
-			 size_t size)
+int scoutfs_xattr_get_locked(struct inode *inode, const char *name, void *buffer, size_t size,
+			     struct scoutfs_lock *lck)
 {
-	struct inode *inode = dentry->d_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_xattr *xat = NULL;
-	struct scoutfs_lock *lck = NULL;
 	struct scoutfs_key key;
 	unsigned int xat_bytes;
 	size_t name_len;
 	int ret;
-
-	if (unknown_prefix(name))
-		return -EOPNOTSUPP;
 
 	name_len = strlen(name);
 	if (name_len > SCOUTFS_XATTR_MAX_NAME_LEN)
@@ -479,10 +466,6 @@ ssize_t scoutfs_getxattr(struct dentry *dentry, const char *name, void *buffer,
 	xat = kmalloc(xat_bytes, GFP_NOFS);
 	if (!xat)
 		return -ENOMEM;
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lck);
-	if (ret)
-		goto out;
 
 	down_read(&si->xattr_rwsem);
 
@@ -509,9 +492,24 @@ ssize_t scoutfs_getxattr(struct dentry *dentry, const char *name, void *buffer,
 	ret = copy_xattr_value(sb, &key, xat, xat_bytes, buffer, size, lck);
 unlock:
 	up_read(&si->xattr_rwsem);
-	scoutfs_unlock(sb, lck, SCOUTFS_LOCK_READ);
-out:
+
 	kfree(xat);
+	return ret;
+}
+
+static int scoutfs_xattr_get(struct dentry *dentry, const char *name, void *buffer, size_t size)
+{
+	struct inode *inode = dentry->d_inode;
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *lock = NULL;
+	int ret;
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
+	if (ret == 0) {
+		ret = scoutfs_xattr_get_locked(inode, name, buffer, size, lock);
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+	}
+
 	return ret;
 }
 
@@ -619,30 +617,32 @@ int scoutfs_xattr_combine_totl(void *dst, int dst_len, void *src, int src_len)
  * cause creation to fail if the xattr already exists (_CREATE) or
  * doesn't already exist (_REPLACE).  xattrs can have a zero length
  * value.
+ *
+ * The caller has acquired cluster locks, holds a transaction, and has
+ * dirtied the inode item so that they can update it after we modify it.
+ * The caller has to know the tags to acquire cluster locks before
+ * holding the transaction so they pass in the parsed tags, or all 0s for
+ * non scoutfs. prefixes.
  */
-static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
-			     const void *value, size_t size, int flags)
+int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_len,
+			     const void *value, size_t size, int flags,
+			     const struct scoutfs_xattr_prefix_tags *tgs,
+			     struct scoutfs_lock *lck, struct scoutfs_lock *totl_lock,
+			     struct list_head *ind_locks)
 {
-	struct inode *inode = dentry->d_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_xattr_totl_val tval = {0,};
-	struct scoutfs_xattr_prefix_tags tgs;
 	struct scoutfs_xattr *xat = NULL;
-	struct scoutfs_lock *lck = NULL;
-	struct scoutfs_lock *totl_lock = NULL;
-	size_t name_len = strlen(name);
 	struct scoutfs_key totl_key;
 	struct scoutfs_key key;
 	bool undo_srch = false;
 	bool undo_totl = false;
-	LIST_HEAD(ind_locks);
 	u8 found_parts;
 	unsigned int xat_bytes_totl;
 	unsigned int xat_bytes;
 	unsigned int val_len;
-	u64 ind_seq;
 	u64 total;
 	u64 hash = 0;
 	u64 id = 0;
@@ -650,6 +650,9 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 	int err;
 
 	trace_scoutfs_xattr_set(sb, name_len, value, size, flags);
+
+	if (WARN_ON_ONCE(tgs->totl && !totl_lock))
+		return -EINVAL;
 
 	/* mirror the syscall's errors for large names and values */
 	if (name_len > SCOUTFS_XATTR_MAX_NAME_LEN)
@@ -661,16 +664,10 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 	    (flags & ~(XATTR_CREATE | XATTR_REPLACE)))
 		return -EINVAL;
 
-	if (unknown_prefix(name))
-		return -EOPNOTSUPP;
-
-	if (scoutfs_xattr_parse_tags(name, name_len, &tgs) != 0)
-		return -EINVAL;
-
-	if ((tgs.hide | tgs.srch | tgs.totl) && !capable(CAP_SYS_ADMIN))
+	if ((tgs->hide | tgs->srch | tgs->totl) && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (tgs.totl && ((ret = parse_totl_key(&totl_key, name, name_len)) != 0))
+	if (tgs->totl && ((ret = parse_totl_key(&totl_key, name, name_len)) != 0))
 		return ret;
 
 	/* allocate enough to always read an existing xattr's totl */
@@ -679,51 +676,44 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 	/* but store partial first item that only includes the new xattr's value */
 	xat_bytes = first_item_bytes(name_len, size);
 	xat = kmalloc(xat_bytes_totl, GFP_NOFS);
-	if (!xat) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &lck);
-	if (ret)
-		goto out;
+	if (!xat)
+		return -ENOMEM;
 
 	down_write(&si->xattr_rwsem);
 
 	/* find an existing xattr to delete, including possible totl value */
 	ret = get_next_xattr(inode, &key, xat, xat_bytes_totl, name, name_len, 0, 0, lck);
 	if (ret < 0 && ret != -ENOENT)
-		goto unlock;
+		goto out;
 
 	/* check existence constraint flags */
 	if (ret == -ENOENT && (flags & XATTR_REPLACE)) {
 		ret = -ENODATA;
-		goto unlock;
+		goto out;
 	} else if (ret >= 0 && (flags & XATTR_CREATE)) {
 		ret = -EEXIST;
-		goto unlock;
+		goto out;
 	}
 
 	/* not an error to delete something that doesn't exist */
 	if (ret == -ENOENT && !value) {
 		ret = 0;
-		goto unlock;
+		goto out;
 	}
 
 	/* s64 count delta if we create or delete */
-	if (tgs.totl)
+	if (tgs->totl)
 		tval.count = cpu_to_le64((u64)!!(value) - (u64)!!(ret != -ENOENT));
 
 	/* found fields in key will also be used */
 	found_parts = ret >= 0 ? xattr_nr_parts(xat) : 0;
 
-	if (found_parts && tgs.totl) {
+	if (found_parts && tgs->totl) {
 		/* parse old totl value before we clobber xat buf */
 		val_len = ret - offsetof(struct scoutfs_xattr, name[xat->name_len]);
 		ret = parse_totl_u64(&xat->name[xat->name_len], val_len, &total);
 		if (ret < 0)
-			goto unlock;
+			goto out;
 
 		le64_add_cpu(&tval.total, -total);
 	}
@@ -742,14 +732,89 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name,
 		       min(size, SCOUTFS_XATTR_MAX_PART_SIZE -
 			         offsetof(struct scoutfs_xattr, name[name_len])));
 
-		if (tgs.totl) {
+		if (tgs->totl) {
 			ret = parse_totl_u64(value, size, &total);
 			if (ret < 0)
-				goto unlock;
+				goto out;
 		}
 
 		le64_add_cpu(&tval.total, total);
 	}
+
+	if (tgs->srch && !(found_parts && value)) {
+		if (found_parts)
+			id = le64_to_cpu(key.skx_id);
+		hash = scoutfs_hash64(name, name_len);
+		ret = scoutfs_forest_srch_add(sb, hash, ino, id);
+		if (ret < 0)
+			goto out;
+		undo_srch = true;
+	}
+
+	if (tgs->totl) {
+		ret = apply_totl_delta(sb, &totl_key, &tval, totl_lock);
+		if (ret < 0)
+			goto out;
+		undo_totl = true;
+	}
+
+	if (found_parts && value)
+		ret = change_xattr_items(inode, id, xat, xat_bytes, value, size,
+					 xattr_nr_parts(xat), found_parts, lck);
+	else if (found_parts)
+		ret = delete_xattr_items(inode, le64_to_cpu(key.skx_name_hash),
+					 le64_to_cpu(key.skx_id), found_parts,
+					 lck);
+	else
+		ret = create_xattr_items(inode, id, xat, xat_bytes, value, size,
+					 xattr_nr_parts(xat), lck);
+	if (ret < 0)
+		goto out;
+
+	/* XXX do these want i_mutex or anything? */
+	inode_inc_iversion(inode);
+	inode->i_ctime = CURRENT_TIME;
+	ret = 0;
+
+out:
+	if (ret < 0 && undo_srch) {
+		err = scoutfs_forest_srch_add(sb, hash, ino, id);
+		BUG_ON(err);
+	}
+	if (ret < 0 && undo_totl) {
+		/* _delta() on dirty items shouldn't fail */
+		tval.total = cpu_to_le64(-le64_to_cpu(tval.total));
+		tval.count = cpu_to_le64(-le64_to_cpu(tval.count));
+		err = apply_totl_delta(sb, &totl_key, &tval, totl_lock);
+		BUG_ON(err);
+	}
+
+	up_write(&si->xattr_rwsem);
+	kfree(xat);
+
+	return ret;
+}
+
+static int scoutfs_xattr_set(struct dentry *dentry, const char *name, const void *value,
+			     size_t size, int flags)
+{
+	struct inode *inode = dentry->d_inode;
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_xattr_prefix_tags tgs;
+	struct scoutfs_lock *totl_lock = NULL;
+	struct scoutfs_lock *lck = NULL;
+	size_t name_len = strlen(name);
+	LIST_HEAD(ind_locks);
+	u64 ind_seq;
+	int ret;
+
+	if (scoutfs_xattr_parse_tags(name, name_len, &tgs) != 0)
+		return -EINVAL;
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &lck);
+	if (ret)
+		goto unlock;
 
 	if (tgs.totl) {
 		ret = scoutfs_lock_xattr_totl(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, &totl_lock);
@@ -770,80 +835,98 @@ retry:
 	if (ret < 0)
 		goto release;
 
-	if (tgs.srch && !(found_parts && value)) {
-		if (found_parts)
-			id = le64_to_cpu(key.skx_id);
-		hash = scoutfs_hash64(name, name_len);
-		ret = scoutfs_forest_srch_add(sb, hash, ino, id);
-		if (ret < 0)
-			goto release;
-		undo_srch = true;
-	}
-
-	if (tgs.totl) {
-		ret = apply_totl_delta(sb, &totl_key, &tval, totl_lock);
-		if (ret < 0)
-			goto release;
-		undo_totl = true;
-	}
-
-	if (found_parts && value)
-		ret = change_xattr_items(inode, id, xat, xat_bytes, value, size,
-					 xattr_nr_parts(xat), found_parts, lck);
-	else if (found_parts)
-		ret = delete_xattr_items(inode, le64_to_cpu(key.skx_name_hash),
-					 le64_to_cpu(key.skx_id), found_parts,
-					 lck);
-	else
-		ret = create_xattr_items(inode, id, xat, xat_bytes, value, size,
-					 xattr_nr_parts(xat), lck);
-	if (ret < 0)
-		goto release;
-
-	/* XXX do these want i_mutex or anything? */
-	inode_inc_iversion(inode);
-	inode->i_ctime = CURRENT_TIME;
-	scoutfs_update_inode_item(inode, lck, &ind_locks);
-	ret = 0;
+	ret = scoutfs_xattr_set_locked(dentry->d_inode, name, name_len, value, size, flags, &tgs,
+				       lck, totl_lock, &ind_locks);
+	if (ret == 0)
+		scoutfs_update_inode_item(inode, lck, &ind_locks);
 
 release:
-	if (ret < 0 && undo_srch) {
-		err = scoutfs_forest_srch_add(sb, hash, ino, id);
-		BUG_ON(err);
-	}
-	if (ret < 0 && undo_totl) {
-		/* _delta() on dirty items shouldn't fail */
-		tval.total = cpu_to_le64(-le64_to_cpu(tval.total));
-		tval.count = cpu_to_le64(-le64_to_cpu(tval.count));
-		err = apply_totl_delta(sb, &totl_key, &tval, totl_lock);
-		BUG_ON(err);
-	}
-
 	scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 unlock:
-	up_write(&si->xattr_rwsem);
 	scoutfs_unlock(sb, lck, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, totl_lock, SCOUTFS_LOCK_WRITE_ONLY);
-out:
-	kfree(xat);
 
 	return ret;
 }
 
-int scoutfs_setxattr(struct dentry *dentry, const char *name,
-		     const void *value, size_t size, int flags)
+/*
+ * Future kernels have this amazing hack to rewind the name to get the
+ * skipped prefix.  We're back in the stone ages without the handler
+ * arg, so we Just Know that this is possible.  This will become a
+ * compat hook to either call the kernel's xattr_full_name(handler), or
+ * our hack to use the flags as the prefix length.
+ */
+static const char *full_name_hack(void *handler, const char *name, int len)
 {
-	if (size == 0)
-		value = ""; /* set empty value */
+	return name - len;
+}
 
+static int scoutfs_xattr_get_handler(struct dentry *dentry, const char *name,
+				     void *value, size_t size, int handler_flags)
+{
+	name = full_name_hack(NULL, name, handler_flags);
+	return scoutfs_xattr_get(dentry, name, value, size);
+}
+
+static int scoutfs_xattr_set_handler(struct dentry *dentry, const char *name,
+				     const void *value, size_t size, int flags, int handler_flags)
+{
+	name = full_name_hack(NULL, name, handler_flags);
 	return scoutfs_xattr_set(dentry, name, value, size, flags);
 }
 
-int scoutfs_removexattr(struct dentry *dentry, const char *name)
-{
-	return scoutfs_xattr_set(dentry, name, NULL, 0, XATTR_REPLACE);
-}
+static const struct xattr_handler scoutfs_xattr_user_handler = {
+	.prefix = XATTR_USER_PREFIX,
+	.flags = XATTR_USER_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+static const struct xattr_handler scoutfs_xattr_scoutfs_handler = {
+	.prefix = SCOUTFS_XATTR_PREFIX,
+	.flags = SCOUTFS_XATTR_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+static const struct xattr_handler scoutfs_xattr_trusted_handler = {
+	.prefix = XATTR_TRUSTED_PREFIX,
+	.flags = XATTR_TRUSTED_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+static const struct xattr_handler scoutfs_xattr_security_handler = {
+	.prefix = XATTR_SECURITY_PREFIX,
+	.flags = XATTR_SECURITY_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
+static const struct xattr_handler scoutfs_xattr_acl_access_handler = {
+	.prefix = XATTR_NAME_POSIX_ACL_ACCESS,
+	.flags  = ACL_TYPE_ACCESS,
+	.get    = scoutfs_acl_get_xattr,
+	.set    = scoutfs_acl_set_xattr,
+};
+
+static const struct xattr_handler scoutfs_xattr_acl_default_handler = {
+	.prefix = XATTR_NAME_POSIX_ACL_DEFAULT,
+	.flags  = ACL_TYPE_DEFAULT,
+	.get    = scoutfs_acl_get_xattr,
+	.set    = scoutfs_acl_set_xattr,
+};
+
+const struct xattr_handler *scoutfs_xattr_handlers[] = {
+	&scoutfs_xattr_user_handler,
+	&scoutfs_xattr_scoutfs_handler,
+	&scoutfs_xattr_trusted_handler,
+	&scoutfs_xattr_security_handler,
+	&scoutfs_xattr_acl_access_handler,
+	&scoutfs_xattr_acl_default_handler,
+	NULL
+};
 
 ssize_t scoutfs_list_xattrs(struct inode *inode, char *buffer,
 			    size_t size, __u32 *hash_pos, __u64 *id_pos,

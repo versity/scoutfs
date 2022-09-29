@@ -32,6 +32,7 @@
 #include "hash.h"
 #include "omap.h"
 #include "forest.h"
+#include "acl.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
 
@@ -765,7 +766,8 @@ retry:
 	if (ret)
 		goto out_unlock;
 
-	ret = scoutfs_new_inode(sb, dir, mode, rdev, ino, *inode_lock, &inode);
+	ret = scoutfs_new_inode(sb, dir, mode, rdev, ino, *inode_lock, &inode) ?:
+	      scoutfs_init_acl_locked(inode, dir, *inode_lock, *dir_lock, ind_locks);
 	if (ret < 0)
 		goto out;
 
@@ -1242,10 +1244,11 @@ const struct inode_operations scoutfs_symlink_iops = {
 	.put_link       = scoutfs_put_link,
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.removexattr	= generic_removexattr,
+	.get_acl	= scoutfs_get_acl,
 };
 
 /*
@@ -1978,10 +1981,11 @@ const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.rename		= scoutfs_rename,
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.removexattr	= generic_removexattr,
+	.get_acl	= scoutfs_get_acl,
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
 	},

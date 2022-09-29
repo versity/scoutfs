@@ -1,0 +1,18 @@
+#ifndef _SCOUTFS_ACL_H_
+#define _SCOUTFS_ACL_H_
+
+struct posix_acl *scoutfs_get_acl(struct inode *inode, int type);
+struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct scoutfs_lock *lock);
+int scoutfs_set_acl(struct inode *inode, struct posix_acl *acl, int type);
+int scoutfs_set_acl_locked(struct inode *inode, struct posix_acl *acl, int type,
+			   struct scoutfs_lock *lock, struct list_head *ind_locks);
+int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, size_t size,
+			  int type);
+int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *value, size_t size,
+			  int flags, int type);
+int scoutfs_acl_chmod_locked(struct inode *inode, struct iattr *attr,
+			     struct scoutfs_lock *lock, struct list_head *ind_locks);
+int scoutfs_init_acl_locked(struct inode *inode, struct inode *dir,
+			    struct scoutfs_lock *lock, struct scoutfs_lock *dir_lock,
+			    struct list_head *ind_locks);
+#endif
