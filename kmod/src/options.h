@@ -6,6 +6,8 @@
 #include "format.h"
 
 struct scoutfs_mount_options {
+	u64 data_prealloc_blocks;
+	bool data_prealloc_contig_only;
 	char *metadev_path;
 	unsigned int orphan_scan_delay_ms;
 	int quorum_slot_nr;

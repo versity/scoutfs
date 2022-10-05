@@ -27,9 +27,12 @@
 #include "options.h"
 #include "super.h"
 #include "inode.h"
+#include "alloc.h"
 
 enum {
 	Opt_acl,
+	Opt_data_prealloc_blocks,
+	Opt_data_prealloc_contig_only,
 	Opt_metadev_path,
 	Opt_noacl,
 	Opt_orphan_scan_delay_ms,
@@ -39,6 +42,8 @@ enum {
 
 static const match_table_t tokens = {
 	{Opt_acl, "acl"},
+	{Opt_data_prealloc_blocks, "data_prealloc_blocks=%s"},
+	{Opt_data_prealloc_contig_only, "data_prealloc_contig_only=%s"},
 	{Opt_metadev_path, "metadev_path=%s"},
 	{Opt_noacl, "noacl"},
 	{Opt_orphan_scan_delay_ms, "orphan_scan_delay_ms=%s"},
@@ -110,9 +115,15 @@ static void free_options(struct scoutfs_mount_options *opts)
 #define DEFAULT_ORPHAN_SCAN_DELAY_MS	(10 * MSEC_PER_SEC)
 #define MAX_ORPHAN_SCAN_DELAY_MS	(60 * MSEC_PER_SEC)
 
+#define MIN_DATA_PREALLOC_BLOCKS	1ULL
+#define MAX_DATA_PREALLOC_BLOCKS	((unsigned long long)SCOUTFS_BLOCK_SM_MAX)
+
 static void init_default_options(struct scoutfs_mount_options *opts)
 {
 	memset(opts, 0, sizeof(*opts));
+
+	opts->data_prealloc_blocks = SCOUTFS_DATA_PREALLOC_DEFAULT_BLOCKS;
+	opts->data_prealloc_contig_only = 1;
 	opts->quorum_slot_nr = -1;
 	opts->orphan_scan_delay_ms = -1;
 }
@@ -126,6 +137,7 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 static int parse_options(struct super_block *sb, char *options, struct scoutfs_mount_options *opts)
 {
 	substring_t args[MAX_OPT_ARGS];
+	u64 nr64;
 	int nr;
 	int token;
 	char *p;
@@ -140,6 +152,30 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 
 		case Opt_acl:
 			sb->s_flags |= MS_POSIXACL;
+			break;
+
+		case Opt_data_prealloc_blocks:
+			ret = match_u64(args, &nr64);
+			if (ret < 0 ||
+			    nr64 < MIN_DATA_PREALLOC_BLOCKS || nr64 > MAX_DATA_PREALLOC_BLOCKS) {
+				scoutfs_err(sb, "invalid data_prealloc_blocks option, must be between %llu and %llu",
+					    MIN_DATA_PREALLOC_BLOCKS, MAX_DATA_PREALLOC_BLOCKS);
+				if (ret == 0)
+					ret = -EINVAL;
+				return ret;
+			}
+			opts->data_prealloc_blocks = nr64;
+			break;
+
+		case Opt_data_prealloc_contig_only:
+			ret = match_int(args, &nr);
+			if (ret < 0 || nr < 0 || nr > 1) {
+				scoutfs_err(sb, "invalid data_prealloc_contig_only option, bool must only be 0 or 1");
+				if (ret == 0)
+					ret = -EINVAL;
+				return ret;
+			}
+			opts->data_prealloc_contig_only = nr;
 			break;
 
 		case Opt_metadev_path:
@@ -271,6 +307,8 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 
 	if (is_acl)
 		seq_puts(seq, ",acl");
+	seq_printf(seq, ",data_prealloc_blocks=%llu", opts.data_prealloc_blocks);
+	seq_printf(seq, ",data_prealloc_contig_only=%u", opts.data_prealloc_contig_only);
 	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
 	if (!is_acl)
 		seq_puts(seq, ",noacl");
@@ -280,6 +318,83 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 
 	return 0;
 }
+
+static ssize_t data_prealloc_blocks_show(struct kobject *kobj, struct kobj_attribute *attr,
+					 char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%llu", opts.data_prealloc_blocks);
+}
+static ssize_t data_prealloc_blocks_store(struct kobject *kobj, struct kobj_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	u64 val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoll(nullterm, 0, &val);
+	if (ret < 0 || val < MIN_DATA_PREALLOC_BLOCKS || val > MAX_DATA_PREALLOC_BLOCKS) {
+		scoutfs_err(sb, "invalid data_prealloc_blocks option, must be between %llu and %llu",
+			    MIN_DATA_PREALLOC_BLOCKS, MAX_DATA_PREALLOC_BLOCKS);
+		return -EINVAL;
+	}
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.data_prealloc_blocks = val;
+	write_sequnlock(&optinf->seqlock);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(data_prealloc_blocks);
+
+static ssize_t data_prealloc_contig_only_show(struct kobject *kobj, struct kobj_attribute *attr,
+					 char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%u", opts.data_prealloc_contig_only);
+}
+static ssize_t data_prealloc_contig_only_store(struct kobject *kobj, struct kobj_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[20]; /* more than enough for octal -U32_MAX */
+	long val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtol(nullterm, 0, &val);
+	if (ret < 0 || val < 0 || val > 1) {
+		scoutfs_err(sb, "invalid data_prealloc_contig_only option, bool must be 0 or 1");
+		return -EINVAL;
+	}
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.data_prealloc_contig_only = val;
+	write_sequnlock(&optinf->seqlock);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(data_prealloc_contig_only);
 
 static ssize_t metadev_path_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -345,6 +460,8 @@ static ssize_t quorum_slot_nr_show(struct kobject *kobj, struct kobj_attribute *
 SCOUTFS_ATTR_RO(quorum_slot_nr);
 
 static struct attribute *options_attrs[] = {
+	SCOUTFS_ATTR_PTR(data_prealloc_blocks),
+	SCOUTFS_ATTR_PTR(data_prealloc_contig_only),
 	SCOUTFS_ATTR_PTR(metadev_path),
 	SCOUTFS_ATTR_PTR(orphan_scan_delay_ms),
 	SCOUTFS_ATTR_PTR(quorum_slot_nr),
