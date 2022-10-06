@@ -1,0 +1,26 @@
+== initial writes smaller than prealloc grow to prealloc size
+/mnt/test/test/data-prealloc/file-1: 7 extents found
+/mnt/test/test/data-prealloc/file-2: 7 extents found
+== larger files get full prealloc extents
+/mnt/test/test/data-prealloc/file-1: 9 extents found
+/mnt/test/test/data-prealloc/file-2: 9 extents found
+== non-streaming writes with contig have per-block extents
+/mnt/test/test/data-prealloc/file-1: 32 extents found
+/mnt/test/test/data-prealloc/file-2: 32 extents found
+== any writes to region prealloc get full extents
+/mnt/test/test/data-prealloc/file-1: 4 extents found
+/mnt/test/test/data-prealloc/file-2: 4 extents found
+/mnt/test/test/data-prealloc/file-1: 4 extents found
+/mnt/test/test/data-prealloc/file-2: 4 extents found
+== streaming offline writes get full extents either way
+/mnt/test/test/data-prealloc/file-1: 4 extents found
+/mnt/test/test/data-prealloc/file-2: 4 extents found
+/mnt/test/test/data-prealloc/file-1: 4 extents found
+/mnt/test/test/data-prealloc/file-2: 4 extents found
+== goofy preallocation amounts work
+/mnt/test/test/data-prealloc/file-1: 5 extents found
+/mnt/test/test/data-prealloc/file-2: 5 extents found
+/mnt/test/test/data-prealloc/file-1: 5 extents found
+/mnt/test/test/data-prealloc/file-2: 5 extents found
+/mnt/test/test/data-prealloc/file-1: 3 extents found
+/mnt/test/test/data-prealloc/file-2: 3 extents found
