@@ -58,6 +58,7 @@ $(basename $0) options:
     -m        | Run mkfs on the device before mounting and running
               | tests.  Implies unmounting existing mounts first.
     -n <nr>   | The number of devices and mounts to test.
+    -o <opts> | Add option string to all mounts during all tests.
     -P        | Enable trace_printk.
     -p        | Exit script after preparing mounts only, don't run tests.
     -q <nr>   | The first <nr> mounts will be quorum members.  Must be
@@ -134,6 +135,12 @@ while true; do
 	-n)
 		test -n "$2" || die "-n must have nr mounts argument"
 		T_NR_MOUNTS="$2"
+		shift
+		;;
+	-o)
+		test -n "$2" || die "-o must have option string argument"
+		# always appending to existing options
+		T_MNT_OPTIONS+=",$2"
 		shift
 		;;
 	-P)
@@ -430,6 +437,7 @@ for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 	if [ "$i" -lt "$T_QUORUM" ]; then
 		opts="$opts,quorum_slot_nr=$i"
 	fi
+	opts="${opts}${T_MNT_OPTIONS}"
 
 	msg "mounting $meta_dev|$data_dev on $dir"
 	cmd mount -t scoutfs $opts "$data_dev" "$dir" &
