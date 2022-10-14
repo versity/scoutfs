@@ -69,6 +69,7 @@ $(basename $0) options:
     -s        | Skip git repo checkouts.
     -t        | Enabled trace events that match the given glob argument.
               | Multiple options enable multiple globbed events.
+    -T <nr>   | Multiply the original trace buffer size by nr during the run.
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
     -y        | xfstests ./check additional args
@@ -165,6 +166,11 @@ while true; do
 	-t)
 		test -n "$2" || die "-t must have trace glob argument"
 		T_TRACE_GLOB+=("$2")
+		shift
+		;;
+	-T)
+		test -n "$2" || die "-T must have trace buffer size multiplier argument"
+		T_TRACE_MULT="$2"
 		shift
 		;;
 	-X)
@@ -352,6 +358,13 @@ if [ -n "$T_INSMOD" ]; then
 	cmd insmod "$T_KMOD/src/scoutfs.ko"
 fi
 
+if [ -n "$T_TRACE_MULT" ]; then
+	orig_trace_size=$(cat /sys/kernel/debug/tracing/buffer_size_kb)
+	mult_trace_size=$((orig_trace_size * T_TRACE_MULT))
+	msg "increasing trace buffer size from $orig_trace_size KiB to $mult_trace_size KiB"
+	echo $mult_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
+fi
+
 nr_globs=${#T_TRACE_GLOB[@]}
 if [ $nr_globs -gt 0 ]; then
 	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
@@ -381,6 +394,7 @@ fi
 # always describe tracing in the logs
 cmd cat /sys/kernel/debug/tracing/set_event
 cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
+	    /sys/kernel/debug/tracing/buffer_size_kb \
 	    /proc/sys/kernel/ftrace_dump_on_oops
 
 #
@@ -612,6 +626,9 @@ if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
 	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
 	echo 0 > /sys/kernel/debug/tracing/options/trace_printk
 	cat /sys/kernel/debug/tracing/trace > "$T_RESULTS/traces"
+	if [ -n "$orig_trace_size" ]; then
+		echo $orig_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
+	fi
 fi
 
 if [ "$skipped" == 0 -a "$failed" == 0 ]; then
