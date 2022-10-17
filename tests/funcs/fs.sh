@@ -405,7 +405,7 @@ t_save_all_sysfs_mount_options() {
 
 	for i in $(t_fs_nrs); do
 		opt="$(t_sysfs_path $i)/mount_options/$name"
-		ind="$name_$i"
+		ind="${name}_${i}"
 
 		_saved_opts[$ind]="$(cat $opt)"
 	done
@@ -417,7 +417,7 @@ t_restore_all_sysfs_mount_options() {
 	local i
 
 	for i in $(t_fs_nrs); do
-		ind="$name_$i"
+		ind="${name}_${i}"
 
 		t_set_sysfs_mount_option $i $name "${_saved_opts[$ind]}"
 	done

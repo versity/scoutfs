@@ -6,6 +6,7 @@ simple-inode-index.sh
 simple-staging.sh
 simple-release-extents.sh
 fallocate.sh
+data-prealloc.sh
 setattr_more.sh
 offline-extent-waiting.sh
 move-blocks.sh

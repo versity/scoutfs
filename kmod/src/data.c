@@ -366,27 +366,27 @@ static inline u64 ext_last(struct scoutfs_extent *ext)
 
 /*
  * The caller is writing to a logical iblock that doesn't have an
- * allocated extent.
+ * allocated extent.  The caller has searched for an extent containing
+ * iblock.  If it already existed then it must be unallocated and
+ * offline.
  *
- * We always allocate an extent starting at the logical iblock.  The
- * caller has searched for an extent containing iblock.  If it already
- * existed then it must be unallocated and offline.
+ * We implement two preallocation strategies.  Typically we only
+ * preallocate for simple streaming writes and limit preallocation while
+ * the file is small.   The largest efficient allocation size is
+ * typically large enough that it would be unreasonable to allocate that
+ * much for all small files.
  *
- * Preallocation is used if we're strictly contiguously extending
- * writes.  That is, if the logical block offset equals the number of
- * online blocks.  We try to preallocate the number of blocks existing
- * so that small files don't waste inordinate amounts of space and large
- * files will eventually see large extents.  This only works for
- * contiguous single stream writes or stages of files from the first
- * block.  It doesn't work for concurrent stages, releasing behind
- * staging, sparse files, multi-node writes, etc.  fallocate() is always
- * a better tool to use.
+ * Optionally, we can simply preallocate large empty aligned regions.
+ * This can waste a lot of space for small or sparse files but is
+ * reasonable when a file population is known to be large and dense but
+ * known to be written with non-streaming write patterns.
  */
 static int alloc_block(struct super_block *sb, struct inode *inode,
 		       struct scoutfs_extent *ext, u64 iblock,
 		       struct scoutfs_lock *lock)
 {
 	DECLARE_DATA_INFO(sb, datinf);
+	struct scoutfs_mount_options opts;
 	const u64 ino = scoutfs_ino(inode);
 	struct data_ext_args args = {
 		.ino = ino,
@@ -394,16 +394,21 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		.lock = lock,
 	};
 	struct scoutfs_extent found;
-	struct scoutfs_extent pre;
+	struct scoutfs_extent pre = {0,};
+	bool undo_pre = false;
 	u64 blkno = 0;
 	u64 online;
 	u64 offline;
 	u8 flags;
+	u64 start;
 	u64 count;
+	u64 rem;
 	int ret;
 	int err;
 
 	trace_scoutfs_data_alloc_block_enter(sb, ino, iblock, ext);
+
+	scoutfs_options_read(sb, &opts);
 
 	/* can only allocate over existing unallocated offline extent */
 	if (WARN_ON_ONCE(ext->len &&
@@ -413,66 +418,106 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 
 	mutex_lock(&datinf->mutex);
 
-	scoutfs_inode_get_onoff(inode, &online, &offline);
+	/* default to single allocation at the written block */
+	start = iblock;
+	count = 1;
+	/* copy existing flags for preallocated regions */
+	flags = ext->len ? ext->flags : 0;
 
 	if (ext->len) {
-		/* limit preallocation to remaining existing (offline) extent */
+		/*
+		 * Assume that offline writers are going to be writing
+		 * all the offline extents and try to preallocate the
+		 * rest of the unwritten extent.
+		 */
 		count = ext->len - (iblock - ext->start);
-		flags = ext->flags;
+
+	} else if (opts.data_prealloc_contig_only) {
+		/*
+		 * Only preallocate when a quick test of the online
+		 * block counts looks like we're a simple streaming
+		 * write.  Try to write until the next extent but limit
+		 * the preallocation size to the number of online
+		 * blocks.
+		 */
+		scoutfs_inode_get_onoff(inode, &online, &offline);
+		if (iblock > 1 && iblock == online) {
+			ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
+					       iblock, 1, &found);
+			if (ret < 0 && ret != -ENOENT)
+				goto out;
+			if (found.len && found.start > iblock)
+				count = found.start - iblock;
+			else
+				count = opts.data_prealloc_blocks;
+
+			count = min(iblock, count);
+		}
+
 	} else {
-		/* otherwise alloc to next extent */
-		ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
-				       iblock, 1, &found);
+		/*
+		 * Preallocation of aligned regions only preallocates if
+		 * the aligned region contains no extents at all.  This
+		 * could be fooled by offline sparse extents but we
+		 * don't want to iterate over all offline extents in the
+		 * aligned region.
+		 */
+		div64_u64_rem(iblock, opts.data_prealloc_blocks, &rem);
+		start = iblock - rem;
+		count = opts.data_prealloc_blocks;
+		ret = scoutfs_ext_next(sb, &data_ext_ops, &args, start, 1, &found);
 		if (ret < 0 && ret != -ENOENT)
 			goto out;
-		if (found.len && found.start > iblock)
-			count = found.start - iblock;
-		else
-			count = SCOUTFS_DATA_EXTEND_PREALLOC_LIMIT;
-		flags = 0;
+		if (found.len && found.start < start + count)
+			count = 1;
 	}
 
 	/* overall prealloc limit */
-	count = min_t(u64, count, SCOUTFS_DATA_EXTEND_PREALLOC_LIMIT);
-
-	/* only strictly contiguous extending writes will try to preallocate */
-	if (iblock > 1 && iblock == online)
-		count = min(iblock, count);
-	else
-		count = 1;
+	count = min_t(u64, count, opts.data_prealloc_blocks);
 
 	ret = scoutfs_alloc_data(sb, datinf->alloc, datinf->wri,
 				 &datinf->dalloc, count, &blkno, &count);
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_ext_set(sb, &data_ext_ops, &args, iblock, 1, blkno, 0);
-	if (ret < 0)
-		goto out;
+	/*
+	 * An aligned prealloc attempt that gets a smaller extent can
+	 * fail to cover iblock, make sure that it does.  This is a
+	 * pathological case so we don't try to move the window past
+	 * iblock.  Just enough to cover it, which we know is safe.
+	 */
+	if (start + count <= iblock)
+		start += (iblock - (start + count) + 1);
 
 	if (count > 1) {
-		pre.start = iblock + 1;
-		pre.len = count - 1;
-		pre.map = blkno + 1;
+		pre.start = start;
+		pre.len = count;
+		pre.map = blkno;
 		pre.flags = flags | SEF_UNWRITTEN;
 		ret = scoutfs_ext_set(sb, &data_ext_ops, &args, pre.start,
 				      pre.len, pre.map, pre.flags);
-		if (ret < 0) {
-			err = scoutfs_ext_set(sb, &data_ext_ops, &args, iblock,
-					      1, 0, flags);
-			BUG_ON(err); /* couldn't restore original */
+		if (ret < 0)
 			goto out;
-		}
+		undo_pre = true;
 	}
+
+	ret = scoutfs_ext_set(sb, &data_ext_ops, &args, iblock, 1, blkno + (iblock - start), 0);
+	if (ret < 0)
+		goto out;
 
 	/* tell the caller we have a single block, could check next? */
 	ext->start = iblock;
 	ext->len = 1;
-	ext->map = blkno;
+	ext->map = blkno + (iblock - start);
 	ext->flags = 0;
 	ret = 0;
 out:
 	if (ret < 0 && blkno > 0) {
+		if (undo_pre) {
+			err = scoutfs_ext_set(sb, &data_ext_ops, &args,
+					      pre.start, pre.len, 0, flags);
+			BUG_ON(err); /* leaked preallocated extent */
+		}
 		err = scoutfs_free_data(sb, datinf->alloc, datinf->wri,
 				        &datinf->data_freed, blkno, count);
 		BUG_ON(err); /* leaked free blocks */

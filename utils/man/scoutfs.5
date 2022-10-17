@@ -21,6 +21,40 @@ as detailed in
 .BR acl (5) .
 Support for POSIX ACLs is the default.
 .TP
+.B data_prealloc_blocks=<blocks>
+Set the size of preallocation regions of data files, in 4KiB blocks.
+Writes to these regions that contain no extents will attempt to
+preallocate the size of the full region.  This can waste a lot of space
+with small files, files with sparse regions, and files whose final
+length isn't a multiple of the preallocation size.  The following
+data_prealloc_contig_only option, which is the default, restricts this
+behaviour to waste less space.
+.sp
+All the preallocation options can be changed in an active mount by
+writing to their respective files in the options directory in the
+mount's sysfs directory.
+.sp
+It is worth noting that it is always more efficient in every way to use 
+.BR fallocate (2)
+to precisely allocate large extents for the resulting size of the file.
+Always attempt to enable it in software that supports it.
+.TP
+.B data_prealloc_contig_only=<0|1>
+This option, currently the default, limits file data preallocation in
+two ways.  First, it will only preallocate when extending a fully
+allocated file.  Second, it will limit the size of preallocation to the
+existing length of the file.  These limits reduce the amount of
+preallocation wasted per file at the cost of multiple initial extents in
+all files.  It only supports simple streaming writes, any other write
+pattern will not be recognized and could result in many fragmented
+extent allocations.
+.sp
+This option can be disabled to encourage large allocated extents
+regardless of write patterns.  This can be helpful if files are written
+with initial sparse regions (perhaps by multiple threads writing to
+different regions) and wasted space isn't an issue (perhaps because the
+file population contains few small files).
+.TP
 .B metadev_path=<device>
 The metadev_path option specifies the path to the block device that
 contains the filesystem's metadata.
