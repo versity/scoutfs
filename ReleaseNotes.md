@@ -2,6 +2,23 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.8
+\
+*Oct 18, 2022*
+
+Add support for Linux POSIX Access Control Lists, as described in
+acl(5).  Mount options are added to enable ("acl") and disable ("noacl")
+support.  The default is to support ACLs.  ACLs are stored in the
+existing extended attribute scheme so adding support is does not require
+a format change.
+
+Add options to control data extent preallocation.  The default behavior
+does not change.  The options can relax the limits on preallocation
+which will then trigger under more write patterns and increase the risk
+of preallocated space which is never used.  The options are described in
+scoutfs(5).
+
+---
 v1.7
 \
 *Aug 26, 2022*
