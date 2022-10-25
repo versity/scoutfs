@@ -60,8 +60,6 @@
  * All the entries have a dirent struct with the full name in their
  * value.  The dirent struct contains the name hash and readdir position
  * so that any item use can reference all the items for a given entry.
- * This is important for deleting all the items given a dentry that was
- * populated by lookup.
  */
 
 static unsigned int mode_to_type(umode_t mode)
@@ -102,14 +100,9 @@ static unsigned int dentry_type(enum scoutfs_dentry_type type)
 
 /*
  * @lock_cov: tells revalidation that the dentry is still locked and valid.
- *
- * @pos, @hash: lets us remove items on final unlink without having to
- * look them up.
  */
 struct dentry_info {
 	struct scoutfs_lock_coverage lock_cov;
-	u64 hash;
-	u64 pos;
 };
 
 static struct kmem_cache *dentry_info_cache;
@@ -162,7 +155,7 @@ static int alloc_dentry_info(struct dentry *dentry)
 }
 
 static void update_dentry_info(struct super_block *sb, struct dentry *dentry,
-			       u64 hash, u64 pos, struct scoutfs_lock *lock)
+			       struct scoutfs_lock *lock)
 {
 	struct dentry_info *di = dentry->d_fsdata;
 
@@ -170,28 +163,6 @@ static void update_dentry_info(struct super_block *sb, struct dentry *dentry,
 		return;
 
 	scoutfs_lock_add_coverage(sb, lock, &di->lock_cov);
-	di->hash = hash;
-	di->pos = pos;
-}
-
-static u64 dentry_info_hash(struct dentry *dentry)
-{
-	struct dentry_info *di = dentry->d_fsdata;
-
-	if (WARN_ON_ONCE(di == NULL))
-		return 0;
-
-	return di->hash;
-}
-
-static u64 dentry_info_pos(struct dentry *dentry)
-{
-	struct dentry_info *di = dentry->d_fsdata;
-
-	if (WARN_ON_ONCE(di == NULL))
-		return 0;
-
-	return di->pos;
 }
 
 static void init_dirent_key(struct scoutfs_key *key, u8 type, u64 ino,
@@ -351,8 +322,7 @@ static int verify_entry(struct super_block *sb, u64 dir_ino, struct dentry *dent
 	if (ret < 0 && ret != -ENOENT)
 		return ret;
 
-	if (dentry_ino != le64_to_cpu(dent.ino) || di->hash != le64_to_cpu(dent.hash) ||
-	    di->pos != le64_to_cpu(dent.pos)) {
+	if (dentry_ino != le64_to_cpu(dent.ino)) {
 		if (dentry_ino)
 			ret = -ENOENT;
 		else
@@ -434,8 +404,7 @@ static int scoutfs_d_revalidate(struct dentry *dentry, unsigned int flags)
 	dentry_ino = dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
 
 	if ((dentry_ino == le64_to_cpu(dent.ino))) {
-		update_dentry_info(sb, dentry, le64_to_cpu(dent.hash),
-				   le64_to_cpu(dent.pos), lock);
+		update_dentry_info(sb, dentry, lock);
 		scoutfs_inc_counter(sb, dentry_revalidate_valid);
 		ret = 1;
 	} else {
@@ -501,8 +470,7 @@ static struct dentry *scoutfs_lookup(struct inode *dir, struct dentry *dentry,
 		ino = le64_to_cpu(dent.ino);
 	}
 	if (ret == 0)
-		update_dentry_info(sb, dentry, le64_to_cpu(dent.hash),
-				   le64_to_cpu(dent.pos), dir_lock);
+		update_dentry_info(sb, dentry, dir_lock);
 
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_READ);
 
@@ -831,7 +799,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	if (ret)
 		goto out;
 
-	update_dentry_info(sb, dentry, hash, pos, dir_lock);
+	update_dentry_info(sb, dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
@@ -959,7 +927,7 @@ retry:
 		WARN_ON_ONCE(err); /* no orphan, might not scan and delete after crash */
 		goto out;
 	}
-	update_dentry_info(sb, dentry, hash, pos, dir_lock);
+	update_dentry_info(sb, dentry, dir_lock);
 
 	i_size_write(dir, dir_size);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
@@ -1007,9 +975,11 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
+	struct scoutfs_dirent dent;
 	LIST_HEAD(ind_locks);
 	u64 ind_seq;
-	int ret = 0;
+	u64 hash;
+	int ret;
 
 	ret = scoutfs_lock_inodes(sb, SCOUTFS_LOCK_WRITE,
 				  SCOUTFS_LKF_REFRESH_INODE,
@@ -1030,6 +1000,13 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 		ret = -ENOTEMPTY;
 		goto unlock;
 	}
+
+	hash = dirent_name_hash(dentry->d_name.name, dentry->d_name.len);
+
+	ret = lookup_dirent(sb, scoutfs_ino(dir), dentry->d_name.name, dentry->d_name.len, hash,
+			    &dent, dir_lock);
+	if (ret < 0)
+		goto out;
 
 	if (should_orphan(inode)) {
 		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(inode),
@@ -1054,16 +1031,15 @@ retry:
 			goto out;
 	}
 
-	ret = del_entry_items(sb, scoutfs_ino(dir), dentry_info_hash(dentry),
-			      dentry_info_pos(dentry), scoutfs_ino(inode),
-			      dir_lock, inode_lock);
+	ret = del_entry_items(sb, scoutfs_ino(dir), le64_to_cpu(dent.hash), le64_to_cpu(dent.pos),
+			      scoutfs_ino(inode), dir_lock, inode_lock);
 	if (ret) {
 		ret = scoutfs_inode_orphan_delete(sb, scoutfs_ino(inode), orph_lock);
 		WARN_ON_ONCE(ret); /* should have been dirty */
 		goto out;
 	}
 
-	update_dentry_info(sb, dentry, 0, 0, dir_lock);
+	update_dentry_info(sb, dentry, dir_lock);
 
 	dir->i_ctime = ts;
 	dir->i_mtime = ts;
@@ -1304,7 +1280,7 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 	if (ret)
 		goto out;
 
-	update_dentry_info(sb, dentry, hash, pos, dir_lock);
+	update_dentry_info(sb, dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
@@ -1634,6 +1610,8 @@ static int scoutfs_rename_common(struct inode *old_dir,
 	struct scoutfs_lock *old_inode_lock = NULL;
 	struct scoutfs_lock *new_inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
+	struct scoutfs_dirent new_dent;
+	struct scoutfs_dirent old_dent;
 	struct timespec now;
 	bool ins_new = false;
 	bool del_new = false;
@@ -1736,10 +1714,12 @@ retry:
 
 	/* remove the new entry if it exists */
 	if (new_inode) {
-		ret = del_entry_items(sb, scoutfs_ino(new_dir),
-				      dentry_info_hash(new_dentry),
-				      dentry_info_pos(new_dentry),
-				      scoutfs_ino(new_inode),
+		ret = lookup_dirent(sb, scoutfs_ino(new_dir), new_dentry->d_name.name,
+				    new_dentry->d_name.len, new_hash, &new_dent, new_dir_lock);
+		if (ret < 0)
+			goto out;
+		ret = del_entry_items(sb, scoutfs_ino(new_dir), le64_to_cpu(new_dent.hash),
+				      le64_to_cpu(new_dent.pos), scoutfs_ino(new_inode),
 				      new_dir_lock, new_inode_lock);
 		if (ret)
 			goto out;
@@ -1755,11 +1735,14 @@ retry:
 		goto out;
 	del_new = true;
 
+	ret = lookup_dirent(sb, scoutfs_ino(old_dir), old_dentry->d_name.name,
+			    old_dentry->d_name.len, old_hash, &old_dent, old_dir_lock);
+	if (ret < 0)
+		goto out;
+
 	/* remove the old entry */
-	ret = del_entry_items(sb, scoutfs_ino(old_dir),
-			      dentry_info_hash(old_dentry),
-			      dentry_info_pos(old_dentry),
-			      scoutfs_ino(old_inode),
+	ret = del_entry_items(sb, scoutfs_ino(old_dir), le64_to_cpu(old_dent.hash),
+			      le64_to_cpu(old_dent.pos), scoutfs_ino(old_inode),
 			      old_dir_lock, old_inode_lock);
 	if (ret)
 		goto out;
@@ -1774,7 +1757,7 @@ retry:
 	/* won't fail from here on out, update all the vfs structs */
 
 	/* the caller will use d_move to move the old_dentry into place */
-	update_dentry_info(sb, old_dentry, new_hash, new_pos, new_dir_lock);
+	update_dentry_info(sb, old_dentry, new_dir_lock);
 
        i_size_write(old_dir, i_size_read(old_dir) - old_dentry->d_name.len);
        if (!new_inode)
@@ -1839,8 +1822,8 @@ out:
 		err = 0;
 		if (ins_old)
 			err = add_entry_items(sb, scoutfs_ino(old_dir),
-					      dentry_info_hash(old_dentry),
-					      dentry_info_pos(old_dentry),
+					      le64_to_cpu(old_dent.hash),
+					      le64_to_cpu(old_dent.pos),
 					      old_dentry->d_name.name,
 					      old_dentry->d_name.len,
 					      scoutfs_ino(old_inode),
@@ -1856,8 +1839,8 @@ out:
 
 		if (ins_new && err == 0)
 			err = add_entry_items(sb, scoutfs_ino(new_dir),
-					      dentry_info_hash(new_dentry),
-					      dentry_info_pos(new_dentry),
+					      le64_to_cpu(new_dent.hash),
+					      le64_to_cpu(new_dent.pos),
 					      new_dentry->d_name.name,
 					      new_dentry->d_name.len,
 					      scoutfs_ino(new_inode),
