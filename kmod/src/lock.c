@@ -1528,6 +1528,38 @@ void scoutfs_lock_flush_invalidate(struct super_block *sb)
 		flush_work(&linfo->inv_work);
 }
 
+static u64 get_held_lock_refresh_gen(struct super_block *sb, struct scoutfs_key *start)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+	struct scoutfs_lock *lock;
+	u64 refresh_gen = 0;
+
+	/* this can be called from all manner of places */
+	if (!linfo)
+		return 0;
+
+	spin_lock(&linfo->lock);
+	lock = lock_lookup(sb, start, NULL);
+	if (lock) {
+		if (lock_mode_can_read(lock->mode))
+			refresh_gen = lock->refresh_gen;
+	}
+	spin_unlock(&linfo->lock);
+
+	return refresh_gen;
+}
+
+u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino)
+{
+	struct scoutfs_key start;
+
+	scoutfs_key_set_zeros(&start);
+	start.sk_zone = SCOUTFS_FS_ZONE;
+	start.ski_ino = cpu_to_le64(ino & ~(u64)SCOUTFS_LOCK_INODE_GROUP_MASK);
+
+	return get_held_lock_refresh_gen(sb, &start);
+}
+
 /*
  * The caller is going to be shutting down transactions and the client.
  * We need to make sure that locking won't call either after we return.
