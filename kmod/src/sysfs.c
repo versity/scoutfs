@@ -268,7 +268,7 @@ int __init scoutfs_sysfs_init(void)
 	return 0;
 }
 
-void __exit scoutfs_sysfs_exit(void)
+void scoutfs_sysfs_exit(void)
 {
 	if (scoutfs_kset)
 		kset_unregister(scoutfs_kset);
