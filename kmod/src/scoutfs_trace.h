@@ -1417,42 +1417,71 @@ TRACE_EVENT(scoutfs_rename,
 );
 
 TRACE_EVENT(scoutfs_d_revalidate,
-	TP_PROTO(struct super_block *sb,
-		 struct dentry *dentry, int flags, struct dentry *parent,
-		 bool is_covered, int ret),
+	TP_PROTO(struct super_block *sb, struct dentry *dentry, int flags, u64 dir_ino, int ret),
 
-	TP_ARGS(sb, dentry, flags, parent, is_covered, ret),
+	TP_ARGS(sb, dentry, flags, dir_ino, ret),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
+		__field(void *, dentry)
 		__string(name, dentry->d_name.name)
 		__field(__u64, ino)
-		__field(__u64, parent_ino)
+		__field(__u64, dir_ino)
 		__field(int, flags)
 		__field(int, is_root)
-		__field(int, is_covered)
 		__field(int, ret)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
+		__entry->dentry = dentry;
 		__assign_str(name, dentry->d_name.name)
-		__entry->ino = dentry->d_inode ?
-			       scoutfs_ino(dentry->d_inode) : 0;
-		__entry->parent_ino = parent->d_inode ?
-			       scoutfs_ino(parent->d_inode) : 0;
+		__entry->ino = dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
+		__entry->dir_ino = dir_ino;
 		__entry->flags = flags;
 		__entry->is_root = IS_ROOT(dentry);
-		__entry->is_covered = is_covered;
 		__entry->ret = ret;
 	),
 
-	TP_printk(SCSBF" name %s ino %llu parent_ino %llu flags 0x%x s_root %u is_covered %u ret %d",
-		  SCSB_TRACE_ARGS, __get_str(name), __entry->ino,
-		  __entry->parent_ino, __entry->flags,
-		  __entry->is_root,
-		  __entry->is_covered,
-		  __entry->ret)
+	TP_printk(SCSBF" dentry %p name %s ino %llu dir_ino %llu flags 0x%x s_root %u ret %d",
+		  SCSB_TRACE_ARGS, __entry->dentry, __get_str(name), __entry->ino, __entry->dir_ino,
+		  __entry->flags, __entry->is_root, __entry->ret)
+);
+
+TRACE_EVENT(scoutfs_validate_dentry,
+	TP_PROTO(struct super_block *sb, struct dentry *dentry, u64 dir_ino, u64 dentry_ino,
+		 u64 dent_ino, u64 refresh_gen, int ret),
+
+	TP_ARGS(sb, dentry, dir_ino, dentry_ino, dent_ino, refresh_gen, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(void *, dentry)
+		__field(__u64, dir_ino)
+		__string(name, dentry->d_name.name)
+		__field(__u64, dentry_ino)
+		__field(__u64, dent_ino)
+		__field(__u64, fsdata_gen)
+		__field(__u64, refresh_gen)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->dentry = dentry;
+		__entry->dir_ino = dir_ino;
+		__assign_str(name, dentry->d_name.name)
+		__entry->dentry_ino = dentry_ino;
+		__entry->dent_ino = dent_ino;
+		__entry->fsdata_gen = (unsigned long long)dentry->d_fsdata;
+		__entry->refresh_gen = refresh_gen;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" dentry %p dir %llu name %s dentry_ino %llu dent_ino %llu fsdata_gen %llu refresh_gen %llu ret %d",
+		  SCSB_TRACE_ARGS, __entry->dentry, __entry->dir_ino, __get_str(name),
+		  __entry->dentry_ino, __entry->dent_ino, __entry->fsdata_gen,
+		  __entry->refresh_gen, __entry->ret)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_super_lifecycle_class,

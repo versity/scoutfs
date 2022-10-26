@@ -98,72 +98,11 @@ static unsigned int dentry_type(enum scoutfs_dentry_type type)
 	return DT_UNKNOWN;
 }
 
-/*
- * @lock_cov: tells revalidation that the dentry is still locked and valid.
- */
-struct dentry_info {
-	struct scoutfs_lock_coverage lock_cov;
-};
-
-static struct kmem_cache *dentry_info_cache;
-
-static void scoutfs_d_release(struct dentry *dentry)
-{
-	struct super_block *sb = dentry->d_sb;
-	struct dentry_info *di = dentry->d_fsdata;
-
-	if (di) {
-		scoutfs_lock_del_coverage(sb, &di->lock_cov);
-		kmem_cache_free(dentry_info_cache, di);
-		dentry->d_fsdata = NULL;
-	}
-}
-
 static int scoutfs_d_revalidate(struct dentry *dentry, unsigned int flags);
 
-static const struct dentry_operations scoutfs_dentry_ops = {
-	.d_release = scoutfs_d_release,
+const struct dentry_operations scoutfs_dentry_ops = {
 	.d_revalidate = scoutfs_d_revalidate,
 };
-
-static int alloc_dentry_info(struct dentry *dentry)
-{
-	struct dentry_info *di;
-
-	smp_rmb();
-	if (dentry->d_op == &scoutfs_dentry_ops)
-		return 0;
-
-	di = kmem_cache_zalloc(dentry_info_cache, GFP_NOFS);
-	if (!di)
-		return -ENOMEM;
-
-	scoutfs_lock_init_coverage(&di->lock_cov);
-
-	spin_lock(&dentry->d_lock);
-	if (!dentry->d_fsdata) {
-		dentry->d_fsdata = di;
-		smp_wmb();
-		d_set_d_op(dentry, &scoutfs_dentry_ops);
-	}
-	spin_unlock(&dentry->d_lock);
-
-	if (di != dentry->d_fsdata)
-		kmem_cache_free(dentry_info_cache, di);
-
-	return 0;
-}
-
-static void update_dentry_info(struct super_block *sb, struct dentry *dentry,
-			       struct scoutfs_lock *lock)
-{
-	struct dentry_info *di = dentry->d_fsdata;
-
-	if (WARN_ON_ONCE(di == NULL))
-		return;
-
-	scoutfs_lock_add_coverage(sb, lock, &di->lock_cov);
-}
 
 static void init_dirent_key(struct scoutfs_key *key, u8 type, u64 ino,
 			    u64 major, u64 minor)
@@ -289,47 +228,97 @@ out:
 	return ret;
 }
 
-/*
- * Verify that the caller's dentry still precisely matches our dirent
- * items.
- *
- * The caller has a dentry that the vfs revalidated before they acquired
- * their locks.  If the dentry is still covered by a lock we immediately
- * return 0.   If not, we check items and return -ENOENT if a positive
- * dentry no longer matches the items or -EEXIST if a negative entry's
- * name now has an item.
- */
-static int verify_entry(struct super_block *sb, u64 dir_ino, struct dentry *dentry,
-			struct scoutfs_lock *lock)
+static int lookup_dentry_dirent(struct super_block *sb, u64 dir_ino, struct dentry *dentry,
+				struct scoutfs_dirent *dent_ret,
+				struct scoutfs_lock *lock)
 {
-	struct dentry_info *di = dentry->d_fsdata;
+	return lookup_dirent(sb, dir_ino, dentry->d_name.name, dentry->d_name.len,
+			     dirent_name_hash(dentry->d_name.name, dentry->d_name.len),
+			     dent_ret, lock);
+}
+
+static u64 dentry_parent_ino(struct dentry *dentry)
+{
+	struct dentry *parent = NULL;
+	struct inode *dir;
+	u64 dir_ino = 0;
+
+	if ((parent = dget_parent(dentry)) && (dir = parent->d_inode))
+		dir_ino = scoutfs_ino(dir);
+
+	dput(parent);
+	return dir_ino;
+}
+
+/* negative dentries return 0, our root ino is non-zero (1) */
+static u64 dentry_ino(struct dentry *dentry)
+{
+	return dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
+}
+
+static void set_dentry_fsdata(struct dentry *dentry, struct scoutfs_lock *lock)
+{
+	void *now = (void *)(unsigned long)lock->refresh_gen;
+	void *was;
+
+	/* didn't want to alloc :/ */
+	BUILD_BUG_ON(sizeof(dentry->d_fsdata) != sizeof(u64));
+	BUILD_BUG_ON(sizeof(dentry->d_fsdata) != sizeof(long));
+
+	do {
+		was = dentry->d_fsdata;
+	} while (cmpxchg(&dentry->d_fsdata, was, now) != was);
+}
+
+static bool test_dentry_fsdata(struct dentry *dentry, u64 refresh)
+{
+	u64 fsd = (unsigned long)ACCESS_ONCE(dentry->d_fsdata);
+
+	return fsd == refresh;
+}
+
+/*
+ * Validate an operation caller's input dentry argument.  If the fsdata
+ * is valid then the underlying dirent items couldn't have changed and
+ * we return 0.  If fsdata is no longer protected by a lock or its
+ * fields don't match then we check the dirent item.  If the dirent item
+ * doesn't match what the caller expected given their dentry fields then
+ * we return an error.
+ */
+static int validate_dentry(struct super_block *sb, u64 dir_ino, struct dentry *dentry,
+			   struct scoutfs_lock *lock)
+{
+	u64 ino = dentry_ino(dentry);
 	struct scoutfs_dirent dent = {0,};
-	const char *name;
-	u64 dentry_ino;
-	int name_len;
-	u64 hash;
 	int ret;
 
-	if (scoutfs_lock_is_covered(sb, &di->lock_cov))
-		return 0;
+	if (test_dentry_fsdata(dentry, lock->refresh_gen)) {
+		ret = 0;
+		goto out;
+	}
 
-	dentry_ino = dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
-	name = dentry->d_name.name;
-	name_len = dentry->d_name.len;
-	hash = dirent_name_hash(name, name_len);
-
-	ret = lookup_dirent(sb, dir_ino, name, name_len, hash, &dent, lock);
+	ret = lookup_dentry_dirent(sb, dir_ino, dentry, &dent, lock);
 	if (ret < 0 && ret != -ENOENT)
-		return ret;
+		goto out;
 
-	if (dentry_ino != le64_to_cpu(dent.ino)) {
-		if (dentry_ino)
-			ret = -ENOENT;
-		else
-			ret = -EEXIST;
+	/* use negative zeroed dent when lookup gave -ENOENT */
+	if (!ino && dent.ino) {
+		/* caller expected negative but there was a dirent */
+		ret = -EEXIST;
+	} else if (ino && !dent.ino) {
+		/* caller expected positive but there was no dirent */
+		ret = -ENOENT;
+	} else if (ino != le64_to_cpu(dent.ino)) {
+		/* name linked to different inode than caller's */
+		ret = -ESTALE;
 	} else {
+		/* dirent ino matches dentry ino */
 		ret = 0;
 	}
+
+out:
+	trace_scoutfs_validate_dentry(sb, dentry, dir_ino, ino, le64_to_cpu(dent.ino),
+				      lock->refresh_gen, ret);
 
 	return ret;
 }
@@ -337,13 +326,7 @@ static int verify_entry(struct super_block *sb, u64 dir_ino, struct dentry *dent
 static int scoutfs_d_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	struct super_block *sb = dentry->d_sb;
-	struct dentry_info *di = dentry->d_fsdata;
-	struct dentry *parent = dget_parent(dentry);
-	struct scoutfs_lock *lock = NULL;
-	struct scoutfs_dirent dent;
-	bool is_covered = false;
-	struct inode *dir;
-	u64 dentry_ino;
+	u64 dir_ino = dentry_parent_ino(dentry);
 	int ret;
 
 	/* don't think this happens but we can find out */
@@ -365,46 +348,7 @@ static int scoutfs_d_revalidate(struct dentry *dentry, unsigned int flags)
 		goto out;
 	}
 
-	if (WARN_ON_ONCE(di == NULL)) {
-		ret = 0;
-		goto out;
-	}
-
-	is_covered = scoutfs_lock_is_covered(sb, &di->lock_cov);
-	if (is_covered) {
-		scoutfs_inc_counter(sb, dentry_revalidate_locked);
-		ret = 1;
-		goto out;
-	}
-
-	if (!parent || !parent->d_inode) {
-		scoutfs_inc_counter(sb, dentry_revalidate_orphan);
-		ret = 0;
-		goto out;
-	}
-	dir = parent->d_inode;
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, dir, &lock);
-	if (ret)
-		goto out;
-
-	ret = lookup_dirent(sb, scoutfs_ino(dir),
-			    dentry->d_name.name, dentry->d_name.len,
-			    dirent_name_hash(dentry->d_name.name,
-					     dentry->d_name.len),
-			    &dent, lock);
-	if (ret == -ENOENT) {
-		dent.ino = 0;
-		dent.hash = 0;
-		dent.pos = 0;
-	} else if (ret < 0) {
-		goto out;
-	}
-
-	dentry_ino = dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
-
-	if ((dentry_ino == le64_to_cpu(dent.ino))) {
-		update_dentry_info(sb, dentry, lock);
+	if (test_dentry_fsdata(dentry, scoutfs_lock_ino_refresh_gen(sb, dir_ino))) {
 		scoutfs_inc_counter(sb, dentry_revalidate_valid);
 		ret = 1;
 	} else {
@@ -413,10 +357,7 @@ static int scoutfs_d_revalidate(struct dentry *dentry, unsigned int flags)
 	}
 
 out:
-	trace_scoutfs_d_revalidate(sb, dentry, flags, parent, is_covered, ret);
-
-	dput(parent);
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+	trace_scoutfs_d_revalidate(sb, dentry, flags, dir_ino, ret);
 
 	if (ret < 0 && ret != -ECHILD)
 		scoutfs_inc_counter(sb, dentry_revalidate_error);
@@ -453,10 +394,6 @@ static struct dentry *scoutfs_lookup(struct inode *dir, struct dentry *dentry,
 		goto out;
 	}
 
-	ret = alloc_dentry_info(dentry);
-	if (ret)
-		goto out;
-
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, dir, &dir_lock);
 	if (ret)
 		goto out;
@@ -470,7 +407,7 @@ static struct dentry *scoutfs_lookup(struct inode *dir, struct dentry *dentry,
 		ino = le64_to_cpu(dent.ino);
 	}
 	if (ret == 0)
-		update_dentry_info(sb, dentry, dir_lock);
+		set_dentry_fsdata(dentry, dir_lock);
 
 	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_READ);
 
@@ -694,10 +631,6 @@ static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 	int ret = 0;
 	u64 ino;
 
-	ret = alloc_dentry_info(dentry);
-	if (ret)
-		return ERR_PTR(ret);
-
 	ret = scoutfs_alloc_ino(sb, S_ISDIR(mode), &ino);
 	if (ret)
 		return ERR_PTR(ret);
@@ -786,7 +719,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 		return PTR_ERR(inode);
 	si = SCOUTFS_I(inode);
 
-	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	ret = validate_dentry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
 		goto out;
 
@@ -799,7 +732,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	if (ret)
 		goto out;
 
-	update_dentry_info(sb, dentry, dir_lock);
+	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
@@ -873,18 +806,14 @@ static int scoutfs_link(struct dentry *old_dentry,
 	if (ret)
 		return ret;
 
+	ret = validate_dentry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	if (ret < 0)
+		goto out_unlock;
+
 	if (inode->i_nlink >= SCOUTFS_LINK_MAX) {
 		ret = -EMLINK;
 		goto out_unlock;
 	}
-
-	ret = alloc_dentry_info(dentry);
-	if (ret)
-		goto out_unlock;
-
-	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
-	if (ret < 0)
-		goto out_unlock;
 
 	dir_size = i_size_read(dir) + dentry->d_name.len;
 
@@ -927,7 +856,7 @@ retry:
 		WARN_ON_ONCE(err); /* no orphan, might not scan and delete after crash */
 		goto out;
 	}
-	update_dentry_info(sb, dentry, dir_lock);
+	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, dir_size);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
@@ -988,11 +917,7 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 	if (ret)
 		return ret;
 
-	ret = alloc_dentry_info(dentry);
-	if (ret)
-		goto unlock;
-
-	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	ret = validate_dentry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
 		goto unlock;
 
@@ -1039,7 +964,7 @@ retry:
 		goto out;
 	}
 
-	update_dentry_info(sb, dentry, dir_lock);
+	set_dentry_fsdata(dentry, dir_lock);
 
 	dir->i_ctime = ts;
 	dir->i_mtime = ts;
@@ -1252,17 +1177,13 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 	    name_len > PATH_MAX || name_len > SCOUTFS_SYMLINK_MAX_SIZE)
 		return -ENAMETOOLONG;
 
-	ret = alloc_dentry_info(dentry);
-	if (ret)
-		return ret;
-
 	inode = lock_hold_create(dir, dentry, S_IFLNK|S_IRWXUGO, 0,
 				 &dir_lock, &inode_lock, NULL, &ind_locks);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 	si = SCOUTFS_I(inode);
 
-	ret = verify_entry(sb, scoutfs_ino(dir), dentry, dir_lock);
+	ret = validate_dentry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
 		goto out;
 
@@ -1280,7 +1201,7 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 	if (ret)
 		goto out;
 
-	update_dentry_info(sb, dentry, dir_lock);
+	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
@@ -1659,19 +1580,18 @@ static int scoutfs_rename_common(struct inode *old_dir,
 	if (ret)
 		goto out_unlock;
 
+	/* make sure that the entries assumed by the argument still exist */
+	ret = validate_dentry(sb, scoutfs_ino(old_dir), old_dentry, old_dir_lock) ?:
+	      validate_dentry(sb, scoutfs_ino(new_dir), new_dentry, new_dir_lock);
+	if (ret)
+		goto out_unlock;
+
 	/* test dir i_size now that it's refreshed */
 	if (new_inode && S_ISDIR(new_inode->i_mode) && i_size_read(new_inode)) {
 		ret = -ENOTEMPTY;
 		goto out_unlock;
 	}
 
-	/* make sure that the entries assumed by the argument still exist */
-	ret = alloc_dentry_info(old_dentry) ?:
-	      alloc_dentry_info(new_dentry) ?:
-	      verify_entry(sb, scoutfs_ino(old_dir), old_dentry, old_dir_lock) ?:
-	      verify_entry(sb, scoutfs_ino(new_dir), new_dentry, new_dir_lock);
-	if (ret)
-		goto out_unlock;
 
 	if ((flags & RENAME_NOREPLACE) && (new_inode != NULL)) {
 		ret = -EEXIST;
@@ -1757,7 +1677,7 @@ retry:
 	/* won't fail from here on out, update all the vfs structs */
 
 	/* the caller will use d_move to move the old_dentry into place */
-	update_dentry_info(sb, old_dentry, new_dir_lock);
+	set_dentry_fsdata(old_dentry, new_dir_lock);
 
        i_size_write(old_dir, i_size_read(old_dir) - old_dentry->d_name.len);
        if (!new_inode)
@@ -1975,22 +1895,3 @@ const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.tmpfile	= scoutfs_tmpfile,
 	.rename2	= scoutfs_rename2,
 };
-
-void scoutfs_dir_exit(void)
-{
-	if (dentry_info_cache) {
-		kmem_cache_destroy(dentry_info_cache);
-		dentry_info_cache = NULL;
-	}
-}
-
-int scoutfs_dir_init(void)
-{
-	dentry_info_cache = kmem_cache_create("scoutfs_dentry_info",
-					      sizeof(struct dentry_info), 0,
-					      SLAB_RECLAIM_ACCOUNT, NULL);
-	if (!dentry_info_cache)
-		return -ENOMEM;
-
-	return 0;
-}

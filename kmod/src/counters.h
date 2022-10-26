@@ -75,8 +75,6 @@
 	EXPAND_COUNTER(data_write_begin_enobufs_retry)		\
 	EXPAND_COUNTER(dentry_revalidate_error)			\
 	EXPAND_COUNTER(dentry_revalidate_invalid)		\
-	EXPAND_COUNTER(dentry_revalidate_locked)		\
-	EXPAND_COUNTER(dentry_revalidate_orphan)		\
 	EXPAND_COUNTER(dentry_revalidate_rcu)			\
 	EXPAND_COUNTER(dentry_revalidate_root)			\
 	EXPAND_COUNTER(dentry_revalidate_valid)			\

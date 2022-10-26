@@ -8,6 +8,8 @@ extern const struct file_operations scoutfs_dir_fops;
 extern const struct inode_operations_wrapper scoutfs_dir_iops;
 extern const struct inode_operations scoutfs_symlink_iops;
 
+extern const struct dentry_operations scoutfs_dentry_ops;
+
 struct scoutfs_link_backref_entry {
 	struct list_head head;
 	u64 dir_ino;
@@ -28,8 +30,5 @@ int scoutfs_dir_add_next_linkref(struct super_block *sb, u64 ino,
 
 int scoutfs_symlink_drop(struct super_block *sb, u64 ino,
 			 struct scoutfs_lock *lock, u64 i_size);
-
-int scoutfs_dir_init(void);
-void scoutfs_dir_exit(void);
 
 #endif
