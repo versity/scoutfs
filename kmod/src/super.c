@@ -483,6 +483,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_magic = SCOUTFS_SUPER_MAGIC;
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_op = &scoutfs_super_ops;
+	sb->s_d_op = &scoutfs_dentry_ops;
 	sb->s_export_op = &scoutfs_export_ops;
 	sb->s_xattr = scoutfs_xattr_handlers;
 	sb->s_flags |= MS_I_VERSION | MS_POSIXACL;
@@ -630,7 +631,6 @@ MODULE_ALIAS_FS("scoutfs");
 static void teardown_module(void)
 {
 	debugfs_remove(scoutfs_debugfs_root);
-	scoutfs_dir_exit();
 	scoutfs_inode_exit();
 	scoutfs_sysfs_exit();
 }
@@ -668,7 +668,6 @@ static int __init scoutfs_module_init(void)
 		goto out;
 	}
 	ret = scoutfs_inode_init() ?:
-	      scoutfs_dir_init() ?:
 	      register_filesystem(&scoutfs_fs_type);
 out:
 	if (ret)
