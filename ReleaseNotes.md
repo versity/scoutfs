@@ -2,6 +2,18 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.9
+\
+*Oct 29, 2022*
+
+Fix VFS cached directory entry consistency verification that could cause
+spurious "no such file or directory" (ENOENT) errors from rename over
+NFS under certain conditions.  The problem was only every with the
+consistency of in-memory cached dentry objects, persistent data was
+correct and eventual eviction of the bad cached objects would stop
+generating the errors.
+
+---
 v1.8
 \
 *Oct 18, 2022*
