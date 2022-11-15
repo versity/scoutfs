@@ -125,8 +125,10 @@ int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat);
 int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
 
-int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
-int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
+int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary);
+int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary);
 void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb);
 
 void scoutfs_inode_queue_writeback(struct inode *inode);

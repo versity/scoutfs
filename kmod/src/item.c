@@ -1676,6 +1676,14 @@ static int lock_safe(struct scoutfs_lock *lock, struct scoutfs_key *key,
 		return 0;
 }
 
+static int optional_lock_mode_match(struct scoutfs_lock *lock, int mode)
+{
+	if (WARN_ON_ONCE(lock && lock->mode != mode))
+		return -EINVAL;
+	else
+		return 0;
+}
+
 /*
  * Copy the cached item's value into the caller's value.  The number of
  * bytes copied is returned.  A null val returns 0.
@@ -1832,12 +1840,19 @@ out:
  * also increase the seqs.  It lets us limit the inputs of item merging
  * to the last stable seq and ensure that all the items in open
  * transactions and granted locks will have greater seqs.
+ *
+ * This is a little awkward for WRITE_ONLY locks which can have much
+ * older versions than the version of locked primary data that they're
+ * operating on behalf of.  Callers can optionally provide that primary
+ * lock to get the version from.   This ensures that items created under
+ * WRITE_ONLY locks can not have versions less than their primary data.
  */
-static u64 item_seq(struct super_block *sb, struct scoutfs_lock *lock)
+static u64 item_seq(struct super_block *sb, struct scoutfs_lock *lock,
+		    struct scoutfs_lock *primary)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
-	return max(sbi->trans_seq, lock->write_seq);
+	return max3(sbi->trans_seq, lock->write_seq, primary ? primary->write_seq : 0);
 }
 
 /*
@@ -1872,7 +1887,7 @@ int scoutfs_item_dirty(struct super_block *sb, struct scoutfs_key *key,
 	if (!item || item->deletion) {
 		ret = -ENOENT;
 	} else {
-		item->seq = item_seq(sb, lock);
+		item->seq = item_seq(sb, lock, NULL);
 		mark_item_dirty(sb, cinf, pg, NULL, item);
 		ret = 0;
 	}
@@ -1889,10 +1904,10 @@ out:
  */
 static int item_create(struct super_block *sb, struct scoutfs_key *key,
 		       void *val, int val_len, struct scoutfs_lock *lock,
-		       int mode, bool force)
+		       struct scoutfs_lock *primary, int mode, bool force)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-	const u64 seq = item_seq(sb, lock);
+	const u64 seq = item_seq(sb, lock, primary);
 	struct cached_item *found;
 	struct cached_item *item;
 	struct cached_page *pg;
@@ -1902,7 +1917,8 @@ static int item_create(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_create);
 
-	if ((ret = lock_safe(lock, key, mode)))
+	if ((ret = lock_safe(lock, key, mode)) ||
+	    (ret = optional_lock_mode_match(primary, SCOUTFS_LOCK_WRITE)))
 		goto out;
 
 	ret = scoutfs_forest_set_bloom_bits(sb, lock);
@@ -1943,15 +1959,15 @@ out:
 int scoutfs_item_create(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock)
 {
-	return item_create(sb, key, val, val_len, lock,
+	return item_create(sb, key, val, val_len, lock, NULL,
 			   SCOUTFS_LOCK_READ, false);
 }
 
 int scoutfs_item_create_force(struct super_block *sb, struct scoutfs_key *key,
 			      void *val, int val_len,
-			      struct scoutfs_lock *lock)
+			      struct scoutfs_lock *lock, struct scoutfs_lock *primary)
 {
-	return item_create(sb, key, val, val_len, lock,
+	return item_create(sb, key, val, val_len, lock, primary,
 			   SCOUTFS_LOCK_WRITE_ONLY, true);
 }
 
@@ -1965,7 +1981,7 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-	const u64 seq = item_seq(sb, lock);
+	const u64 seq = item_seq(sb, lock, NULL);
 	struct cached_item *item;
 	struct cached_item *found;
 	struct cached_page *pg;
@@ -2025,12 +2041,16 @@ out:
  * current items so the caller always writes with write only locks.  If
  * combining the current delta item and the caller's item results in a
  * null we can just drop it, we don't have to emit a deletion item.
+ *
+ * Delta items don't have to worry about creating items with old
+ * versions under write_only locks.  The versions don't impact how we
+ * merge two items.
  */
 int scoutfs_item_delta(struct super_block *sb, struct scoutfs_key *key,
 		       void *val, int val_len, struct scoutfs_lock *lock)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-	const u64 seq = item_seq(sb, lock);
+	const u64 seq = item_seq(sb, lock, NULL);
 	struct cached_item *item;
 	struct cached_page *pg;
 	struct rb_node **pnode;
@@ -2099,10 +2119,11 @@ out:
  * deletion item if there isn't one already cached.
  */
 static int item_delete(struct super_block *sb, struct scoutfs_key *key,
-		       struct scoutfs_lock *lock, int mode, bool force)
+		       struct scoutfs_lock *lock, struct scoutfs_lock *primary,
+		       int mode, bool force)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-	const u64 seq = item_seq(sb, lock);
+	const u64 seq = item_seq(sb, lock, primary);
 	struct cached_item *item;
 	struct cached_page *pg;
 	struct rb_node **pnode;
@@ -2111,7 +2132,8 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_delete);
 
-	if ((ret = lock_safe(lock, key, mode)))
+	if ((ret = lock_safe(lock, key, mode)) ||
+	    (ret = optional_lock_mode_match(primary, SCOUTFS_LOCK_WRITE)))
 		goto out;
 
 	ret = scoutfs_forest_set_bloom_bits(sb, lock);
@@ -2161,13 +2183,13 @@ out:
 int scoutfs_item_delete(struct super_block *sb, struct scoutfs_key *key,
 			struct scoutfs_lock *lock)
 {
-	return item_delete(sb, key, lock, SCOUTFS_LOCK_WRITE, false);
+	return item_delete(sb, key, lock, NULL, SCOUTFS_LOCK_WRITE, false);
 }
 
 int scoutfs_item_delete_force(struct super_block *sb, struct scoutfs_key *key,
-			      struct scoutfs_lock *lock)
+			      struct scoutfs_lock *lock, struct scoutfs_lock *primary)
 {
-	return item_delete(sb, key, lock, SCOUTFS_LOCK_WRITE_ONLY, true);
+	return item_delete(sb, key, lock, primary, SCOUTFS_LOCK_WRITE_ONLY, true);
 }
 
 u64 scoutfs_item_dirty_pages(struct super_block *sb)
