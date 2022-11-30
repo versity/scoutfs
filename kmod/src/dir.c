@@ -840,7 +840,7 @@ retry:
 		goto out;
 
 	if (del_orphan) {
-		ret = scoutfs_inode_orphan_delete(sb, scoutfs_ino(inode), orph_lock);
+		ret = scoutfs_inode_orphan_delete(sb, scoutfs_ino(inode), orph_lock, inode_lock);
 		if (ret)
 			goto out;
 	}
@@ -852,7 +852,7 @@ retry:
 			      scoutfs_ino(inode), inode->i_mode, dir_lock,
 			      inode_lock);
 	if (ret) {
-		err = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
+		err = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock, inode_lock);
 		WARN_ON_ONCE(err); /* no orphan, might not scan and delete after crash */
 		goto out;
 	}
@@ -951,7 +951,7 @@ retry:
 		goto unlock;
 
 	if (should_orphan(inode)) {
-		ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
+		ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock, inode_lock);
 		if (ret < 0)
 			goto out;
 	}
@@ -959,7 +959,7 @@ retry:
 	ret = del_entry_items(sb, scoutfs_ino(dir), le64_to_cpu(dent.hash), le64_to_cpu(dent.pos),
 			      scoutfs_ino(inode), dir_lock, inode_lock);
 	if (ret) {
-		ret = scoutfs_inode_orphan_delete(sb, scoutfs_ino(inode), orph_lock);
+		ret = scoutfs_inode_orphan_delete(sb, scoutfs_ino(inode), orph_lock, inode_lock);
 		WARN_ON_ONCE(ret); /* should have been dirty */
 		goto out;
 	}
@@ -1669,7 +1669,8 @@ retry:
 	ins_old = true;
 
 	if (should_orphan(new_inode)) {
-		ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(new_inode), orph_lock);
+		ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(new_inode), orph_lock,
+						  new_inode_lock);
 		if (ret)
 			goto out;
 	}
@@ -1831,7 +1832,7 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 		return PTR_ERR(inode);
 	si = SCOUTFS_I(inode);
 
-	ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock);
+	ret = scoutfs_inode_orphan_create(sb, scoutfs_ino(inode), orph_lock, inode_lock);
 	if (ret < 0)
 		goto out; /* XXX returning error but items created */
 

@@ -955,7 +955,8 @@ void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
 static int update_index_items(struct super_block *sb,
 			      struct scoutfs_inode_info *si, u64 ino, u8 type,
 			      u64 major, u32 minor,
-			      struct list_head *lock_list)
+			      struct list_head *lock_list,
+			      struct scoutfs_lock *primary)
 {
 	struct scoutfs_lock *ins_lock;
 	struct scoutfs_lock *del_lock;
@@ -972,7 +973,7 @@ static int update_index_items(struct super_block *sb,
 	scoutfs_inode_init_index_key(&ins, type, major, minor, ino);
 
 	ins_lock = find_index_lock(lock_list, type, major, minor, ino);
-	ret = scoutfs_item_create_force(sb, &ins, NULL, 0, ins_lock);
+	ret = scoutfs_item_create_force(sb, &ins, NULL, 0, ins_lock, primary);
 	if (ret || !will_del_index(si, type, major, minor))
 		return ret;
 
@@ -984,7 +985,7 @@ static int update_index_items(struct super_block *sb,
 
 	del_lock = find_index_lock(lock_list, type, get_item_major(si, type),
 				   get_item_minor(si, type), ino);
-	ret = scoutfs_item_delete_force(sb, &del, del_lock);
+	ret = scoutfs_item_delete_force(sb, &del, del_lock, primary);
 	if (ret) {
 		err = scoutfs_item_delete(sb, &ins, ins_lock);
 		BUG_ON(err);
@@ -996,7 +997,8 @@ static int update_index_items(struct super_block *sb,
 static int update_indices(struct super_block *sb,
 			  struct scoutfs_inode_info *si, u64 ino, umode_t mode,
 			  struct scoutfs_inode *sinode,
-			  struct list_head *lock_list)
+			  struct list_head *lock_list,
+			  struct scoutfs_lock *primary)
 {
 	struct index_update {
 		u8 type;
@@ -1016,7 +1018,7 @@ static int update_indices(struct super_block *sb,
 			continue;
 
 		ret = update_index_items(sb, si, ino, upd->type, upd->major,
-					 upd->minor, lock_list);
+					 upd->minor, lock_list, primary);
 		if (ret)
 			break;
 	}
@@ -1056,7 +1058,7 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 	/* only race with other inode field stores once */
 	store_inode(&sinode, inode);
 
-	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list);
+	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list, lock);
 	BUG_ON(ret);
 
 	scoutfs_inode_init_key(&key, ino);
@@ -1325,7 +1327,7 @@ void scoutfs_inode_index_unlock(struct super_block *sb, struct list_head *list)
 
 /* this is called on final inode cleanup so enoent is fine */
 static int remove_index(struct super_block *sb, u64 ino, u8 type, u64 major,
-			u32 minor, struct list_head *ind_locks)
+			u32 minor, struct list_head *ind_locks, struct scoutfs_lock *primary)
 {
 	struct scoutfs_key key;
 	struct scoutfs_lock *lock;
@@ -1334,7 +1336,7 @@ static int remove_index(struct super_block *sb, u64 ino, u8 type, u64 major,
 	scoutfs_inode_init_index_key(&key, type, major, minor, ino);
 
 	lock = find_index_lock(ind_locks, type, major, minor, ino);
-	ret = scoutfs_item_delete_force(sb, &key, lock);
+	ret = scoutfs_item_delete_force(sb, &key, lock, primary);
 	if (ret == -ENOENT)
 		ret = 0;
 	return ret;
@@ -1351,16 +1353,17 @@ static int remove_index(struct super_block *sb, u64 ino, u8 type, u64 major,
  */
 static int remove_index_items(struct super_block *sb, u64 ino,
 			      struct scoutfs_inode *sinode,
-			      struct list_head *ind_locks)
+			      struct list_head *ind_locks,
+			      struct scoutfs_lock *primary)
 {
 	umode_t mode = le32_to_cpu(sinode->mode);
 	int ret;
 
 	ret = remove_index(sb, ino, SCOUTFS_INODE_INDEX_META_SEQ_TYPE,
-			   le64_to_cpu(sinode->meta_seq), 0, ind_locks);
+			   le64_to_cpu(sinode->meta_seq), 0, ind_locks, primary);
 	if (ret == 0 && S_ISREG(mode))
 		ret = remove_index(sb, ino, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE,
-				   le64_to_cpu(sinode->data_seq), 0, ind_locks);
+				   le64_to_cpu(sinode->data_seq), 0, ind_locks, primary);
 	return ret;
 }
 
@@ -1493,22 +1496,24 @@ static void init_orphan_key(struct scoutfs_key *key, u64 ino)
  * zone under a write only lock while the caller has the inode protected
  * by a write lock.
  */
-int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock)
+int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary)
 {
 	struct scoutfs_key key;
 
 	init_orphan_key(&key, ino);
 
-	return scoutfs_item_create_force(sb, &key, NULL, 0, lock);
+	return scoutfs_item_create_force(sb, &key, NULL, 0, lock, primary);
 }
 
-int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock)
+int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary)
 {
 	struct scoutfs_key key;
 
 	init_orphan_key(&key, ino);
 
-	return scoutfs_item_delete_force(sb, &key, lock);
+	return scoutfs_item_delete_force(sb, &key, lock, primary);
 }
 
 /*
@@ -1561,7 +1566,7 @@ retry:
 
 	release = true;
 
-	ret = remove_index_items(sb, ino, sinode, &ind_locks);
+	ret = remove_index_items(sb, ino, sinode, &ind_locks, lock);
 	if (ret)
 		goto out;
 
@@ -1576,7 +1581,7 @@ retry:
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_inode_orphan_delete(sb, ino, orph_lock);
+	ret = scoutfs_inode_orphan_delete(sb, ino, orph_lock, lock);
 	if (ret < 0)
 		goto out;
 
