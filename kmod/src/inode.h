@@ -56,13 +56,15 @@ struct scoutfs_inode_info {
 
 	struct scoutfs_lock_coverage ino_lock_cov;
 
-	/* drop if i_count hits 0, allows drop while invalidate holds coverage */
-	bool drop_invalidated;
-	struct llist_node iput_llnode;
-	atomic_t iput_count;
+	struct list_head iput_head;
+	unsigned long iput_count;
+	unsigned long iput_flags;
 
 	struct inode inode;
 };
+
+/* try to prune dcache aliases with queued iput */
+#define SI_IPUT_FLAG_PRUNE	(1 << 0)
 
 static inline struct scoutfs_inode_info *SCOUTFS_I(struct inode *inode)
 {
@@ -78,7 +80,7 @@ struct inode *scoutfs_alloc_inode(struct super_block *sb);
 void scoutfs_destroy_inode(struct inode *inode);
 int scoutfs_drop_inode(struct inode *inode);
 void scoutfs_evict_inode(struct inode *inode);
-void scoutfs_inode_queue_iput(struct inode *inode);
+void scoutfs_inode_queue_iput(struct inode *inode, unsigned long flags);
 
 #define SCOUTFS_IGF_LINKED (1 << 0) /* enoent if nlink == 0 */
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf);
