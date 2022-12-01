@@ -377,6 +377,14 @@ t_wait_for_leader() {
 	done
 }
 
+t_get_sysfs_mount_option() {
+	local nr="$1"
+	local name="$2"
+	local opt="$(t_sysfs_path $nr)/mount_options/$name"
+
+	cat "$opt"
+}
+
 t_set_sysfs_mount_option() {
 	local nr="$1"
 	local name="$2"
