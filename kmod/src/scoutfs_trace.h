@@ -691,16 +691,16 @@ TRACE_EVENT(scoutfs_evict_inode,
 
 TRACE_EVENT(scoutfs_drop_inode,
 	TP_PROTO(struct super_block *sb, __u64 ino, unsigned int nlink,
-		 unsigned int unhashed, bool drop_invalidated),
+		 unsigned int unhashed, bool lock_covered),
 
-	TP_ARGS(sb, ino, nlink, unhashed, drop_invalidated),
+	TP_ARGS(sb, ino, nlink, unhashed, lock_covered),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, ino)
 		__field(unsigned int, nlink)
 		__field(unsigned int, unhashed)
-		__field(unsigned int, drop_invalidated)
+		__field(unsigned int, lock_covered)
 	),
 
 	TP_fast_assign(
@@ -708,12 +708,12 @@ TRACE_EVENT(scoutfs_drop_inode,
 		__entry->ino = ino;
 		__entry->nlink = nlink;
 		__entry->unhashed = unhashed;
-		__entry->drop_invalidated = !!drop_invalidated;
+		__entry->lock_covered = !!lock_covered;
 	),
 
-	TP_printk(SCSBF" ino %llu nlink %u unhashed %d drop_invalidated %u", SCSB_TRACE_ARGS,
+	TP_printk(SCSBF" ino %llu nlink %u unhashed %d lock_covered %u", SCSB_TRACE_ARGS,
 		  __entry->ino, __entry->nlink, __entry->unhashed,
-		  __entry->drop_invalidated)
+		  __entry->lock_covered)
 );
 
 TRACE_EVENT(scoutfs_inode_walk_writeback,

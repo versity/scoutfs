@@ -130,16 +130,13 @@ static bool lock_modes_match(int granted, int requested)
  * allows deletions to be performed by unlink without having to wait for
  * remote cached inodes to be dropped.
  *
- * If the cached inode was already deferring final inode deletion then
- * we can't perform that inline in invalidation.  The locking alone
- * deadlock, and it might also take multiple transactions to fully
- * delete an inode with significant metadata.  We only perform the iput
- * inline if we know that possible eviction can't perform the final
- * deletion, otherwise we kick it off to async work.
+ * We kick the d_prune and iput off to async work because they can end
+ * up in final iput and inode eviction item deletion which would
+ * deadlock.   d_prune->dput can end up in iput on parents in different
+ * locks entirely.
  */
 static void invalidate_inode(struct super_block *sb, u64 ino)
 {
-	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_inode_info *si;
 	struct inode *inode;
 
@@ -153,19 +150,9 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 			scoutfs_data_wait_changed(inode);
 		}
 
-		/* can't touch during unmount, dcache destroys w/o locks */
-		if (!linfo->unmounting)
-			d_prune_aliases(inode);
-
 		forget_all_cached_acls(inode);
 
-		si->drop_invalidated = true;
-		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink > 0) {
-			iput(inode);
-		} else {
-			/* defer iput to work context so we don't evict inodes from invalidation */
-			scoutfs_inode_queue_iput(inode);
-		}
+		scoutfs_inode_queue_iput(inode, SI_IPUT_FLAG_PRUNE);
 	}
 }
 
@@ -201,16 +188,6 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
 retry:
-		/* invalidate inodes before removing coverage */
-		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
-			ino = le64_to_cpu(lock->start.ski_ino);
-			last = le64_to_cpu(lock->end.ski_ino);
-			while (ino <= last) {
-				invalidate_inode(sb, ino);
-				ino++;
-			}
-		}
-
 		/* remove cov items to tell users that their cache is stale */
 		spin_lock(&lock->cov_list_lock);
 		list_for_each_entry_safe(cov, tmp, &lock->cov_list, head) {
@@ -225,6 +202,16 @@ retry:
 			scoutfs_inc_counter(sb, lock_invalidate_coverage);
 		}
 		spin_unlock(&lock->cov_list_lock);
+
+		/* invalidate inodes after removing coverage so drop/evict aren't covered */
+		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
+			ino = le64_to_cpu(lock->start.ski_ino);
+			last = le64_to_cpu(lock->end.ski_ino);
+			while (ino <= last) {
+				invalidate_inode(sb, ino);
+				ino++;
+			}
+		}
 
 		scoutfs_item_invalidate(sb, &lock->start, &lock->end);
 	}

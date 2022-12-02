@@ -19,6 +19,7 @@
 #include <linux/pagemap.h>
 #include <linux/sched.h>
 #include <linux/list_sort.h>
+#include <linux/workqueue.h>
 
 #include "format.h"
 #include "super.h"
@@ -67,8 +68,10 @@ struct inode_sb_info {
 
 	struct delayed_work orphan_scan_dwork;
 
+	struct workqueue_struct *iput_workq;
 	struct work_struct iput_work;
-	struct llist_head iput_llist;
+	spinlock_t iput_lock;
+	struct list_head iput_list;
 };
 
 #define DECLARE_INODE_SB_INFO(sb, name) \
@@ -95,7 +98,9 @@ static void scoutfs_inode_ctor(void *obj)
 	init_rwsem(&si->xattr_rwsem);
 	INIT_LIST_HEAD(&si->writeback_entry);
 	scoutfs_lock_init_coverage(&si->ino_lock_cov);
-	atomic_set(&si->iput_count, 0);
+	INIT_LIST_HEAD(&si->iput_head);
+	si->iput_count = 0;
+	si->iput_flags = 0;
 
 	inode_init_once(&si->inode);
 }
@@ -325,7 +330,6 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 			load_inode(inode, &sinode);
 			atomic64_set(&si->last_refreshed, refresh_gen);
 			scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
-			si->drop_invalidated = false;
 		}
 	} else {
 		ret = 0;
@@ -1453,7 +1457,6 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
 	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
-	si->drop_invalidated = false;
 	si->flags = 0;
 
 	scoutfs_inode_set_meta_seq(inode);
@@ -1755,18 +1758,18 @@ out:
 }
 
 /*
- * As we drop an inode we need to decide to try and delete its items or
- * not, which is expensive.  The two common cases we want to get right
- * both have cluster lock coverage and don't want to delete.   Dropping
- * unused inodes during read lock invalidation has the current lock and
- * sees a nonzero nlink and knows not to delete.  Final iput after a
- * local unlink also has a lock, sees a zero nlink, and tries to perform
- * item deletion in the task that dropped the last link, as users
- * expect. 
+ * As we evicted an inode we need to decide to try and delete its items
+ * or not, which is expensive.  We only try when we have lock coverage
+ * and the inode has been unlinked.  This catches the common case of
+ * regular deletion so deletion will be performed in the final unlink
+ * task.  It also catches open-unlink or o_tmpfile that aren't cached on
+ * other nodes.
  *
- * Evicting an inode outside of cluster locking is the odd slow path
- * that involves lock contention during use the worst cross-mount
- * open-unlink/delete case.
+ * Inodes being evicted outside of lock coverage, by referenced dentries
+ * or inodes that survived the attempt to drop them as their lock was
+ * invalidated, will not try to delete.  This means that cross-mount
+ * open/unlink will almost certainly fall back to the orphan scanner to
+ * perform final deletion.
  */
 void scoutfs_evict_inode(struct inode *inode)
 {
@@ -1782,7 +1785,7 @@ void scoutfs_evict_inode(struct inode *inode)
 		/* clear before trying to delete tests */
 		scoutfs_omap_clear(sb, ino);
 
-		if (!scoutfs_lock_is_covered(sb, &si->ino_lock_cov) || inode->i_nlink == 0)
+		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink == 0)
 			try_delete_inode_items(sb, scoutfs_ino(inode));
 	}
 
@@ -1807,30 +1810,56 @@ int scoutfs_drop_inode(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	const bool covered = scoutfs_lock_is_covered(sb, &si->ino_lock_cov);
 
 	trace_scoutfs_drop_inode(sb, scoutfs_ino(inode), inode->i_nlink, inode_unhashed(inode),
-				 si->drop_invalidated);
+				 covered);
 
-	return si->drop_invalidated || !scoutfs_lock_is_covered(sb, &si->ino_lock_cov) ||
-	       generic_drop_inode(inode);
+	return !covered || generic_drop_inode(inode);
 }
 
+
+/*
+ * These iput workers can be concurrent amongst cpus.  This lets us get
+ * some concurrency when these async final iputs end up performing very
+ * expensive inode deletion.  Typically they're dropping linked inodes
+ * that lost lock coverage and the iput will evict without deleting.
+ *
+ * Keep in mind that the dputs in d_prune can ascend into parents and
+ * end up performing the final iput->evict deletion on other inodes.
+ */
 static void iput_worker(struct work_struct *work)
 {
 	struct inode_sb_info *inf = container_of(work, struct inode_sb_info, iput_work);
 	struct scoutfs_inode_info *si;
-	struct scoutfs_inode_info *tmp;
-	struct llist_node *inodes;
-	bool more;
+	struct inode *inode;
+	unsigned long count;
+	unsigned long flags;
 
-	inodes = llist_del_all(&inf->iput_llist);
+	spin_lock(&inf->iput_lock);
+	while ((si = list_first_entry_or_null(&inf->iput_list, struct scoutfs_inode_info,
+					      iput_head))) {
+		list_del_init(&si->iput_head);
+		count = si->iput_count;
+		flags = si->iput_flags;
+		si->iput_count = 0;
+		si->iput_flags = 0;
+		spin_unlock(&inf->iput_lock);
 
-	llist_for_each_entry_safe(si, tmp, inodes, iput_llnode) {
-		do {
-			more = atomic_dec_return(&si->iput_count) > 0;
-			iput(&si->inode);
-		} while (more);
+		inode = &si->inode;
+
+		/* can't touch during unmount, dcache destroys w/o locks */
+		if ((flags & SI_IPUT_FLAG_PRUNE) && !inf->stopped)
+			d_prune_aliases(inode);
+
+		while (count-- > 0)
+			iput(inode);
+
+		/* can't touch inode after final iput */
+
+		spin_lock(&inf->iput_lock);
 	}
+	spin_unlock(&inf->iput_lock);
 }
 
 /*
@@ -1847,15 +1876,21 @@ static void iput_worker(struct work_struct *work)
  * Nothing stops multiple puts of an inode before the work runs so we
  * can track multiple puts in flight.
  */
-void scoutfs_inode_queue_iput(struct inode *inode)
+void scoutfs_inode_queue_iput(struct inode *inode, unsigned long flags)
 {
 	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	bool should_queue;
 
-	if (atomic_inc_return(&si->iput_count) == 1)
-		llist_add(&si->iput_llnode, &inf->iput_llist);
-	smp_wmb(); /* count and list visible before work executes */
-	schedule_work(&inf->iput_work);
+	spin_lock(&inf->iput_lock);
+	si->iput_count++;
+	si->iput_flags |= flags;
+	if ((should_queue = list_empty(&si->iput_head)))
+		list_add_tail(&si->iput_head, &inf->iput_list);
+	spin_unlock(&inf->iput_lock);
+
+	if (should_queue)
+		queue_work(inf->iput_workq, &inf->iput_work);
 }
 
 /*
@@ -2059,7 +2094,7 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 		trace_scoutfs_inode_walk_writeback(sb, scoutfs_ino(inode),
 						   write, ret);
 		if (ret) {
-			scoutfs_inode_queue_iput(inode);
+			scoutfs_inode_queue_iput(inode, 0);
 			goto out;
 		}
 
@@ -2075,7 +2110,7 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 		if (!write)
 			list_del_init(&si->writeback_entry);
 
-		scoutfs_inode_queue_iput(inode);
+		scoutfs_inode_queue_iput(inode, 0);
 	}
 
 	spin_unlock(&inf->writeback_lock);
@@ -2100,7 +2135,15 @@ int scoutfs_inode_setup(struct super_block *sb)
 	spin_lock_init(&inf->ino_alloc.lock);
 	INIT_DELAYED_WORK(&inf->orphan_scan_dwork, inode_orphan_scan_worker);
 	INIT_WORK(&inf->iput_work, iput_worker);
-	init_llist_head(&inf->iput_llist);
+	spin_lock_init(&inf->iput_lock);
+	INIT_LIST_HEAD(&inf->iput_list);
+
+	/* re-entrant, worker locks with itself and queueing */
+	inf->iput_workq = alloc_workqueue("scoutfs_inode_iput", WQ_UNBOUND, 0);
+	if (!inf->iput_workq) {
+		kfree(inf);
+		return -ENOMEM;
+	}
 
 	sbi->inode_sb_info = inf;
 
@@ -2136,14 +2179,18 @@ void scoutfs_inode_flush_iput(struct super_block *sb)
 	DECLARE_INODE_SB_INFO(sb, inf);
 
 	if (inf)
-		flush_work(&inf->iput_work);
+		flush_workqueue(inf->iput_workq);
 }
 
 void scoutfs_inode_destroy(struct super_block *sb)
 {
 	struct inode_sb_info *inf = SCOUTFS_SB(sb)->inode_sb_info;
 
-	kfree(inf);
+	if (inf) {
+		if (inf->iput_workq)
+			destroy_workqueue(inf->iput_workq);
+		kfree(inf);
+	}
 }
 
 void scoutfs_inode_exit(void)
