@@ -1,0 +1,6 @@
+== truncate writes zeroed partial end of file block
+0000000 0a79 0a79 0a79 0a79 0a79 0a79 0a79 0a79
+*
+0006144 0000 0000 0000 0000 0000 0000 0000 0000
+*
+0012288
