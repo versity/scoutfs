@@ -2,6 +2,32 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.10
+\
+*Dec 7, 2022*
+
+Fixed a potential directory entry cache management deadlock that could
+occur when many nodes performed heavy metadata write loads across shared
+directories and their child subdirectories.  The deadlock could halt
+invalidation progress on a node which could then stop use of locks that
+needed invalidation on that node which would result in almost all tasks
+hanging on those locks that would never make progress. 
+
+Fixed a circumstance where metadata change sequence index item
+modification could leave behind old stale metadata sequence items.  The
+duplication case required concurrent metadata updates across mounts with
+particular open transaction patterns so the duplicate items are rare.
+They resulted in a small amount of additional load when walking change
+indexes but had no effect on correctness.
+
+Fixed a rare case where sparse file extension might not write partial
+blocks of zeros which was found in testing.  This required using
+truncate to extend files past file sizes that end in partial blocks
+along with the right transaction commit and memory reclaim patterns.
+This never affected regular non-sparse files nor files prepopulated with
+fallocate.
+
+---
 v1.9
 \
 *Oct 29, 2022*
