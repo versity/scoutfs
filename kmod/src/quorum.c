@@ -342,7 +342,7 @@ static int read_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_q
 			     bool check_rid)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	const u64 fsid = sbi->fsid;
 	const u64 rid = sbi->rid;
 	char msg[150];
 	__le32 crc;
@@ -367,9 +367,9 @@ static int read_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_q
 	else if (le32_to_cpu(blk->hdr.magic) != SCOUTFS_BLOCK_MAGIC_QUORUM) 
 		snprintf(msg, sizeof(msg), "blk magic %08x != %08x",
 			 le32_to_cpu(blk->hdr.magic), SCOUTFS_BLOCK_MAGIC_QUORUM);
-	else if (blk->hdr.fsid != super->hdr.fsid)
+	else if (blk->hdr.fsid != cpu_to_le64(fsid))
 		snprintf(msg, sizeof(msg), "blk fsid %016llx != %016llx",
-			 le64_to_cpu(blk->hdr.fsid), le64_to_cpu(super->hdr.fsid));
+			 le64_to_cpu(blk->hdr.fsid), fsid);
 	else if (le64_to_cpu(blk->hdr.blkno) != blkno)
 		snprintf(msg, sizeof(msg), "blk blkno %llu != %llu",
 			 le64_to_cpu(blk->hdr.blkno), blkno);

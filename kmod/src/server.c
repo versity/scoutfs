@@ -3554,10 +3554,9 @@ static int server_greeting(struct super_block *sb,
 		goto send_err;
 	}
 
-	if (gr->fsid != super->hdr.fsid) {
+	if (gr->fsid != cpu_to_le64(sbi->fsid)) {
 		scoutfs_warn(sb, "client rid %016llx greeting fsid 0x%llx did not match server fsid 0x%llx",
-			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fsid),
-			     le64_to_cpu(super->hdr.fsid));
+			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fsid), sbi->fsid);
 		ret = -EINVAL;
 		goto send_err;
 	}

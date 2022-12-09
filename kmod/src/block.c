@@ -677,7 +677,7 @@ out:
 int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
 			   struct scoutfs_block **bl_ret)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_block_header *hdr;
 	struct block_private *bp = NULL;
 	bool retried = false;
@@ -701,7 +701,7 @@ retry:
 		set_bit(BLOCK_BIT_CRC_VALID, &bp->bits);
 	}
 
-	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != super->hdr.fsid ||
+	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != cpu_to_le64(sbi->fsid) ||
 	    hdr->seq != ref->seq || hdr->blkno != ref->blkno) {
 		ret = -ESTALE;
 		goto out;
@@ -797,7 +797,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 			    u32 magic, struct scoutfs_block **bl_ret,
 			    u64 dirty_blkno, u64 *ref_blkno)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_block *cow_bl = NULL;
 	struct scoutfs_block *bl = NULL;
 	struct block_private *exist_bp = NULL;
@@ -865,7 +865,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 
 	hdr = bl->data;
 	hdr->magic = cpu_to_le32(magic);
-	hdr->fsid = super->hdr.fsid;
+	hdr->fsid = cpu_to_le64(sbi->fsid);
 	hdr->blkno = cpu_to_le64(bl->blkno);
 	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
 
