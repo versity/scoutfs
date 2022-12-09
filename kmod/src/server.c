@@ -130,9 +130,9 @@ struct server_info {
 	struct mutex srch_mutex;
 	struct mutex mounted_clients_mutex;
 
-	/* stable versions stored from commits, given in locks and rpcs */
-	seqcount_t roots_seqcount;
-	struct scoutfs_net_roots roots;
+	/* stable super stored from commits, given in locks and rpcs */
+	seqcount_t stable_seqcount;
+	struct scoutfs_super_block stable_super;
 
 	/* serializing and get and set volume options */
 	seqcount_t volopt_seqcount;
@@ -469,16 +469,22 @@ static void commit_end(struct super_block *sb, struct commit_users *cusers, int 
 	wake_up(&cusers->waitq);
 }
 
-static void get_roots(struct super_block *sb,
-			      struct scoutfs_net_roots *roots)
+static void get_stable(struct super_block *sb, struct scoutfs_super_block *super,
+		       struct scoutfs_net_roots *roots)
 {
 	DECLARE_SERVER_INFO(sb, server);
 	unsigned int seq;
 
 	do {
-		seq = read_seqcount_begin(&server->roots_seqcount);
-		*roots = server->roots;
-	} while (read_seqcount_retry(&server->roots_seqcount, seq));
+		seq = read_seqcount_begin(&server->stable_seqcount);
+		if (super)
+			*super = server->stable_super;
+		if (roots) {
+			roots->fs_root = server->stable_super.fs_root;
+			roots->logs_root = server->stable_super.logs_root;
+			roots->srch_root = server->stable_super.srch_root;
+		}
+	} while (read_seqcount_retry(&server->stable_seqcount, seq));
 }
 
 u64 scoutfs_server_seq(struct super_block *sb)
@@ -510,17 +516,12 @@ void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq)
 	}
 }
 
-static void set_roots(struct server_info *server,
-		      struct scoutfs_btree_root *fs_root,
-		      struct scoutfs_btree_root *logs_root,
-		      struct scoutfs_btree_root *srch_root)
+static void set_stable_super(struct server_info *server, struct scoutfs_super_block *super)
 {
 	preempt_disable();
-	write_seqcount_begin(&server->roots_seqcount);
-	server->roots.fs_root = *fs_root;
-	server->roots.logs_root = *logs_root;
-	server->roots.srch_root = *srch_root;
-	write_seqcount_end(&server->roots_seqcount);
+	write_seqcount_begin(&server->stable_seqcount);
+	server->stable_super = *super;
+	write_seqcount_end(&server->stable_seqcount);
 	preempt_enable();
 }
 
@@ -603,8 +604,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 		goto out;
 	}
 
-	set_roots(server, &super->fs_root, &super->logs_root,
-		  &super->srch_root);
+	set_stable_super(server, super);
 
 	/* swizzle the active and idle server alloc/freed heads */
 	server->other_ind ^= 1;
@@ -1624,7 +1624,7 @@ static int server_get_roots(struct super_block *sb,
 		memset(&roots, 0, sizeof(roots));
 		ret = -EINVAL;
 	}  else {
-		get_roots(sb, &roots);
+		get_stable(sb, NULL, &roots);
 		ret = 0;
 	}
 
@@ -4230,8 +4230,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	write_seqcount_end(&server->volopt_seqcount);
 
 	atomic64_set(&server->seq_atomic, le64_to_cpu(super->seq));
-	set_roots(server, &super->fs_root, &super->logs_root,
-		  &super->srch_root);
+	set_stable_super(server, super);
 
 	/* prepare server alloc for this transaction, larger first */
 	if (le64_to_cpu(super->server_meta_avail[0].total_nr) <
@@ -4381,7 +4380,7 @@ int scoutfs_server_setup(struct super_block *sb)
 	INIT_WORK(&server->log_merge_free_work, server_log_merge_free_work);
 	mutex_init(&server->srch_mutex);
 	mutex_init(&server->mounted_clients_mutex);
-	seqcount_init(&server->roots_seqcount);
+	seqcount_init(&server->stable_seqcount);
 	seqcount_init(&server->volopt_seqcount);
 	mutex_init(&server->volopt_mutex);
 	INIT_WORK(&server->fence_pending_recov_work, fence_pending_recov_worker);
