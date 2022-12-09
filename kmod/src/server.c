@@ -4188,13 +4188,13 @@ static void scoutfs_server_worker(struct work_struct *work)
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
 	scoutfs_options_read(sb, &opts);
-	scoutfs_quorum_slot_sin(super, opts.quorum_slot_nr, &sin);
+	scoutfs_quorum_slot_sin(&super->qconf, opts.quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
 
 	scoutfs_block_writer_init(sb, &server->wri);
 
 	/* first make sure no other servers are still running */
-	ret = scoutfs_quorum_fence_leaders(sb, server->term);
+	ret = scoutfs_quorum_fence_leaders(sb, &super->qconf, server->term);
 	if (ret < 0) {
 		scoutfs_err(sb, "server error %d attempting to fence previous leaders", ret);
 		goto out;
