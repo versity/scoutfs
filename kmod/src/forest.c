@@ -541,9 +541,8 @@ void scoutfs_forest_dec_inode_count(struct super_block *sb)
 
 /*
  * Return the total inode count from the super block and all the
- * log_btrees it references.   This assumes it's working with a block
- * reference hierarchy that should be fully consistent.   If we see
- * ESTALE we've hit persistent corruption.
+ * log_btrees it references.  ESTALE from read blocks is returned to the
+ * caller who is expected to retry or return hard errors.
  */
 int scoutfs_forest_inode_count(struct super_block *sb, struct scoutfs_super_block *super,
 			       u64 *inode_count)
@@ -572,8 +571,6 @@ int scoutfs_forest_inode_count(struct super_block *sb, struct scoutfs_super_bloc
 		if (ret < 0) {
 			if (ret == -ENOENT)
 				ret = 0;
-			else if (ret == -ESTALE)
-				ret = -EIO;
 			break;
 		}
 	}
