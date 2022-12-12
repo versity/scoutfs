@@ -861,7 +861,6 @@ int scoutfs_srch_search_xattrs(struct super_block *sb,
 			       struct scoutfs_srch_rb_root *sroot,
 			       u64 hash, u64 ino, u64 last_ino, bool *done)
 {
-	struct scoutfs_net_roots prev_roots;
 	struct scoutfs_net_roots roots;
 	struct scoutfs_srch_entry start;
 	struct scoutfs_srch_entry end;
@@ -869,6 +868,7 @@ int scoutfs_srch_search_xattrs(struct super_block *sb,
 	struct scoutfs_log_trees lt;
 	struct scoutfs_srch_file sfl;
 	SCOUTFS_BTREE_ITEM_REF(iref);
+	DECLARE_SAVED_REFS(saved);
 	struct scoutfs_key key;
 	unsigned long limit = SRCH_LIMIT;
 	int ret;
@@ -877,7 +877,6 @@ int scoutfs_srch_search_xattrs(struct super_block *sb,
 
 	*done = false;
 	srch_init_rb_root(sroot);
-	memset(&prev_roots, 0, sizeof(prev_roots));
 
 	start.hash = cpu_to_le64(hash);
 	start.ino = cpu_to_le64(ino);
@@ -892,7 +891,6 @@ retry:
 	ret = scoutfs_client_get_roots(sb, &roots);
 	if (ret)
 		goto out;
-	memset(&roots.fs_root, 0, sizeof(roots.fs_root));
 
 	end = final;
 
@@ -968,16 +966,10 @@ retry:
 	*done = sre_cmp(&end, &final) == 0;
 	ret = 0;
 out:
-	if (ret == -ESTALE) {
-		if (memcmp(&prev_roots, &roots, sizeof(roots)) == 0) {
-			scoutfs_inc_counter(sb, srch_search_stale_eio);
-			ret = -EIO;
-		} else {
-			scoutfs_inc_counter(sb, srch_search_stale_retry);
-			prev_roots = roots;
-			goto retry;
-		}
-	}
+	ret = scoutfs_block_check_stale(sb, ret, &saved, &roots.srch_root.ref,
+					&roots.logs_root.ref);
+	if (ret == -ESTALE)
+		goto retry;
 
 	return ret;
 }

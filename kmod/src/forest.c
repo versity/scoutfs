@@ -78,11 +78,6 @@ struct forest_refs {
 	struct scoutfs_block_ref logs_ref;
 };
 
-/* initialize some refs that initially aren't equal */
-#define DECLARE_STALE_TRACKING_SUPER_REFS(a, b)		\
-	struct forest_refs a = {{cpu_to_le64(0),}};	\
-	struct forest_refs b = {{cpu_to_le64(1),}}
-
 struct forest_bloom_nrs {
 	unsigned int nrs[SCOUTFS_FOREST_BLOOM_NRS];
 };
@@ -136,11 +131,11 @@ static struct scoutfs_block *read_bloom_ref(struct super_block *sb, struct scout
 int scoutfs_forest_next_hint(struct super_block *sb, struct scoutfs_key *key,
 			     struct scoutfs_key *next)
 {
-	DECLARE_STALE_TRACKING_SUPER_REFS(prev_refs, refs);
 	struct scoutfs_net_roots roots;
 	struct scoutfs_btree_root item_root;
 	struct scoutfs_log_trees *lt;
 	SCOUTFS_BTREE_ITEM_REF(iref);
+	DECLARE_SAVED_REFS(saved);
 	struct scoutfs_key found;
 	struct scoutfs_key ltk;
 	bool checked_fs;
@@ -155,8 +150,6 @@ retry:
 		goto out;
 
 	trace_scoutfs_forest_using_roots(sb, &roots.fs_root, &roots.logs_root);
-	refs.fs_ref = roots.fs_root.ref;
-	refs.logs_ref = roots.logs_root.ref;
 
 	scoutfs_key_init_log_trees(&ltk, 0, 0);
 	checked_fs = false;
@@ -212,14 +205,10 @@ retry:
 		}
 	}
 
-	if (ret == -ESTALE) {
-		if (memcmp(&prev_refs, &refs, sizeof(refs)) == 0)
-			return -EIO;
-		prev_refs = refs;
+	ret = scoutfs_block_check_stale(sb, ret, &saved, &roots.fs_root.ref, &roots.logs_root.ref);
+	if (ret == -ESTALE)
 		goto retry;
-	}
 out:
-
 	return ret;
 }
 
