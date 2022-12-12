@@ -759,7 +759,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 			qst.server_start_term = qst.term;
 			qst.server_event = SCOUTFS_QUORUM_EVENT_ELECT;
-			scoutfs_server_start(sb, qst.term);
+			scoutfs_server_start(sb, &qinf->qconf, qst.term);
 		}
 
 		/*

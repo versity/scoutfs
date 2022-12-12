@@ -143,10 +143,17 @@ struct server_info {
 	struct work_struct fence_pending_recov_work;
 	/* while running we check for fenced mounts to reclaim */
 	struct delayed_work reclaim_dwork;
+
+	/* a running server gets a static quorum config from quorum as it starts */
+	struct scoutfs_quorum_config qconf;
+	/* a running server maintains a private dirty super */
+	struct scoutfs_super_block dirty_super;
 };
 
 #define DECLARE_SERVER_INFO(sb, name) \
 	struct server_info *name = SCOUTFS_SB(sb)->server_info
+
+#define DIRTY_SUPER_SB(sb)	(&SCOUTFS_SB(sb)->server_info->dirty_super)
 
 /*
  * The server tracks each connected client.
@@ -546,7 +553,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  commit_work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct commit_users *cusers = &server->cusers;
 	int ret;
 
@@ -641,7 +648,7 @@ static int server_alloc_inodes(struct super_block *sb,
 			       u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_inode_alloc ial = { 0, };
 	COMMIT_HOLD(hold);
 	__le64 lecount;
@@ -809,7 +816,7 @@ static void mod_bitmap_bits(__le64 *dst, u64 dst_zone_blocks,
 static int get_data_alloc_zone_bits(struct super_block *sb, u64 rid, __le64 *exclusive,
 				    __le64 *vacant, u64 zone_blocks)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees *lt;
 	struct scoutfs_key key;
@@ -1040,7 +1047,7 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 					u64 rid, struct commit_hold *hold)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_log_trees each_lt;
@@ -1242,7 +1249,7 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 static void try_drain_data_freed(struct super_block *sb, struct scoutfs_log_trees *lt)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	const u64 rid = le64_to_cpu(lt->rid);
 	const u64 nr = le64_to_cpu(lt->nr);
 	struct scoutfs_log_trees drain;
@@ -1329,7 +1336,7 @@ static int server_get_log_trees(struct super_block *sb,
 				struct scoutfs_net_connection *conn,
 				u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	u64 rid = scoutfs_net_client_rid(conn);
 	DECLARE_SERVER_INFO(sb, server);
 	__le64 exclusive[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
@@ -1524,7 +1531,7 @@ static int server_commit_log_trees(struct super_block *sb,
 				   struct scoutfs_net_connection *conn,
 				   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	const u64 rid = scoutfs_net_client_rid(conn);
 	DECLARE_SERVER_INFO(sb, server);
 	SCOUTFS_BTREE_ITEM_REF(iref);
@@ -1654,7 +1661,7 @@ static int server_get_roots(struct super_block *sb,
  */
 static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	DECLARE_SERVER_INFO(sb, server);
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees lt;
@@ -1751,9 +1758,8 @@ out:
  */
 static int get_stable_trans_seq(struct super_block *sb, u64 *last_seq_ret)
 {
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees *lt;
 	struct scoutfs_key key;
@@ -1909,9 +1915,8 @@ static int server_srch_get_compact(struct super_block *sb,
 				   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
 	struct scoutfs_srch_compact *sc = NULL;
 	COMMIT_HOLD(hold);
 	int ret;
@@ -1976,8 +1981,7 @@ static int server_srch_commit_compact(struct super_block *sb,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_srch_compact *sc;
 	struct scoutfs_alloc_list_head av;
 	struct scoutfs_alloc_list_head fr;
@@ -2052,8 +2056,7 @@ static int splice_log_merge_completions(struct super_block *sb,
 					bool no_ranges)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_complete comp;
 	struct scoutfs_log_merge_freeing fr;
 	struct scoutfs_log_merge_range rng;
@@ -2370,7 +2373,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  log_merge_free_work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_freeing fr;
 	struct scoutfs_key key;
 	COMMIT_HOLD(hold);
@@ -2462,8 +2465,7 @@ static int server_get_log_merge(struct super_block *sb,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_log_merge_range remain;
@@ -2746,8 +2748,7 @@ static int server_commit_log_merge(struct super_block *sb,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_request orig_req;
 	struct scoutfs_log_merge_complete *comp;
 	struct scoutfs_log_merge_status stat;
@@ -2982,7 +2983,7 @@ static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connecti
 			     u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_volume_options *volopt;
 	COMMIT_HOLD(hold);
 	u64 opt;
@@ -3051,7 +3052,7 @@ static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connec
 			       u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_volume_options *volopt;
 	COMMIT_HOLD(hold);
 	__le64 *opt;
@@ -3105,7 +3106,7 @@ static int server_resize_devices(struct super_block *sb, struct scoutfs_net_conn
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_resize_devices *nrd;
 	COMMIT_HOLD(hold);
 	u64 meta_tot;
@@ -3281,7 +3282,7 @@ static int insert_mounted_client(struct super_block *sb, u64 rid, u64 gr_flags,
 				 struct sockaddr_in *sin)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_mounted_client_btree_val mcv;
 	struct scoutfs_key key;
 	int ret;
@@ -3307,7 +3308,7 @@ static int lookup_mounted_client_addr(struct super_block *sb, u64 rid,
 				      union scoutfs_inet_addr *addr)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_mounted_client_btree_val *mcv;
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
@@ -3341,7 +3342,7 @@ static int lookup_mounted_client_addr(struct super_block *sb, u64 rid,
 static int delete_mounted_client(struct super_block *sb, u64 rid)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_key key;
 	int ret;
 
@@ -3365,7 +3366,7 @@ static int delete_mounted_client(struct super_block *sb, u64 rid)
 static int cancel_srch_compact(struct super_block *sb, u64 rid)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_alloc_list_head av;
 	struct scoutfs_alloc_list_head fr;
 	int ret;
@@ -3417,7 +3418,7 @@ static int cancel_srch_compact(struct super_block *sb, u64 rid)
 static int cancel_log_merge(struct super_block *sb, u64 rid)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_request req;
 	struct scoutfs_log_merge_range rng;
@@ -3541,7 +3542,7 @@ static int server_greeting(struct super_block *sb,
 			   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_greeting *gr = arg;
 	struct scoutfs_net_greeting greet;
 	DECLARE_SERVER_INFO(sb, server);
@@ -3699,7 +3700,7 @@ static void farewell_worker(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  farewell_work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_mounted_client_btree_val *mcv;
 	struct farewell_request *tmp;
 	struct farewell_request *fw;
@@ -4061,7 +4062,7 @@ static void recovery_timeout(struct super_block *sb)
 static int start_recovery(struct super_block *sb)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
 	unsigned int nr = 0;
@@ -4178,8 +4179,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_connection *conn = NULL;
 	struct scoutfs_mount_options opts;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
@@ -4191,13 +4191,13 @@ static void scoutfs_server_worker(struct work_struct *work)
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
 	scoutfs_options_read(sb, &opts);
-	scoutfs_quorum_slot_sin(&super->qconf, opts.quorum_slot_nr, &sin);
+	scoutfs_quorum_slot_sin(&server->qconf, opts.quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
 
 	scoutfs_block_writer_init(sb, &server->wri);
 
 	/* first make sure no other servers are still running */
-	ret = scoutfs_quorum_fence_leaders(sb, &super->qconf, server->term);
+	ret = scoutfs_quorum_fence_leaders(sb, &server->qconf, server->term);
 	if (ret < 0) {
 		scoutfs_err(sb, "server error %d attempting to fence previous leaders", ret);
 		goto out;
@@ -4327,11 +4327,12 @@ out:
 /*
  * Start the server but don't wait for it to complete.
  */
-void scoutfs_server_start(struct super_block *sb, u64 term)
+void scoutfs_server_start(struct super_block *sb, struct scoutfs_quorum_config *qconf, u64 term)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	if (cmpxchg(&server->status, SERVER_DOWN, SERVER_STARTING) == SERVER_DOWN) {
+		server->qconf = *qconf;
 		server->term = term;
 		queue_work(server->wq, &server->work);
 	}
