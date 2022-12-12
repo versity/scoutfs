@@ -728,6 +728,36 @@ out:
 	return ret;
 }
 
+static bool stale_refs_match(struct scoutfs_block_ref *caller, struct scoutfs_block_ref *saved)
+{
+	return !caller || (caller->blkno == saved->blkno && caller->seq == saved->seq);
+}
+
+/*
+ * Check if a read of a reference that gave ESTALE should be retried or
+ * should generate a hard error.  If this is the second time we got
+ * ESTALE from the same refs then we return EIO and the caller should
+ * stop.  As long as we keep seeing different refs we'll return ESTALE
+ * and the caller can keep trying.
+ */
+int scoutfs_block_check_stale(struct super_block *sb, int ret,
+			      struct scoutfs_block_saved_refs *saved,
+			      struct scoutfs_block_ref *a, struct scoutfs_block_ref *b)
+{
+	if (ret == -ESTALE) {
+		if (stale_refs_match(a, &saved->refs[0]) && stale_refs_match(b, &saved->refs[1])){
+			ret = -EIO;
+		} else {
+			if (a)
+				saved->refs[0] = *a;
+			if (b)
+				saved->refs[1] = *b;
+		}
+	}
+
+	return ret;
+}
+
 void scoutfs_block_put(struct super_block *sb, struct scoutfs_block *bl)
 {
 	if (!IS_ERR_OR_NULL(bl))
