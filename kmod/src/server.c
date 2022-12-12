@@ -3212,16 +3212,19 @@ static int count_free_blocks(struct super_block *sb, void *arg, int owner,
 }
 
 /*
- * We calculate the total inode count and free blocks from the current in-memory dirty
- * versions of the super block and log_trees structs, so we have to lock them.
+ * We calculate the total inode count and free blocks from the last
+ * stable super that was written.  Other users also walk stable blocks
+ * so by joining them we don't have to worry about ensuring that we've
+ * locked all the dirty structures that the summations could reference.
+ * We handle stale reads by retrying with the most recent stable super.
  */
 static int server_statfs(struct super_block *sb, struct scoutfs_net_connection *conn,
 			 u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block super;
 	struct scoutfs_net_statfs nst = {{0,}};
 	struct statfs_free_blocks sfb = {0,};
+	DECLARE_SAVED_REFS(saved);
 	u64 inode_count;
 	int ret;
 
@@ -3230,24 +3233,24 @@ static int server_statfs(struct super_block *sb, struct scoutfs_net_connection *
 		goto out;
 	}
 
-	mutex_lock(&server->alloc_mutex);
-	ret = scoutfs_alloc_foreach_super(sb, super, count_free_blocks, &sfb);
-	mutex_unlock(&server->alloc_mutex);
-	if (ret < 0)
-		goto out;
+	do {
+		get_stable(sb, &super, NULL);
 
-	mutex_lock(&server->logs_mutex);
-	ret = scoutfs_forest_inode_count(sb, super, &inode_count);
-	mutex_unlock(&server->logs_mutex);
-	if (ret < 0)
-		goto out;
+		ret = scoutfs_alloc_foreach_super(sb, &super, count_free_blocks, &sfb) ?:
+		      scoutfs_forest_inode_count(sb, &super, &inode_count);
+		if (ret < 0 && ret != -ESTALE)
+			goto out;
 
-	BUILD_BUG_ON(sizeof(nst.uuid) != sizeof(super->uuid));
-	memcpy(nst.uuid, super->uuid, sizeof(nst.uuid));
+		ret = scoutfs_block_check_stale(sb, ret, &saved, &super.logs_root.ref,
+						&super.srch_root.ref);
+	} while (ret == -ESTALE);
+
+	BUILD_BUG_ON(sizeof(nst.uuid) != sizeof(super.uuid));
+	memcpy(nst.uuid, super.uuid, sizeof(nst.uuid));
 	nst.free_meta_blocks = cpu_to_le64(sfb.meta);
-	nst.total_meta_blocks = super->total_meta_blocks;
+	nst.total_meta_blocks = super.total_meta_blocks;
 	nst.free_data_blocks = cpu_to_le64(sfb.data);
-	nst.total_data_blocks = super->total_data_blocks;
+	nst.total_data_blocks = super.total_data_blocks;
 	nst.inode_count = cpu_to_le64(inode_count);
 
 	ret = 0;
