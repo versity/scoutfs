@@ -39,8 +39,6 @@ struct scoutfs_sb_info {
 	u64 rid;
 	u64 fmt_vers;
 
-	struct scoutfs_super_block super;
-
 	struct block_device *meta_bdev;
 
 	spinlock_t next_ino_lock;
