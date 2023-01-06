@@ -1192,9 +1192,9 @@ static void truncate_inode_pages_extent(struct inode *inode, u64 start, u64 len)
  * explained above the move_blocks ioctl argument structure definition.
  *
  * The caller has processed the ioctl args and performed the most basic
- * inode checks, but we perform more detailed inode checks once we have
- * the inode lock and refreshed inodes.  Our job is to safely lock the
- * two files and move the extents.
+ * argument sanity and inode checks, but we perform more detailed inode
+ * checks once we have the inode lock and refreshed inodes.  Our job is
+ * to safely lock the two files and move the extents.
  */
 #define MOVE_DATA_EXTENTS_PER_HOLD 16
 int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
@@ -1253,6 +1253,15 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	from_iblock = from_off >> SCOUTFS_BLOCK_SM_SHIFT;
 	count = (byte_len + SCOUTFS_BLOCK_SM_MASK) >> SCOUTFS_BLOCK_SM_SHIFT;
 	to_iblock = to_off >> SCOUTFS_BLOCK_SM_SHIFT;
+
+	/* only move extent blocks inside i_size, careful not to wrap */
+	from_size = i_size_read(from);
+	if (from_off >= from_size) {
+		ret = 0;
+		goto out;
+	}
+	if (from_off + byte_len > from_size)
+		count = ((from_size - from_off) + SCOUTFS_BLOCK_SM_MASK) >> SCOUTFS_BLOCK_SM_SHIFT;
 
 	if (S_ISDIR(from->i_mode) || S_ISDIR(to->i_mode)) {
 		ret = -EISDIR;
@@ -1329,9 +1338,8 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 				break;
 			}
 
-			/* only move extents within count and i_size */
-			if (ext.start >= from_iblock + count ||
-			    ext.start >= i_size_read(from)) {
+			/* done if next extent starts after moving region */
+			if (ext.start >= from_iblock + count) {
 				done = true;
 				ret = 0;
 				break;
@@ -1339,12 +1347,14 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 
 			from_start = max(ext.start, from_iblock);
 			map = ext.map + (from_start - ext.start);
-			len = min3(from_iblock + count,
-				   round_up((u64)i_size_read(from),
-					    SCOUTFS_BLOCK_SM_SIZE),
-				   ext.start + ext.len) - from_start;
-
+			len = min(from_iblock + count, ext.start + ext.len) - from_start;
 			to_start = to_iblock + (from_start - from_iblock);
+
+			/* we'd get stuck, shouldn't happen */
+			if (WARN_ON_ONCE(len == 0)) {
+				ret = -EIO;
+				goto out;
+			}
 
 			if (is_stage) {
 				ret = scoutfs_ext_next(sb, &data_ext_ops, &to_args,
