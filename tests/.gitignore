@@ -8,3 +8,4 @@ src/bulk_create_paths
 src/find_xattrs
 src/stage_tmpfile
 src/create_xattr_loop
+src/o_tmpfile_umask
