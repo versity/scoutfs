@@ -976,6 +976,16 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 			break;
 		}
 
+		/* return partial if the server alloc can't dirty any more */
+		if (scoutfs_alloc_meta_low(sb, alloc, 50 + extent_mod_blocks(src->root.height) +
+						      extent_mod_blocks(dst->root.height))) {
+			if (WARN_ON_ONCE(!moved))
+				ret = -ENOSPC;
+			else
+				ret = 0;
+			break;
+		}
+
 		/* searching set start/len, finish initializing alloced extent */
 		ext.map = found.map ? ext.start - found.start + found.map : 0;
 		ext.flags = found.flags;
