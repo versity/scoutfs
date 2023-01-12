@@ -1,3 +1,11 @@
+== non-acl O_TMPFILE creation honors umask
+umask 022
+fstat after open(0777): 0100755
+stat after linkat: 0100755
+umask 077
+fstat after open(0777): 0100700
+stat after linkat: 0100700
+== stage from tmpfile
 total file size 33669120
 00000000  41 41 41 41 41 41 41 41  41 41 41 41 41 41 41 41  |AAAAAAAAAAAAAAAA|
 *

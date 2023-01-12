@@ -11,7 +11,8 @@ BIN := src/createmany			\
 	src/stage_tmpfile		\
 	src/find_xattrs			\
 	src/create_xattr_loop		\
-	src/fragmented_data_extents
+	src/fragmented_data_extents	\
+	src/o_tmpfile_umask
 
 DEPS := $(wildcard src/*.d)
 
