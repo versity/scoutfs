@@ -677,7 +677,7 @@ out:
 int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
 			   struct scoutfs_block **bl_ret)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_block_header *hdr;
 	struct block_private *bp = NULL;
 	bool retried = false;
@@ -701,7 +701,7 @@ retry:
 		set_bit(BLOCK_BIT_CRC_VALID, &bp->bits);
 	}
 
-	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != super->hdr.fsid ||
+	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != cpu_to_le64(sbi->fsid) ||
 	    hdr->seq != ref->seq || hdr->blkno != ref->blkno) {
 		ret = -ESTALE;
 		goto out;
@@ -725,6 +725,36 @@ out:
 	}
 
 	*bl_ret = bp ? &bp->bl : NULL;
+	return ret;
+}
+
+static bool stale_refs_match(struct scoutfs_block_ref *caller, struct scoutfs_block_ref *saved)
+{
+	return !caller || (caller->blkno == saved->blkno && caller->seq == saved->seq);
+}
+
+/*
+ * Check if a read of a reference that gave ESTALE should be retried or
+ * should generate a hard error.  If this is the second time we got
+ * ESTALE from the same refs then we return EIO and the caller should
+ * stop.  As long as we keep seeing different refs we'll return ESTALE
+ * and the caller can keep trying.
+ */
+int scoutfs_block_check_stale(struct super_block *sb, int ret,
+			      struct scoutfs_block_saved_refs *saved,
+			      struct scoutfs_block_ref *a, struct scoutfs_block_ref *b)
+{
+	if (ret == -ESTALE) {
+		if (stale_refs_match(a, &saved->refs[0]) && stale_refs_match(b, &saved->refs[1])){
+			ret = -EIO;
+		} else {
+			if (a)
+				saved->refs[0] = *a;
+			if (b)
+				saved->refs[1] = *b;
+		}
+	}
+
 	return ret;
 }
 
@@ -797,7 +827,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 			    u32 magic, struct scoutfs_block **bl_ret,
 			    u64 dirty_blkno, u64 *ref_blkno)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_block *cow_bl = NULL;
 	struct scoutfs_block *bl = NULL;
 	struct block_private *exist_bp = NULL;
@@ -865,7 +895,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 
 	hdr = bl->data;
 	hdr->magic = cpu_to_le32(magic);
-	hdr->fsid = super->hdr.fsid;
+	hdr->fsid = cpu_to_le64(sbi->fsid);
 	hdr->blkno = cpu_to_le64(bl->blkno);
 	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
 

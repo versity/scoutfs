@@ -35,10 +35,9 @@ struct scoutfs_sb_info {
 	struct super_block *sb;
 
 	/* assigned once at the start of each mount, read-only */
+	u64 fsid;
 	u64 rid;
 	u64 fmt_vers;
-
-	struct scoutfs_super_block super;
 
 	struct block_device *meta_bdev;
 
@@ -135,14 +134,14 @@ static inline bool scoutfs_unmounting(struct super_block *sb)
 	(int)(le64_to_cpu(fsid) >> SCSB_SHIFT),				    \
 	(int)(le64_to_cpu(rid) >> SCSB_SHIFT)
 #define SCSB_ARGS(sb)							    \
-	(int)(le64_to_cpu(SCOUTFS_SB(sb)->super.hdr.fsid) >> SCSB_SHIFT),   \
+	(int)(SCOUTFS_SB(sb)->fsid >> SCSB_SHIFT),			    \
 	(int)(SCOUTFS_SB(sb)->rid >> SCSB_SHIFT)
 #define SCSB_TRACE_FIELDS	\
 	__field(__u64, fsid)	\
 	__field(__u64, rid)
 #define SCSB_TRACE_ASSIGN(sb)						\
 	__entry->fsid = SCOUTFS_HAS_SBI(sb) ?				\
-			le64_to_cpu(SCOUTFS_SB(sb)->super.hdr.fsid) : 0;\
+		        SCOUTFS_SB(sb)->fsid : 0;			\
 	__entry->rid = SCOUTFS_HAS_SBI(sb) ?				\
 		       SCOUTFS_SB(sb)->rid : 0;
 #define SCSB_TRACE_ARGS				\

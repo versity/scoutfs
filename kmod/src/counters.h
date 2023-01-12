@@ -187,8 +187,6 @@
 	EXPAND_COUNTER(srch_search_retry_empty)			\
 	EXPAND_COUNTER(srch_search_sorted)			\
 	EXPAND_COUNTER(srch_search_sorted_block)		\
-	EXPAND_COUNTER(srch_search_stale_eio)			\
-	EXPAND_COUNTER(srch_search_stale_retry)			\
 	EXPAND_COUNTER(srch_search_xattrs)			\
 	EXPAND_COUNTER(srch_read_stale)				\
 	EXPAND_COUNTER(statfs)					\

@@ -1582,12 +1582,10 @@ out:
  * call the caller's callback.  This assumes that the super it's reading
  * could be stale and will retry if it encounters stale blocks.
  */
-int scoutfs_alloc_foreach(struct super_block *sb,
-			  scoutfs_alloc_foreach_cb_t cb, void *arg)
+int scoutfs_alloc_foreach(struct super_block *sb, scoutfs_alloc_foreach_cb_t cb, void *arg)
 {
 	struct scoutfs_super_block *super = NULL;
-	struct scoutfs_block_ref stale_refs[2] = {{0,}};
-	struct scoutfs_block_ref refs[2] = {{0,}};
+	DECLARE_SAVED_REFS(saved);
 	int ret;
 
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
@@ -1596,26 +1594,18 @@ int scoutfs_alloc_foreach(struct super_block *sb,
 		goto out;
 	}
 
-retry:
-	ret = scoutfs_read_super(sb, super);
-	if (ret < 0)
-		goto out;
+	do {
+		ret = scoutfs_read_super(sb, super);
+		if (ret < 0)
+			goto out;
 
-	refs[0] = super->logs_root.ref;
-	refs[1] = super->srch_root.ref;
+		ret = scoutfs_alloc_foreach_super(sb, super, cb, arg);
 
-	ret = scoutfs_alloc_foreach_super(sb, super, cb, arg);
+		ret = scoutfs_block_check_stale(sb, ret, &saved, &super->logs_root.ref,
+						&super->srch_root.ref);
+	} while (ret == -ESTALE);
+
 out:
-	if (ret == -ESTALE) {
-		if (memcmp(&stale_refs, &refs, sizeof(refs)) == 0) {
-			ret = -EIO;
-		} else {
-			BUILD_BUG_ON(sizeof(stale_refs) != sizeof(refs));
-			memcpy(stale_refs, refs, sizeof(stale_refs));
-			goto retry;
-		}
-	}
-
 	kfree(super);
 	return ret;
 }

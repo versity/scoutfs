@@ -13,6 +13,17 @@ struct scoutfs_block {
 	void *priv;
 };
 
+struct scoutfs_block_saved_refs {
+	struct scoutfs_block_ref refs[2];
+};
+
+#define DECLARE_SAVED_REFS(name) \
+	struct scoutfs_block_saved_refs name = {{{0,}}}
+
+int scoutfs_block_check_stale(struct super_block *sb, int ret,
+			      struct scoutfs_block_saved_refs *saved,
+			      struct scoutfs_block_ref *a, struct scoutfs_block_ref *b);
+
 int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
 			   struct scoutfs_block **bl_ret);
 void scoutfs_block_put(struct super_block *sb, struct scoutfs_block *bl);

@@ -461,9 +461,8 @@ static int scoutfs_read_supers(struct super_block *sb)
 		goto out;
 	}
 
-
+	sbi->fsid = le64_to_cpu(meta_super->hdr.fsid);
 	sbi->fmt_vers = le64_to_cpu(meta_super->fmt_vers);
-	sbi->super = *meta_super;
 out:
 	kfree(meta_super);
 	kfree(data_super);

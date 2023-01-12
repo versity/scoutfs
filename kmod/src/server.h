@@ -75,7 +75,7 @@ u64 scoutfs_server_seq(struct super_block *sb);
 u64 scoutfs_server_next_seq(struct super_block *sb);
 void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq);
 
-void scoutfs_server_start(struct super_block *sb, u64 term);
+void scoutfs_server_start(struct super_block *sb, struct scoutfs_quorum_config *qconf, u64 term);
 void scoutfs_server_stop(struct super_block *sb);
 void scoutfs_server_stop_wait(struct super_block *sb);
 bool scoutfs_server_is_running(struct super_block *sb);
