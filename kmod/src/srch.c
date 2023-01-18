@@ -995,6 +995,14 @@ int scoutfs_srch_rotate_log(struct super_block *sb,
 		      le64_to_cpu(sfl->ref.blkno), 0);
 	ret = scoutfs_btree_insert(sb, alloc, wri, root, &key,
 				   sfl, sizeof(*sfl));
+	/*
+	 * While it's fine to replay moving the client's logging srch
+	 * file to the core btree item, server commits should keep it
+	 * from happening.  So we'll warn if we see it happen.  This can
+	 * be removed eventually.
+	 */
+	if (WARN_ON_ONCE(ret == -EEXIST))
+		ret = 0;
 	if (ret == 0) {
 		memset(sfl, 0, sizeof(*sfl));
 		scoutfs_inc_counter(sb, srch_rotate_log);

@@ -1586,6 +1586,13 @@ static int server_commit_log_trees(struct super_block *sb,
 	if (ret < 0 || committed)
 		goto unlock;
 
+	/* make sure _update succeeds before we modify srch items */
+	ret = scoutfs_btree_dirty(sb, &server->alloc, &server->wri, &super->logs_root, &key);
+	if (ret < 0) {
+		err_str = "dirtying lt item";
+		goto unlock;
+	}
+
 	/* try to rotate the srch log when big enough */
 	mutex_lock(&server->srch_mutex);
 	ret = scoutfs_srch_rotate_log(sb, &server->alloc, &server->wri,
@@ -1600,6 +1607,7 @@ static int server_commit_log_trees(struct super_block *sb,
 
 	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				   &super->logs_root, &key, &lt, sizeof(lt));
+	BUG_ON(ret < 0); /* dirtying should have guaranteed success */
 	if (ret < 0)
 		err_str = "updating log trees item";
 
