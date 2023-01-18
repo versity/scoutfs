@@ -3,6 +3,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <errno.h>
@@ -102,4 +103,45 @@ char *size_str(u64 nr, unsigned size)
 	}
 
 	return suffixes[i];
+}
+
+/*
+ * Try to flush the local read cache for a device.  This is only a best
+ * effort as these interfaces don't block waiting to fully purge the
+ * cache.  This is OK because it's used by cached readers that are known
+ * to be racy anyway.
+ */
+int flush_device(int fd)
+{
+	struct stat st;
+	int ret;
+
+	ret = fstat(fd, &st);
+	if (ret < 0) {
+		ret = -errno;
+		fprintf(stderr, "fstat failed: %s (%d)\n", strerror(errno), errno);
+		goto out;
+	}
+
+	if (S_ISREG(st.st_mode)) {
+		ret = posix_fadvise(fd, 0, st.st_size, POSIX_FADV_DONTNEED);
+		if (ret < 0) {
+			ret = -errno;
+			fprintf(stderr, "POSIX_FADV_DONTNEED failed: %s (%d)\n",
+				strerror(errno), errno);
+			goto out;
+		}
+
+	} else if (S_ISBLK(st.st_mode)) {
+		ret = ioctl(fd, BLKFLSBUF, 0);
+		if (ret < 0) {
+			ret = -errno;
+			fprintf(stderr, "BLKFLSBUF, failed: %s (%d)\n", strerror(errno), errno);
+			goto out;
+		}
+	}
+
+	ret = 0;
+out:
+	return ret;
 }
