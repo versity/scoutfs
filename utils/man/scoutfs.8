@@ -623,11 +623,9 @@ space of the volume making the output much more useful for inspection.
 .TP
 .B "META-DEVICE"
 The path to the metadata device for the filesystem whose metadata will be
-printed.  Since this command reads via the host's buffer cache, it may not
-reflect the current blocks in the filesystem possibly written to the shared
-block devices from another host, unless
-.B blockdev \--flushbufs
-command is used first.
+printed.  An attempt will be made to flush the host's buffer cache for
+this device with the BLKFLSBUF ioctl, or with posix_fadvise() if
+the path refers to a regular file.
 .RE
 .PD
 
