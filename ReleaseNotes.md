@@ -2,6 +2,29 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.11
+\
+*Feb 2, 2023*
+
+Fixed a free extent processing error that could prevent mount from
+proceeding when free data extents were sufficiently fragmented.  It now
+properly handle very fragmented free extent maps.
+
+Fixed a statfs server processing race that could return spurious errors
+and shut down the server.  With the race closed statfs processing is
+reliable.
+
+Fixed a rare livelock in the move\_blocks ioctl.  With the right
+relationship between ioctl arguments and eventual file extent items the
+core loop in the move\_blocks ioctl could get stuck looping on an extent
+item and never return.  The loop exit conditions were fixed and the loop
+will always advance through all extents.
+
+Changed the 'print' scoutfs commands to flush the block cache for the
+devices.  It was inconvenient to expect cache flushing to be a separate
+step to ensure consistency with remote node writes.
+
+---
 v1.10
 \
 *Dec 7, 2022*
