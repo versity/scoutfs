@@ -14,5 +14,6 @@ int device_size(char *path, int fd,
 		char *use_type, u64 *size_ret);
 float size_flt(u64 nr, unsigned size);
 char *size_str(u64 nr, unsigned size);
+int flush_device(int fd);
 
 #endif

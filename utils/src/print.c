@@ -27,6 +27,7 @@
 #include "avl.h"
 #include "srch.h"
 #include "leaf_item_hash.h"
+#include "dev.h"
 
 static void print_block_header(struct scoutfs_block_header *hdr, int size)
 {
@@ -1107,7 +1108,12 @@ static int do_print(struct print_args *args)
 		return ret;
 	}
 
+	ret = flush_device(fd);
+	if (ret < 0)
+		goto out;
+
 	ret = print_volume(fd, args);
+out:
 	close(fd);
 	return ret;
 };
