@@ -1443,6 +1443,11 @@ static int item_d_ancestor(struct super_block *sb, u64 p1, u64 p2, u64 *p_ret)
 
 	*p_ret = 0;
 
+	if (p2 == SCOUTFS_ROOT_INO) {
+		ret = 0;
+		goto out;
+	}
+
 	ret = scoutfs_dir_get_backref_path(sb, p2, 0, 0, &list);
 	if (ret)
 		goto out;
