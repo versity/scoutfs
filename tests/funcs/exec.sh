@@ -40,6 +40,18 @@ t_quiet()
 }
 
 #
+# Quietly run a command during a test.  The output is logged but only
+# the return code is printed, presumably because the output contains
+# a lot of invocation specific text that is difficult to filter.
+#
+t_rc()
+{
+	echo "# $*" >> "$T_TMP.rc.log"
+	"$@" >> "$T_TMP.rc.log" 2>&1
+	echo "rc: $?"
+}
+
+#
 # redirect test output back to the output of the invoking script intead
 # of the compared output.
 #
