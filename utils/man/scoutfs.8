@@ -329,6 +329,46 @@ The range of supported versions is visible in the output of
 .PD
 
 .TP
+.BI "prepare-empty-data-device {-c|--check} META-DEVICE DATA-DEVICE"
+.sp
+Prepare an unused device for use as the data device for an existing file
+system.  This will write an initialized super block to the specified
+data device, destroying any existing contents.  The specified metadata
+device will not be modified.  The file system must be fully unmounted
+and any client mount recovery must be complete.
+.sp
+The existing metadata device is read to ensure that it's safe to stop
+using the old data device.  The data block allocators must indicate that
+all data blocks are free.  If there are still data blocks referenced by
+files then the command will fail.  The contents of these files must be
+freed for the command to proceed.
+.sp
+A new super block is written to the new data device.  The device can
+then be used as the data device to mount the file system.  As this
+switch is made all client mounts must refer to the new device.  The old
+device is not modified and still contains a valid data super block that
+could be mounted, creating data device writes that wouldn't be read by
+mounts using the new device.
+.sp
+The number of data blocks available to the file system will not change
+as the new data device is used.  The new device must be large enough to
+store all the data blocks that were available on the old device.  If the
+new device is larger then its added capacity can be used by growing the
+new data device with the resize-devices command once it is mounted.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-c, --check"
+Only check for errors that would prevent a new empty data device from
+being used.  No changes will be made to the data device.  If the data
+device is provided then its size will be checked to make sure that it is
+large enough.  This can be used to test the metadata for data references
+before destroying an old empty data device.
+.RE
+.PD
+
+.TP
 .BI "print {-S|--skip-likely-huge} META-DEVICE"
 .sp
 Prints out all of the metadata in the file system.  This makes no effort
