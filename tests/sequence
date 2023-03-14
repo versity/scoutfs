@@ -36,6 +36,7 @@ cross-mount-data-free.sh
 persistent-item-vers.sh
 setup-error-teardown.sh
 resize-devices.sh
+change-devices.sh
 fence-and-reclaim.sh
 orphan-inodes.sh
 mount-unmount-race.sh
