@@ -77,6 +77,97 @@ run when the file system will not be mounted.
 .PD
 
 .TP
+.BI "counters [-t|--table] SYSFS-DIR"
+.sp
+Display the counters and their values for a mounted ScoutFS filesystem.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B SYSFS-DIR
+The mount's sysfs directory in which to find the
+.B counters/
+directory when then contains files for each counter.
+The sysfs directory is
+of the form
+.I /sys/fs/scoutfs/f.<fsid>.r.<rid>/
+\&.
+.TP
+.B "-t, --table"
+Format the counters into a columnar table that fills the width of the display
+instead of printing one counter per line.
+.RE
+.PD
+
+.TP
+.BI "data-waiting {-I|--inode} INODE-NUM {-B|--block} BLOCK-NUM [-p|--path PATH]"
+.sp
+Display all the files and blocks for which there is a task blocked waiting on
+offline data.
+.sp
+The results are sorted by the file's inode number and the
+logical block offset that is being waited on.
+.sp
+Each line of output describes a block in a file that has a task waiting
+and is formatted as:
+.I "ino <nr> iblock <nr> ops [str]"
+\&. The ops string indicates blocked operations seperated by commas and can
+include
+.B read
+for a read operation,
+.B write
+for a write operation, and
+.B change_size
+for a truncate or extending write.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "-I, --inode INODE-NUM"
+Start iterating over waiting tasks from the given inode number.
+Value of 0 will show all waiting tasks.
+.TP
+.B "-B, --block BLOCK-NUM"
+Start iterating over waiting tasks from the given logical block number
+in the starting inode.  Value of 0 will show blocks in the first inode
+and then continue to show all blocks with tasks waiting in all the
+remaining inodes.
+.TP
+.B "-p, --path PATH"
+A path within a ScoutFS filesystem.
+.RE
+.PD
+
+.TP
+.BI "data-wait-err {-I|--inode} INODE-NUM {-V|--version} VER-NUM {-F|--offset} OFF-NUM {-C|--count} COUNT {-O|--op} OP {-E|--err} ERR [-p|--path PATH]"
+.sp
+Return error from matching waiters.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "-C, --count COUNT"
+Count.
+.TP
+.B "-E, --err ERR"
+Error.
+.TP
+.B "-F, --offset OFF-NUM"
+Offset. May be expressed in bytes, or with KMGTP (Kibi, Mibi, etc.) size
+suffixes.
+.TP
+.B "-I, --inode INODE-NUM"
+Inode number.
+.TP
+.B "-O, --op OP"
+Operation. One of: "read", "write", "change_size".
+.TP
+.B "-p, --path PATH"
+A path within a ScoutFS filesystem.
+.RE
+.PD
+
+.TP
 .BI "df [-h|--human-readable] [-p|--path PATH]"
 .sp
 Display available and used space on the ScoutFS data and metadata devices.
@@ -90,6 +181,72 @@ of ScoutFS allocation blocks.
 .TP
 .B "-p, --path PATH"
 A path within a ScoutFS filesystem.
+.RE
+.PD
+
+.TP
+.BI "get-allocated-inos [-i|--ino INO] [-s|--single] [-p|--path PATH]"
+.sp
+This debugging command prints allocated inode numbers.  It only prints
+inodes
+found in the group that contains the starting inode.  The printed inode
+numbers aren't necessarily reachable.  They could be anywhere in the
+process from being unlinked to finally deleted when their items
+were found.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-i, --ino INO"
+The first 64bit inode number which could be printed.
+.TP
+.B "-s, --single"
+Only print the single starting inode when it is allocated, all other allocated
+inode numbers will be ignored.
+.TP
+.B "-p, --path PATH"
+A path within a ScoutFS filesystem.
+.RE
+.PD
+
+.TP
+.BI "ino-path INODE-NUM [-p|--path PATH]"
+.sp
+Display all paths that reference an inode number.
+.sp
+Ongoing filesystem changes, such as renaming a common parent of multiple paths,
+can cause displayed paths to be inconsistent.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "INODE-NUM"
+The inode number of the target inode.
+.TP
+.B "-p|--path PATH"
+A path within a ScoutFS filesystem.
+.RE
+.PD
+
+.TP
+.BI "list-hidden-xattrs FILE"
+.sp
+Display extended attributes starting with the
+.BR scoutfs.
+prefix and containing the
+.BR hide.
+tag
+which makes them invisible to
+.BR listxattr (2) .
+The names of each attribute are output, one per line.  Their order
+is not specified.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "FILE"
+The path to a file within a ScoutFS filesystem.  File permissions must allow
+reading.
 .RE
 .PD
 
@@ -172,6 +329,39 @@ The range of supported versions is visible in the output of
 .PD
 
 .TP
+.BI "print {-S|--skip-likely-huge} META-DEVICE"
+.sp
+Prints out all of the metadata in the file system.  This makes no effort
+to ensure that the structures are consistent as they're traversed and
+can present structures that seem corrupt as they change as they're
+output.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "-S, --skip-likely-huge"
+Skip printing structures that are likely to be very large.  The
+structures that are skipped tend to be global and whose size tends to be
+related to the size of the volume.   Examples of skipped structures include
+the global fs items, srch files, and metadata and data
+allocators.  Similar structures that are not skipped are related to the
+number of mounts and are maintained at a relatively reasonable size.
+These include per-mount log trees, srch files, allocators, and the
+metadata allocators used by server commits.
+.sp
+Skipping the larger structures limits the print output to a relatively
+constant size rather than being a large multiple of the used metadata
+space of the volume making the output much more useful for inspection.
+.TP
+.B "META-DEVICE"
+The path to the metadata device for the filesystem whose metadata will be
+printed.  An attempt will be made to flush the host's buffer cache for
+this device with the BLKFLSBUF ioctl, or with posix_fadvise() if
+the path refers to a regular file.
+.RE
+.PD
+
+.TP
 .BI "resize-devices [-p|--path PATH] [-m|--meta-size SIZE] [-d|--data-size SIZE]"
 .sp
 Resize the metadata or data devices of a mounted ScoutFS filesystem.
@@ -229,6 +419,92 @@ kibibytes, mebibytes, etc.
 .RE
 .PD
 
+.TP
+.BI "search-xattrs XATTR-NAME [-p|--path PATH]"
+.sp
+Display the inode numbers of inodes in the filesystem which may have
+an extended attribute with the given name.
+.sp
+The results may contain false positives.  The returned inode numbers
+should be checked to verify that the extended attribute is in fact
+present on the inode.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B XATTR-NAME
+The full name of the extended attribute to search for as
+described in the
+.BR xattr (7)
+manual page.
+.TP
+.B "-p|--path PATH"
+A path within a ScoutFS filesystem.
+.RE
+.PD
+
+.TP
+.BI "setattr FILE [-d, --data-version=VERSION [-s, --size=SIZE [-o, --offline]]] [-t, --ctime=TIMESPEC]"
+.sp
+Set ScoutFS-specific attributes on a newly created zero-length file.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "-V, --data-version=VERSION"
+Set data version.
+.TP
+.B "-o, --offline"
+Set file contents as offline, not sparse. Requires
+.I --size
+option also be present.
+.TP
+.B "-s, --size=SIZE"
+Set file size. May be expressed in bytes, or with
+KMGTP (Kibi, Mibi, etc.) size suffixes. Requires
+.I --data-version
+option also be present.
+.TP
+.B "-t, --ctime=TIMESPEC"
+Set creation time using
+.I "<seconds-since-epoch>.<nanoseconds>"
+format.
+.RE
+.PD
+
+.TP
+.BI "stage ARCHIVE-FILE FILE {-V|--version} VERSION [-o, --offset OFF-NUM] [-l, --length LENGTH]"
+.sp
+.B Stage
+(i.e. return to online) the previously-offline contents of a file by copying a
+region from another file, the archive, and without updating regular inode
+metadata.  Any operations that are blocked by the existence of an offline
+region will proceed once the region has been staged.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.B "ARCHIVE-FILE"
+The source file for the file contents being staged.
+.TP
+.B "FILE"
+The regular file whose contents will be staged.
+.TP
+.B "-V, --version VERSION"
+The data_version of the contents to be staged.  It must match the
+current data_version of the file.
+.TP
+.B "-o, --offset OFF-NUM"
+The starting byte offset of the region to write.  May be expressed in bytes, or with
+KMGTP (Kibi, Mibi, etc.) size suffixes. Default is 0.
+.TP
+.B "-l, --length LENGTH"
+Length of range (bytes or KMGTP units) of file to stage. Default is the file's
+total size.
+.RE
+.PD
+
+.TP
 .BI "stat FILE [-s|--single-field FIELD-NAME]"
 .sp
 Display ScoutFS-specific metadata fields for the given file.
@@ -315,221 +591,6 @@ The total number of 4K data blocks in the filesystem.
 .PD
 
 .TP
-.BI "counters [-t|--table] SYSFS-DIR"
-.sp
-Display the counters and their values for a mounted ScoutFS filesystem.
-.RS 1.0i
-.PD 0
-.sp
-.TP
-.B SYSFS-DIR
-The mount's sysfs directory in which to find the
-.B counters/
-directory when then contains files for each counter.
-The sysfs directory is
-of the form
-.I /sys/fs/scoutfs/f.<fsid>.r.<rid>/
-\&.
-.TP
-.B "-t, --table"
-Format the counters into a columnar table that fills the width of the display
-instead of printing one counter per line.
-.RE
-.PD
-
-.TP
-.BI "search-xattrs XATTR-NAME [-p|--path PATH]"
-.sp
-Display the inode numbers of inodes in the filesystem which may have
-an extended attribute with the given name.
-.sp
-The results may contain false positives.  The returned inode numbers
-should be checked to verify that the extended attribute is in fact
-present on the inode.
-.RS 1.0i
-.PD 0
-.TP
-.sp
-.B XATTR-NAME
-The full name of the extended attribute to search for as
-described in the
-.BR xattr (7)
-manual page.
-.TP
-.B "-p|--path PATH"
-A path within a ScoutFS filesystem.
-.RE
-.PD
-
-.TP
-.BI "list-hidden-xattrs FILE"
-.sp
-Display extended attributes starting with the
-.BR scoutfs.
-prefix and containing the
-.BR hide.
-tag
-which makes them invisible to
-.BR listxattr (2) .
-The names of each attribute are output, one per line.  Their order
-is not specified.
-.RS 1.0i
-.PD 0
-.TP
-.sp
-.B "FILE"
-The path to a file within a ScoutFS filesystem.  File permissions must allow
-reading.
-.RE
-.PD
-
-.TP
-.BI "walk-inodes {meta_seq|data_seq} FIRST-INODE LAST-INODE [-p|--path PATH]"
-.sp
-Walk an inode index in the file system and output the inode numbers
-that are found between the first and last positions in the index.
-.RS 1.0i
-.PD 0
-.sp
-.TP
-.BR meta_seq , data_seq
-Which index to walk.
-.TP
-.B "FIRST-INODE"
-An integer index value giving starting position of the index walk.
-.I 0
-is the first possible position.
-.TP
-.B "LAST-INODE"
-An integer index value giving the last position to include in the index walk.
-.I \-1
-can be given to indicate the last possible position.
-.TP
-.B "-p|--path PATH"
-A path within a ScoutFS filesystem.
-.RE
-.PD
-
-.TP
-.BI "ino-path INODE-NUM [-p|--path PATH]"
-.sp
-Display all paths that reference an inode number.
-.sp
-Ongoing filesystem changes, such as renaming a common parent of multiple paths,
-can cause displayed paths to be inconsistent.
-.RS 1.0i
-.PD 0
-.sp
-.TP
-.B "INODE-NUM"
-The inode number of the target inode.
-.TP
-.B "-p|--path PATH"
-A path within a ScoutFS filesystem.
-.RE
-.PD
-
-.TP
-.BI "data-waiting {-I|--inode} INODE-NUM {-B|--block} BLOCK-NUM [-p|--path PATH]"
-.sp
-Display all the files and blocks for which there is a task blocked waiting on
-offline data.
-.sp
-The results are sorted by the file's inode number and the
-logical block offset that is being waited on.
-.sp
-Each line of output describes a block in a file that has a task waiting
-and is formatted as:
-.I "ino <nr> iblock <nr> ops [str]"
-\&. The ops string indicates blocked operations seperated by commas and can
-include
-.B read
-for a read operation,
-.B write
-for a write operation, and
-.B change_size
-for a truncate or extending write.
-.RS 1.0i
-.PD 0
-.sp
-.TP
-.B "-I, --inode INODE-NUM"
-Start iterating over waiting tasks from the given inode number.
-Value of 0 will show all waiting tasks.
-.TP
-.B "-B, --block BLOCK-NUM"
-Start iterating over waiting tasks from the given logical block number
-in the starting inode.  Value of 0 will show blocks in the first inode
-and then continue to show all blocks with tasks waiting in all the
-remaining inodes.
-.TP
-.B "-p, --path PATH"
-A path within a ScoutFS filesystem.
-.RE
-.PD
-
-.TP
-.BI "data-wait-err {-I|--inode} INODE-NUM {-V|--version} VER-NUM {-F|--offset} OFF-NUM {-C|--count} COUNT {-O|--op} OP {-E|--err} ERR [-p|--path PATH]"
-.sp
-Return error from matching waiters.
-.RS 1.0i
-.PD 0
-.sp
-.TP
-.B "-C, --count COUNT"
-Count.
-.TP
-.B "-E, --err ERR"
-Error.
-.TP
-.B "-F, --offset OFF-NUM"
-Offset. May be expressed in bytes, or with KMGTP (Kibi, Mibi, etc.) size
-suffixes.
-.TP
-.B "-I, --inode INODE-NUM"
-Inode number.
-.TP
-.B "-O, --op OP"
-Operation. One of: "read", "write", "change_size".
-.TP
-.B "-p, --path PATH"
-A path within a ScoutFS filesystem.
-.RE
-.PD
-
-.TP
-.BI "stage ARCHIVE-FILE FILE {-V|--version} VERSION [-o, --offset OFF-NUM] [-l, --length LENGTH]"
-.sp
-.B Stage
-(i.e. return to online) the previously-offline contents of a file by copying a
-region from another file, the archive, and without updating regular inode
-metadata.  Any operations that are blocked by the existence of an offline
-region will proceed once the region has been staged.
-.RS 1.0i
-.PD 0
-.TP
-.sp
-.B "ARCHIVE-FILE"
-The source file for the file contents being staged.
-.TP
-.B "FILE"
-The regular file whose contents will be staged.
-.TP
-.B "-V, --version VERSION"
-The data_version of the contents to be staged.  It must match the
-current data_version of the file.
-.TP
-.B "-o, --offset OFF-NUM"
-The starting byte offset of the region to write.  May be expressed in bytes, or with
-KMGTP (Kibi, Mibi, etc.) size suffixes. Default is 0.
-.TP
-.B "-l, --length LENGTH"
-Length of range (bytes or KMGTP units) of file to stage. Default is the file's
-total size.
-.RE
-.PD
-
-.TP
 .BI "release FILE {-V|--version} VERSION [-o, --offset OFF-NUM] [-l, --length LENGTH]"
 .sp
 .B Release
@@ -568,88 +629,28 @@ total size.
 .PD
 
 .TP
-.BI "setattr FILE [-d, --data-version=VERSION [-s, --size=SIZE [-o, --offline]]] [-t, --ctime=TIMESPEC]"
+.BI "walk-inodes {meta_seq|data_seq} FIRST-INODE LAST-INODE [-p|--path PATH]"
 .sp
-Set ScoutFS-specific attributes on a newly created zero-length file.
+Walk an inode index in the file system and output the inode numbers
+that are found between the first and last positions in the index.
 .RS 1.0i
 .PD 0
 .sp
 .TP
-.B "-V, --data-version=VERSION"
-Set data version.
+.BR meta_seq , data_seq
+Which index to walk.
 .TP
-.B "-o, --offline"
-Set file contents as offline, not sparse. Requires
-.I --size
-option also be present.
+.B "FIRST-INODE"
+An integer index value giving starting position of the index walk.
+.I 0
+is the first possible position.
 .TP
-.B "-s, --size=SIZE"
-Set file size. May be expressed in bytes, or with
-KMGTP (Kibi, Mibi, etc.) size suffixes. Requires
-.I --data-version
-option also be present.
+.B "LAST-INODE"
+An integer index value giving the last position to include in the index walk.
+.I \-1
+can be given to indicate the last possible position.
 .TP
-.B "-t, --ctime=TIMESPEC"
-Set creation time using
-.I "<seconds-since-epoch>.<nanoseconds>"
-format.
-.RE
-.PD
-
-.TP
-.BI "print {-S|--skip-likely-huge} META-DEVICE"
-.sp
-Prints out all of the metadata in the file system.  This makes no effort
-to ensure that the structures are consistent as they're traversed and
-can present structures that seem corrupt as they change as they're
-output.
-.RS 1.0i
-.PD 0
-.TP
-.sp
-.B "-S, --skip-likely-huge"
-Skip printing structures that are likely to be very large.  The
-structures that are skipped tend to be global and whose size tends to be
-related to the size of the volume.   Examples of skipped structures include
-the global fs items, srch files, and metadata and data
-allocators.  Similar structures that are not skipped are related to the
-number of mounts and are maintained at a relatively reasonable size.
-These include per-mount log trees, srch files, allocators, and the
-metadata allocators used by server commits.
-.sp
-Skipping the larger structures limits the print output to a relatively
-constant size rather than being a large multiple of the used metadata
-space of the volume making the output much more useful for inspection.
-.TP
-.B "META-DEVICE"
-The path to the metadata device for the filesystem whose metadata will be
-printed.  An attempt will be made to flush the host's buffer cache for
-this device with the BLKFLSBUF ioctl, or with posix_fadvise() if
-the path refers to a regular file.
-.RE
-.PD
-
-.TP
-.BI "get-allocated-inos [-i|--ino INO] [-s|--single] [-p|--path PATH]"
-.sp
-This debugging command prints allocated inode numbers.  It only prints
-inodes
-found in the group that contains the starting inode.  The printed inode
-numbers aren't necessarily reachable.  They could be anywhere in the
-process from being unlinked to finally deleted when their items
-were found.
-.RS 1.0i
-.PD 0
-.TP
-.sp
-.B "-i, --ino INO"
-The first 64bit inode number which could be printed.
-.TP
-.B "-s, --single"
-Only print the single starting inode when it is allocated, all other allocated
-inode numbers will be ignored.
-.TP
-.B "-p, --path PATH"
+.B "-p|--path PATH"
 A path within a ScoutFS filesystem.
 .RE
 .PD
