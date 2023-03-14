@@ -206,14 +206,14 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* minumum meta device size to make reserved blocks reasonably large */
-	ret = device_size(args->meta_device, meta_fd, 64ULL * (1024 * 1024 * 1024),
-			  args->max_meta_size, args->allow_small_size, "meta", &meta_size);
+	ret = limit_device_size(args->meta_device, meta_fd, 64ULL * (1024 * 1024 * 1024),
+				args->max_meta_size, args->allow_small_size, "meta", &meta_size);
 	if (ret)
 		goto out;
 
 	/* .. then arbitrarily the same minimum data device size */
-	ret = device_size(args->data_device, data_fd, 64ULL * (1024 * 1024 * 1024),
-			  args->max_data_size, args->allow_small_size, "data", &data_size);
+	ret = limit_device_size(args->data_device, data_fd, 64ULL * (1024 * 1024 * 1024),
+				args->max_data_size, args->allow_small_size, "data", &data_size);
 	if (ret)
 		goto out;
 
