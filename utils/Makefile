@@ -19,7 +19,9 @@ OBJ_DIRS := src src/check
 OBJ := $(foreach dir,$(OBJ_DIRS),$(patsubst %.c,%.o,$(wildcard $(dir)/*.c)))
 DEPS := $(foreach dir,$(OBJ_DIRS),$(wildcard $(dir)/*.d))
 
-all: $(BIN)
+AR := src/scoutfs_parallel_restore.a
+
+all: $(BIN) $(AR)
 
 ifneq ($(DEPS),)
 -include $(DEPS)
@@ -36,6 +38,10 @@ endif
 $(BIN): $(OBJ)
 	$(QU)  [BIN $@]
 	$(VE)gcc -o $@ $^ -luuid -lm -lcrypto -lblkid
+
+$(AR): $(OBJ)
+	$(QU)  [AR $@]
+	$(VE)ar rcs $@ $^
 
 %.o %.d: %.c Makefile sparse.sh
 	$(QU)  [CC $<]
