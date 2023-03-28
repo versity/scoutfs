@@ -12,7 +12,8 @@ BIN := src/createmany			\
 	src/find_xattrs			\
 	src/create_xattr_loop		\
 	src/fragmented_data_extents	\
-	src/o_tmpfile_umask
+	src/o_tmpfile_umask		\
+	src/parallel_restore
 
 DEPS := $(wildcard src/*.d)
 
@@ -22,8 +23,11 @@ ifneq ($(DEPS),)
 -include $(DEPS)
 endif
 
+src/parallel_restore_cflags := ../utils/src/scoutfs_parallel_restore.a -lm
+
 $(BIN): %: %.c Makefile
-	gcc $(CFLAGS) -MD -MP -MF $*.d $< -o $@
+	gcc $(CFLAGS) -MD -MP -MF $*.d $< -o $@ $($(@)_cflags)
+
 
 .PHONY: clean
 clean:
