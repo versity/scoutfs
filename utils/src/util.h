@@ -82,6 +82,7 @@ do {				\
 							\
 	(_x == 0 ? 0 : 64 - __builtin_clzll(_x));	\
 })
+#define fls64(x) flsll(x)
 
 #define ilog2(x)					\
 ({							\
