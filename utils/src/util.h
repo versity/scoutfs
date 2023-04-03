@@ -101,6 +101,16 @@ emit_get_unaligned_le(16)
 emit_get_unaligned_le(32)
 emit_get_unaligned_le(64)
 
+#define emit_put_unaligned_le(nr)				\
+static inline void put_unaligned_le##nr(u##nr val, void *buf)	\
+{								\
+	__le##nr x = cpu_to_le##nr(val);			\
+	memcpy(buf, &x, sizeof(x));				\
+}
+emit_put_unaligned_le(16)
+emit_put_unaligned_le(32)
+emit_put_unaligned_le(64)
+
 /*
  * return -1,0,+1 based on the memcmp comparison of the minimum of their
  * two lengths.  If their min shared bytes are equal but the lengths
