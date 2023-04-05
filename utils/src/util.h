@@ -70,6 +70,8 @@ do {				\
 #define container_of(ptr, type, memb) \
 	((type *)((void *)(ptr) - offsetof(type, memb)))
 
+#define NSEC_PER_SEC 1000000000
+
 #define BITS_PER_LONG (sizeof(long) * 8)
 #define U8_MAX ((u8)~0ULL)
 #define U16_MAX ((u16)~0ULL)
