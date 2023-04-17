@@ -2,6 +2,23 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.12
+\
+*Apr 17, 2023*
+
+Add the prepare-empty-data-device scoutfs command.  A data device can be
+unused when no files have data blocks, perhaps because they're archived
+and offline.  In this case the data device can be swapped out for
+another device without changes to the metadata device.
+
+Fix an oversight which limited inode timestamps to second granularity
+for some operations.  All operations now record timestamps with full
+nanosecond precision.
+
+Fix spurious ENOENT failures when renaming from other directories into
+the root directory.
+
+---
 v1.11
 \
 *Feb 2, 2023*
