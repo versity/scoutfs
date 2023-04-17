@@ -12,13 +12,10 @@
 #include "sparse.h"
 #include "dev.h"
 
-int device_size(char *path, int fd,
-		u64 min_size, u64 max_size, bool allow_small_size,
-		char *use_type, u64 *size_ret)
+int get_device_size(char *path, int fd, u64 *size_ret)
 {
 	struct stat st;
 	u64 size;
-	char *target_type;
 	int ret;
 
 	if (fstat(fd, &st)) {
@@ -30,7 +27,6 @@ int device_size(char *path, int fd,
 
 	if (S_ISREG(st.st_mode)) {
 		size = st.st_size;
-		target_type = "file";
 	} else if (S_ISBLK(st.st_mode)) {
 		if (ioctl(fd, BLKGETSIZE64, &size)) {
 			ret = -errno;
@@ -38,12 +34,25 @@ int device_size(char *path, int fd,
 				path, strerror(errno), errno);
 			return ret;
 		}
-		target_type = "device";
 	} else {
 		fprintf(stderr, "path isn't regular or device file '%s'\n",
 			path);
 		return -EINVAL;
 	}
+
+	*size_ret = size;
+	return 0;
+}
+
+int limit_device_size(char *path, int fd, u64 min_size, u64 max_size, bool allow_small_size,
+		      char *use_type, u64 *size_ret)
+{
+	u64 size;
+	int ret;
+
+	ret = get_device_size(path, fd, &size);
+	if (ret < 0)
+		return ret;
 
 	if (max_size) {
 		if (size > max_size) {
@@ -64,9 +73,9 @@ int device_size(char *path, int fd,
 
 	if (size < min_size) {
 		fprintf(stderr,
-			BASE_SIZE_FMT" %s too small for min "
+			BASE_SIZE_FMT" too small for min "
 			BASE_SIZE_FMT" %s device%s\n",
-			BASE_SIZE_ARGS(size), target_type,
+			BASE_SIZE_ARGS(size),
 			BASE_SIZE_ARGS(min_size), use_type,
 			allow_small_size ? ", allowing with -A" : "");
 

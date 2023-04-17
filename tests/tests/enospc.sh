@@ -59,7 +59,7 @@ echo "== make small meta fs"
 # meta device just big enough for reserves and the metadata we'll fill
 scoutfs mkfs -A -f -Q 0,127.0.0.1,53000 -m 10G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
 	t_fail "mkfs failed"
-SCR="/mnt/scoutfs.enospc"
+SCR="$T_TMPDIR/mnt.scratch"
 mkdir -p "$SCR"
 mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 \
 	"$T_EX_DATA_DEV" "$SCR"

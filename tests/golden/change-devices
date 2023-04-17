@@ -1,0 +1,27 @@
+== make tmp sparse data dev files
+== make scratch fs
+== small new data device fails
+rc: 1
+== check sees data device errors
+rc: 1
+rc: 0
+== preparing while mounted fails
+rc: 1
+== preparing without recovery fails
+rc: 1
+== check sees metadata errors
+rc: 1
+rc: 1
+== preparing with file data fails
+rc: 1
+== preparing after emptied
+rc: 0
+== checks pass
+rc: 0
+rc: 0
+== using prepared
+== preparing larger and resizing
+rc: 0
+equal_prepared
+large_prepared
+resized larger test rc: 0
