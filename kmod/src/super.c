@@ -486,6 +486,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_export_op = &scoutfs_export_ops;
 	sb->s_xattr = scoutfs_xattr_handlers;
 	sb->s_flags |= MS_I_VERSION | MS_POSIXACL;
+	sb->s_time_gran = 1;
 
 	/* btree blocks use long lived bh->b_data refs */
 	mapping_set_gfp_mask(sb->s_bdev->bd_inode->i_mapping, GFP_NOFS);
