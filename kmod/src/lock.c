@@ -12,7 +12,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/fs.h>
-#include <linux/preempt_mask.h> /* a rhel shed.h needed preempt_offset? */
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
