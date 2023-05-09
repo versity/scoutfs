@@ -307,7 +307,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 	LIST_HEAD(ind_locks);
 	s64 ret = 0;
 
-	WARN_ON_ONCE(inode && !mutex_is_locked(&inode->i_mutex));
+	WARN_ON_ONCE(inode && !inode_is_locked(inode));
 
 	/* clamp last to the last possible block? */
 	if (last > SCOUTFS_BLOCK_SM_MAX)
@@ -558,7 +558,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 	u64 offset;
 	int ret;
 
-	WARN_ON_ONCE(create && !mutex_is_locked(&inode->i_mutex));
+	WARN_ON_ONCE(create && !inode_is_locked(inode));
 
 	/* make sure caller holds a cluster lock */
 	lock = scoutfs_per_task_get(&si->pt_data_lock);
@@ -1057,7 +1057,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		goto out;
 	}
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -1118,7 +1118,7 @@ out_extent:
 	up_write(&si->extent_sem);
 out_mutex:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 
 out:
 	trace_scoutfs_data_fallocate(sb, ino, mode, offset, len, ret);
@@ -1529,7 +1529,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (ret)
 		goto out;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 	down_read(&si->extent_sem);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
@@ -1583,7 +1583,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 unlock:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	up_read(&si->extent_sem);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 
 out:
 	if (ret == 1)

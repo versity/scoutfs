@@ -496,9 +496,9 @@ retry:
 				scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 
 				/* XXX callee locks instead? */
-				mutex_unlock(&inode->i_mutex);
+				inode_unlock(inode);
 				ret = scoutfs_data_wait(inode, &dw);
-				mutex_lock(&inode->i_mutex);
+				inode_lock(inode);
 
 				if (ret == 0)
 					goto retry;
