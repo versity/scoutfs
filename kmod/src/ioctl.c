@@ -302,7 +302,7 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	if (ret)
 		return ret;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -351,7 +351,7 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 
 	trace_scoutfs_ioc_release_ret(sb, scoutfs_ino(inode), ret);
@@ -393,7 +393,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 		goto out;
 	}
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -411,7 +411,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 unlock:
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	iput(inode);
 out:
 	return ret;
@@ -489,7 +489,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	if (ret)
 		return ret;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -533,7 +533,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 out:
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 
 	trace_scoutfs_ioc_stage_ret(sb, scoutfs_ino(inode), ret);
@@ -652,7 +652,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 	if (ret)
 		goto out;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -696,7 +696,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 unlock:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 out:
 
