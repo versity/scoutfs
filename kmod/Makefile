@@ -31,12 +31,12 @@ TARFILE = scoutfs-kmod-$(RPM_VERSION).tar
 all: module
 
 module:
-	make $(SCOUTFS_ARGS)
-	$(SP) make C=2 CF="-D__CHECK_ENDIAN__" $(SCOUTFS_ARGS)
+	$(MAKE) $(SCOUTFS_ARGS)
+	$(SP) $(MAKE) C=2 CF="-D__CHECK_ENDIAN__" $(SCOUTFS_ARGS)
 
 
 modules_install:
-	make $(SCOUTFS_ARGS) modules_install
+	$(MAKE) $(SCOUTFS_ARGS) modules_install
 
 
 %.spec: %.spec.in .FORCE
@@ -50,4 +50,4 @@ dist: scoutfs-kmod.spec
 	@ tar rf $(TARFILE) --transform="s@\(.*\)@scoutfs-kmod-$(RPM_VERSION)/\1@" scoutfs-kmod.spec
 
 clean:
-	make $(SCOUTFS_ARGS) clean
+	$(MAKE) $(SCOUTFS_ARGS) clean
