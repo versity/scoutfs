@@ -675,14 +675,14 @@ out:
 		teardown_module();
 	return ret;
 }
-module_init(scoutfs_module_init)
+module_init(scoutfs_module_init);
 
 static void __exit scoutfs_module_exit(void)
 {
 	unregister_filesystem(&scoutfs_fs_type);
 	teardown_module();
 }
-module_exit(scoutfs_module_exit)
+module_exit(scoutfs_module_exit);
 
 MODULE_AUTHOR("Zach Brown <zab@versity.com>");
 MODULE_LICENSE("GPL");
