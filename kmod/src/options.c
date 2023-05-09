@@ -169,7 +169,7 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 		switch (token) {
 
 		case Opt_acl:
-			sb->s_flags |= MS_POSIXACL;
+			sb->s_flags |= SB_POSIXACL;
 			break;
 
 		case Opt_data_prealloc_blocks:
@@ -203,7 +203,7 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 			break;
 
 		case Opt_noacl:
-			sb->s_flags &= ~MS_POSIXACL;
+			sb->s_flags &= ~SB_POSIXACL;
 			break;
 
 		case Opt_orphan_scan_delay_ms:
@@ -327,7 +327,7 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 {
 	struct super_block *sb = root->d_sb;
 	struct scoutfs_mount_options opts;
-	const bool is_acl = !!(sb->s_flags & MS_POSIXACL);
+	const bool is_acl = !!(sb->s_flags & SB_POSIXACL);
 
 	scoutfs_options_read(sb, &opts);
 

@@ -167,6 +167,17 @@ do {					\
 #define kc_bio_get_errno(bio)			({ (int)((void)(bio), _error_arg); })
 #endif
 
+/*
+ * v4.13-rc1-6-ge462ec50cb5f
+ *
+ * MS_* (mount) flags from <linux/mount.h> should not be used in the kernel
+ * anymore from 4.x onwards. Instead, we need to use the SB_* (superblock) flags
+ */
+#ifndef SB_POSIXACL
+#define SB_POSIXACL MS_POSIXACL
+#define SB_I_VERSION MS_I_VERSION
+#endif
+
 #ifndef KC_SHRINKER_SHRINK
 
 #define KC_DEFINE_SHRINKER(name) struct shrinker name
