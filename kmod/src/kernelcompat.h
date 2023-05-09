@@ -4,6 +4,17 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 
+/*
+ * v4.15-rc3-4-gae5e165d855d
+ *
+ * new API for handling inode->i_version. This forces us to
+ * include this API where we need. We include it here for
+ * convenience instead of where it's needed.
+ */
+#ifdef KC_NEED_LINUX_IVERSION_H
+#include <linux/iversion.h>
+#endif
+
 #ifndef KC_ITERATE_DIR_CONTEXT
 typedef filldir_t kc_readdir_ctx_t;
 #define KC_DECLARE_READDIR(name, file, dirent, ctx) name(file, dirent, ctx)
