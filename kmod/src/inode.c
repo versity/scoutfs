@@ -467,8 +467,7 @@ retry:
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret)
 		return ret;
-
-	ret = inode_change_ok(inode, attr);
+	ret = setattr_prepare(dentry, attr);
 	if (ret)
 		goto out;
 
