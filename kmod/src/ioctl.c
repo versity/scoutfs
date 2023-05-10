@@ -22,6 +22,7 @@
 #include <linux/sched.h>
 #include <linux/aio.h>
 #include <linux/list_sort.h>
+#include <linux/backing-dev.h>
 
 #include "format.h"
 #include "key.h"
@@ -448,7 +449,6 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
-	struct address_space *mapping = inode->i_mapping;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	struct scoutfs_ioctl_stage args;
@@ -516,7 +516,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	}
 
 	si->staging = true;
-	current->backing_dev_info = mapping->backing_dev_info;
+	current->backing_dev_info = inode_to_bdi(inode);
 
 	pos = args.offset;
 	written = 0;
