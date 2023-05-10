@@ -761,7 +761,7 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 			goto out;
 		if (ret > 0) {
 			list_del(&page->lru);
-			page_cache_release(page);
+			put_page(page);
 			if (--nr_pages == 0) {
 				ret = 0;
 				goto out;
