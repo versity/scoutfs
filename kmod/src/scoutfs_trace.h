@@ -2020,9 +2020,9 @@ DEFINE_EVENT(scoutfs_quorum_message_class, scoutfs_quorum_recv_message,
 
 TRACE_EVENT(scoutfs_quorum_loop,
 	TP_PROTO(struct super_block *sb, int role, u64 term, int vote_for,
-		 unsigned long vote_bits, struct timespec64 timeout),
+		 unsigned long vote_bits, unsigned long long nsecs),
 
-	TP_ARGS(sb, role, term, vote_for, vote_bits, timeout),
+	TP_ARGS(sb, role, term, vote_for, vote_bits, nsecs),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
@@ -2031,8 +2031,7 @@ TRACE_EVENT(scoutfs_quorum_loop,
 		__field(int, vote_for)
 		__field(unsigned long, vote_bits)
 		__field(unsigned long, vote_count)
-		__field(unsigned long long, timeout_sec)
-		__field(int, timeout_nsec)
+		__field(unsigned long long, nsecs)
 	),
 
 	TP_fast_assign(
@@ -2042,14 +2041,13 @@ TRACE_EVENT(scoutfs_quorum_loop,
 		__entry->vote_for = vote_for;
 		__entry->vote_bits = vote_bits;
 		__entry->vote_count = hweight_long(vote_bits);
-		__entry->timeout_sec = timeout.tv_sec;
-		__entry->timeout_nsec = timeout.tv_nsec;
+		__entry->nsecs = nsecs;
 	),
 
-	TP_printk(SCSBF" term %llu role %d vote_for %d vote_bits 0x%lx vote_count %lu timeout %llu.%u",
+	TP_printk(SCSBF" term %llu role %d vote_for %d vote_bits 0x%lx vote_count %lu timeout %llu",
 		  SCSB_TRACE_ARGS, __entry->term, __entry->role,
 		  __entry->vote_for, __entry->vote_bits, __entry->vote_count,
-		  __entry->timeout_sec, __entry->timeout_nsec)
+		  __entry->nsecs)
 );
 
 TRACE_EVENT(scoutfs_trans_seq_last,

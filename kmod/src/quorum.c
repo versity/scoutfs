@@ -781,8 +781,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			msg.type = SCOUTFS_QUORUM_MSG_INVALID;
 
 		trace_scoutfs_quorum_loop(sb, qst.role, qst.term, qst.vote_for,
-					  qst.vote_bits,
-					  ktime_to_timespec64(qst.timeout));
+					  qst.vote_bits, ktime_to_ns(qst.timeout));
 
 		/* receiving greater terms resets term, becomes follower */
 		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
