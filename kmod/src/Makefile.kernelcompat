@@ -50,7 +50,7 @@ endif
 #
 # Added user_ns argument to posix_acl_valid
 #
-ifneq (,$(shell grep 'posix_acl_valid.*user_ns,' include/linux/posix_acl.h))
+ifneq (,$(shell grep 'posix_acl_valid.*user_namespace' include/linux/posix_acl.h))
 ccflags-y += -DKC_POSIX_ACL_VALID_USER_NS
 endif
 
