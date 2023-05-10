@@ -218,10 +218,17 @@ int scoutfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 	return ret;
 }
-
+#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
+int scoutfs_acl_get_xattr(const struct xattr_handler *handler, struct dentry *dentry,
+			  struct inode *inode, const char *name, void *value,
+			  size_t size)
+{
+	int type = handler->flags;
+#else
 int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, size_t size,
 			  int type)
 {
+#endif
 	struct posix_acl *acl;
 	int ret = 0;
 
@@ -240,9 +247,17 @@ int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, 
 	return ret;
 }
 
+#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
+int scoutfs_acl_set_xattr(const struct xattr_handler *handler, struct dentry *dentry,
+			  struct inode *inode, const char *name, const void *value,
+			  size_t size, int flags)
+{
+	int type = handler->flags;
+#else
 int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *value, size_t size,
 			  int flags, int type)
 {
+#endif
 	struct posix_acl *acl = NULL;
 	int ret;
 
