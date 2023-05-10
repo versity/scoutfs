@@ -53,3 +53,13 @@ endif
 ifneq (,$(shell grep 'posix_acl_valid.*user_ns,' include/linux/posix_acl.h))
 ccflags-y += -DKC_POSIX_ACL_VALID_USER_NS
 endif
+
+#
+# v5.3-12296-g6d2052d188d9
+#
+# The RBCOMPUTE function is now passed an extra flag, and should return a bool
+# to indicate whether the propagated callback should stop or not.
+#
+ifneq (,$(shell grep 'static inline bool RBNAME.*_compute_max' include/linux/rbtree_augmented.h))
+ccflags-y += -DKC_RB_TREE_AUGMENTED_COMPUTE_MAX
+endif
