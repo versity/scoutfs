@@ -65,6 +65,15 @@ ccflags-y += -DKC_RB_TREE_AUGMENTED_COMPUTE_MAX
 endif
 
 #
+# v4.8-rc1-29-g31051c85b5e2
+#
+# inode_change_ok() removed - replace with setattr_prepare()
+#
+ifneq (,$(shell grep 'extern int setattr_prepare' include/linux/fs.h))
+ccflags-y += -DKC_SETATTR_PREPARE
+endif
+
+#
 # v4.15-rc3-4-gae5e165d855d
 #
 # linux/iversion.h needs to manually be included for code that

@@ -99,4 +99,13 @@ static inline int dir_emit_dots(struct file *file, void *dirent,
 #define d_materialise_unique(dentry, inode) d_splice_alias(inode, dentry)
 #endif
 
+/*
+ * v4.8-rc1-29-g31051c85b5e2
+ *
+ * fall back to inode_change_ok() if setattr_prepare() isn't available
+ */
+#ifndef KC_SETATTR_PREPARE
+#define setattr_prepare(dentry, attr) inode_change_ok(d_inode(dentry), attr)
+#endif
+
 #endif
