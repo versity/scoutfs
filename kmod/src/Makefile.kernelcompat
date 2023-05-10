@@ -139,3 +139,13 @@ endif
 ifneq (,$(shell grep '(*shrink)' include/linux/shrinker.h))
 ccflags-y += -DKC_SHRINKER_SHRINK
 endif
+
+#
+# v3.19-4777-g6bec00352861
+#
+# backing_dev_info is removed from address_space. Instead we need to use
+# inode_to_bdi() inline from <backing-dev.h>.
+#
+ifneq (,$(shell grep 'struct backing_dev_info.*backing_dev_info' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_BACKING_DEV_INFO=1
+endif
