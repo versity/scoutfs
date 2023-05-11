@@ -13,6 +13,20 @@
  */
 #ifdef KC_NEED_LINUX_IVERSION_H
 #include <linux/iversion.h>
+#else
+/*
+ * Kernels before above version will need to fall back to
+ * manipulating inode->i_version as previous with degraded
+ * methods.
+ */
+#define inode_set_iversion_queried(inode, val)	\
+do {						\
+	(inode)->i_version = val;		\
+} while (0)
+#define inode_peek_iversion(inode)		\
+({						\
+	(inode)->i_version;			\
+})
 #endif
 
 #ifndef KC_ITERATE_DIR_CONTEXT
