@@ -194,3 +194,13 @@ endif
 ifneq (,$(shell grep 'extern struct timespec64 current_time' include/linux/fs.h))
 ccflags-y += -DKC_CURRENT_TIME_INODE=1
 endif
+
+#
+# v4.9-12228-g530e9b76ae8f
+#
+# register_cpu_notifier and family were all removed and to be
+# replaced with cpuhp_* API calls.
+#
+ifneq (,$(shell grep 'define register_hotcpu_notifier' include/linux/cpu.h))
+ccflags-y += -DKC_CPU_NOTIFIER
+endif
