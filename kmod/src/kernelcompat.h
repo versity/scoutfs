@@ -1,8 +1,10 @@
 #ifndef _SCOUTFS_KERNELCOMPAT_H_
 #define _SCOUTFS_KERNELCOMPAT_H_
 
-#ifndef KC_ITERATE_DIR_CONTEXT
+#include <linux/kernel.h>
 #include <linux/fs.h>
+
+#ifndef KC_ITERATE_DIR_CONTEXT
 typedef filldir_t kc_readdir_ctx_t;
 #define KC_DECLARE_READDIR(name, file, dirent, ctx) name(file, dirent, ctx)
 #define KC_FOP_READDIR readdir
