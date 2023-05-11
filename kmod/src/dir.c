@@ -1058,6 +1058,7 @@ static int symlink_item_ops(struct super_block *sb, enum symlink_ops op, u64 ino
 	return ret;
 }
 
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 /*
  * Full a buffer with the null terminated symlink, point nd at it, and
  * return it so put_link can free it once the vfs is done.
@@ -1138,19 +1139,73 @@ static void scoutfs_put_link(struct dentry *dentry, struct nameidata *nd,
 	if (!IS_ERR_OR_NULL(cookie))
 		kfree(cookie);
 }
+#else
+static const char *scoutfs_get_link(struct dentry *dentry, struct inode *inode, struct delayed_call *done)
+{
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *inode_lock = NULL;
+	char *path = NULL;
+	loff_t size;
+	int ret;
 
-const struct inode_operations scoutfs_symlink_iops = {
-	.readlink       = generic_readlink,
-	.follow_link    = scoutfs_follow_link,
-	.put_link       = scoutfs_put_link,
-	.getattr	= scoutfs_getattr,
-	.setattr	= scoutfs_setattr,
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
-	.removexattr	= generic_removexattr,
-	.get_acl	= scoutfs_get_acl,
-};
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+	if (ret)
+		return ERR_PTR(ret);
+
+	size = i_size_read(inode);
+
+	if (size == 0 || size > SCOUTFS_SYMLINK_MAX_SIZE) {
+		scoutfs_corruption(sb, SC_SYMLINK_INODE_SIZE,
+				   corrupt_symlink_inode_size,
+				   "ino %llu size %llu",
+				   scoutfs_ino(inode), (u64)size);
+		ret = -EIO;
+		goto out;
+	}
+
+	/* unlikely, but possible I suppose */
+	if (size > PATH_MAX) {
+		ret = -ENAMETOOLONG;
+		goto out;
+	}
+
+	path = kmalloc(size, GFP_NOFS);
+	if (!path) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = symlink_item_ops(sb, SYM_LOOKUP, scoutfs_ino(inode), inode_lock,
+			       path, size);
+
+	if (ret == -ENOENT) {
+		scoutfs_corruption(sb, SC_SYMLINK_MISSING_ITEM,
+				   corrupt_symlink_missing_item,
+				   "ino %llu size %llu", scoutfs_ino(inode),
+				   size);
+		ret = -EIO;
+
+	} else if (ret == 0 && path[size - 1]) {
+		scoutfs_corruption(sb, SC_SYMLINK_NOT_NULL_TERM,
+				   corrupt_symlink_not_null_term,
+				   "ino %llu last %u",
+				   scoutfs_ino(inode), path[size - 1]);
+		ret = -EIO;
+	}
+
+	if (ret != -EIO)
+		set_delayed_call(done, kfree_link, path);
+
+out:
+	if (ret < 0) {
+		kfree(path);
+		path = ERR_PTR(ret);
+	}
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	return path;
+}
+#endif
 
 /*
  * Symlink target paths can be annoyingly large.  We store relatively
@@ -1811,12 +1866,14 @@ out_unlock:
 	return ret;
 }
 
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 static int scoutfs_rename(struct inode *old_dir,
 			  struct dentry *old_dentry, struct inode *new_dir,
 			  struct dentry *new_dentry)
 {
 	return scoutfs_rename_common(old_dir, old_dentry, new_dir, new_dentry, 0);
 }
+#endif
 
 static int scoutfs_rename2(struct inode *old_dir,
 			  struct dentry *old_dentry, struct inode *new_dir,
@@ -1886,6 +1943,37 @@ out:
 	return ret;
 }
 
+const struct inode_operations scoutfs_symlink_iops = {
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.readlink       = generic_readlink,
+	.follow_link    = scoutfs_follow_link,
+	.put_link       = scoutfs_put_link,
+#else
+	.get_link	= scoutfs_get_link,
+#endif
+	.getattr	= scoutfs_getattr,
+	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.removexattr	= generic_removexattr,
+#endif
+	.get_acl	= scoutfs_get_acl,
+#ifndef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.tmpfile	= scoutfs_tmpfile,
+	.rename		= scoutfs_rename_common,
+	.symlink	= scoutfs_symlink,
+	.unlink		= scoutfs_unlink,
+	.link		= scoutfs_link,
+	.mkdir		= scoutfs_mkdir,
+	.create		= scoutfs_create,
+	.lookup		= scoutfs_lookup,
+#endif
+};
+
 const struct file_operations scoutfs_dir_fops = {
 	.KC_FOP_READDIR	= scoutfs_readdir,
 #ifdef KC_FMODE_KABI_ITERATE
@@ -1897,9 +1985,12 @@ const struct file_operations scoutfs_dir_fops = {
 };
 
 
-
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.ops = {
+#else
+const struct inode_operations scoutfs_dir_iops = {
+#endif
 	.lookup		= scoutfs_lookup,
 	.mknod		= scoutfs_mknod,
 	.create		= scoutfs_create,
@@ -1907,17 +1998,25 @@ const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.link		= scoutfs_link,
 	.unlink		= scoutfs_unlink,
 	.rmdir		= scoutfs_unlink,
-	.rename		= scoutfs_rename,
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.rename		= scoutfs_rename,
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
 	.get_acl	= scoutfs_get_acl,
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	},
+#endif
 	.tmpfile	= scoutfs_tmpfile,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.rename2	= scoutfs_rename2,
+#else
+	.rename		= scoutfs_rename2,
+#endif
 };

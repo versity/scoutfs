@@ -480,8 +480,10 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	/* the iocb is really only used for the file pointer :P */
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = args.offset;
+#ifdef KC_LINUX_AIO_KI_LEFT
 	kiocb.ki_left = args.length;
 	kiocb.ki_nbytes = args.length;
+#endif
 	iov.iov_base = (void __user *)(unsigned long)args.buf_ptr;
 	iov.iov_len = args.length;
 

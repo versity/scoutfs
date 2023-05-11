@@ -123,8 +123,13 @@ void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off);
 int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock);
 
 int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock);
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat);
+#else
+int scoutfs_getattr(const struct path *path, struct kstat *stat,
+		    u32 request_mask, unsigned int query_flags);
+#endif
 int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
 
 int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
