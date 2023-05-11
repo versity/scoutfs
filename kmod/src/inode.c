@@ -384,7 +384,7 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 		scoutfs_inode_inc_data_version(inode);
 
 	truncate_setsize(inode, new_size);
-	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
+	inode->i_ctime = inode->i_mtime = current_time(inode);
 	if (truncate)
 		si->flags |= SCOUTFS_INO_FLAG_TRUNCATE;
 	scoutfs_inode_set_data_seq(inode);
@@ -1474,7 +1474,7 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	inode->i_ino = ino; /* XXX overflow */
 	inode_init_owner(inode, dir, mode);
 	inode_set_bytes(inode, 0);
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	inode->i_rdev = rdev;
 	set_inode_ops(inode);
 
