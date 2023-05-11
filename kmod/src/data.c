@@ -1221,7 +1221,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	struct data_ext_args from_args;
 	struct data_ext_args to_args;
 	struct scoutfs_extent ext;
-	struct timespec cur_time;
+	struct kc_timespec cur_time;
 	LIST_HEAD(locks);
 	bool done = false;
 	loff_t from_size;
@@ -1442,7 +1442,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		up_write(&from_si->extent_sem);
 		up_write(&to_si->extent_sem);
 
-		cur_time = CURRENT_TIME;
+		cur_time = current_time(from);
 		if (!is_stage) {
 			to->i_ctime = to->i_mtime = cur_time;
 			inode_inc_iversion(to);

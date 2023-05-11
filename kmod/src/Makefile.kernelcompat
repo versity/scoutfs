@@ -185,3 +185,12 @@ endif
 ifneq (,$(shell grep 'struct iov_iter.*msg_iter' include/linux/socket.h))
 ccflags-y += -DKC_MSGHDR_STRUCT_IOV_ITER=1
 endif
+
+#
+# v4.17-rc6-7-g95582b008388
+#
+# Kernel has current_time(inode) to uniformly retreive timespec in the right unit
+#
+ifneq (,$(shell grep 'extern struct timespec64 current_time' include/linux/fs.h))
+ccflags-y += -DKC_CURRENT_TIME_INODE=1
+endif

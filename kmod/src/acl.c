@@ -183,7 +183,7 @@ int scoutfs_set_acl_locked(struct inode *inode, struct posix_acl *acl, int type,
 		if (!value) {
 			/* can be setting an acl that only affects mode, didn't need xattr */
 			inode_inc_iversion(inode);
-			inode->i_ctime = CURRENT_TIME;
+			inode->i_ctime = current_time(inode);
 		}
 	}
 

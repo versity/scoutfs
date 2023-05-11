@@ -178,6 +178,14 @@ do {					\
 #define SB_I_VERSION MS_I_VERSION
 #endif
 
+#ifndef KC_CURRENT_TIME_INODE
+struct timespec64 kc_current_time(struct inode *inode);
+#define current_time kc_current_time
+#define kc_timespec timespec
+#else
+#define kc_timespec timespec64
+#endif
+
 #ifndef KC_SHRINKER_SHRINK
 
 #define KC_DEFINE_SHRINKER(name) struct shrinker name
