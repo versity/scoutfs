@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fs.h>
+#include <linux/blkdev.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
 #include <linux/magic.h>
