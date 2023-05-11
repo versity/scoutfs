@@ -143,10 +143,12 @@ void scoutfs_destroy_inode(struct inode *inode)
 static const struct inode_operations scoutfs_file_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
 	.get_acl	= scoutfs_get_acl,
 	.fiemap		= scoutfs_data_fiemap,
 };
@@ -154,10 +156,12 @@ static const struct inode_operations scoutfs_file_iops = {
 static const struct inode_operations scoutfs_special_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
 	.get_acl	= scoutfs_get_acl,
 };
 
@@ -174,8 +178,12 @@ static void set_inode_ops(struct inode *inode)
 		inode->i_fop = &scoutfs_file_fops;
 		break;
 	case S_IFDIR:
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 		inode->i_op = &scoutfs_dir_iops.ops;
 		inode->i_flags |= S_IOPS_WRAPPER;
+#else
+		inode->i_op = &scoutfs_dir_iops;
+#endif
 		inode->i_fop = &scoutfs_dir_fops;
 		break;
 	case S_IFLNK:
@@ -340,10 +348,17 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 	return ret;
 }
 
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat)
 {
 	struct inode *inode = dentry->d_inode;
+#else
+int scoutfs_getattr(const struct path *path, struct kstat *stat,
+		    u32 request_mask, unsigned int query_flags)
+{
+	struct inode *inode = d_inode(path->dentry);
+#endif
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
 	int ret;

@@ -225,3 +225,26 @@ endif
 ifneq (,$(shell grep 'readahead.*struct readahead_control' include/linux/fs.h))
 ccflags-y += -DKC_FILE_AOPS_READAHEAD
 endif
+
+#
+# v4.0-rc7-1743-g8436318205b9
+#
+# .aio_read and .aio_write no longer exist. All reads and writes now use the
+# .read_iter and .write_iter methods, or must implement .read and .write (which
+# we don't).
+#
+ifneq (,$(shell grep 'ssize_t.*aio_read' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_HAVE_FOP_AIO_READ=1
+endif
+
+#
+# rhel7 has a custom inode_operations_wrapper struct that is discarded
+# entirely in favor of upstream structure since rhel8.
+#
+ifneq (,$(shell grep 'void.*follow_link.*struct dentry' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_HAVE_RHEL_IOPS_WRAPPER=1
+endif
+
+ifneq (,$(shell grep 'size_t.*ki_left;' include/linux/aio.h))
+ccflags-y += -DKC_LINUX_AIO_KI_LEFT=1
+endif

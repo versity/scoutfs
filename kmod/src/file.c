@@ -29,6 +29,7 @@
 #include "per_task.h"
 #include "omap.h"
 
+#ifdef KC_LINUX_HAVE_FOP_AIO_READ
 /*
  * Start a high level file read.  We check for offline extents in the
  * read region here so that we only check the extents once.  We use the
@@ -146,6 +147,113 @@ out:
 
 	return ret;
 }
+#else
+ssize_t scoutfs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *scoutfs_inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
+	DECLARE_DATA_WAIT(dw);
+	int ret;
+
+retry:
+	/* protect checked extents from release */
+	inode_lock(inode);
+	atomic_inc(&inode->i_dio_count);
+	inode_unlock(inode);
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &scoutfs_inode_lock);
+	if (ret)
+		goto out;
+
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, scoutfs_inode_lock)) {
+		ret = scoutfs_data_wait_check_iter(inode, iocb->ki_pos, to,
+						   SEF_OFFLINE,
+						   SCOUTFS_IOC_DWO_READ,
+						   &dw, scoutfs_inode_lock);
+		if (ret != 0)
+			goto out;
+	} else {
+		WARN_ON_ONCE(true);
+	}
+
+	ret = generic_file_read_iter(iocb, to);
+
+out:
+	inode_dio_end(inode);
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	scoutfs_unlock(sb, scoutfs_inode_lock, SCOUTFS_LOCK_READ);
+
+	if (scoutfs_data_wait_found(&dw)) {
+		ret = scoutfs_data_wait(inode, &dw);
+		if (ret == 0)
+			goto retry;
+	}
+	return ret;
+}
+
+ssize_t scoutfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file_inode(file);
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *scoutfs_inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
+	DECLARE_DATA_WAIT(dw);
+	int ret;
+	int written;
+
+retry:
+	inode_lock(inode);
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &scoutfs_inode_lock);
+	if (ret)
+		goto out;
+
+	ret = generic_write_checks(iocb, from);
+	if (ret <= 0)
+		goto out;
+
+	ret = scoutfs_complete_truncate(inode, scoutfs_inode_lock);
+	if (ret)
+		goto out;
+
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, scoutfs_inode_lock)) {
+		/* data_version is per inode, whole file must be online */
+		ret = scoutfs_data_wait_check_iter(inode, iocb->ki_pos, from,
+						   SEF_OFFLINE,
+						   SCOUTFS_IOC_DWO_WRITE,
+						   &dw, scoutfs_inode_lock);
+		if (ret != 0)
+			goto out;
+	}
+
+	/* XXX: remove SUID bit */
+
+	written = __generic_file_write_iter(iocb, from);
+
+out:
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	scoutfs_unlock(sb, scoutfs_inode_lock, SCOUTFS_LOCK_WRITE);
+	inode_unlock(inode);
+
+	if (scoutfs_data_wait_found(&dw)) {
+		ret = scoutfs_data_wait(inode, &dw);
+		if (ret == 0)
+			goto retry;
+	}
+
+	if (ret > 0 || ret == -EIOCBQUEUED)
+		ret = generic_write_sync(iocb, written);
+
+	return written ? written : ret;
+}
+#endif
 
 int scoutfs_permission(struct inode *inode, int mask)
 {
