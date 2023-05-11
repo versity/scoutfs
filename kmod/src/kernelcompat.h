@@ -266,4 +266,11 @@ static inline int kc_kernel_getpeername(struct socket *sock, struct sockaddr *ad
 #define kc_sock_create_kern sock_create_kern
 #endif
 
+#ifndef KC_GENERIC_FILE_BUFFERED_WRITE
+ssize_t kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *iov,
+               unsigned long nr_segs, loff_t pos, loff_t *ppos,
+               size_t count, ssize_t written);
+#define generic_file_buffered_write kc_generic_file_buffered_write
+#endif
+
 #endif
