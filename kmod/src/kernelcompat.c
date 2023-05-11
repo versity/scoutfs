@@ -1,4 +1,6 @@
 
+#include <linux/uio.h>
+
 #include "kernelcompat.h"
 
 #ifdef KC_SHRINKER_SHRINK
@@ -56,5 +58,27 @@ struct timespec64 kc_current_time(struct inode *inode)
 	}
 
 	return now;
+}
+#endif
+
+#ifndef KC_GENERIC_FILE_BUFFERED_WRITE
+ssize_t
+kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *iov,
+			       unsigned long nr_segs, loff_t pos, loff_t *ppos,
+			       size_t count, ssize_t written)
+{
+	struct file *file = iocb->ki_filp;
+	ssize_t status;
+	struct iov_iter i;
+
+	iov_iter_init(&i, WRITE, iov, nr_segs, count);
+	status = generic_perform_write(file, &i, pos);
+
+	if (likely(status >= 0)) {
+		written += status;
+		*ppos = pos + status;
+	}
+
+	return written ? written : status;
 }
 #endif
