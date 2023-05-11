@@ -1059,14 +1059,14 @@ static int symlink_item_ops(struct super_block *sb, enum symlink_ops op, u64 ino
 }
 
 /*
- * Full a buffer with the null terminated symlink, point nd at it, and
- * return it so put_link can free it once the vfs is done.
+ * Fill a buffer with the null terminated symlink, and return it
+ * so callers can free it once the vfs is done.
  *
  * We chose to pay the runtime cost of per-call allocation and copy
  * overhead instead of wiring up symlinks to the page cache, storing
  * each small link in a full page, and later having to reclaim them.
  */
-static void *scoutfs_follow_link(struct dentry *dentry, struct nameidata *nd)
+static void *scoutfs_get_link_target(struct dentry *dentry)
 {
 	struct inode *inode = dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
@@ -1125,10 +1125,20 @@ out:
 	if (ret < 0) {
 		kfree(path);
 		path = ERR_PTR(ret);
-	} else {
-		nd_set_link(nd, path);
 	}
+
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	return path;
+}
+
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+static void *scoutfs_follow_link(struct dentry *dentry, struct nameidata *nd)
+{
+	char *path;
+
+	path = scoutfs_get_link_target(dentry);
+	if (!IS_ERR_OR_NULL(path))
+		nd_set_link(nd, path);
 	return path;
 }
 
@@ -1138,19 +1148,18 @@ static void scoutfs_put_link(struct dentry *dentry, struct nameidata *nd,
 	if (!IS_ERR_OR_NULL(cookie))
 		kfree(cookie);
 }
+#else
+static const char *scoutfs_get_link(struct dentry *dentry, struct inode *inode, struct delayed_call *done)
+{
+	char *path;
 
-const struct inode_operations scoutfs_symlink_iops = {
-	.readlink       = generic_readlink,
-	.follow_link    = scoutfs_follow_link,
-	.put_link       = scoutfs_put_link,
-	.getattr	= scoutfs_getattr,
-	.setattr	= scoutfs_setattr,
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
-	.removexattr	= generic_removexattr,
-	.get_acl	= scoutfs_get_acl,
-};
+	path = scoutfs_get_link_target(dentry);
+	if (!IS_ERR_OR_NULL(path))
+		set_delayed_call(done, kfree_link, path);
+
+	return path;
+}
+#endif
 
 /*
  * Symlink target paths can be annoyingly large.  We store relatively
@@ -1811,12 +1820,14 @@ out_unlock:
 	return ret;
 }
 
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 static int scoutfs_rename(struct inode *old_dir,
 			  struct dentry *old_dentry, struct inode *new_dir,
 			  struct dentry *new_dentry)
 {
 	return scoutfs_rename_common(old_dir, old_dentry, new_dir, new_dentry, 0);
 }
+#endif
 
 static int scoutfs_rename2(struct inode *old_dir,
 			  struct dentry *old_dentry, struct inode *new_dir,
@@ -1886,6 +1897,37 @@ out:
 	return ret;
 }
 
+const struct inode_operations scoutfs_symlink_iops = {
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.readlink       = generic_readlink,
+	.follow_link    = scoutfs_follow_link,
+	.put_link       = scoutfs_put_link,
+#else
+	.get_link	= scoutfs_get_link,
+#endif
+	.getattr	= scoutfs_getattr,
+	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.removexattr	= generic_removexattr,
+#endif
+	.get_acl	= scoutfs_get_acl,
+#ifndef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.tmpfile	= scoutfs_tmpfile,
+	.rename		= scoutfs_rename_common,
+	.symlink	= scoutfs_symlink,
+	.unlink		= scoutfs_unlink,
+	.link		= scoutfs_link,
+	.mkdir		= scoutfs_mkdir,
+	.create		= scoutfs_create,
+	.lookup		= scoutfs_lookup,
+#endif
+};
+
 const struct file_operations scoutfs_dir_fops = {
 	.KC_FOP_READDIR	= scoutfs_readdir,
 #ifdef KC_FMODE_KABI_ITERATE
@@ -1897,9 +1939,12 @@ const struct file_operations scoutfs_dir_fops = {
 };
 
 
-
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.ops = {
+#else
+const struct inode_operations scoutfs_dir_iops = {
+#endif
 	.lookup		= scoutfs_lookup,
 	.mknod		= scoutfs_mknod,
 	.create		= scoutfs_create,
@@ -1907,17 +1952,25 @@ const struct inode_operations_wrapper scoutfs_dir_iops = {
 	.link		= scoutfs_link,
 	.unlink		= scoutfs_unlink,
 	.rmdir		= scoutfs_unlink,
-	.rename		= scoutfs_rename,
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.rename		= scoutfs_rename,
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
 	.get_acl	= scoutfs_get_acl,
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	},
+#endif
 	.tmpfile	= scoutfs_tmpfile,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.rename2	= scoutfs_rename2,
+#else
+	.rename		= scoutfs_rename2,
+#endif
 };

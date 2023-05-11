@@ -5,7 +5,11 @@
 #include "lock.h"
 
 extern const struct file_operations scoutfs_dir_fops;
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 extern const struct inode_operations_wrapper scoutfs_dir_iops;
+#else
+extern const struct inode_operations scoutfs_dir_iops;
+#endif
 extern const struct inode_operations scoutfs_symlink_iops;
 
 extern const struct dentry_operations scoutfs_dentry_ops;
