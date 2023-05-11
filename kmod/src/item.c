@@ -78,7 +78,9 @@ struct item_cache_info {
 	struct super_block *sb;
 	struct item_percpu_pages __percpu *pcpu_pages;
 	KC_DEFINE_SHRINKER(shrinker);
+#ifdef KC_CPU_NOTIFIER
 	struct notifier_block notifier;
+#endif
 
 	/* often walked, but per-cpu refs are fast path */
 	rwlock_t rwlock;
@@ -2605,6 +2607,7 @@ static unsigned long item_cache_scan_objects(struct shrinker *shrink,
 	return freed;
 }
 
+#ifdef KC_CPU_NOTIFIER
 static int item_cpu_callback(struct notifier_block *nfb,
 			     unsigned long action, void *hcpu)
 {
@@ -2619,6 +2622,7 @@ static int item_cpu_callback(struct notifier_block *nfb,
 
 	return NOTIFY_OK;
 }
+#endif
 
 int scoutfs_item_setup(struct super_block *sb)
 {
@@ -2651,8 +2655,10 @@ int scoutfs_item_setup(struct super_block *sb)
 	KC_INIT_SHRINKER_FUNCS(&cinf->shrinker, item_cache_count_objects,
 			       item_cache_scan_objects);
 	KC_REGISTER_SHRINKER(&cinf->shrinker);
+#ifdef KC_CPU_NOTIFIER
         cinf->notifier.notifier_call = item_cpu_callback;
         register_hotcpu_notifier(&cinf->notifier);
+#endif
 
 	sbi->item_cache_info = cinf;
 	return 0;
@@ -2672,7 +2678,9 @@ void scoutfs_item_destroy(struct super_block *sb)
 	if (cinf) {
 		BUG_ON(!list_empty(&cinf->active_list));
 
+#ifdef KC_CPU_NOTIFIER
 		unregister_hotcpu_notifier(&cinf->notifier);
+#endif
 		KC_UNREGISTER_SHRINKER(&cinf->shrinker);
 
 		for_each_possible_cpu(cpu)
