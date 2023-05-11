@@ -735,7 +735,7 @@ static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
-	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
+	dir->i_mtime = dir->i_ctime = current_time(inode);
 	inode->i_mtime = inode->i_atime = inode->i_ctime = dir->i_mtime;
 	si->crtime = inode->i_mtime;
 	inode_inc_iversion(dir);
@@ -859,7 +859,7 @@ retry:
 	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, dir_size);
-	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
+	dir->i_mtime = dir->i_ctime = current_time(inode);
 	inode->i_ctime = dir->i_mtime;
 	inc_nlink(inode);
 	inode_inc_iversion(dir);
@@ -900,7 +900,7 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode = dentry->d_inode;
-	struct timespec ts = current_kernel_time();
+	struct kc_timespec ts = current_time(inode);
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
@@ -1204,7 +1204,7 @@ static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
 	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
-	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
+	dir->i_mtime = dir->i_ctime = current_time(inode);
 	inode_inc_iversion(dir);
 
 	inode->i_ctime = dir->i_mtime;
@@ -1558,7 +1558,7 @@ static int scoutfs_rename_common(struct inode *old_dir,
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_dirent new_dent;
 	struct scoutfs_dirent old_dent;
-	struct timespec now;
+	struct kc_timespec now;
 	bool ins_new = false;
 	bool del_new = false;
 	bool ins_old = false;
@@ -1724,7 +1724,7 @@ retry:
 		inc_nlink(new_dir);
 	}
 
-	now = CURRENT_TIME;
+	now = current_time(old_inode);
 	old_dir->i_ctime = now;
 	old_dir->i_mtime = now;
 	if (new_dir != old_dir) {
@@ -1861,7 +1861,7 @@ static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mod
 	if (ret < 0)
 		goto out; /* XXX returning error but items created */
 
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	si->crtime = inode->i_mtime;
 	insert_inode_hash(inode);
 	ihold(inode); /* need to update inode modifications in d_tmpfile */
