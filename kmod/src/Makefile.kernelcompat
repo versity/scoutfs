@@ -204,3 +204,12 @@ endif
 ifneq (,$(shell grep 'define register_hotcpu_notifier' include/linux/cpu.h))
 ccflags-y += -DKC_CPU_NOTIFIER
 endif
+
+#
+# v3.14-rc8-130-gccad2365668f
+#
+# generic_file_buffered_write is removed, backport it
+#
+ifneq (,$(shell grep 'extern ssize_t generic_file_buffered_write' include/linux/fs.h))
+ccflags-y += -DKC_GENERIC_FILE_BUFFERED_WRITE=1
+endif
