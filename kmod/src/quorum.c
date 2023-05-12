@@ -699,6 +699,20 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				goto out;
 		}
 
+		/* receiving heartbeats extends timeout, delaying elections */
+		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
+			qst.timeout = heartbeat_timeout();
+			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
+		}
+
+		/* receiving a resignation from server starts election */
+		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
+		    qst.role == FOLLOWER &&
+		    msg.term == qst.term) {
+			qst.timeout = election_timeout();
+			scoutfs_inc_counter(sb, quorum_recv_resignation);
+		}
+
 		/* followers and candidates start new election on timeout */
 		if (qst.role != LEADER &&
 		    ktime_after(ktime_get(), qst.timeout)) {
@@ -822,20 +836,6 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 					qst.term);
 			qst.timeout = heartbeat_interval();
 			scoutfs_inc_counter(sb, quorum_send_heartbeat);
-		}
-
-		/* receiving heartbeats extends timeout, delaying elections */
-		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
-			qst.timeout = heartbeat_timeout();
-			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
-		}
-
-		/* receiving a resignation from server starts election */
-		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
-		    qst.role == FOLLOWER &&
-		    msg.term == qst.term) {
-			qst.timeout = election_timeout();
-			scoutfs_inc_counter(sb, quorum_recv_resignation);
 		}
 
 		/* followers vote once per term */
