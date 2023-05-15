@@ -4464,7 +4464,7 @@ void scoutfs_server_stop_wait(struct super_block *sb)
 	DECLARE_SERVER_INFO(sb, server);
 
 	stop_server(server);
-	flush_work_sync(&server->work);
+	flush_work(&server->work);
 }
 
 int scoutfs_server_setup(struct super_block *sb)

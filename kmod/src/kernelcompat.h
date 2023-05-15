@@ -55,6 +55,16 @@ static inline int dir_emit_dots(struct file *file, void *dirent,
 #endif
 
 /*
+ * v3.6-rc1-24-gdbf2576e37da
+ *
+ * All workqueues are now non-reentrant, and the bit flag is removed
+ * shortly after its uses were removed.
+ */
+#ifndef WQ_NON_REENTRANT
+#define WQ_NON_REENTRANT 0
+#endif
+
+/*
  * v3.18-rc2-19-gb5ae6b15bd73
  *
  * Folds d_materialise_unique into d_splice_alias. Note reversal
