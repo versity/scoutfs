@@ -180,7 +180,8 @@ static int create_socket(struct super_block *sb)
 		goto out;
 	}
 
-	sock->sk->sk_allocation = GFP_NOFS;
+	/* rather fail and retry than block waiting for free */
+	sock->sk->sk_allocation = GFP_ATOMIC;
 
 	quorum_slot_sin(&qinf->qconf, qinf->our_quorum_slot_nr, &sin);
 
