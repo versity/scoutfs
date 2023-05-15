@@ -1346,7 +1346,7 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 			    enum scoutfs_lock_mode mode)
 {
-	signed char lock_mode = ACCESS_ONCE(lock->mode);
+	signed char lock_mode = READ_ONCE(lock->mode);
 
 	return lock_modes_match(lock_mode, mode) &&
 	       scoutfs_key_compare_ranges(key, key,

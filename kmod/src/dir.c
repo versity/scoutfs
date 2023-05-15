@@ -272,7 +272,7 @@ static void set_dentry_fsdata(struct dentry *dentry, struct scoutfs_lock *lock)
 
 static bool test_dentry_fsdata(struct dentry *dentry, u64 refresh)
 {
-	u64 fsd = (unsigned long)ACCESS_ONCE(dentry->d_fsdata);
+	u64 fsd = (unsigned long)READ_ONCE(dentry->d_fsdata);
 
 	return fsd == refresh;
 }
