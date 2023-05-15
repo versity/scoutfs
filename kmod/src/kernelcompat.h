@@ -54,4 +54,14 @@ static inline int dir_emit_dots(struct file *file, void *dirent,
 #define kc_posix_acl_valid(user_ns, acl) posix_acl_valid(acl)
 #endif
 
+/*
+ * v3.18-rc2-19-gb5ae6b15bd73
+ *
+ * Folds d_materialise_unique into d_splice_alias. Note reversal
+ * of arguments (Also note Documentation/filesystems/porting.rst)
+ */
+#ifndef KC_D_MATERIALISE_UNIQUE
+#define d_materialise_unique(dentry, inode) d_splice_alias(inode, dentry)
+#endif
+
 #endif
