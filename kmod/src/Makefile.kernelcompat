@@ -27,6 +27,16 @@ ccflags-y += -DKC_DIR_EMIT_DOTS
 endif
 
 #
+# v3.18-rc2-19-gb5ae6b15bd73
+# 
+# Folds d_materialise_unique into d_splice_alias. Note reversal
+# of arguments (Also note Documentation/filesystems/porting.rst)
+#
+ifneq (,$(shell grep 'd_materialise_unique' include/linux/dcache.h))
+ccflags-y += -DKC_D_MATERIALISE_UNIQUE=1
+endif
+
+#
 # RHEL extended the fop struct so to use it we have to set
 # a flag to indicate that the struct is large enough and
 # contains the pointer.
