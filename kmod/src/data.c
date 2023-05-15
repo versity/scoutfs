@@ -704,7 +704,7 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
 		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_CACHE_SIZE, SEF_OFFLINE,
+					      PAGE_SIZE, SEF_OFFLINE,
 					      SCOUTFS_IOC_DWO_READ, &dw,
 					      inode_lock);
 		if (ret != 0) {
@@ -754,7 +754,7 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 
 	list_for_each_entry_safe(page, tmp, pages, lru) {
 		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_CACHE_SIZE, SEF_OFFLINE,
+					      PAGE_SIZE, SEF_OFFLINE,
 					      SCOUTFS_IOC_DWO_READ, NULL,
 					      inode_lock);
 		if (ret < 0)
