@@ -115,6 +115,7 @@ struct quorum_status {
 struct quorum_info {
 	struct super_block *sb;
 	struct scoutfs_quorum_config qconf;
+	struct workqueue_struct *workq;
 	struct work_struct work;
 	struct socket *sock;
 	bool shutdown;
@@ -1195,6 +1196,15 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	sbi->quorum_info = qinf;
 	qinf->sb = sb;
 
+	/* a high priority single threaded context without mem reclaim */
+	qinf->workq = alloc_workqueue("scoutfs_quorum_work",
+				       WQ_NON_REENTRANT | WQ_UNBOUND |
+				       WQ_HIGHPRI, 1);
+	if (!qinf->workq) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
 	ret = scoutfs_read_super(sb, super);
 	if (ret < 0)
 		goto out;
@@ -1213,7 +1223,7 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	if (ret < 0)
 		goto out;
 
-	schedule_work(&qinf->work);
+	queue_work(qinf->workq, &qinf->work);
 
 out:
 	if (ret)
@@ -1242,6 +1252,9 @@ void scoutfs_quorum_destroy(struct super_block *sb)
 	if (qinf) {
 		qinf->shutdown = true;
 		flush_work(&qinf->work);
+
+		if (qinf->workq)
+			destroy_workqueue(qinf->workq);
 
 		scoutfs_sysfs_destroy_attrs(sb, &qinf->ssa);
 		if (qinf->sock)
