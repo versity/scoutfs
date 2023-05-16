@@ -210,12 +210,16 @@ static __le32 quorum_message_crc(struct scoutfs_quorum_message *qmes)
 	return cpu_to_le32(crc32c(~0, qmes, len));
 }
 
-static void send_msg_members(struct super_block *sb, int type, u64 term,
-			     int only)
+/*
+ * Returns the number of failures from sendmsg.
+ */
+static int send_msg_members(struct super_block *sb, int type, u64 term, int only)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	DECLARE_QUORUM_INFO(sb, qinf);
+	int failed = 0;
 	ktime_t now;
+	int ret;
 	int i;
 
 	struct scoutfs_quorum_message qmes = {
@@ -241,7 +245,6 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 
 	qmes.crc = quorum_message_crc(&qmes);
 
-
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(&qinf->qconf, i) ||
 		    (only >= 0 && i != only) || i == qinf->our_quorum_slot_nr)
@@ -249,7 +252,9 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 
 		scoutfs_quorum_slot_sin(&qinf->qconf, i, &sin);
 		now = ktime_get();
-		kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
+		ret = kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
+		if (ret != kv.iov_len)
+			failed++;
 
 		spin_lock(&qinf->show_lock);
 		qinf->last_send[i].msg.term = term;
@@ -260,6 +265,8 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 		if (i == only)
 			break;
 	}
+
+	return failed;
 }
 
 #define send_msg_to(sb, type, term, nr)  send_msg_members(sb, type, term, nr)
@@ -839,8 +846,12 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		/* leaders regularly send heartbeats to delay elections */
 		if (qst.role == LEADER &&
 		    ktime_after(ktime_get(), qst.timeout)) {
-			send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT,
-					qst.term);
+			ret = send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT, qst.term);
+			if (ret > 0) {
+				scoutfs_add_counter(sb, quorum_send_heartbeat_dropped, ret);
+				ret = 0;
+			}
+
 			qst.timeout = heartbeat_interval();
 			scoutfs_inc_counter(sb, quorum_send_heartbeat);
 		}

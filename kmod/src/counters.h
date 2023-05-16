@@ -166,6 +166,7 @@
 	EXPAND_COUNTER(quorum_recv_resignation)			\
 	EXPAND_COUNTER(quorum_recv_vote)			\
 	EXPAND_COUNTER(quorum_send_heartbeat)			\
+	EXPAND_COUNTER(quorum_send_heartbeat_dropped)		\
 	EXPAND_COUNTER(quorum_send_resignation)			\
 	EXPAND_COUNTER(quorum_send_request)			\
 	EXPAND_COUNTER(quorum_send_vote)			\
