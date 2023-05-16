@@ -85,6 +85,25 @@ the options directory in the mount's sysfs directory.  Writing a new
 value will cause the next pending orphan scan to be rescheduled
 with the newly written delay time.
 .TP
+.B quorum_heartbeat_timeout_ms=<number>
+This option sets the amount of time, in milliseconds, that a quorum
+member will wait without receiving heartbeat messages from the current
+leader before trying to take over as leader.  This setting is per-mount
+and only changes the behavior of that mount.
+.sp
+This determines how long it may take before a failed leader is replaced
+by a waiting quorum member.  Setting it too low may lead to spurious
+fencing as active leaders are prematurely replaced due to task or
+network delays that prevent the quorum members from promptly sending and
+receiving messages.  The ideal setting is the longest acceptable
+downtime during server failover.  The default is 10000 (10s) and it can
+not be less than 2000 greater than 60000.
+.sp
+This option can be changed in an active mount by writing to its file in
+the options directory in the mount's sysfs directory.  Writing a new
+value will take effect the next time the quorum agent receives a
+heartbeat message and sets the next timeout.
+.TP
 .B quorum_slot_nr=<number>
 The quorum_slot_nr option assigns a quorum member slot to the mount.
 The mount will use the slot assignment to claim exclusive ownership of

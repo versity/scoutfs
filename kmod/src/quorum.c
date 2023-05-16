@@ -161,9 +161,9 @@ static ktime_t heartbeat_interval(void)
 	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_IVAL_MS);
 }
 
-static ktime_t heartbeat_timeout(void)
+static ktime_t heartbeat_timeout(struct scoutfs_mount_options *opts)
 {
-	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_TIMEO_MS);
+	return ktime_add_ms(ktime_get(), opts->quorum_heartbeat_timeout_ms);
 }
 
 static int create_socket(struct super_block *sb)
@@ -625,6 +625,7 @@ static void update_show_status(struct quorum_info *qinf, struct quorum_status *q
 static void scoutfs_quorum_worker(struct work_struct *work)
 {
 	struct quorum_info *qinf = container_of(work, struct quorum_info, work);
+	struct scoutfs_mount_options opts;
 	struct super_block *sb = qinf->sb;
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
@@ -635,6 +636,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	/* recording votes from slots as native single word bitmap */
 	BUILD_BUG_ON(SCOUTFS_QUORUM_MAX_SLOTS > BITS_PER_LONG);
 
+	scoutfs_options_read(sb, &opts);
+
 	/* start out as a follower */
 	qst.role = FOLLOWER;
 	qst.vote_for = -1;
@@ -644,7 +647,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 	/* see if there's a server to chose heartbeat or election timeout */
 	if (scoutfs_quorum_server_sin(sb, &unused) == 0)
-		qst.timeout = heartbeat_timeout();
+		qst.timeout = heartbeat_timeout(&opts);
 	else
 		qst.timeout = election_timeout();
 
@@ -667,6 +670,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			msg.type = SCOUTFS_QUORUM_MSG_INVALID;
 			ret = 0;
 		}
+
+		scoutfs_options_read(sb, &opts);
 
 		/* ignore messages from older terms */
 		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
@@ -691,7 +696,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			scoutfs_inc_counter(sb, quorum_term_follower);
 
 			if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT)
-				qst.timeout = heartbeat_timeout();
+				qst.timeout = heartbeat_timeout(&opts);
 			else
 				qst.timeout = election_timeout();
 
@@ -703,7 +708,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 		/* receiving heartbeats extends timeout, delaying elections */
 		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
-			qst.timeout = heartbeat_timeout();
+			qst.timeout = heartbeat_timeout(&opts);
 			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
 		}
 

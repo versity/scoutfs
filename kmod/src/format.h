@@ -683,16 +683,19 @@ struct scoutfs_xattr_totl_val {
 #define SCOUTFS_QUORUM_ELECT_VAR_MS	100
 
 /*
- * Once a leader is elected they send out heartbeats at regular
- * intervals to force members to wait the much longer heartbeat timeout.
- * Once heartbeat timeout expires without receiving a heartbeat they'll
- * switch over the performing elections.
+ * Once a leader is elected they send heartbeat messages to all quorum
+ * members at regular intervals to force members to wait the much longer
+ * heartbeat timeout.  Once the heartbeat timeout expires without
+ * receiving a heartbeat message a member will start an election.
  *
  * These determine how long it could take members to notice that a
- * leader has gone silent and start to elect a new leader.
+ * leader has gone silent and start to elect a new leader.  The
+ * heartbeat timeout can be changed at run time by options.
  */
 #define SCOUTFS_QUORUM_HB_IVAL_MS	100
-#define SCOUTFS_QUORUM_HB_TIMEO_MS	(5 * MSEC_PER_SEC)
+#define SCOUTFS_QUORUM_MIN_HB_TIMEO_MS	(2 * MSEC_PER_SEC)
+#define SCOUTFS_QUORUM_DEF_HB_TIMEO_MS	(10 * MSEC_PER_SEC)
+#define SCOUTFS_QUORUM_MAX_HB_TIMEO_MS	(60 * MSEC_PER_SEC)
 
 /*
  * A newly elected leader will give fencing some time before giving up and
