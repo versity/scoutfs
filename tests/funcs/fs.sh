@@ -400,7 +400,7 @@ t_set_sysfs_mount_option() {
 	local val="$3"
 	local opt="$(t_sysfs_path $nr)/mount_options/$name"
 
-	echo "$val" > "$opt"
+	echo "$val" > "$opt" 2>/dev/null
 }
 
 t_set_all_sysfs_mount_options() {
