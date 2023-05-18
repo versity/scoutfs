@@ -259,6 +259,11 @@ static int send_msg_members(struct super_block *sb, int type, u64 term, int only
 		    (only >= 0 && i != only) || i == qinf->our_quorum_slot_nr)
 			continue;
 
+		if (scoutfs_forcing_unmount(sb)) {
+			failed = 0;
+			break;
+		}
+
 		scoutfs_quorum_slot_sin(&qinf->qconf, i, &sin);
 		now = ktime_get();
 		ret = kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
@@ -329,6 +334,9 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	ret = kernel_recvmsg(qinf->sock, &mh, &kv, 1, kv.iov_len, mh.msg_flags);
 	if (ret < 0)
 		return ret;
+
+	if (scoutfs_forcing_unmount(sb))
+		return 0;
 
 	now = ktime_get();
 
