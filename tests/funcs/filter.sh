@@ -82,6 +82,7 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error .* freeing merged btree blocks.*.final commit del.upd freeing item"
 	re="$re|scoutfs .* error .*reading quorum block.*to update event.*"
 	re="$re|scoutfs .* error.*server failed to bind to.*"
+	re="$re|scoutfs .* critical transaction commit failure.*"
 
 	egrep -v "($re)" 
 }
