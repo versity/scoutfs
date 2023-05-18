@@ -38,6 +38,7 @@ setup-error-teardown.sh
 resize-devices.sh
 change-devices.sh
 fence-and-reclaim.sh
+quorum-heartbeat-timeout.sh
 orphan-inodes.sh
 mount-unmount-race.sh
 client-unmount-recovery.sh

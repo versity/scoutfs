@@ -61,6 +61,7 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error: meta_super META flag not set"
 	re="$re|scoutfs .* error: could not open metadev:.*"
 	re="$re|scoutfs .* error: Unknown or malformed option,.*"
+	re="$re|scoutfs .* error: invalid quorum_heartbeat_timeout_ms value"
 
 	# in debugging kernels we can slow things down a bit
 	re="$re|hrtimer: interrupt took .*"
