@@ -2,6 +2,17 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.13
+\
+*May 19, 2023*
+
+Add the quorum\_heartbeat\_timeout\_ms mount option to set the quorum
+heartbeat timeout.
+
+Change some task prioritization and allocation behavior of the quorum
+agent to help reduce delays in sending and receiving heartbeat messages.
+
+---
 v1.12
 \
 *Apr 17, 2023*
