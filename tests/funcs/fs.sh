@@ -76,6 +76,15 @@ t_fs_nrs()
 }
 
 #
+# output the fs nrs of quorum nodes, we "know" that
+# the quorum nrs are the first consequtive nrs
+#
+t_quorum_nrs()
+{
+	seq 0 $((T_QUORUM - 1))
+}
+
+#
 # outputs "1" if the fs number has "1" in its quorum/is_leader file.
 # All other cases output 0, including the fs nr being a client which
 # won't have a quorum/ dir.
@@ -391,7 +400,7 @@ t_set_sysfs_mount_option() {
 	local val="$3"
 	local opt="$(t_sysfs_path $nr)/mount_options/$name"
 
-	echo "$val" > "$opt"
+	echo "$val" > "$opt" 2>/dev/null
 }
 
 t_set_all_sysfs_mount_options() {

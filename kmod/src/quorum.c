@@ -100,6 +100,11 @@ struct last_msg {
 	ktime_t ts;
 };
 
+struct count_recent {
+	u64 count;
+	ktime_t recent;
+};
+
 enum quorum_role { FOLLOWER, CANDIDATE, LEADER };
 
 struct quorum_status {
@@ -112,9 +117,12 @@ struct quorum_status {
 	ktime_t timeout;
 };
 
+#define HB_DELAY_NR		(SCOUTFS_QUORUM_MAX_HB_TIMEO_MS / MSEC_PER_SEC)
+
 struct quorum_info {
 	struct super_block *sb;
 	struct scoutfs_quorum_config qconf;
+	struct workqueue_struct *workq;
 	struct work_struct work;
 	struct socket *sock;
 	bool shutdown;
@@ -126,6 +134,8 @@ struct quorum_info {
 	struct quorum_status show_status;
 	struct last_msg last_send[SCOUTFS_QUORUM_MAX_SLOTS];
 	struct last_msg last_recv[SCOUTFS_QUORUM_MAX_SLOTS];
+	struct count_recent *hb_delay;
+	unsigned long max_hb_delay;
 
 	struct scoutfs_sysfs_attrs ssa;
 };
@@ -160,9 +170,9 @@ static ktime_t heartbeat_interval(void)
 	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_IVAL_MS);
 }
 
-static ktime_t heartbeat_timeout(void)
+static ktime_t heartbeat_timeout(struct scoutfs_mount_options *opts)
 {
-	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_TIMEO_MS);
+	return ktime_add_ms(ktime_get(), opts->quorum_heartbeat_timeout_ms);
 }
 
 static int create_socket(struct super_block *sb)
@@ -179,7 +189,8 @@ static int create_socket(struct super_block *sb)
 		goto out;
 	}
 
-	sock->sk->sk_allocation = GFP_NOFS;
+	/* rather fail and retry than block waiting for free */
+	sock->sk->sk_allocation = GFP_ATOMIC;
 
 	quorum_slot_sin(&qinf->qconf, qinf->our_quorum_slot_nr, &sin);
 
@@ -208,12 +219,16 @@ static __le32 quorum_message_crc(struct scoutfs_quorum_message *qmes)
 	return cpu_to_le32(crc32c(~0, qmes, len));
 }
 
-static void send_msg_members(struct super_block *sb, int type, u64 term,
-			     int only)
+/*
+ * Returns the number of failures from sendmsg.
+ */
+static int send_msg_members(struct super_block *sb, int type, u64 term, int only)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	DECLARE_QUORUM_INFO(sb, qinf);
+	int failed = 0;
 	ktime_t now;
+	int ret;
 	int i;
 
 	struct scoutfs_quorum_message qmes = {
@@ -239,15 +254,21 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 
 	qmes.crc = quorum_message_crc(&qmes);
 
-
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(&qinf->qconf, i) ||
 		    (only >= 0 && i != only) || i == qinf->our_quorum_slot_nr)
 			continue;
 
+		if (scoutfs_forcing_unmount(sb)) {
+			failed = 0;
+			break;
+		}
+
 		scoutfs_quorum_slot_sin(&qinf->qconf, i, &sin);
 		now = ktime_get();
-		kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
+		ret = kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
+		if (ret != kv.iov_len)
+			failed++;
 
 		spin_lock(&qinf->show_lock);
 		qinf->last_send[i].msg.term = term;
@@ -258,6 +279,8 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 		if (i == only)
 			break;
 	}
+
+	return failed;
 }
 
 #define send_msg_to(sb, type, term, nr)  send_msg_members(sb, type, term, nr)
@@ -311,6 +334,9 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	ret = kernel_recvmsg(qinf->sock, &mh, &kv, 1, kv.iov_len, mh.msg_flags);
 	if (ret < 0)
 		return ret;
+
+	if (scoutfs_forcing_unmount(sb))
+		return 0;
 
 	now = ktime_get();
 
@@ -599,6 +625,71 @@ out:
 	return ret;
 }
 
+static void clear_hb_delay(struct quorum_info *qinf)
+{
+	int i;
+
+	spin_lock(&qinf->show_lock);
+	qinf->max_hb_delay = 0;
+	for (i = 0; i < HB_DELAY_NR; i++) {
+		qinf->hb_delay[i].recent = ns_to_ktime(0);
+		qinf->hb_delay[i].count = 0;
+	}
+	spin_unlock(&qinf->show_lock);
+}
+
+struct hb_recording {
+	ktime_t prev;
+	int count;
+};
+
+/*
+ * Record long heartbeat delays.  We only record the delay between back
+ * to back send attempts in the leader or back to back recv messages in
+ * the followers.  The worker caller sets record_hb when their iteration
+ * sent or received a heartbeat.  An iteration that does anything else
+ * resets the tracking.
+ */
+static void record_hb_delay(struct super_block *sb, struct quorum_info *qinf,
+			    struct hb_recording *hbr, bool record_hb, int role)
+{
+	bool log = false;
+	ktime_t now;
+	s64 s;
+
+	if (!record_hb) {
+		hbr->count = 0;
+		return;
+	}
+
+	now = ktime_get();
+
+	if (hbr->count < 2 && ++hbr->count < 2) {
+		hbr->prev = now;
+		return;
+	}
+
+	s = ktime_ms_delta(now, hbr->prev) / MSEC_PER_SEC;
+	hbr->prev = now;
+
+	if (s <= 0 || s >= HB_DELAY_NR)
+		return;
+
+	spin_lock(&qinf->show_lock);
+	if (qinf->max_hb_delay < s) {
+		qinf->max_hb_delay = s;
+		if (s >= 3)
+			log = true;
+	}
+	qinf->hb_delay[s].recent = now;
+	qinf->hb_delay[s].count++;
+	spin_unlock(&qinf->show_lock);
+
+	if (log)
+		scoutfs_info(sb, "longest quorum heartbeat %s delay of %lld sec",
+			     role == LEADER ? "send" : "recv", s);
+}
+
 /*
  * The main quorum task maintains its private status.  It seemed cleaner
  * to occasionally copy the status for showing in sysfs/debugfs files
@@ -623,15 +714,20 @@ static void update_show_status(struct quorum_info *qinf, struct quorum_status *q
 static void scoutfs_quorum_worker(struct work_struct *work)
 {
 	struct quorum_info *qinf = container_of(work, struct quorum_info, work);
+	struct scoutfs_mount_options opts;
 	struct super_block *sb = qinf->sb;
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
 	struct quorum_status qst = {0,};
+	struct hb_recording hbr = {{0,},};
+	bool record_hb;
 	int ret;
 	int err;
 
 	/* recording votes from slots as native single word bitmap */
 	BUILD_BUG_ON(SCOUTFS_QUORUM_MAX_SLOTS > BITS_PER_LONG);
+
+	scoutfs_options_read(sb, &opts);
 
 	/* start out as a follower */
 	qst.role = FOLLOWER;
@@ -642,7 +738,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 	/* see if there's a server to chose heartbeat or election timeout */
 	if (scoutfs_quorum_server_sin(sb, &unused) == 0)
-		qst.timeout = heartbeat_timeout();
+		qst.timeout = heartbeat_timeout(&opts);
 	else
 		qst.timeout = election_timeout();
 
@@ -666,6 +762,9 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			ret = 0;
 		}
 
+		scoutfs_options_read(sb, &opts);
+		record_hb = false;
+
 		/* ignore messages from older terms */
 		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
 		    msg.term < qst.term)
@@ -681,6 +780,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			if (qst.role == LEADER) {
 				scoutfs_warn(sb, "saw msg type %u from %u for term %llu while leader in term %llu, shutting down server.",
 					     msg.type, msg.from, msg.term, qst.term);
+				clear_hb_delay(qinf);
 			}
 			qst.role = FOLLOWER;
 			qst.term = msg.term;
@@ -689,7 +789,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			scoutfs_inc_counter(sb, quorum_term_follower);
 
 			if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT)
-				qst.timeout = heartbeat_timeout();
+				qst.timeout = heartbeat_timeout(&opts);
 			else
 				qst.timeout = election_timeout();
 
@@ -697,6 +797,21 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_TERM, qst.term, true);
 			if (ret < 0)
 				goto out;
+		}
+
+		/* receiving heartbeats extends timeout, delaying elections */
+		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
+			qst.timeout = heartbeat_timeout(&opts);
+			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
+			record_hb = true;
+		}
+
+		/* receiving a resignation from server starts election */
+		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
+		    qst.role == FOLLOWER &&
+		    msg.term == qst.term) {
+			qst.timeout = election_timeout();
+			scoutfs_inc_counter(sb, quorum_recv_resignation);
 		}
 
 		/* followers and candidates start new election on timeout */
@@ -751,6 +866,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			qst.timeout = heartbeat_interval();
 
 			update_show_status(qinf, &qst);
+			clear_hb_delay(qinf);
 
 			/* record that we've been elected before starting up server */
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_ELECT, qst.term, true);
@@ -805,6 +921,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
 						qst.server_start_term);
 				scoutfs_inc_counter(sb, quorum_send_resignation);
+				clear_hb_delay(qinf);
 			}
 
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP,
@@ -818,24 +935,16 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		/* leaders regularly send heartbeats to delay elections */
 		if (qst.role == LEADER &&
 		    ktime_after(ktime_get(), qst.timeout)) {
-			send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT,
-					qst.term);
+			ret = send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT, qst.term);
+			if (ret > 0) {
+				scoutfs_add_counter(sb, quorum_send_heartbeat_dropped, ret);
+				ret = 0;
+			}
+
 			qst.timeout = heartbeat_interval();
 			scoutfs_inc_counter(sb, quorum_send_heartbeat);
-		}
+			record_hb = true;
 
-		/* receiving heartbeats extends timeout, delaying elections */
-		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
-			qst.timeout = heartbeat_timeout();
-			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
-		}
-
-		/* receiving a resignation from server starts election */
-		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
-		    qst.role == FOLLOWER &&
-		    msg.term == qst.term) {
-			qst.timeout = election_timeout();
-			scoutfs_inc_counter(sb, quorum_recv_resignation);
 		}
 
 		/* followers vote once per term */
@@ -847,6 +956,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				    msg.from);
 			scoutfs_inc_counter(sb, quorum_send_vote);
 		}
+
+		record_hb_delay(sb, qinf, &hbr, record_hb, qst.role);
 	}
 
 	update_show_status(qinf, &qst);
@@ -983,9 +1094,11 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 {
 	DECLARE_QUORUM_INFO_KOBJ(kobj, qinf);
 	struct quorum_status qst;
+	struct count_recent cr;
 	struct last_msg last;
 	struct timespec64 ts;
 	const ktime_t now = ktime_get();
+	unsigned long ul;
 	size_t size;
 	int ret;
 	int i;
@@ -1041,6 +1154,26 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 			     "last_recv from %u term %llu type %u secs_since %lld.%09u\n",
 			     i, last.msg.term, last.msg.type,
 			     (s64)ts.tv_sec, (int)ts.tv_nsec);
+	}
+
+	spin_lock(&qinf->show_lock);
+	ul = qinf->max_hb_delay;
+	spin_unlock(&qinf->show_lock);
+	if (ul)
+		snprintf_ret(buf, size, &ret, "HB Delay(s)      Count  Secs Since\n");
+
+	for (i = 1; i <= ul && i < HB_DELAY_NR; i++) {
+		spin_lock(&qinf->show_lock);
+		cr = qinf->hb_delay[i];
+		spin_unlock(&qinf->show_lock);
+
+		if (cr.count == 0)
+			continue;
+
+		ts = ktime_to_timespec64(ktime_sub(now, cr.recent));
+		snprintf_ret(buf, size, &ret,
+			     "%11u  %9llu  %lld.%09u\n",
+			     i, cr.count, (s64)ts.tv_sec, (int)ts.tv_nsec);
 	}
 
 	return ret;
@@ -1180,7 +1313,12 @@ int scoutfs_quorum_setup(struct super_block *sb)
 
 	qinf = kzalloc(sizeof(struct quorum_info), GFP_KERNEL);
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_KERNEL);
-	if (!qinf || !super) {
+	if (qinf)
+		qinf->hb_delay = __vmalloc(HB_DELAY_NR * sizeof(struct count_recent),
+					   GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL);
+	if (!qinf || !super || !qinf->hb_delay) {
+		if (qinf)
+			vfree(qinf->hb_delay);
 		kfree(qinf);
 		ret = -ENOMEM;
 		goto out;
@@ -1194,6 +1332,15 @@ int scoutfs_quorum_setup(struct super_block *sb)
 
 	sbi->quorum_info = qinf;
 	qinf->sb = sb;
+
+	/* a high priority single threaded context without mem reclaim */
+	qinf->workq = alloc_workqueue("scoutfs_quorum_work",
+				       WQ_NON_REENTRANT | WQ_UNBOUND |
+				       WQ_HIGHPRI, 1);
+	if (!qinf->workq) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	ret = scoutfs_read_super(sb, super);
 	if (ret < 0)
@@ -1213,7 +1360,7 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	if (ret < 0)
 		goto out;
 
-	schedule_work(&qinf->work);
+	queue_work(qinf->workq, &qinf->work);
 
 out:
 	if (ret)
@@ -1243,10 +1390,14 @@ void scoutfs_quorum_destroy(struct super_block *sb)
 		qinf->shutdown = true;
 		flush_work(&qinf->work);
 
+		if (qinf->workq)
+			destroy_workqueue(qinf->workq);
+
 		scoutfs_sysfs_destroy_attrs(sb, &qinf->ssa);
 		if (qinf->sock)
 			sock_release(qinf->sock);
 
+		vfree(qinf->hb_delay);
 		kfree(qinf);
 		sbi->quorum_info = NULL;
 	}
