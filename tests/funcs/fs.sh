@@ -153,7 +153,27 @@ t_mount()
 	test "$nr" -lt "$T_NR_MOUNTS" || \
 		t_fail "fs nr $nr invalid"
 
-	eval t_quiet mount -t scoutfs \$T_O$nr \$T_DB$nr \$T_M$nr
+	eval t_quiet mount -t scoutfs \$T_O$nr\$opt \$T_DB$nr \$T_M$nr
+}
+
+#
+# Mount with an optional mount option string.  If the string is empty
+# then the saved mount options are used.  If the string has contents
+# then it is appended to the end of the saved options with a separating
+# comma.
+#
+# Unlike t_mount this won't inherently fail in t_quiet, errors are
+# returned so bad options can be tested.
+#
+t_mount_opt()
+{
+	local nr="$1"
+	local opt="${2:+,$2}"
+
+	test "$nr" -lt "$T_NR_MOUNTS" || \
+		t_fail "fs nr $nr invalid"
+
+	eval mount -t scoutfs \$T_O$nr\$opt \$T_DB$nr \$T_M$nr
 }
 
 t_umount()
