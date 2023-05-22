@@ -1,2 +1,5 @@
 == bad timeout values fail
-== test different timeouts
+== bad mount option fails
+== mount option
+== sysfs
+== reset all options
