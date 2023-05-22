@@ -131,10 +131,8 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 	opts->quorum_slot_nr = -1;
 }
 
-static int set_quorum_heartbeat_timeout_ms(struct super_block *sb, int ret, u64 val)
+static int verify_quorum_heartbeat_timeout_ms(struct super_block *sb, int ret, u64 val)
 {
-	DECLARE_OPTIONS_INFO(sb, optinf);
-
 	if (ret < 0) {
 		scoutfs_err(sb, "failed to parse quorum_heartbeat_timeout_ms value");
 		return -EINVAL;
@@ -144,10 +142,6 @@ static int set_quorum_heartbeat_timeout_ms(struct super_block *sb, int ret, u64 
 			    val, SCOUTFS_QUORUM_MIN_HB_TIMEO_MS, SCOUTFS_QUORUM_MAX_HB_TIMEO_MS);
 		return -EINVAL;
 	}
-
-	write_seqlock(&optinf->seqlock);
-	optinf->opts.quorum_heartbeat_timeout_ms = val;
-	write_sequnlock(&optinf->seqlock);
 
 	return 0;
 }
@@ -232,9 +226,10 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 
 		case Opt_quorum_heartbeat_timeout_ms:
 			ret = match_u64(args, &nr64);
-			ret = set_quorum_heartbeat_timeout_ms(sb, ret, nr64);
+			ret = verify_quorum_heartbeat_timeout_ms(sb, ret, nr64);
 			if (ret < 0)
 				return ret;
+			opts->quorum_heartbeat_timeout_ms = nr64;
 			break;
 
 		case Opt_quorum_slot_nr:
@@ -493,6 +488,7 @@ static ssize_t quorum_heartbeat_timeout_ms_store(struct kobject *kobj, struct ko
 						 const char *buf, size_t count)
 {
 	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
 	char nullterm[30]; /* more than enough for octal -U64_MAX */
 	u64 val;
 	int len;
@@ -503,9 +499,13 @@ static ssize_t quorum_heartbeat_timeout_ms_store(struct kobject *kobj, struct ko
 	nullterm[len] = '\0';
 
 	ret = kstrtoll(nullterm, 0, &val);
-	ret = set_quorum_heartbeat_timeout_ms(sb, ret, val);
-	if (ret == 0)
+	ret = verify_quorum_heartbeat_timeout_ms(sb, ret, val);
+	if (ret == 0) {
+		write_seqlock(&optinf->seqlock);
+		optinf->opts.quorum_heartbeat_timeout_ms = val;
+		write_sequnlock(&optinf->seqlock);
 		ret = count;
+	}
 
 	return ret;
 }
