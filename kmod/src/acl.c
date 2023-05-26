@@ -301,7 +301,7 @@ int scoutfs_init_acl_locked(struct inode *inode, struct inode *dir,
 			if (ret)
 				goto out;
 		}
-		ret = posix_acl_create(&acl, GFP_NOFS, &inode->i_mode);
+		ret = __posix_acl_create(&acl, GFP_NOFS, &inode->i_mode);
 		if (ret < 0)
 			return ret;
 		if (ret > 0)
@@ -345,7 +345,7 @@ int scoutfs_acl_chmod_locked(struct inode *inode, struct iattr *attr,
 	if (IS_ERR_OR_NULL(acl))
 		return PTR_ERR(acl);
 
-	ret = posix_acl_chmod(&acl, GFP_KERNEL, attr->ia_mode);
+	ret = __posix_acl_chmod(&acl, GFP_KERNEL, attr->ia_mode);
 	if (ret)
 		return ret;
 

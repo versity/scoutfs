@@ -65,6 +65,16 @@ ccflags-y += -DKC_RB_TREE_AUGMENTED_COMPUTE_MAX
 endif
 
 #
+# v3.13-25-g37bc15392a23
+#
+# Renames posix_acl_create to __posix_acl_create and provide some
+# new interfaces for creating ACLs
+#
+ifneq (,$(shell grep '__posix_acl_create' include/linux/posix_acl.h))
+ccflags-y += -DKC___POSIX_ACL_CREATE
+endif
+
+#
 # v4.8-rc1-29-g31051c85b5e2
 #
 # inode_change_ok() removed - replace with setattr_prepare()
