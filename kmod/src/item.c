@@ -2277,7 +2277,7 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 		ret = -ENOMEM;
 		goto out;
 	}
-	list_add(&page->list, &pages);
+	list_add(&page->lru, &pages);
 
 	first = NULL;
 	prev = &first;
@@ -2290,7 +2290,7 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 				ret = -ENOMEM;
 				goto out;
 			}
-			list_add(&second->list, &pages);
+			list_add(&second->lru, &pages);
 		}
 
 		/* read lock next sorted page, we're only dirty_list user */
@@ -2347,8 +2347,8 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 	/* write all the dirty items into log btree blocks */
 	ret = scoutfs_forest_insert_list(sb, first);
 out:
-	list_for_each_entry_safe(page, second, &pages, list) {
-		list_del_init(&page->list);
+	list_for_each_entry_safe(page, second, &pages, lru) {
+		list_del_init(&page->lru);
 		__free_page(page);
 	}
 
