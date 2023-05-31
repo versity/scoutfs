@@ -167,3 +167,12 @@ endif
 ifneq (,$(shell grep 'kernel_getsockname.*,$$' include/linux/net.h))
 ccflags-y += -DKC_KERNEL_GETSOCKNAME_ADDRLEN=1
 endif
+
+#
+# v4.1-rc1-410-geeb1bd5c40ed
+#
+# Adds a struct net parameter to sock_create_kern
+#
+ifneq (,$(shell grep 'sock_create_kern.*struct net' include/linux/net.h))
+ccflags-y += -DKC_SOCK_CREATE_KERN_NET=1
+endif
