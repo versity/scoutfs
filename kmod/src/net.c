@@ -897,7 +897,6 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 			       struct socket *sock)
 {
 	struct timeval tv;
-	int addrlen;
 	int optval;
 	int ret;
 
@@ -947,23 +946,18 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 	if (ret)
 		goto out;
 
-	addrlen = sizeof(struct sockaddr_in);
-	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname,
-				 &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		ret = -EAFNOSUPPORT;
-	if (ret)
+	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	if (ret < 0)
 		goto out;
 
-	addrlen = sizeof(struct sockaddr_in);
-	ret = kernel_getpeername(sock, (struct sockaddr *)&conn->peername,
-				 &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		ret = -EAFNOSUPPORT;
-	if (ret)
+	ret = kc_kernel_getpeername(sock, (struct sockaddr *)&conn->peername);
+	if (ret < 0)
 		goto out;
+
+	ret = 0;
 
 	conn->last_peername = conn->peername;
+
 out:
 	return ret;
 }
@@ -1471,20 +1465,18 @@ int scoutfs_net_bind(struct super_block *sb,
 		goto out;
 
 	ret = kernel_listen(sock, 255);
-	if (ret)
+	if (ret < 0)
 		goto out;
 
-	addrlen = sizeof(struct sockaddr_in);
-	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname,
-				 &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		ret = -EAFNOSUPPORT;
-	if (ret)
+	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	if (ret < 0)
 		goto out;
+
+	ret = 0;
 
 	conn->sock = sock;
 	*sin = conn->sockname;
-	ret = 0;
+
 out:
 	if (ret < 0 && sock)
 		sock_release(sock);
