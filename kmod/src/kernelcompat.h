@@ -252,4 +252,10 @@ static inline int kc_kernel_getpeername(struct socket *sock, struct sockaddr *ad
 #define kc_kernel_getpeername(sock, addr) kernel_getpeername(sock, addr)
 #endif
 
+#ifdef KC_SOCK_CREATE_KERN_NET
+#define kc_sock_create_kern(family, type, proto, res) sock_create_kern(&init_net, family, type, proto, res)
+#else
+#define kc_sock_create_kern sock_create_kern
+#endif
+
 #endif
