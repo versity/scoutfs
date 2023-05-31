@@ -222,4 +222,34 @@ struct kc_shrinker_wrapper {
 
 #endif /* KC_SHRINKER_SHRINK */
 
+#ifdef KC_KERNEL_GETSOCKNAME_ADDRLEN
+#include <linux/net.h>
+#include <linux/inet.h>
+static inline int kc_kernel_getsockname(struct socket *sock, struct sockaddr *addr)
+{
+	int addrlen = sizeof(struct sockaddr_in);
+	int ret = kernel_getsockname(sock, addr, &addrlen);
+	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
+		return -EAFNOSUPPORT;
+	else if (ret < 0)
+		return ret;
+
+	return sizeof(struct sockaddr_in);
+}
+static inline int kc_kernel_getpeername(struct socket *sock, struct sockaddr *addr)
+{
+	int addrlen = sizeof(struct sockaddr_in);
+	int ret = kernel_getpeername(sock, addr, &addrlen);
+	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
+		return -EAFNOSUPPORT;
+	else if (ret < 0)
+		return ret;
+
+	return sizeof(struct sockaddr_in);
+}
+#else
+#define kc_kernel_getsockname(sock, addr) kernel_getsockname(sock, addr)
+#define kc_kernel_getpeername(sock, addr) kernel_getpeername(sock, addr)
+#endif
+
 #endif

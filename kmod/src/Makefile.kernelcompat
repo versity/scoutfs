@@ -158,3 +158,12 @@ endif
 ifneq (,$(shell grep 'int...get..const struct xattr_handler.*struct dentry.*dentry,' include/linux/xattr.h))
 ccflags-y += -DKC_XATTR_STRUCT_XATTR_HANDLER=1
 endif
+
+#
+# v4.16-rc1-1-g9b2c45d479d0
+#
+# kernel_getsockname() and kernel_getpeername dropped addrlen arg
+#
+ifneq (,$(shell grep 'kernel_getsockname.*,$$' include/linux/net.h))
+ccflags-y += -DKC_KERNEL_GETSOCKNAME_ADDRLEN=1
+endif
