@@ -176,3 +176,12 @@ endif
 ifneq (,$(shell grep 'sock_create_kern.*struct net' include/linux/net.h))
 ccflags-y += -DKC_SOCK_CREATE_KERN_NET=1
 endif
+
+#
+# v3.18-rc6-1619-gc0371da6047a
+#
+# iov_iter is now part of struct msghdr
+#
+ifneq (,$(shell grep 'struct iov_iter.*msg_iter' include/linux/socket.h))
+ccflags-y += -DKC_MSGHDR_STRUCT_IOV_ITER=1
+endif
