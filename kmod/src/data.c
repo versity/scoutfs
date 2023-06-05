@@ -729,6 +729,7 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	return ret;
 }
 
+#ifndef KC_FILE_AOPS_READAHEAD
 /*
  * This is used for opportunistic read-ahead which can throw the pages
  * away if it needs to.  If the caller didn't deal with offline extents
@@ -775,6 +776,29 @@ out:
 	BUG_ON(!list_empty(pages));
 	return ret;
 }
+#else
+static void scoutfs_readahead(struct readahead_control *rac)
+{
+	struct inode *inode = rac->file->f_inode;
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *inode_lock = NULL;
+	int ret;
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+	if (ret)
+		return;
+
+	ret = scoutfs_data_wait_check(inode, readahead_pos(rac),
+				      readahead_length(rac), SEF_OFFLINE,
+				      SCOUTFS_IOC_DWO_READ, NULL,
+				      inode_lock);
+	if (ret == 0)
+		mpage_readahead(rac, scoutfs_get_block_read);
+
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+}
+#endif
 
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
 {
@@ -1873,7 +1897,11 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 
 const struct address_space_operations scoutfs_file_aops = {
 	.readpage		= scoutfs_readpage,
+#ifndef KC_FILE_AOPS_READAHEAD
 	.readpages		= scoutfs_readpages,
+#else
+	.readahead		= scoutfs_readahead,
+#endif
 	.writepage		= scoutfs_writepage,
 	.writepages		= scoutfs_writepages,
 	.write_begin		= scoutfs_write_begin,
