@@ -213,3 +213,15 @@ endif
 ifneq (,$(shell grep 'extern ssize_t generic_file_buffered_write' include/linux/fs.h))
 ccflags-y += -DKC_GENERIC_FILE_BUFFERED_WRITE=1
 endif
+
+#
+# v5.7-438-g8151b4c8bee4
+#
+# struct address_space_operations switches away from .readpages to .readahead
+#
+# RHEL has backported this feature all the way to RHEL8, as part of RHEL_KABI,
+# which means we need to detect this very precisely
+#
+ifneq (,$(shell grep 'readahead.*struct readahead_control' include/linux/fs.h))
+ccflags-y += -DKC_FILE_AOPS_READAHEAD
+endif
