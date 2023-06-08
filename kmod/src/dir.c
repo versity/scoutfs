@@ -1253,75 +1253,93 @@ int scoutfs_symlink_drop(struct super_block *sb, u64 ino,
 }
 
 /*
- * Find the next link backref key for the given ino starting from the
- * given dir inode and final entry position.  If we find a backref item
- * we add an allocated copy of it to the head of the caller's list.
+ * Find the next link backref items for the given ino starting from the
+ * given dir inode and final entry position.  For each backref item we
+ * add an allocated copy of it to the head of the caller's list.
  *
- * Returns 0 if we added an entry, -ENOENT if we didn't, and -errno for
- * search errors.
+ * Callers who are building a path can add one entry for each parent.
+ * They're left with a list of entries from the root down in list order.
+ *
+ * Callers who are gathering multiple entries for one inode get the
+ * entries in the opposite order that their items are found.
+ *
+ * Returns +ve for number of entries added, -ENOENT if no entries were
+ * found, or -errno on error.  It weirdly won't return 0, but early
+ * callers preferred -ENOENT so we use that for the case of no entries.
  *
  * Callers are comfortable with the race inherent to incrementally
- * building up a path with individual locked backref item lookups.
+ * gathering backrefs across multiple lock acquisitions.
  */
-int scoutfs_dir_add_next_linkref(struct super_block *sb, u64 ino,
-				 u64 dir_ino, u64 dir_pos,
-				 struct list_head *list)
+int scoutfs_dir_add_next_linkrefs(struct super_block *sb, u64 ino, u64 dir_ino, u64 dir_pos,
+				  int count, struct list_head *list)
 {
+	struct scoutfs_link_backref_entry *prev_ent = NULL;
 	struct scoutfs_link_backref_entry *ent = NULL;
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_key last_key;
 	struct scoutfs_key key;
+	int nr = 0;
 	int len;
 	int ret;
 
-	ent = kmalloc(offsetof(struct scoutfs_link_backref_entry,
-			       dent.name[SCOUTFS_NAME_LEN]), GFP_KERNEL);
-	if (!ent) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	INIT_LIST_HEAD(&ent->head);
-
 	init_dirent_key(&key, SCOUTFS_LINK_BACKREF_TYPE, ino, dir_ino, dir_pos);
-	init_dirent_key(&last_key, SCOUTFS_LINK_BACKREF_TYPE, ino, U64_MAX,
-			U64_MAX);
+	init_dirent_key(&last_key, SCOUTFS_LINK_BACKREF_TYPE, ino, U64_MAX, U64_MAX);
 
 	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, ino, &lock);
 	if (ret)
 		goto out;
 
-	ret = scoutfs_item_next(sb, &key, &last_key, &ent->dent,
-				dirent_bytes(SCOUTFS_NAME_LEN), lock);
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
-	lock = NULL;
-	if (ret < 0)
-		goto out;
+	while (nr < count) {
+		ent = kmalloc(offsetof(struct scoutfs_link_backref_entry,
+				       dent.name[SCOUTFS_NAME_LEN]), GFP_NOFS);
+		if (!ent) {
+			ret = -ENOMEM;
+			goto out;
+		}
 
-	len = ret - sizeof(struct scoutfs_dirent);
-	if (len < 1 || len > SCOUTFS_NAME_LEN) {
-		scoutfs_corruption(sb, SC_DIRENT_BACKREF_NAME_LEN,
-				   corrupt_dirent_backref_name_len,
-				   "ino %llu dir_ino %llu pos %llu key "SK_FMT" len %d",
-				   ino, dir_ino, dir_pos, SK_ARG(&key), len);
-		ret = -EIO;
-		goto out;
+		INIT_LIST_HEAD(&ent->head);
+
+		ret = scoutfs_item_next(sb, &key, &last_key, &ent->dent,
+					dirent_bytes(SCOUTFS_NAME_LEN), lock);
+		if (ret < 0) {
+			if (ret == -ENOENT && prev_ent)
+				prev_ent->last = true;
+			goto out;
+		}
+
+		len = ret - sizeof(struct scoutfs_dirent);
+		if (len < 1 || len > SCOUTFS_NAME_LEN) {
+			scoutfs_corruption(sb, SC_DIRENT_BACKREF_NAME_LEN,
+					   corrupt_dirent_backref_name_len,
+					   "ino %llu dir_ino %llu pos %llu key "SK_FMT" len %d",
+					   ino, dir_ino, dir_pos, SK_ARG(&key), len);
+			ret = -EIO;
+			goto out;
+		}
+
+		ent->dir_ino = le64_to_cpu(key.skd_major);
+		ent->dir_pos = le64_to_cpu(key.skd_minor);
+		ent->name_len = len;
+		ent->d_type = dentry_type(ent->dent.type);
+		ent->last = false;
+
+		trace_scoutfs_dir_add_next_linkref_found(sb, ino, ent->dir_ino, ent->dir_pos,
+							 ent->name_len);
+
+		list_add(&ent->head, list);
+		prev_ent = ent;
+		ent = NULL;
+		nr++;
+		scoutfs_key_inc(&key);
 	}
 
-	list_add(&ent->head, list);
-	ent->dir_ino = le64_to_cpu(key.skd_major);
-	ent->dir_pos = le64_to_cpu(key.skd_minor);
-	ent->name_len = len;
 	ret = 0;
 out:
-	trace_scoutfs_dir_add_next_linkref(sb, ino, dir_ino, dir_pos, ret,
-					   ent ? ent->dir_ino : 0,
-					   ent ? ent->dir_pos : 0,
-					   ent ? ent->name_len : 0);
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+	trace_scoutfs_dir_add_next_linkrefs(sb, ino, dir_ino, dir_pos, count, nr, ret);
 
-	if (ent && list_empty(&ent->head))
-		kfree(ent);
-	return ret;
+	kfree(ent);
+	return nr ?: ret;
 }
 
 static u64 first_backref_dir_ino(struct list_head *list)
@@ -1396,7 +1414,7 @@ retry:
 	}
 
 	/* get the next link name to the given inode */
-	ret = scoutfs_dir_add_next_linkref(sb, ino, dir_ino, dir_pos, list);
+	ret = scoutfs_dir_add_next_linkrefs(sb, ino, dir_ino, dir_pos, 1, list);
 	if (ret < 0)
 		goto out;
 
@@ -1404,7 +1422,7 @@ retry:
 	par_ino = first_backref_dir_ino(list);
 	while (par_ino != SCOUTFS_ROOT_INO) {
 
-		ret = scoutfs_dir_add_next_linkref(sb, par_ino, 0, 0, list);
+		ret = scoutfs_dir_add_next_linkrefs(sb, par_ino, 0, 0, 1, list);
 		if (ret < 0) {
 			if (ret == -ENOENT) {
 				/* restart if there was no parent component */
@@ -1416,6 +1434,8 @@ retry:
 
 		par_ino = first_backref_dir_ino(list);
 	}
+
+	ret = 0;
 out:
 	if (ret < 0)
 		scoutfs_dir_free_backref_path(sb, list);
