@@ -1096,6 +1096,7 @@ static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
 	struct super_block *sb = binf->sb;
 	struct rhashtable_iter iter;
 	struct block_private *bp;
+	bool stop = false;
 	unsigned long nr;
 	u64 recently;
 
@@ -1107,7 +1108,6 @@ static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
 
 	nr = DIV_ROUND_UP(nr, SCOUTFS_BLOCK_LG_PAGES_PER);
 
-restart:
 	recently = accessed_recently(binf);
 	rhashtable_walk_enter(&binf->ht, &iter);
 	rhashtable_walk_start(&iter);
@@ -1129,12 +1129,15 @@ restart:
 		if (bp == NULL)
 			break;
 		if (bp == ERR_PTR(-EAGAIN)) {
-			/* hard exit to wait for rcu rebalance to finish */
-			rhashtable_walk_stop(&iter);
-			rhashtable_walk_exit(&iter);
-			scoutfs_inc_counter(sb, block_cache_shrink_restart);
-			synchronize_rcu();
-			goto restart;
+			/*
+			 * We can be called from reclaim in the allocation
+			 * to resize the hash table itself.  We have to
+			 * return so that the caller can proceed and
+			 * enable hash table iteration again.
+			 */
+			scoutfs_inc_counter(sb, block_cache_shrink_stop);
+			stop = true;
+			break;
 		}
 
 		scoutfs_inc_counter(sb, block_cache_shrink_next);
@@ -1157,8 +1160,11 @@ restart:
 	rhashtable_walk_stop(&iter);
 	rhashtable_walk_exit(&iter);
 out:
-	return min_t(u64, (u64)atomic_read(&binf->total_inserted) * SCOUTFS_BLOCK_LG_PAGES_PER,
-		     INT_MAX);
+	if (stop)
+		return -1;
+	else
+		return min_t(u64, INT_MAX,
+			     (u64)atomic_read(&binf->total_inserted) * SCOUTFS_BLOCK_LG_PAGES_PER);
 }
 
 struct sm_block_completion {
