@@ -34,7 +34,7 @@
 	EXPAND_COUNTER(block_cache_shrink_next)			\
 	EXPAND_COUNTER(block_cache_shrink_recent)		\
 	EXPAND_COUNTER(block_cache_shrink_remove)		\
-	EXPAND_COUNTER(block_cache_shrink_restart)		\
+	EXPAND_COUNTER(block_cache_shrink_stop)			\
 	EXPAND_COUNTER(btree_compact_values)			\
 	EXPAND_COUNTER(btree_compact_values_enomem)		\
 	EXPAND_COUNTER(btree_delete)				\
