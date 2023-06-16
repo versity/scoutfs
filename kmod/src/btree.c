@@ -2179,15 +2179,18 @@ static int next_resolved_mpos(struct super_block *sb, struct rb_root *pos_root,
 	struct merge_pos *mpos;
 	struct merge_pos *next;
 	struct scoutfs_key key;
+	int delta;
 	int ret = 0;
 
 	while ((mpos = first_mpos(pos_root)) && (next = next_mpos(mpos)) &&
 	       !scoutfs_key_compare(mpos->key, next->key)) {
 
-		ret = scoutfs_forest_combine_deltas(mpos->key, mpos->val, mpos->val_len,
-						    next->val, next->val_len);
-		if (ret < 0)
+		delta = scoutfs_forest_combine_deltas(mpos->key, mpos->val, mpos->val_len,
+						      next->val, next->val_len);
+		if (delta < 0) {
+			ret = delta;
 			break;
+		}
 
 		/* reset advances to the next item */
 		key = *mpos->key;
@@ -2198,9 +2201,9 @@ static int next_resolved_mpos(struct super_block *sb, struct rb_root *pos_root,
 		if (ret < 0)
 			break;
 
-		if (ret == SCOUTFS_DELTA_COMBINED) {
+		if (delta == SCOUTFS_DELTA_COMBINED) {
 			scoutfs_inc_counter(sb, btree_merge_delta_combined);
-		} else if (ret == SCOUTFS_DELTA_COMBINED_NULL) {
+		} else if (delta == SCOUTFS_DELTA_COMBINED_NULL) {
 			scoutfs_inc_counter(sb, btree_merge_delta_null);
 			/* if merging resulted in no info, skip current */
 			ret = reset_mpos(sb, pos_root, mpos, &key, end);
