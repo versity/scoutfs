@@ -18,6 +18,7 @@ t_filter_dmesg()
 
 	# the kernel can just be noisy
 	re=" used greatest stack depth: "
+	re="$re|sched: RT throttling activated"
 
 	# mkfs/mount checks partition tables
 	re="$re|unknown partition table"
