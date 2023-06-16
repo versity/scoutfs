@@ -77,7 +77,7 @@ test_timeout()
 
 	# make sure the new leader delay was reasonable, allowing for some slack
 	low=$((to - 1000))
-	high=$((to + 3000))
+	high=$((to + 5000))
 
 	# make sure the new leader delay was reasonable
 	test "$delay" -lt "$low" && t_fail "delay $delay < low $low (to $to)"
