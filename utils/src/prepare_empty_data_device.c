@@ -38,6 +38,7 @@ struct prepare_empty_data_dev_args {
 	char *meta_device;
 	char *data_device;
 	bool check;
+	bool force;
 };
 
 static int do_prepare_empty_data_dev(struct prepare_empty_data_dev_args *args)
@@ -84,13 +85,15 @@ static int do_prepare_empty_data_dev(struct prepare_empty_data_dev_args *args)
 		goto out;
 	}
 
-	in_use = (le64_to_cpu(meta_super->total_data_blocks) - SCOUTFS_DATA_DEV_START_BLKNO) -
-		 le64_to_cpu(meta_super->data_alloc.total_len);
-	if (in_use) {
-		fprintf(stderr, "Data block allocator metadata shows "SIZE_FMT" data blocks used by files.  They must be removed, truncated, or released before a new empty data device can be used.\n",
-		       SIZE_ARGS(in_use, SCOUTFS_BLOCK_SM_SIZE));
-		ret = -EINVAL;
-		goto out;
+	if (!args->force) {
+		in_use = (le64_to_cpu(meta_super->total_data_blocks) - SCOUTFS_DATA_DEV_START_BLKNO) -
+			 le64_to_cpu(meta_super->data_alloc.total_len);
+		if (in_use) {
+			fprintf(stderr, "Data block allocator metadata shows "SIZE_FMT" data blocks used by files.  They must be removed, truncated, or released before a new empty data device can be used.\n",
+			       SIZE_ARGS(in_use, SCOUTFS_BLOCK_SM_SIZE));
+			ret = -EINVAL;
+			goto out;
+		}
 	}
 
 	if (args->data_device) {
@@ -193,6 +196,9 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	case 'c':
 		args->check = true;
 		break;
+	case 'f':
+		args->force = true;
+		break;
 	case ARGP_KEY_ARG:
 		if (!args->meta_device)
 			args->meta_device = strdup_or_error(state, arg);
@@ -216,6 +222,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 
 static struct argp_option options[] = {
 	{ "check", 'c', NULL, 0, "Only check for errors and do not write", },
+	{ "force", 'f', NULL, 0, "Force writing, don't check meta allocators", },
 	{ NULL }
 };
 
@@ -230,6 +237,7 @@ static int prepare_empty_data_dev_cmd(int argc, char *argv[])
 {
 	struct prepare_empty_data_dev_args prepare_empty_data_dev_args = { 
 		.check = false,
+		.force = false,
 	};
 	int ret;
 
