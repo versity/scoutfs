@@ -1267,6 +1267,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	from_iblock = from_off >> SCOUTFS_BLOCK_SM_SHIFT;
 	count = (byte_len + SCOUTFS_BLOCK_SM_MASK) >> SCOUTFS_BLOCK_SM_SHIFT;
 	to_iblock = to_off >> SCOUTFS_BLOCK_SM_SHIFT;
+	from_start = from_iblock;
 
 	/* only move extent blocks inside i_size, careful not to wrap */
 	from_size = i_size_read(from);
@@ -1343,7 +1344,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 
 			/* find the next extent to move */
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &from_args,
-					       from_iblock, 1, &ext);
+					       from_start, 1, &ext);
 			if (ret < 0) {
 				if (ret == -ENOENT) {
 					done = true;
@@ -1431,6 +1432,12 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 							i_size_read(from);
 				i_size_write(to, to_size);
 			}
+
+			/* find next after moved extent, avoiding wrapping */
+			if (from_start + len < from_start)
+				from_start = from_iblock + count + 1;
+			else
+				from_start += len;
 		}
 
 
