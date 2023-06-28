@@ -24,3 +24,325 @@
 /mnt/test/test/data-prealloc/file-2: 5 extents found
 /mnt/test/test/data-prealloc/file-1: 3 extents found
 /mnt/test/test/data-prealloc/file-2: 3 extents found
+== block writes into region allocs hole
+wrote blk 24
+wrote blk 32
+wrote blk 40
+wrote blk 55
+wrote blk 63
+wrote blk 71
+wrote blk 72
+wrote blk 79
+wrote blk 80
+wrote blk 87
+wrote blk 88
+wrote blk 95
+before:
+24.. 1: 
+32.. 1: 
+40.. 1: 
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 0 at pos 0
+wrote blk 0
+0.. 1: 
+1.. 7: unwritten
+24.. 1: 
+32.. 1: 
+40.. 1: 
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 0 at pos 1
+wrote blk 15
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+24.. 1: 
+32.. 1: 
+40.. 1: 
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 0 at pos 2
+wrote blk 19
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+32.. 1: 
+40.. 1: 
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 1 at pos 0
+wrote blk 25
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+40.. 1: 
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 1 at pos 1
+wrote blk 39
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 1 at pos 2
+wrote blk 44
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+41.. 3: unwritten
+44.. 1: 
+45.. 3: unwritten
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 2 at pos 0
+wrote blk 48
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+41.. 3: unwritten
+44.. 1: 
+45.. 3: unwritten
+48.. 1: 
+49.. 6: unwritten
+55.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 2 at pos 1
+wrote blk 62
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+41.. 3: unwritten
+44.. 1: 
+45.. 3: unwritten
+48.. 1: 
+49.. 6: unwritten
+55.. 1: 
+56.. 6: unwritten
+62.. 1: 
+63.. 1: 
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 2 at pos 2
+wrote blk 67
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+41.. 3: unwritten
+44.. 1: 
+45.. 3: unwritten
+48.. 1: 
+49.. 6: unwritten
+55.. 1: 
+56.. 6: unwritten
+62.. 1: 
+63.. 1: 
+64.. 3: unwritten
+67.. 1: 
+68.. 3: unwritten
+71.. 2: 
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 3 at pos 0
+wrote blk 73
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+41.. 3: unwritten
+44.. 1: 
+45.. 3: unwritten
+48.. 1: 
+49.. 6: unwritten
+55.. 1: 
+56.. 6: unwritten
+62.. 1: 
+63.. 1: 
+64.. 3: unwritten
+67.. 1: 
+68.. 3: unwritten
+71.. 2: 
+73.. 1: 
+74.. 5: unwritten
+79.. 2: 
+87.. 2: 
+95.. 1: eof
+writing into existing 3 at pos 1
+wrote blk 86
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+41.. 3: unwritten
+44.. 1: 
+45.. 3: unwritten
+48.. 1: 
+49.. 6: unwritten
+55.. 1: 
+56.. 6: unwritten
+62.. 1: 
+63.. 1: 
+64.. 3: unwritten
+67.. 1: 
+68.. 3: unwritten
+71.. 2: 
+73.. 1: 
+74.. 5: unwritten
+79.. 2: 
+81.. 5: unwritten
+86.. 1: 
+87.. 2: 
+95.. 1: eof
+writing into existing 3 at pos 2
+wrote blk 92
+0.. 1: 
+1.. 14: unwritten
+15.. 1: 
+16.. 3: unwritten
+19.. 1: 
+20.. 4: unwritten
+24.. 1: 
+25.. 1: 
+26.. 6: unwritten
+32.. 1: 
+33.. 6: unwritten
+39.. 1: 
+40.. 1: 
+41.. 3: unwritten
+44.. 1: 
+45.. 3: unwritten
+48.. 1: 
+49.. 6: unwritten
+55.. 1: 
+56.. 6: unwritten
+62.. 1: 
+63.. 1: 
+64.. 3: unwritten
+67.. 1: 
+68.. 3: unwritten
+71.. 2: 
+73.. 1: 
+74.. 5: unwritten
+79.. 2: 
+81.. 5: unwritten
+86.. 1: 
+87.. 2: 
+89.. 3: unwritten
+92.. 1: 
+93.. 2: unwritten
+95.. 1: eof
