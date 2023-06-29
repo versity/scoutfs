@@ -1398,6 +1398,110 @@ out:
 	return ret ?: nr;
 }
 
+/*
+ * Copy entries that point to an inode to the user's buffer.  We copy to
+ * userspace from copies of the entries that are acquired under a lock
+ * so that we don't fault while holding cluster locks.  It also gives us
+ * a chance to limit the amount of work under each lock hold.
+ */
+static long scoutfs_ioc_get_referring_entries(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_get_referring_entries gre;
+	struct scoutfs_link_backref_entry *bref = NULL;
+	struct scoutfs_link_backref_entry *bref_tmp;
+	struct scoutfs_ioctl_dirent __user *uent;
+	struct scoutfs_ioctl_dirent ent;
+	LIST_HEAD(list);
+	u64 copied;
+	int name_len;
+	int bytes;
+	long nr;
+	int ret;
+
+	if (!capable(CAP_DAC_READ_SEARCH))
+		return -EPERM;
+
+	if (copy_from_user(&gre, (void __user *)arg, sizeof(gre)))
+		return -EFAULT;
+
+	uent = (void __user *)(unsigned long)gre.entries_ptr;
+	copied = 0;
+	nr = 0;
+
+	/* use entry as cursor between calls */
+	ent.dir_ino = gre.dir_ino;
+	ent.dir_pos = gre.dir_pos;
+
+	for (;;) {
+		ret = scoutfs_dir_add_next_linkrefs(sb, gre.ino, ent.dir_ino, ent.dir_pos, 1024,
+						    &list);
+		if (ret < 0) {
+			if (ret == -ENOENT)
+				ret = 0;
+			goto out;
+		}
+
+		/* _add_next adds each entry to the head, _reverse for key order */
+		list_for_each_entry_safe_reverse(bref, bref_tmp, &list, head) {
+			list_del_init(&bref->head);
+
+			name_len = bref->name_len;
+			bytes = ALIGN(offsetof(struct scoutfs_ioctl_dirent, name[name_len + 1]),
+				      16);
+			if (copied + bytes > gre.entries_bytes) {
+				ret = -EINVAL;
+				goto out;
+			}
+
+			ent.dir_ino = bref->dir_ino;
+			ent.dir_pos = bref->dir_pos;
+			ent.ino = gre.ino;
+			ent.entry_bytes = bytes;
+			ent.flags = bref->last ? SCOUTFS_IOCTL_DIRENT_FLAG_LAST : 0;
+			ent.d_type = bref->d_type;
+			ent.name_len = name_len;
+
+			if (copy_to_user(uent, &ent, sizeof(struct scoutfs_ioctl_dirent)) ||
+			    copy_to_user(&uent->name[0], bref->dent.name, name_len) ||
+			    put_user('\0', &uent->name[name_len])) {
+				ret = -EFAULT;
+				goto out;
+			}
+
+			kfree(bref);
+			bref = NULL;
+
+			uent = (void __user *)uent + bytes;
+			copied += bytes;
+			nr++;
+
+			if (nr == LONG_MAX || (ent.flags & SCOUTFS_IOCTL_DIRENT_FLAG_LAST)) {
+				ret = 0;
+				goto out;
+			}
+		}
+
+		/* advance cursor pos from last copied entry */
+		if (++ent.dir_pos == 0) {
+			if (++ent.dir_ino == 0) {
+				ret = 0;
+				goto out;
+			}
+		}
+	}
+
+	ret = 0;
+out:
+	kfree(bref);
+	list_for_each_entry_safe(bref, bref_tmp, &list, head) {
+		list_del_init(&bref->head);
+		kfree(bref);
+	}
+
+	return nr ?: ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1433,6 +1537,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_read_xattr_totals(file, arg);
 	case SCOUTFS_IOC_GET_ALLOCATED_INOS:
 		return scoutfs_ioc_get_allocated_inos(file, arg);
+	case SCOUTFS_IOC_GET_REFERRING_ENTRIES:
+		return scoutfs_ioc_get_referring_entries(file, arg);
 	}
 
 	return -ENOTTY;

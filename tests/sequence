@@ -5,6 +5,7 @@ inode-items-updated.sh
 simple-inode-index.sh
 simple-staging.sh
 simple-release-extents.sh
+get-referring-entries.sh
 fallocate.sh
 basic-truncate.sh
 data-prealloc.sh

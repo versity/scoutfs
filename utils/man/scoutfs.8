@@ -210,6 +210,29 @@ A path within a ScoutFS filesystem.
 .PD
 
 .TP
+.BI "get-referring-entries [-p|--path PATH] INO"
+.sp
+Find directory entries that reference an inode number.
+.sp
+Display all the directory entries that refer to a given inode.  Each
+entry includes the inode number of the directory that contains it, the
+d_off and d_type values for the entry as described by
+.BR readdir (3)
+, and the name of the entry.
+.RS 1.0i
+.PD 0
+.TP
+.sp
+.TP
+.B "-p, --path PATH"
+A path within a ScoutFS filesystem.
+.TP
+.B "INO"
+The inode number of the target inode.
+.RE
+.PD
+
+.TP
 .BI "ino-path INODE-NUM [-p|--path PATH]"
 .sp
 Display all paths that reference an inode number.

@@ -1,0 +1,18 @@
+== root inode returns nothing
+== crazy large unused inode does nothing
+== basic entry
+file
+== rename
+renamed
+== hard link
+file
+link
+== removal
+== different dirs
+== file types
+type b name block
+type c name char
+type d name dir
+type f name file
+type l name symlink
+== all name lengths work
