@@ -2,6 +2,26 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.14
+\
+*Jun 29, 2023*
+
+Add get\_referring\_entries ioctl for getting directory entries that
+refer to an inode.
+
+Fix excessive CPU use in the move\_blocks interface when moving a large
+number of extents.
+
+Reduce fragmented data allocation when contig\_only prealloc is not in
+use by more consistently allocating multi-block extents within each
+aligned prealloc region.
+
+Avoid rare deadlock in metadata block cache recalim under both heavy
+load and memory pressure.
+
+Fix crash when using quorum\_heartbeat\_timeout\_ms mount option.
+
+---
 v1.13
 \
 *May 19, 2023*
