@@ -456,11 +456,13 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 
 	} else {
 		/*
-		 * Preallocation of aligned regions only preallocates if
-		 * the aligned region contains no extents at all.  This
-		 * could be fooled by offline sparse extents but we
-		 * don't want to iterate over all offline extents in the
-		 * aligned region.
+		 * Preallocation within aligned regions tries to
+		 * allocate an extent to fill the hole in the region
+		 * that contains iblock.  We search for a next extent
+		 * from the start of the region.  If it's at the start
+		 * we might have to search again to find an existing
+		 * extent at the end of the region.  (This next could be
+		 * given to us by the caller).
 		 */
 		div64_u64_rem(iblock, opts.data_prealloc_blocks, &rem);
 		start = iblock - rem;
@@ -468,8 +470,20 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		ret = scoutfs_ext_next(sb, &data_ext_ops, &args, start, 1, &found);
 		if (ret < 0 && ret != -ENOENT)
 			goto out;
-		if (found.len && found.start < start + count)
-			count = 1;
+
+		/* trim count if there's an extent in the region before iblock */
+		if (found.len && found.start < iblock) {
+			count -= (found.start + found.len) - start;
+			start = found.start + found.len;
+			/* see if there's also an extent after iblock */
+			ret = scoutfs_ext_next(sb, &data_ext_ops, &args, iblock, 1, &found);
+			if (ret < 0 && ret != -ENOENT)
+				goto out;
+		}
+
+		/* trim count by a next extent in the region */
+		if (found.len && found.start > start && found.start < start + count)
+			count = (found.start - start);
 	}
 
 	/* overall prealloc limit */
@@ -1253,6 +1267,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	from_iblock = from_off >> SCOUTFS_BLOCK_SM_SHIFT;
 	count = (byte_len + SCOUTFS_BLOCK_SM_MASK) >> SCOUTFS_BLOCK_SM_SHIFT;
 	to_iblock = to_off >> SCOUTFS_BLOCK_SM_SHIFT;
+	from_start = from_iblock;
 
 	/* only move extent blocks inside i_size, careful not to wrap */
 	from_size = i_size_read(from);
@@ -1329,7 +1344,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 
 			/* find the next extent to move */
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &from_args,
-					       from_iblock, 1, &ext);
+					       from_start, 1, &ext);
 			if (ret < 0) {
 				if (ret == -ENOENT) {
 					done = true;
@@ -1417,6 +1432,12 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 							i_size_read(from);
 				i_size_write(to, to_size);
 			}
+
+			/* find next after moved extent, avoiding wrapping */
+			if (from_start + len < from_start)
+				from_start = from_iblock + count + 1;
+			else
+				from_start += len;
 		}
 
 
