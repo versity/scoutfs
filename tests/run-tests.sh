@@ -1,5 +1,8 @@
 #!/usr/bin/bash
 
+# Force system tools to use ASCII quotes
+export LC_ALL=C
+
 #
 # XXX
 #  - could have helper functions for waiting for pids
