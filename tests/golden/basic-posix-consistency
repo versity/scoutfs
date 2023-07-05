@@ -47,7 +47,7 @@ four
 --- dir within dir
 --- overwrite file
 --- can't overwrite non-empty dir
-mv: cannot move ‘/mnt/test/test/basic-posix-consistency/dir/c/clobber’ to ‘/mnt/test/test/basic-posix-consistency/dir/a/dir’: Directory not empty
+mv: cannot move '/mnt/test/test/basic-posix-consistency/dir/c/clobber' to '/mnt/test/test/basic-posix-consistency/dir/a/dir': Directory not empty
 --- can overwrite empty dir
 --- can rename into root
 == path resoluion
