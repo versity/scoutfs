@@ -85,5 +85,8 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error.*server failed to bind to.*"
 	re="$re|scoutfs .* critical transaction commit failure.*"
 
+	# change-devices causes loop device resizing
+	re="$re|loop[0-9].* detected capacity change from.*"
+
 	egrep -v "($re)" 
 }
