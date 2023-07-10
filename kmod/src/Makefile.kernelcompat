@@ -248,3 +248,13 @@ endif
 ifneq (,$(shell grep 'size_t.*ki_left;' include/linux/aio.h))
 ccflags-y += -DKC_LINUX_AIO_KI_LEFT=1
 endif
+
+#
+# v4.4-rc4-4-g98e9cb5711c6
+#
+# Introduces a new xattr_handler .name member that can be used to match the
+# entire field, instead of just a prefix. For these kernels, we must use
+# the new .name field instead.
+ifneq (,$(shell grep 'static inline const char .xattr_prefix' include/linux/xattr.h))
+ccflags-y += -DKC_XATTR_HANDLER_NAME=1
+endif

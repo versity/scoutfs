@@ -925,14 +925,22 @@ static const struct xattr_handler scoutfs_xattr_security_handler = {
 };
 
 static const struct xattr_handler scoutfs_xattr_acl_access_handler = {
+#ifdef KC_XATTR_HANDLER_NAME
+	.name   = XATTR_NAME_POSIX_ACL_ACCESS,
+#else
 	.prefix = XATTR_NAME_POSIX_ACL_ACCESS,
+#endif
 	.flags  = ACL_TYPE_ACCESS,
 	.get    = scoutfs_acl_get_xattr,
 	.set    = scoutfs_acl_set_xattr,
 };
 
 static const struct xattr_handler scoutfs_xattr_acl_default_handler = {
+#ifdef KC_XATTR_HANDLER_NAME
+	.name   = XATTR_NAME_POSIX_ACL_DEFAULT,
+#else
 	.prefix = XATTR_NAME_POSIX_ACL_DEFAULT,
+#endif
 	.flags  = ACL_TYPE_DEFAULT,
 	.get    = scoutfs_acl_get_xattr,
 	.set    = scoutfs_acl_set_xattr,
