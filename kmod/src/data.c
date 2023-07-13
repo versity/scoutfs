@@ -458,11 +458,9 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		/*
 		 * Preallocation within aligned regions tries to
 		 * allocate an extent to fill the hole in the region
-		 * that contains iblock.  We search for a next extent
-		 * from the start of the region.  If it's at the start
-		 * we might have to search again to find an existing
-		 * extent at the end of the region.  (This next could be
-		 * given to us by the caller).
+		 * that contains iblock.  We'd have to add a bit of plumbing
+		 * to find previous extents so we only search for a next
+		 * extent from the front of the region and from iblock.
 		 */
 		div64_u64_rem(iblock, opts.data_prealloc_blocks, &rem);
 		start = iblock - rem;
@@ -473,15 +471,15 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 
 		/* trim count if there's an extent in the region before iblock */
 		if (found.len && found.start < iblock) {
-			count -= (found.start + found.len) - start;
-			start = found.start + found.len;
+			count -= iblock - start;
+			start = iblock;
 			/* see if there's also an extent after iblock */
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &args, iblock, 1, &found);
 			if (ret < 0 && ret != -ENOENT)
 				goto out;
 		}
 
-		/* trim count by a next extent in the region */
+		/* trim count by next extent after iblock */
 		if (found.len && found.start > start && found.start < start + count)
 			count = (found.start - start);
 	}
