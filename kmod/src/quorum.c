@@ -729,10 +729,12 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
 	struct quorum_status qst = {0,};
-	struct hb_recording hbr = {{0,},};
+	struct hb_recording hbr;
 	bool record_hb;
 	int ret;
 	int err;
+
+	memset(&hbr, 0, sizeof(struct hb_recording));
 
 	/* recording votes from slots as native single word bitmap */
 	BUILD_BUG_ON(SCOUTFS_QUORUM_MAX_SLOTS > BITS_PER_LONG);
