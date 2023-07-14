@@ -95,7 +95,7 @@ print_logical_extents()
 			}
 			print $2, $6, flags
 		}
-	'
+	' | sed 's/last,eof/eof/'
 }
 
 t_save_all_sysfs_mount_options data_prealloc_blocks
