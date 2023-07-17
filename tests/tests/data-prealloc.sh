@@ -168,7 +168,8 @@ print_extents_found $prefix
 # the start, and one at the end.
 #
 # Let's keep this last because it creates a ton of output to read
-# through.
+# through.  The correct output is tied to preallocation strategy so it
+# has to be verified each time we change preallocation.
 #
 echo "== block writes into region allocs hole" 
 t_set_sysfs_mount_option 0 data_prealloc_blocks 8
