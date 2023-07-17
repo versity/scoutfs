@@ -2,6 +2,19 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.15
+\
+*Jul 17, 2023*
+
+Process log btree merge splicing in multiple commits.  This prevents a
+rare case where pending log merge completions contain more work than can
+be done in a single server commit, causing the server to trigger an
+assert shortly after starting.
+
+Fix spurious EINVAL from data writes when data\_prealloc\_contig\_only was
+set to 0.
+
+---
 v1.14
 \
 *Jun 29, 2023*
