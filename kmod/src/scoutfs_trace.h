@@ -38,6 +38,8 @@
 #include "data.h"
 #include "ext.h"
 
+#include "trace/wkic.h"
+
 struct lock_info;
 
 #define STE_FMT "[%llu %llu %llu 0x%x]"

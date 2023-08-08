@@ -46,6 +46,7 @@ scoutfs-y +=			\
 	triggers.o		\
 	tseq.o			\
 	volopt.o		\
+	wkic.o			\
 	xattr.o
 
 #
