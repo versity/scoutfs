@@ -3,16 +3,28 @@
 %define kmod_git_hash @@GITHASH@@
 %define pkg_date %(date +%%Y%%m%%d)
 
+# Disable the building of the debug package(s).
+%define debug_package %{nil}
+
 # take kernel version or default to uname -r
 %{!?kversion: %global kversion %(uname -r)}
 %global kernel_version %{kversion}
 
+%if 0%{?el7}
 %global kernel_source() /usr/src/kernels/%{kernel_version}.$(arch)
-%global kernel_release() %{kversion}
+%endif
+%if 0%{?el8}
+%global kernel_source() /usr/src/kernels/%{kernel_version}
+%endif
 
 %{!?_release: %global _release 0.%{pkg_date}git%{kmod_git_hash}}
 
+%if 0%{?el7}
 Name:           %{kmod_name}
+%endif
+%if 0%{?el8}
+Name:           kmod-%{kmod_name}
+%endif
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
 Release:        %{_release}%{?dist}
@@ -20,24 +32,30 @@ License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
 
+%if 0%{?el7}
 BuildRequires:  %{kernel_module_package_buildreqs}
-BuildRequires:  git
+%endif
+%if 0%{?el8}
+BuildRequires:  elfutils-libelf-devel
+%endif
 BuildRequires:  kernel-devel-uname-r = %{kernel_version}
+BuildRequires:  git
 BuildRequires:  module-init-tools
 
 ExclusiveArch:  x86_64
 
 Source:		%{kmod_name}-kmod-%{kmod_version}.tar
 
+%if 0%{?el7}
 # Build only for standard kernel variant(s); for debug packages, append "debug"
 # after "default" (separated by space)
 %kernel_module_package default
+%endif
 
-# Disable the building of the debug package(s).
-%define debug_package %{nil}
-
-%global install_mod_dir extra/%{name}
-
+%global install_mod_dir extra/%{kmod_name}
+%if 0%{?el8}
+%global flavors_to_build x86_64
+%endif
 
 %description
 %{kmod_name} - kernel module
@@ -66,7 +84,7 @@ export INSTALL_MOD_DIR=%{install_mod_dir}
 mkdir -p %{install_mod_dir}
 for flavor in %{flavors_to_build}; do
 	export KSRC=%{kernel_source $flavor}
-	export KVERSION=%{kernel_release $KSRC}
+	export KVERSION=%{kversion}
 	install -d $INSTALL_MOD_PATH/lib/modules/$KVERSION/%{install_mod_dir}
 	cp $PWD/obj/$flavor/src/scoutfs.ko $INSTALL_MOD_PATH/lib/modules/$KVERSION/%{install_mod_dir}/
 done
@@ -74,6 +92,14 @@ done
 # mark modules executable so that strip-to-file can strip them
 find %{buildroot} -type f -name \*.ko -exec %{__chmod} u+x \{\} \;
 
+%if 0%{?el8}
+%files
+/lib/modules
+
+%post
+weak-modules --add-kernel --no-initramfs
+depmod -a
+%endif
 
 %clean
 rm -rf %{buildroot}
