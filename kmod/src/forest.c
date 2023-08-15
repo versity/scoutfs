@@ -238,19 +238,16 @@ static int forest_read_items(struct super_block *sb, struct scoutfs_key *key, u6
  * We return -ESTALE if we hit stale blocks to give the caller a chance
  * to reset their state and retry with a newer version of the btrees.
  */
-int scoutfs_forest_read_items(struct super_block *sb,
-			      struct scoutfs_key *key,
-			      struct scoutfs_key *bloom_key,
-			      struct scoutfs_key *start,
-			      struct scoutfs_key *end,
-			      scoutfs_forest_item_cb cb, void *arg)
+int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_roots *roots,
+				    struct scoutfs_key *key, struct scoutfs_key *bloom_key,
+				    struct scoutfs_key *start, struct scoutfs_key *end,
+				    scoutfs_forest_item_cb cb, void *arg)
 {
 	struct forest_read_items_data rid = {
 		.cb = cb,
 		.cb_arg = arg,
 	};
 	struct scoutfs_log_trees lt;
-	struct scoutfs_net_roots roots;
 	struct scoutfs_bloom_block *bb;
 	struct forest_bloom_nrs bloom;
 	SCOUTFS_BTREE_ITEM_REF(iref);
@@ -264,18 +261,14 @@ int scoutfs_forest_read_items(struct super_block *sb,
 	scoutfs_inc_counter(sb, forest_read_items);
 	calc_bloom_nrs(&bloom, bloom_key);
 
-	ret = scoutfs_client_get_roots(sb, &roots);
-	if (ret)
-		goto out;
-
-	trace_scoutfs_forest_using_roots(sb, &roots.fs_root, &roots.logs_root);
+	trace_scoutfs_forest_using_roots(sb, &roots->fs_root, &roots->logs_root);
 
 	*start = orig_start;
 	*end = orig_end;
 
 	/* start with fs root items */
 	rid.fic |= FIC_FS_ROOT;
-	ret = scoutfs_btree_read_items(sb, &roots.fs_root, key, start, end,
+	ret = scoutfs_btree_read_items(sb, &roots->fs_root, key, start, end,
 				       forest_read_items, &rid);
 	if (ret < 0)
 		goto out;
@@ -283,7 +276,7 @@ int scoutfs_forest_read_items(struct super_block *sb,
 
 	scoutfs_key_init_log_trees(&ltk, 0, 0);
 	for (;; scoutfs_key_inc(&ltk)) {
-		ret = scoutfs_btree_next(sb, &roots.logs_root, &ltk, &iref);
+		ret = scoutfs_btree_next(sb, &roots->logs_root, &ltk, &iref);
 		if (ret == 0) {
 			if (iref.val_len == sizeof(lt)) {
 				ltk = *iref.key;
@@ -337,6 +330,23 @@ int scoutfs_forest_read_items(struct super_block *sb,
 
 	ret = 0;
 out:
+	return ret;
+}
+
+int scoutfs_forest_read_items(struct super_block *sb,
+			      struct scoutfs_key *key,
+			      struct scoutfs_key *bloom_key,
+			      struct scoutfs_key *start,
+			      struct scoutfs_key *end,
+			      scoutfs_forest_item_cb cb, void *arg)
+{
+	struct scoutfs_net_roots roots;
+	int ret;
+
+	ret = scoutfs_client_get_roots(sb, &roots);
+	if (ret == 0)
+		ret = scoutfs_forest_read_items_roots(sb, &roots, key, bloom_key, start, end,
+						      cb, arg);
 	return ret;
 }
 
