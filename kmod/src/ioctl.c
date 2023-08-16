@@ -43,6 +43,7 @@
 #include "server.h"
 #include "counters.h"
 #include "attr_x.h"
+#include "totl.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -1028,15 +1029,7 @@ out:
 struct xattr_total_entry {
 	struct rb_node node;
 	struct scoutfs_ioctl_xattr_total xt;
-	u64 fs_seq;
-	u64 fs_total;
-	u64 fs_count;
-	u64 fin_seq;
-	u64 fin_total;
-	s64 fin_count;
-	u64 log_seq;
-	u64 log_total;
-	s64 log_count;
+	struct scoutfs_totl_merging merg;
 };
 
 static int cmp_xt_entry_name(const struct xattr_total_entry *a,
@@ -1058,7 +1051,6 @@ static int cmp_xt_entry_name(const struct xattr_total_entry *a,
 static int read_xattr_total_item(struct super_block *sb, struct scoutfs_key *key,
 				 u64 seq, u8 flags, void *val, int val_len, int fic, void *arg)
 {
-	struct scoutfs_xattr_totl_val *tval = val;
 	struct xattr_total_entry *ent;
 	struct xattr_total_entry rd;
 	struct rb_root *root = arg;
@@ -1095,24 +1087,13 @@ static int read_xattr_total_item(struct super_block *sb, struct scoutfs_key *key
 			return -ENOMEM;
 
 		memcpy(&ent->xt.name, &rd.xt.name, sizeof(ent->xt.name));
+		scoutfs_totl_merge_init(&ent->merg);
 
 		rb_link_node(&ent->node, parent, node);
 		rb_insert_color(&ent->node, root);
 	}
 
-	if (fic & FIC_FS_ROOT) {
-		ent->fs_seq = seq;
-		ent->fs_total = le64_to_cpu(tval->total);
-		ent->fs_count = le64_to_cpu(tval->count);
-	} else if (fic & FIC_FINALIZED) {
-		ent->fin_seq = seq;
-		ent->fin_total += le64_to_cpu(tval->total);
-		ent->fin_count += le64_to_cpu(tval->count);
-	} else {
-		ent->log_seq = seq;
-		ent->log_total += le64_to_cpu(tval->total);
-		ent->log_count += le64_to_cpu(tval->count);
-	}
+	scoutfs_totl_merge_contribute(&ent->merg, seq, flags, val, val_len, fic);
 
 	scoutfs_inc_counter(sb, totl_read_item);
 
@@ -1152,30 +1133,6 @@ static void free_all_xt_ents(struct rb_root *root)
  * have been committed.  It doesn't use locking to force commits and
  * block writers so it can be a little bit out of date with respect to
  * dirty xattrs in memory across the system.
- *
- * Our reader has to be careful because the log btree merging code can
- * write partial results to the fs_root.  This means that a reader can
- * see both cases where new finalized logs should be applied to the old
- * fs items and where old finalized logs have already been applied to
- * the partially merged fs items.  Currently active logged items are
- * always applied on top of all cases.
- *
- * These cases are differentiated with a combination of sequence numbers
- * in items, the count of contributing xattrs, and a flag
- * differentiating finalized and active logged items.  This lets us
- * recognize all cases, including when finalized logs were merged and
- * deleted the fs item.
- *
- * We're allocating a tracking struct for each totl name we see while
- * traversing the item btrees.  The forest reader is providing the items
- * it finds in leaf blocks that contain the search key.  In the worst
- * case all of these blocks are full and none of the items overlap.  At
- * most, figure order a thousand names per mount.  But in practice many
- * of these factors fall away: leaf blocks aren't fill, leaf items
- * overlap, there aren't finalized log btrees, and not all mounts are
- * actively changing totals.   We're much more likely to only read a
- * leaf block's worth of totals that have been long since merged into
- * the fs_root.
  */
 static long scoutfs_ioc_read_xattr_totals(struct file *file, unsigned long arg)
 {
@@ -1263,27 +1220,7 @@ static long scoutfs_ioc_read_xattr_totals(struct file *file, unsigned long arg)
 			if (rxt.totals_bytes < sizeof(ent->xt))
 				break;
 
-			/* start with the fs item if we have it */
-			if (ent->fs_seq != 0) {
-				ent->xt.total = ent->fs_total;
-				ent->xt.count = ent->fs_count;
-				scoutfs_inc_counter(sb, totl_read_fs);
-			}
-
-			/* apply finalized logs if they're newer or creating */
-			if (((ent->fs_seq != 0) && (ent->fin_seq > ent->fs_seq)) ||
-			    ((ent->fs_seq == 0) && (ent->fin_count > 0))) {
-				ent->xt.total += ent->fin_total;
-				ent->xt.count += ent->fin_count;
-				scoutfs_inc_counter(sb, totl_read_finalized);
-			}
-
-			/* always apply active logs which must be newer than fs and finalized */
-			if (ent->log_seq > 0) {
-				ent->xt.total += ent->log_total;
-				ent->xt.count += ent->log_count;
-				scoutfs_inc_counter(sb, totl_read_logged);
-			}
+			scoutfs_totl_merge_resolve(&ent->merg, &ent->xt.total, &ent->xt.count);
 
 			if (ent->xt.total != 0 || ent->xt.count != 0) {
 				if (copy_to_user(uxt, &ent->xt, sizeof(ent->xt))) {

@@ -36,6 +36,7 @@
 #include "item.h"
 #include "omap.h"
 #include "util.h"
+#include "totl.h"
 
 /*
  * scoutfs uses a lock service to manage item cache consistency between
@@ -1244,10 +1245,7 @@ int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode,
 	struct scoutfs_key start;
 	struct scoutfs_key end;
 
-	scoutfs_key_set_zeros(&start);
-	start.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
-	scoutfs_key_set_ones(&end);
-	end.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
+	scoutfs_totl_set_range(&start, &end);
 
 	return lock_key_range(sb, mode, flags, &start, &end, lock);
 }

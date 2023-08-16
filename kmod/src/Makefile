@@ -43,6 +43,7 @@ scoutfs-y +=			\
 	srch.o			\
 	super.o			\
 	sysfs.o			\
+	totl.o			\
 	trans.o			\
 	triggers.o		\
 	tseq.o			\
