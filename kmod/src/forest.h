@@ -4,6 +4,7 @@
 struct scoutfs_alloc;
 struct scoutfs_block_writer;
 struct scoutfs_block;
+struct scoutfs_lock;
 
 #include "btree.h"
 
