@@ -3,6 +3,7 @@ t_require_commands touch rm setfattr scoutfs find_xattrs
 read_xattr_totals()
 {
 	sync
+	echo 1 > $(t_debugfs_path)/drop_weak_item_cache
 	scoutfs read-xattr-totals -p "$T_M0"
 }
 
@@ -112,7 +113,6 @@ for phase in create update remove; do
 				echo "$k.0.0 = ${totals[$k]}, ${counts[$k]}"
 			  done ) | grep -v "= 0, 0$" | sort -n >> $T_TMP.check_arr
 
-			sync
 			read_xattr_totals | sort -n >> $T_TMP.check_read
 
 			diff -u $T_TMP.check_arr $T_TMP.check_read || \
