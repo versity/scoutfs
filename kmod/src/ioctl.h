@@ -673,4 +673,9 @@ struct scoutfs_ioctl_dirent {
 #define SCOUTFS_IOC_GET_REFERRING_ENTRIES \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 17, struct scoutfs_ioctl_get_referring_entries)
 
+#define SCOUTFS_IOC_GET_PROJECT_ID \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 18, __u64)
+#define SCOUTFS_IOC_SET_PROJECT_ID \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 19, __u64)
+
 #endif

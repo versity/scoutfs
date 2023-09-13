@@ -275,6 +275,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	si->offline_blocks = le64_to_cpu(cinode->offline_blocks);
 	si->next_readdir_pos = le64_to_cpu(cinode->next_readdir_pos);
 	si->next_xattr_id = le64_to_cpu(cinode->next_xattr_id);
+	si->proj = le64_to_cpu(cinode->proj);
 	si->flags = le32_to_cpu(cinode->flags);
 	si->crtime.tv_sec = le64_to_cpu(cinode->crtime.sec);
 	si->crtime.tv_nsec = le32_to_cpu(cinode->crtime.nsec);
@@ -694,6 +695,31 @@ void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off)
 	} while (read_seqcount_retry(&si->seqcount, seq));
 }
 
+u64 scoutfs_inode_get_proj(struct inode *inode)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned int seq;
+	u64 proj;
+
+	do {
+		seq = read_seqcount_begin(&si->seqcount);
+		proj = si->proj;
+	} while (read_seqcount_retry(&si->seqcount, seq));
+
+	return proj;
+}
+
+void scoutfs_inode_set_proj(struct inode *inode, u64 proj)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	preempt_disable();
+	write_seqcount_begin(&si->seqcount);
+	si->proj = proj;
+	write_seqcount_end(&si->seqcount);
+	preempt_enable();
+}
+
 static int scoutfs_iget_test(struct inode *inode, void *arg)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -835,6 +861,7 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	cinode->offline_blocks = cpu_to_le64(offline_blocks);
 	cinode->next_readdir_pos = cpu_to_le64(si->next_readdir_pos);
 	cinode->next_xattr_id = cpu_to_le64(si->next_xattr_id);
+	cinode->proj = cpu_to_le64(si->proj);
 	cinode->flags = cpu_to_le32(si->flags);
 	cinode->crtime.sec = cpu_to_le64(si->crtime.tv_sec);
 	cinode->crtime.nsec = cpu_to_le32(si->crtime.tv_nsec);
@@ -1478,6 +1505,7 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	si->offline_blocks = 0;
 	si->next_readdir_pos = SCOUTFS_DIRENT_FIRST_POS;
 	si->next_xattr_id = 0;
+	si->proj = 0;
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
 	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);

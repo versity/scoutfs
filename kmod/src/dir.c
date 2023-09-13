@@ -672,6 +672,8 @@ retry:
 	if (ret < 0)
 		goto out;
 
+	scoutfs_inode_set_proj(inode, scoutfs_inode_get_proj(dir));
+
 	ret = scoutfs_dirty_inode_item(dir, *dir_lock);
 out:
 	if (ret)
