@@ -849,6 +849,7 @@ struct scoutfs_inode {
 	__le64 next_readdir_pos;
 	__le64 next_xattr_id;
 	__le64 version;
+	__le64 proj;
 	__le32 nlink;
 	__le32 uid;
 	__le32 gid;

@@ -1335,6 +1335,78 @@ out:
 	return nr ?: ret;
 }
 
+static long scoutfs_ioc_get_project_id(struct file *file, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+	struct super_block *sb = inode->i_sb;
+	u64 __user *uproj = (void __user *)arg;
+	struct scoutfs_lock *lock = NULL;
+	u64 proj;
+	int ret;
+
+	if (!capable(CAP_DAC_READ_SEARCH))
+		return -EPERM;
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
+	if (ret == 0) {
+		proj = scoutfs_inode_get_proj(inode);
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+	}
+
+	if (ret == 0 && __put_user(proj, uproj))
+		ret = -EFAULT;
+
+	return ret;
+}
+
+static long scoutfs_ioc_set_project_id(struct file *file, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+	struct super_block *sb = inode->i_sb;
+	u64 __user *uproj = (void __user *)arg;
+	struct scoutfs_lock *lock = NULL;
+	LIST_HEAD(ind_locks);
+	u64 proj;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (get_user(proj, uproj))
+		return -EFAULT;
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
+	if (ret < 0)
+		return ret;
+
+	if (scoutfs_inode_get_proj(inode) == proj) {
+		ret = 0;
+		goto out_unlock;
+	}
+
+	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, false);
+	if (ret)
+		goto out_unlock;
+
+	ret = scoutfs_dirty_inode_item(inode, lock);
+	if (ret < 0)
+		goto out_release;
+
+	scoutfs_inode_set_proj(inode, proj);
+	scoutfs_update_inode_item(inode, lock, &ind_locks);
+
+	ret = 0;
+out_release:
+	scoutfs_release_trans(sb);
+	scoutfs_inode_index_unlock(sb, &ind_locks);
+out_unlock:
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1372,6 +1444,10 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_get_allocated_inos(file, arg);
 	case SCOUTFS_IOC_GET_REFERRING_ENTRIES:
 		return scoutfs_ioc_get_referring_entries(file, arg);
+	case SCOUTFS_IOC_GET_PROJECT_ID:
+		return scoutfs_ioc_get_project_id(file, arg);
+	case SCOUTFS_IOC_SET_PROJECT_ID:
+		return scoutfs_ioc_set_project_id(file, arg);
 	}
 
 	return -ENOTTY;
