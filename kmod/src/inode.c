@@ -278,6 +278,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode, int in
 	si->flags = le32_to_cpu(cinode->flags);
 	si->crtime.tv_sec = le64_to_cpu(cinode->crtime.sec);
 	si->crtime.tv_nsec = le32_to_cpu(cinode->crtime.nsec);
+	si->proj = le64_to_cpu(cinode->proj);
 
 	/*
 	 * i_blocks is initialized from online and offline and is then
@@ -734,6 +735,29 @@ void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or)
 	write_sequnlock(&si->seqlock);
 }
 
+u64 scoutfs_inode_get_proj(struct inode *inode)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned seq;
+	u64 proj;
+
+	do {
+		seq = read_seqbegin(&si->seqlock);
+		proj = si->proj;
+	} while (read_seqretry(&si->seqlock, seq));
+
+	return proj;
+}
+
+void scoutfs_inode_set_proj(struct inode *inode, u64 proj)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	write_seqlock(&si->seqlock);
+	si->proj = proj;
+	write_sequnlock(&si->seqlock);
+}
+
 static int scoutfs_iget_test(struct inode *inode, void *arg)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -879,6 +903,7 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode, int i
 	cinode->crtime.sec = cpu_to_le64(si->crtime.tv_sec);
 	cinode->crtime.nsec = cpu_to_le32(si->crtime.tv_nsec);
 	memset(cinode->crtime.__pad, 0, sizeof(cinode->crtime.__pad));
+	cinode->proj = cpu_to_le64(si->proj);
 }
 
 /*
@@ -1527,6 +1552,7 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	si->offline_blocks = 0;
 	si->next_readdir_pos = SCOUTFS_DIRENT_FIRST_POS;
 	si->next_xattr_id = 0;
+	si->proj = 0;
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
 	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);

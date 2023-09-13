@@ -687,6 +687,7 @@ struct scoutfs_ioctl_inode_attr_x {
 	__u64 crtime_sec;
 	__u64 size;
 	__u64 bits;
+	__u64 project_id;
 };
 
 /*
@@ -736,11 +737,12 @@ struct scoutfs_ioctl_inode_attr_x {
 #define SCOUTFS_IOC_IAX_CRTIME		(1ULL << 6)
 #define SCOUTFS_IOC_IAX_SIZE		(1ULL << 7)
 #define SCOUTFS_IOC_IAX_RETENTION	(1ULL << 8)
+#define SCOUTFS_IOC_IAX_PROJECT_ID	(1ULL << 9)
 
 /* single bit attributes that are packed in the bits field as _B_ */
 #define SCOUTFS_IOC_IAX__BITS		(SCOUTFS_IOC_IAX_RETENTION)
 /* inverse of all the bits we understand */
-#define SCOUTFS_IOC_IAX__UNKNOWN	(U64_MAX << 9)
+#define SCOUTFS_IOC_IAX__UNKNOWN	(U64_MAX << 10)
 
 #define SCOUTFS_IOC_GET_ATTR_X \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 18, struct scoutfs_ioctl_inode_attr_x)

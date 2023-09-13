@@ -12,6 +12,7 @@
 #define SCOUTFS_FORMAT_VERSION_MAX_STR	__stringify(SCOUTFS_FORMAT_VERSION_MAX)
 
 #define SCOUTFS_FORMAT_VERSION_FEAT_RETENTION	2
+#define SCOUTFS_FORMAT_VERSION_FEAT_PROJECT_ID	2
 
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */
@@ -861,7 +862,10 @@ struct scoutfs_inode {
 	struct scoutfs_timespec ctime;
 	struct scoutfs_timespec mtime;
 	struct scoutfs_timespec crtime;
+	__le64 proj;
 };
+
+#define SCOUTFS_INODE_FMT_V1_BYTES offsetof(struct scoutfs_inode, proj)
 
 /*
  * There are so few versions that we don't mind doing this work inline
@@ -872,7 +876,10 @@ struct scoutfs_inode {
 /* Returns the native written inode size for the given format version, 0 for bad version */
 static inline int scoutfs_inode_vers_bytes(__u64 fmt_vers)
 {
-	return sizeof(struct scoutfs_inode);
+	if (fmt_vers == 1)
+		return SCOUTFS_INODE_FMT_V1_BYTES;
+	else
+		return sizeof(struct scoutfs_inode);
 }
 /*
  * Returns true if bytes is a valid inode size to read from the given
@@ -881,7 +888,8 @@ static inline int scoutfs_inode_vers_bytes(__u64 fmt_vers)
  */
 static inline int scoutfs_inode_valid_vers_bytes(__u64 fmt_vers, int bytes)
 {
-	return bytes == sizeof(struct scoutfs_inode);
+	return (bytes == sizeof(struct scoutfs_inode) && fmt_vers == SCOUTFS_FORMAT_VERSION_MAX) ||
+	       (bytes == SCOUTFS_INODE_FMT_V1_BYTES);
 }
 
 #define SCOUTFS_INO_FLAG_TRUNCATE	0x1

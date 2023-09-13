@@ -33,6 +33,10 @@ static int validate_attr_x_input(struct super_block *sb, struct scoutfs_ioctl_in
 	    (ret = scoutfs_fmt_vers_unsupported(sb, SCOUTFS_FORMAT_VERSION_FEAT_RETENTION)))
 		    return ret;
 
+	if ((iax->x_mask & SCOUTFS_IOC_IAX_PROJECT_ID) &&
+	    (ret = scoutfs_fmt_vers_unsupported(sb, SCOUTFS_FORMAT_VERSION_FEAT_PROJECT_ID)))
+		    return ret;
+
 	return 0;
 }
 
@@ -111,6 +115,8 @@ int scoutfs_get_attr_x(struct inode *inode, struct scoutfs_ioctl_inode_attr_x *i
 			bits |= SCOUTFS_IOC_IAX_B_RETENTION;
 		size = fill_attr(size, iax, SCOUTFS_IOC_IAX__BITS, bits, bits);
 	}
+	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_PROJECT_ID,
+			 project_id, scoutfs_inode_get_proj(inode));
 
 	ret = size;
 unlock:
@@ -230,6 +236,8 @@ int scoutfs_set_attr_x(struct inode *inode, struct scoutfs_ioctl_inode_attr_x *i
 					(iax->bits & SCOUTFS_IOC_IAX_B_RETENTION) ?
 					SCOUTFS_INO_FLAG_RETENTION : 0);
 	}
+	if (iax->x_mask & SCOUTFS_IOC_IAX_PROJECT_ID)
+		scoutfs_inode_set_proj(inode, iax->project_id);
 
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 	ret = 0;

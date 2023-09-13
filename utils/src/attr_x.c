@@ -82,6 +82,7 @@ static int do_attr_x(struct attr_x_args *args)
 		pr(iax, CRTIME, "crtime", "%llu.%u", iax->crtime_sec, iax->crtime_nsec);
 		pr(iax, SIZE, "size", "%llu", iax->size);
 		prb(iax, RETENTION, "retention");
+		pr(iax, PROJECT_ID, "project_id", "%llu", iax->project_id);
 	}
 
 	ret = 0;
@@ -191,6 +192,14 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 				args->iax.bits |= SCOUTFS_IOC_IAX_B_RETENTION;
 		}
 		break;
+	case 'p':
+		args->iax.x_mask |= SCOUTFS_IOC_IAX_PROJECT_ID;
+		if (arg) {
+			ret = parse_u64(arg, &args->iax.project_id);
+			if (ret)
+				return ret;
+		}
+		break;
 	case ARGP_KEY_ARG:
 		if (!args->filename)
 			args->filename = strdup_or_error(state, arg);
@@ -222,6 +231,7 @@ static struct argp_option set_options[] = {
 	{ "crtime", 'r', "SECS.NSECS", 0, "ScoutFS creation time"},
 	{ "size", 's', "SIZE", 0, "Inode i_size field"},
 	{ "retention", 't', "0|1", 0, "Retention flag"},
+	{ "project_id", 'p', "PROJECT_ID", 0, "Project ID"},
 	{ NULL }
 };
 

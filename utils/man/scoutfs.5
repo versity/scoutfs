@@ -312,6 +312,19 @@ with sufficient priveledges to remove the retention restrictions on
 other modifications.
 .RE
 
+.SH PROJECT IDs
+All inodes have a project ID attribute that can be set via the
+SET_ATTR_X ioctl and displayed with the GET_ATTR_X ioctl.  Project IDs
+are an unsigned 64bit value and the value of 0 is reserved to indicate
+that no project ID is assigned.   If a project ID is set on a directory
+then all inodes created with it as the initial parent inheret that ID,
+for all file types.  This includes files initially unlinked from the
+namespace when created with O_TMPFILE.  Project IDs are only
+automatically inherited from the parent dir on initial creation.
+They're not changed as directory entry linkes to the inode are created
+or renamed.
+.RE
+
 .SH FORMAT VERSION
 The format version defines the layout and use of structures stored on
 devices and passed over the network.  The version is incremented for
@@ -399,7 +412,8 @@ The defined format versions are:
 Initial format version.
 .TP
 .B 2
-Added retention mode by setting the retention attribute.
+Added retention mode by setting the retention attribute.  Added the
+project ID inode attribute.
 .RE
 
 .SH CORRUPTION DETECTION

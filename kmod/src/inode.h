@@ -21,6 +21,7 @@ struct scoutfs_inode_info {
 	u64 data_version;
 	u64 online_blocks;
 	u64 offline_blocks;
+	u64 proj;
 	u32 flags;
 	struct kc_timespec crtime;
 
@@ -122,6 +123,9 @@ u64 scoutfs_inode_data_version(struct inode *inode);
 void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off);
 u32 scoutfs_inode_get_flags(struct inode *inode);
 void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or);
+u64 scoutfs_inode_get_proj(struct inode *inode);
+void scoutfs_inode_set_proj(struct inode *inode, u64 proj);
+
 int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock);
 
 int scoutfs_inode_check_retention(struct inode *inode);
