@@ -34,6 +34,7 @@
 #include "forest.h"
 #include "acl.h"
 #include "counters.h"
+#include "quota.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -648,6 +649,10 @@ static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 		      scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino,
 				       inode_lock);
 	}
+	if (ret)
+		goto out_unlock;
+
+	ret = scoutfs_quota_check_inode(sb, dir);
 	if (ret)
 		goto out_unlock;
 

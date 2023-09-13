@@ -175,6 +175,10 @@ struct scoutfs_key {
 #define sko_rid		_sk_first
 #define sko_ino		_sk_second
 
+/* quota rules */
+#define skqr_hash	_sk_second
+#define skqr_coll_nr	_sk_third
+
 /* xattr totl */
 #define skxt_a		_sk_first
 #define skxt_b		_sk_second
@@ -585,6 +589,7 @@ struct scoutfs_log_merge_freeing {
  */
 #define SCOUTFS_INODE_INDEX_ZONE		4
 #define SCOUTFS_ORPHAN_ZONE			8
+#define SCOUTFS_QUOTA_ZONE			10
 #define SCOUTFS_XATTR_TOTL_ZONE			12
 #define SCOUTFS_FS_ZONE				16
 #define SCOUTFS_LOCK_ZONE			20
@@ -607,6 +612,9 @@ struct scoutfs_log_merge_freeing {
 
 /* orphan zone, redundant type used for clarity */
 #define SCOUTFS_ORPHAN_TYPE			4
+
+/* quota zone */
+#define SCOUTFS_QUOTA_RULE_TYPE			4
 
 /* fs zone */
 #define SCOUTFS_INODE_TYPE			4
@@ -659,6 +667,34 @@ struct scoutfs_xattr {
 struct scoutfs_xattr_totl_val {
 	__le64 total;
 	__le64 count;
+};
+
+#define SQ_RF_TOTL_COUNT	(1 << 0)
+#define SQ_RF__UNKNOWN	(~((1 << 1) - 1))
+
+#define SQ_NS_LITERAL		0
+#define SQ_NS_PROJ		1
+#define SQ_NS_UID		2
+#define SQ_NS_GID		3
+#define SQ_NS__NR		4
+#define SQ_NS__NR_SELECT	(SQ_NS__NR - 1) /* !literal */
+
+#define SQ_NF_SELECT	(1 << 0)
+#define SQ_NF__UNKNOWN	(~((1 << 1) - 1))
+
+#define SQ_OP_INODE	0
+#define SQ_OP_DATA	1
+#define SQ_OP__NR	2
+
+struct scoutfs_quota_rule_val {
+	__le64 name_val[3];
+	__le64 limit;
+	__u8 prio;
+	__u8 op;
+	__u8 rule_flags;
+	__u8 name_source[3];
+	__u8 name_flags[3];
+	__u8 _pad[7];
 };
 
 /* XXX does this exist upstream somewhere? */

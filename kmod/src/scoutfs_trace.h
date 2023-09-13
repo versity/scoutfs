@@ -37,7 +37,9 @@
 #include "net.h"
 #include "data.h"
 #include "ext.h"
+#include "quota.h"
 
+#include "trace/quota.h"
 #include "trace/wkic.h"
 
 struct lock_info;
