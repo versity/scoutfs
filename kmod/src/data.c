@@ -1110,6 +1110,10 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 
 	while(iblock <= last) {
 
+		ret = scoutfs_quota_check_data(sb, inode);
+		if (ret)
+			goto out_extent;
+
 		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, true);
 		if (ret)
 			goto out_extent;

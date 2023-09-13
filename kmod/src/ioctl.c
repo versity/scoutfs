@@ -45,6 +45,7 @@
 #include "attr_x.h"
 #include "totl.h"
 #include "wkic.h"
+#include "quota.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -1387,6 +1388,79 @@ out:
 	return ret;
 }
 
+static long scoutfs_ioc_get_quota_rules(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_get_quota_rules __user *ugqr = (void __user *)arg;
+	struct scoutfs_ioctl_get_quota_rules gqr;
+	struct scoutfs_ioctl_quota_rule __user *uirules;
+	struct scoutfs_ioctl_quota_rule *irules;
+	struct page *page = NULL;
+	int copied = 0;
+	int nr;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (copy_from_user(&gqr, ugqr, sizeof(gqr)))
+		return -EFAULT;
+
+	if (gqr.rules_nr == 0)
+		return 0;
+
+	uirules = (void __user *)gqr.rules_ptr;
+	/* limit rules copied per call */
+	gqr.rules_nr = min_t(u64, gqr.rules_nr, INT_MAX);
+
+	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	irules = page_address(page);
+
+	while (copied < gqr.rules_nr) {
+		nr = min_t(u64, gqr.rules_nr - copied,
+				PAGE_SIZE / sizeof(struct scoutfs_ioctl_quota_rule));
+		ret = scoutfs_quota_get_rules(sb, gqr.iterator, page_address(page), nr);
+		if (ret <= 0)
+			goto out;
+
+		if (copy_to_user(&uirules[copied], irules, ret * sizeof(irules[0]))) {
+			ret = -EFAULT;
+			goto out;
+		}
+
+		copied += ret;
+	}
+
+	ret = 0;
+out:
+	if (page)
+		__free_page(page);
+
+	if (ret == 0 && copy_to_user(ugqr->iterator, gqr.iterator, sizeof(gqr.iterator)))
+		ret = -EFAULT;
+
+	return ret ?: copied;
+}
+
+static long scoutfs_ioc_mod_quota_rule(struct file *file, unsigned long arg, bool is_add)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_quota_rule __user *uirule = (void __user *)arg;
+	struct scoutfs_ioctl_quota_rule irule;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (copy_from_user(&irule, uirule, sizeof(irule)))
+		return -EFAULT;
+
+	return scoutfs_quota_mod_rule(sb, is_add, &irule);
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1428,6 +1502,12 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_get_attr_x(file, arg);
 	case SCOUTFS_IOC_SET_ATTR_X:
 		return scoutfs_ioc_set_attr_x(file, arg);
+	case SCOUTFS_IOC_GET_QUOTA_RULES:
+		return scoutfs_ioc_get_quota_rules(file, arg);
+	case SCOUTFS_IOC_ADD_QUOTA_RULE:
+		return scoutfs_ioc_mod_quota_rule(file, arg, true);
+	case SCOUTFS_IOC_DEL_QUOTA_RULE:
+		return scoutfs_ioc_mod_quota_rule(file, arg, false);
 	}
 
 	return -ENOTTY;
