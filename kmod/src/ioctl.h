@@ -678,4 +678,73 @@ struct scoutfs_ioctl_dirent {
 #define SCOUTFS_IOC_SET_PROJECT_ID \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 19, __u64)
 
+/*
+ * (These fields are documented in the order that they're displayed by
+ * the scoutfs cli utility which matches the sort order of the rules.)
+ *
+ * @prio: The priority of the rule.  Rules are sorted by their fields
+ * with prio at the highest magnitude.  When multiple rules match the
+ * rule with the highest sort order is enforced.  The priority field
+ * lets rules override the default field sort order.
+ *
+ * @name_val[3]: The three 64bit values that make up the name of the
+ * totl xattr whose total will be checked against the rule's limit to
+ * see if the quota rule has been exceeded.  The behavior of the values
+ * can be changed by their corresponding name_source and name_flags.
+ *
+ * @name_source[3]: The SQ_NS_ enums that control where the value comes
+ * from.  _LITERAL uses the value from name_val.  Inode attribute
+ * sources (_PROJ, _UID, _GID) are taken from the inode of the operation
+ * that is being checked against the rule.
+ *
+ * @name_flags[3]: The SQ_NF_ enums that alter the name values.  _SELECT
+ * makes the rule only match if the inode attribute of the operation
+ * matches the attribute value stored in name_val.  This lets rules
+ * match a specific value of an attribute rather than mapping all
+ * attribute values of to totl names.
+ *
+ * @op: The SQ_OP_ enums which specify the operation that can't exceed
+ * the rule's limit.  _INODE checks inode creation and the inode
+ * attributes are taken from the inode that would be created.  _DATA
+ * checks file data block allocation and the inode fields come from the
+ * inode that is allocating the blocks.
+ *
+ * @limit: The 64bit value that is checked against the totl value
+ * described by the rule.  If the totl value is greater than or equal to
+ * this value of the matching rule then the operation will return
+ * -EDQUOT.
+ *
+ * @rule_flags: SQ_RF_TOTL_COUNT indicates that the rule's limit should
+ * be checked against the number of xattrs contributing to a totl value
+ * instead of the sum of the xattrs.
+ */
+struct scoutfs_ioctl_quota_rule {
+	__u64 name_val[3];
+	__u64 limit;
+	__u8 prio;
+	__u8 op;
+	__u8 rule_flags;
+	__u8 name_source[3];
+	__u8 name_flags[3];
+	__u8 _pad[7];
+};
+
+struct scoutfs_ioctl_get_quota_rules {
+	__u64 iterator[2];
+	__u64 rules_ptr;
+	__u64 rules_nr;
+};
+
+/*
+ * Rules are uniquely identified by their non-padded fields.  Addition will fail
+ * with -EEXIST if the specified rule already exists and deletion must find a rule
+ * with all matching fields to delete.
+ */
+#define SCOUTFS_IOC_GET_QUOTA_RULES \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 20, struct scoutfs_ioctl_get_quota_rules)
+#define SCOUTFS_IOC_ADD_QUOTA_RULE \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 21, struct scoutfs_ioctl_quota_rule)
+#define SCOUTFS_IOC_DEL_QUOTA_RULE \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 22, struct scoutfs_ioctl_quota_rule)
+
 #endif

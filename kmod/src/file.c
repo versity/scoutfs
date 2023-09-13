@@ -28,6 +28,7 @@
 #include "inode.h"
 #include "per_task.h"
 #include "omap.h"
+#include "quota.h"
 
 #ifdef KC_LINUX_HAVE_FOP_AIO_READ
 /*
@@ -121,6 +122,10 @@ retry:
 		if (ret != 0)
 			goto out;
 	}
+
+	ret = scoutfs_quota_check_data(sb, inode);
+	if (ret)
+		goto out;
 
 	/* XXX: remove SUID bit */
 
@@ -220,6 +225,10 @@ retry:
 		goto out;
 
 	ret = scoutfs_complete_truncate(inode, scoutfs_inode_lock);
+	if (ret)
+		goto out;
+
+	ret = scoutfs_quota_check_data(sb, inode);
 	if (ret)
 		goto out;
 
