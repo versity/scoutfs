@@ -151,6 +151,11 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error.*outside of supported version.*"
 	re="$re|scoutfs .* error.*could not get .*super.*"
 
+	# ignore "unsafe core pattern" when xfstests tries to disable cores"
+	re="$re|Unsafe core_pattern used with fs.suid_dumpable=2.*"
+	re="$re|Pipe handler or fully qualified core dump path required.*"
+	re="$re|Set kernel.core_pattern before fs.suid_dumpable.*"
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob
 }
