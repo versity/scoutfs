@@ -80,6 +80,16 @@ generic/325	# mmap missing
 generic/338	# BUG_ON update inode error handling
 generic/346	# mmap missing
 generic/347	# _dmthin_mount doesn't work?
+generic/409	# bind mounts not scripted yet
+generic/410	# bind mounts not scripted yet
+generic/411	# bind mounts not scripted yet
+generic/423	# symlink inode size is strlen() + 1 on scoutfs
+generic/428	# mmap missing
+generic/437	# mmap missing
+generic/452	# exec test - no mmap
+generic/614	# mmap missing
+generic/633	# execveat - no mmap
+generic/638	# mmap missing
 EOF
 
 t_restore_output
