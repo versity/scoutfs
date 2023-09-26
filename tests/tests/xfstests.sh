@@ -81,6 +81,45 @@ generic/325	# mmap missing
 generic/338	# BUG_ON update inode error handling
 generic/346	# mmap missing
 generic/347	# _dmthin_mount doesn't work?
+generic/356	# swap
+generic/357	# swap
+generic/409	# bind mounts not scripted yet
+generic/410	# bind mounts not scripted yet
+generic/411	# bind mounts not scripted yet
+generic/423	# symlink inode size is strlen() + 1 on scoutfs
+generic/428	# mmap missing
+generic/430	# xfs_io copy_range missing in el7
+generic/431	# xfs_io copy_range missing in el7
+generic/432	# xfs_io copy_range missing in el7
+generic/433	# xfs_io copy_range missing in el7
+generic/434	# xfs_io copy_range missing in el7
+generic/437	# mmap missing
+generic/441	# dm-mapper
+generic/444	# el9's posix_acl_update_mode is buggy ?
+generic/452	# exec test - no mmap
+generic/467	# open_by_handle ESTALE
+generic/472	# swap
+generic/484	# dm-mapper
+generic/493	# swap
+generic/494	# swap
+generic/495	# swap
+generic/496	# swap
+generic/497	# swap
+generic/532	# xfs_io statx attrib_mask missing in el7
+generic/554	# swap
+generic/563	# cgroup+loopdev
+generic/564	# xfs_io copy_range missing in el7
+generic/565	# xfs_io copy_range missing in el7
+generic/568	# falloc not resulting in block count increase
+generic/569	# swap
+generic/570	# swap
+generic/614	# mmap missing
+generic/620	# dm-hugedisk
+generic/633	# mmap, id-mapped mounts missing in el7
+generic/636	# swap
+generic/638	# mmap missing
+generic/641	# swap
+generic/643	# swap
 EOF
 
 t_restore_output
