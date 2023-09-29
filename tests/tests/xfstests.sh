@@ -33,7 +33,7 @@ if [ -z "$T_SKIP_CHECKOUT" ]; then
 	# this remote use is bad, do better
 	t_quiet git checkout -B "$T_XFSTESTS_BRANCH" --track "origin/$T_XFSTESTS_BRANCH"
 fi
-t_quiet make
+make > build.log 2>&1
 t_quiet sync
 # pwd stays in xfstests dir to build config and run
 
