@@ -80,6 +80,24 @@ static void print_orphan(struct scoutfs_key *key, void *val, int val_len)
 }
 
 
+#define SQR_FMT "[%u %llu,%u,%x %llu,%u,%x %llu,%u,%x %u %llu %x]"
+
+#define SQR_ARGS(r)								\
+	(r)->prio,								\
+	le64_to_cpu((r)->name_val[0]), (r)->name_source[0], (r)->name_flags[0],	\
+	le64_to_cpu((r)->name_val[1]), (r)->name_source[1], (r)->name_flags[1],	\
+	le64_to_cpu((r)->name_val[2]), (r)->name_source[2], (r)->name_flags[2],	\
+	(r)->op, le64_to_cpu((r)->limit), (r)->rule_flags
+
+static void print_quota(struct scoutfs_key *key, void *val, int val_len)
+{
+	struct scoutfs_quota_rule_val *rv = val;
+
+	printf("    quota rule: hash 0x%016llx coll_nr %llu\n"
+	       "      "SQR_FMT"\n",
+	       le64_to_cpu(key->skqr_hash), le64_to_cpu(key->skqr_coll_nr), SQR_ARGS(rv));
+}
+
 static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_xattr_totl_val *tval = val;
@@ -177,6 +195,9 @@ static print_func_t find_printer(u8 zone, u8 type)
 		if (type == SCOUTFS_ORPHAN_TYPE)
 			return print_orphan;
 	}
+
+	if (zone == SCOUTFS_QUOTA_ZONE)
+		return print_quota;
 
 	if (zone == SCOUTFS_XATTR_TOTL_ZONE)
 		return print_xattr_totl;
