@@ -78,8 +78,9 @@ endif
 # v4.8-rc1-29-g31051c85b5e2
 #
 # inode_change_ok() removed - replace with setattr_prepare()
+# v5.11-rc4-7-g2f221d6f7b88 removes extern attribute
 #
-ifneq (,$(shell grep 'extern int setattr_prepare' include/linux/fs.h))
+ifneq (,$(shell grep 'int setattr_prepare' include/linux/fs.h))
 ccflags-y += -DKC_SETATTR_PREPARE
 endif
 
