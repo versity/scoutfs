@@ -28,7 +28,7 @@ while [ "$SECONDS" -lt "$END" ]; do
         for i in $(t_fs_nrs); do
                 if [ "$i" -ge "$quorum_nr" ]; then
                         t_umount $i &
-                        echo "umount $i pid $pid quo $quorum_nr" \
+                        echo "umount $i rid $rid quo $quorum_nr" \
                                 >> $T_TMP.log
                         mounted[$i]=0
                 fi
@@ -53,6 +53,9 @@ while [ "$SECONDS" -lt "$END" ]; do
 
         for i in "${lock_arr[@]}"; do
                 if [[ ! " ${rid_arr[*]} " =~ " $i " ]]; then
+                        echo -e "RID($i) exists" >> $T_TMP.log
+                        echo -e "rid_arr:\n${rid_arr[@]}" >> $T_TMP.log
+                        echo -e "lock_arr:\n${lock_arr[@]}" >> $T_TMP.log
                         t_fail "RID($i): exists when not mounted"
                 fi
         done
