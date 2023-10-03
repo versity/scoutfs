@@ -183,6 +183,13 @@ static void *scoutfs_tseq_seq_next(struct seq_file *m, void *v, loff_t *pos)
 	ent = tseq_rb_next(ent);
 	if (ent)
 		*pos = ent->pos;
+	else
+		/*
+		 * once we hit the end, *pos is never used, but it has to
+		 * be updated to avoid an error in bpf_seq_read()
+		 */
+		(*pos)++;
+
 	return ent;
 }
 
