@@ -67,6 +67,7 @@ struct commit_users {
 	unsigned int nr_holders;
 	u32 avail_before;
 	u32 freed_before;
+	bool committing;
 	bool exceeded;
 };
 
@@ -84,7 +85,7 @@ do {												\
 	__typeof__(cusers) _cusers = (cusers);							\
 	trace_scoutfs_server_commit_##which(sb, !list_empty(&_cusers->holding),			\
 		!list_empty(&_cusers->applying), _cusers->nr_holders, _cusers->avail_before,	\
-		_cusers->freed_before, _cusers->exceeded);					\
+		_cusers->freed_before, _cusers->committing, _cusers->exceeded);			\
 } while (0)
 
 struct server_info {
@@ -282,6 +283,14 @@ struct commit_hold {
  * per-holder allocation consumption tracking.   The best we can do is
  * flag all the current holders so that as they release we can see
  * everyone involved in crossing the limit.
+ *
+ * The consumption of space to record freed blocks is tricky.  The
+ * freed_before value was the space available as the holder started.
+ * But that happens before we actually dirty the first block in the
+ * freed list.  If that block is too full then we just allocate a new
+ * empty first block.  In that case the current remaining here can be a
+ * lot more than the initial freed_before.  We account for that and
+ * treat freed_before as the maximum capacity.
  */
 static void check_holder_budget(struct super_block *sb, struct server_info *server,
 				struct commit_users *cusers)
@@ -301,8 +310,13 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 		return;
 
 	scoutfs_alloc_meta_remaining(&server->alloc, &avail_now, &freed_now);
+
 	avail_used = cusers->avail_before - avail_now;
-	freed_used = cusers->freed_before - freed_now;
+	if (freed_now < cusers->freed_before)
+		freed_used = cusers->freed_before - freed_now;
+	else
+		freed_used = SCOUTFS_ALLOC_LIST_MAX_BLOCKS - freed_now;
+
 	budget = cusers->nr_holders * COMMIT_HOLD_ALLOC_BUDGET;
 	if (avail_used <= budget && freed_used <= budget)
 		return;
@@ -325,31 +339,18 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 /*
  * We don't have per-holder consumption.   We allow commit holders as
  * long as the total budget of all the holders doesn't exceed the alloc
- * resources that were available
+ * resources that were available.  If a hold is waiting for budget
+ * availability in the allocators then we try and kick off a commit to
+ * fill and use the next allocators after the current transaction.
  */
-static bool commit_alloc_has_room(struct server_info *server, struct commit_users *cusers,
-				  unsigned int more_holders)
-{
-	u32 avail_before;
-	u32 freed_before;
-	u32 budget;
-
-	if (cusers->nr_holders > 0) {
-		avail_before = cusers->avail_before;
-		freed_before = cusers->freed_before;
-	} else {
-		scoutfs_alloc_meta_remaining(&server->alloc, &avail_before, &freed_before);
-	}
-
-	budget = (cusers->nr_holders + more_holders) * COMMIT_HOLD_ALLOC_BUDGET;
-
-	return avail_before >= budget && freed_before >= budget;
-}
-
 static bool hold_commit(struct super_block *sb, struct server_info *server,
 			struct commit_users *cusers, struct commit_hold *hold)
 {
-	bool held = false;
+	bool has_room;
+	bool held;
+	u32 budget;
+	u32 av;
+	u32 fr;
 
 	spin_lock(&cusers->lock);
 
@@ -357,19 +358,39 @@ static bool hold_commit(struct super_block *sb, struct server_info *server,
 
 	check_holder_budget(sb, server, cusers);
 
+	if (cusers->nr_holders == 0) {
+		scoutfs_alloc_meta_remaining(&server->alloc, &av, &fr);
+	} else {
+		av = cusers->avail_before;
+		fr = cusers->freed_before;
+	}
+
 	/* +2 for our additional hold and then for the final commit work the server does */
-	if (list_empty(&cusers->applying) && commit_alloc_has_room(server, cusers, 2)) {
-		scoutfs_alloc_meta_remaining(&server->alloc, &hold->avail, &hold->freed);
+	budget = (cusers->nr_holders + 2) * COMMIT_HOLD_ALLOC_BUDGET;
+	has_room = av >= budget && fr >= budget;
+	/* checking applying so holders drain once an apply caller starts waiting */
+	held = !cusers->committing && has_room && list_empty(&cusers->applying);
+
+	if (held) {
 		if (cusers->nr_holders == 0) {
-			cusers->avail_before = hold->avail;
-			cusers->freed_before = hold->freed;
+			cusers->avail_before = av;
+			cusers->freed_before = fr;
+			hold->avail = av;
+			hold->freed = fr;
 			cusers->exceeded = false;
+		} else {
+			scoutfs_alloc_meta_remaining(&server->alloc, &hold->avail, &hold->freed);
 		}
+
 		hold->exceeded = false;
 		hold->start = ktime_get();
 		list_add_tail(&hold->entry, &cusers->holding);
+
 		cusers->nr_holders++;
-		held = true;
+
+	} else if (!has_room && cusers->nr_holders == 0 && !cusers->committing) {
+		cusers->committing = true;
+		queue_work(server->wq, &server->commit_work);
 	}
 
 	spin_unlock(&cusers->lock);
@@ -403,7 +424,6 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 	DECLARE_SERVER_INFO(sb, server);
 	struct commit_users *cusers = &server->cusers;
 	struct timespec ts;
-	bool start_commit;
 
 	spin_lock(&cusers->lock);
 
@@ -424,12 +444,14 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 		list_del_init(&hold->entry);
 		hold->ret = err;
 	}
-	cusers->nr_holders--;
-	start_commit = cusers->nr_holders == 0 && !list_empty(&cusers->applying);
-	spin_unlock(&cusers->lock);
 
-	if (start_commit)
+	cusers->nr_holders--;
+	if (cusers->nr_holders == 0 && !cusers->committing && !list_empty(&cusers->applying)) {
+		cusers->committing = true;
 		queue_work(server->wq, &server->commit_work);
+	}
+
+	spin_unlock(&cusers->lock);
 
 	wait_event(cusers->waitq, list_empty_careful(&hold->entry));
 	smp_rmb(); /* entry load before ret */
@@ -438,8 +460,8 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 
 /*
  * Start a commit from the commit work.  We should only have been queued
- * while a holder is waiting to apply after all active holders have
- * finished.
+ * while there are no active holders and someone started the commit.
+ * There may or may not be blocked apply callers waiting for the result.
  */
 static int commit_start(struct super_block *sb, struct commit_users *cusers)
 {
@@ -448,7 +470,7 @@ static int commit_start(struct super_block *sb, struct commit_users *cusers)
 	/* make sure holders held off once commit started */
 	spin_lock(&cusers->lock);
 	TRACE_COMMIT_USERS(sb, cusers, start);
-	if (WARN_ON_ONCE(list_empty(&cusers->applying) || cusers->nr_holders != 0))
+	if (WARN_ON_ONCE(!cusers->committing || cusers->nr_holders != 0))
 		ret = -EINVAL;
 	spin_unlock(&cusers->lock);
 
@@ -471,6 +493,7 @@ static void commit_end(struct super_block *sb, struct commit_users *cusers, int 
 	smp_wmb(); /* ret stores before list updates */
 	list_for_each_entry_safe(hold, tmp, &cusers->applying, entry)
 		list_del_init(&hold->entry);
+	cusers->committing = false;
 	spin_unlock(&cusers->lock);
 
 	wake_up(&cusers->waitq);
@@ -543,7 +566,7 @@ static void set_stable_super(struct server_info *server, struct scoutfs_super_bl
  * implement commits with a single pending work func.
  *
  * Processing paths hold the commit while they're making multiple
- * dependent changes.  When they're done and want it persistent they add
+ * dependent changes.  When they're done and want it persistent they
  * queue the commit work.  This work runs, performs the commit, and
  * wakes all the applying waiters with the result.  Readers can run
  * concurrently with these commits.
