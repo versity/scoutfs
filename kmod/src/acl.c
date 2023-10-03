@@ -155,7 +155,8 @@ int scoutfs_set_acl_locked(struct inode *inode, struct posix_acl *acl, int type,
 	switch (type) {
 	case ACL_TYPE_ACCESS:
 		if (acl) {
-			ret = posix_acl_update_mode(inode, &new_mode, &acl);
+			ret = posix_acl_update_mode(KC_VFS_INIT_NS
+						    inode, &new_mode, &acl);
 			if (ret < 0)
 				goto out;
 			set_mode = true;
