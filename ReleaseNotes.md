@@ -2,6 +2,15 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.16
+\
+*Oct 4, 2023*
+
+Fix an issue where the server could hang on startup if its persistent
+allocator structures were left in a specific degraded state by the
+previously active server.
+
+---
 v1.15
 \
 *Jul 17, 2023*
