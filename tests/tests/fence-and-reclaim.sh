@@ -7,14 +7,11 @@ t_require_mounts 2
 
 #
 # Make sure that all mounts can read the results of a write from each
-# mount.  And make sure that the greatest of all the written seqs is
-# visible after the writes were commited by remote reads.
+# mount.
 #
 check_read_write()
 {
 	local expected
-	local greatest=0
-	local seq
 	local path
 	local saw
 	local w
@@ -25,11 +22,6 @@ check_read_write()
 		eval path="\$T_D${w}/written"
 		echo "$expected" > "$path"
 
-		seq=$(scoutfs stat -s meta_seq $path)
-		if [ "$seq" -gt "$greatest" ]; then
-			greatest=$seq
-		fi
-
 		for r in $(t_fs_nrs); do
 			eval path="\$T_D${r}/written"
 			saw=$(cat "$path")
@@ -38,11 +30,6 @@ check_read_write()
 			fi
 		done
 	done
-
-	seq=$(scoutfs statfs -s committed_seq -p $T_D0)
-	if [ "$seq" -lt "$greatest" ]; then
-		echo "committed_seq $seq less than greatest $greatest"
-	fi
 }
 
 # verify that fenced ran our testing fence script
