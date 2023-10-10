@@ -55,10 +55,17 @@ scoutfs setattr -t 67305985.999999999 -V 1 -s 1 "$FILE" 2>&1 | t_filter_fs
 TZ=GMT stat -c "%z" "$FILE"
 rm "$FILE"
 
+#
+# With e2fsprogs-v1.42.10-10-g29758d2f, the output of filefrag 'flags' changes
+# significantly. First, the _LAST flag is now output. Second, the 'unknown'
+# flag is now printed out as 'unknown_loc'. To compensate for this, we check
+# and replace the "correct" output for new versions here with the expected
+# value.
+#
 echo "== large offline extents are created"
 touch "$FILE"
 scoutfs setattr -V 1 -o -s $((10007 * 4096)) "$FILE" 2>&1 | t_filter_fs
-filefrag -v -b4096 "$FILE" 2>&1 | t_filter_fs
+filefrag -v -b4096 "$FILE" 2>&1 | sed 's/last,unknown_loc,eof$/unknown,eof/' | t_filter_fs
 rm "$FILE"
 
 # had a bug where we were creating extents that were too long

@@ -27,15 +27,9 @@ test_xattr_lengths() {
 	echo "key len $name_len val len $val_len" >> "$T_TMP.log"
 	setfattr -n $name -v \"$val\" "$FILE"
 
-	# grep has trouble with enormous args?  so we dump the
-	# name=value to a file and compare with a known good file
-	getfattr -d --absolute-names "$FILE" | grep "$name" > "$T_TMP.got"
+	getfattr -d --only-values --absolute-names "$FILE" -n "$name" > "$T_TMP.got"
+	echo -n "$val" > "$T_TMP.good"
 
-	if [ $val_len == 0 ]; then
-		echo "$name" > "$T_TMP.good"
-	else
-		echo "$name=\"$val\"" > "$T_TMP.good"
-	fi
 	cmp "$T_TMP.good" "$T_TMP.got" || \
 		t_fail "cmp failed name len $name_len val len $val_len"
 

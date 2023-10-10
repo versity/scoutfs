@@ -773,7 +773,7 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 
 	/* XXX do these want i_mutex or anything? */
 	inode_inc_iversion(inode);
-	inode->i_ctime = CURRENT_TIME;
+	inode->i_ctime = current_time(inode);
 	ret = 0;
 
 out:
@@ -850,6 +850,7 @@ unlock:
 	return ret;
 }
 
+#ifndef KC_XATTR_STRUCT_XATTR_HANDLER
 /*
  * Future kernels have this amazing hack to rewind the name to get the
  * skipped prefix.  We're back in the stone ages without the handler
@@ -857,22 +858,41 @@ unlock:
  * compat hook to either call the kernel's xattr_full_name(handler), or
  * our hack to use the flags as the prefix length.
  */
-static const char *full_name_hack(void *handler, const char *name, int len)
+static const char *full_name_hack(const char *name, int len)
 {
 	return name - len;
 }
+#endif
 
-static int scoutfs_xattr_get_handler(struct dentry *dentry, const char *name,
-				     void *value, size_t size, int handler_flags)
+static int scoutfs_xattr_get_handler
+#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
+		(const struct xattr_handler *handler, struct dentry *dentry,
+		 struct inode *inode, const char *name, void *value,
+		 size_t size)
 {
-	name = full_name_hack(NULL, name, handler_flags);
+	name = xattr_full_name(handler, name);
+#else
+		(struct dentry *dentry, const char *name,
+		 void *value, size_t size, int handler_flags)
+{
+	name = full_name_hack(name, handler_flags);
+#endif
 	return scoutfs_xattr_get(dentry, name, value, size);
 }
 
-static int scoutfs_xattr_set_handler(struct dentry *dentry, const char *name,
-				     const void *value, size_t size, int flags, int handler_flags)
+static int scoutfs_xattr_set_handler
+#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
+		(const struct xattr_handler *handler, struct dentry *dentry,
+		 struct inode *inode, const char *name, const void *value,
+		 size_t size, int flags)
 {
-	name = full_name_hack(NULL, name, handler_flags);
+	name = xattr_full_name(handler, name);
+#else
+		(struct dentry *dentry, const char *name,
+		 const void *value, size_t size, int flags, int handler_flags)
+{
+	name = full_name_hack(name, handler_flags);
+#endif
 	return scoutfs_xattr_set(dentry, name, value, size, flags);
 }
 
@@ -905,14 +925,22 @@ static const struct xattr_handler scoutfs_xattr_security_handler = {
 };
 
 static const struct xattr_handler scoutfs_xattr_acl_access_handler = {
+#ifdef KC_XATTR_HANDLER_NAME
+	.name   = XATTR_NAME_POSIX_ACL_ACCESS,
+#else
 	.prefix = XATTR_NAME_POSIX_ACL_ACCESS,
+#endif
 	.flags  = ACL_TYPE_ACCESS,
 	.get    = scoutfs_acl_get_xattr,
 	.set    = scoutfs_acl_set_xattr,
 };
 
 static const struct xattr_handler scoutfs_xattr_acl_default_handler = {
+#ifdef KC_XATTR_HANDLER_NAME
+	.name   = XATTR_NAME_POSIX_ACL_DEFAULT,
+#else
 	.prefix = XATTR_NAME_POSIX_ACL_DEFAULT,
+#endif
 	.flags  = ACL_TYPE_DEFAULT,
 	.get    = scoutfs_acl_get_xattr,
 	.set    = scoutfs_acl_set_xattr,

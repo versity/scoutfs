@@ -1747,7 +1747,7 @@ static int compact_logs(struct super_block *sb,
 				goto out;
 			}
 			page->private = 0;
-			list_add_tail(&page->list, &pages);
+			list_add_tail(&page->lru, &pages);
 			nr_pages++;
 			scoutfs_inc_counter(sb, srch_compact_log_page);
 		}
@@ -1800,7 +1800,7 @@ static int compact_logs(struct super_block *sb,
 
 	/* sort page entries and reset private for _next */
 	i = 0;
-	list_for_each_entry(page, &pages, list) {
+	list_for_each_entry(page, &pages, lru) {
 		args[i++] = page;
 
 		if (atomic_read(&srinf->shutdown)) {
@@ -1821,7 +1821,7 @@ static int compact_logs(struct super_block *sb,
 		goto out;
 
 	/* make sure we finished all the pages */
-	list_for_each_entry(page, &pages, list) {
+	list_for_each_entry(page, &pages, lru) {
 		sre = page_priv_sre(page);
 		if (page->private < SRES_PER_PAGE && sre->ino != 0) {
 			ret = -ENOSPC;
@@ -1834,8 +1834,8 @@ static int compact_logs(struct super_block *sb,
 out:
 	scoutfs_block_put(sb, bl);
 	vfree(args);
-	list_for_each_entry_safe(page, tmp, &pages, list) {
-		list_del(&page->list);
+	list_for_each_entry_safe(page, tmp, &pages, lru) {
+		list_del(&page->lru);
 		__free_page(page);
 	}
 

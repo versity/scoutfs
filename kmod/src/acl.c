@@ -69,12 +69,14 @@ struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct s
 	char *name;
 	int ret;
 
+#ifndef KC___POSIX_ACL_CREATE
 	if (!IS_POSIXACL(inode))
 		return NULL;
 
 	acl = get_cached_acl(inode, type);
 	if (acl != ACL_NOT_CACHED)
 		return acl;
+#endif
 
 	ret = acl_xattr_name_len(type, &name, NULL);
 	if (ret < 0)
@@ -96,9 +98,11 @@ struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct s
 		acl = ERR_PTR(ret);
 	}
 
+#ifndef KC___POSIX_ACL_CREATE
 	/* can set null negative cache */
 	if (!IS_ERR(acl))
 		set_cached_acl(inode, type, acl);
+#endif
 
 	kfree(value);
 
@@ -112,8 +116,10 @@ struct posix_acl *scoutfs_get_acl(struct inode *inode, int type)
 	struct posix_acl *acl;
 	int ret;
 
+#ifndef KC___POSIX_ACL_CREATE
 	if (!IS_POSIXACL(inode))
 		return NULL;
+#endif
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
 	if (ret < 0) {
@@ -183,13 +189,15 @@ int scoutfs_set_acl_locked(struct inode *inode, struct posix_acl *acl, int type,
 		if (!value) {
 			/* can be setting an acl that only affects mode, didn't need xattr */
 			inode_inc_iversion(inode);
-			inode->i_ctime = CURRENT_TIME;
+			inode->i_ctime = current_time(inode);
 		}
 	}
 
 out:
+#ifndef KC___POSIX_ACL_CREATE
 	if (!ret)
 		set_cached_acl(inode, type, acl);
+#endif
 
 	kfree(value);
 
@@ -218,10 +226,17 @@ int scoutfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 	return ret;
 }
-
+#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
+int scoutfs_acl_get_xattr(const struct xattr_handler *handler, struct dentry *dentry,
+			  struct inode *inode, const char *name, void *value,
+			  size_t size)
+{
+	int type = handler->flags;
+#else
 int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, size_t size,
 			  int type)
 {
+#endif
 	struct posix_acl *acl;
 	int ret = 0;
 
@@ -240,9 +255,17 @@ int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, 
 	return ret;
 }
 
+#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
+int scoutfs_acl_set_xattr(const struct xattr_handler *handler, struct dentry *dentry,
+			  struct inode *inode, const char *name, const void *value,
+			  size_t size, int flags)
+{
+	int type = handler->flags;
+#else
 int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *value, size_t size,
 			  int flags, int type)
 {
+#endif
 	struct posix_acl *acl = NULL;
 	int ret;
 
@@ -301,7 +324,7 @@ int scoutfs_init_acl_locked(struct inode *inode, struct inode *dir,
 			if (ret)
 				goto out;
 		}
-		ret = posix_acl_create(&acl, GFP_NOFS, &inode->i_mode);
+		ret = __posix_acl_create(&acl, GFP_NOFS, &inode->i_mode);
 		if (ret < 0)
 			return ret;
 		if (ret > 0)
@@ -345,7 +368,7 @@ int scoutfs_acl_chmod_locked(struct inode *inode, struct iattr *attr,
 	if (IS_ERR_OR_NULL(acl))
 		return PTR_ERR(acl);
 
-	ret = posix_acl_chmod(&acl, GFP_KERNEL, attr->ia_mode);
+	ret = __posix_acl_chmod(&acl, GFP_KERNEL, attr->ia_mode);
 	if (ret)
 		return ret;
 

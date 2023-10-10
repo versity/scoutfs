@@ -75,6 +75,7 @@ generic/215	# mmap missing
 generic/246	# mmap missing
 generic/247	# mmap missing
 generic/248	# mmap missing
+generic/318	# can't support user namespaces until v5.11
 generic/321	# requires selinux enabled for '+' in ls?
 generic/325	# mmap missing
 generic/338	# BUG_ON update inode error handling

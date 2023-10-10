@@ -307,7 +307,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 	LIST_HEAD(ind_locks);
 	s64 ret = 0;
 
-	WARN_ON_ONCE(inode && !mutex_is_locked(&inode->i_mutex));
+	WARN_ON_ONCE(inode && !inode_is_locked(inode));
 
 	/* clamp last to the last possible block? */
 	if (last > SCOUTFS_BLOCK_SM_MAX)
@@ -558,7 +558,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 	u64 offset;
 	int ret;
 
-	WARN_ON_ONCE(create && !mutex_is_locked(&inode->i_mutex));
+	WARN_ON_ONCE(create && !inode_is_locked(inode));
 
 	/* make sure caller holds a cluster lock */
 	lock = scoutfs_per_task_get(&si->pt_data_lock);
@@ -704,7 +704,7 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
 		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_CACHE_SIZE, SEF_OFFLINE,
+					      PAGE_SIZE, SEF_OFFLINE,
 					      SCOUTFS_IOC_DWO_READ, &dw,
 					      inode_lock);
 		if (ret != 0) {
@@ -729,6 +729,7 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	return ret;
 }
 
+#ifndef KC_FILE_AOPS_READAHEAD
 /*
  * This is used for opportunistic read-ahead which can throw the pages
  * away if it needs to.  If the caller didn't deal with offline extents
@@ -754,14 +755,14 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 
 	list_for_each_entry_safe(page, tmp, pages, lru) {
 		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_CACHE_SIZE, SEF_OFFLINE,
+					      PAGE_SIZE, SEF_OFFLINE,
 					      SCOUTFS_IOC_DWO_READ, NULL,
 					      inode_lock);
 		if (ret < 0)
 			goto out;
 		if (ret > 0) {
 			list_del(&page->lru);
-			page_cache_release(page);
+			put_page(page);
 			if (--nr_pages == 0) {
 				ret = 0;
 				goto out;
@@ -775,6 +776,29 @@ out:
 	BUG_ON(!list_empty(pages));
 	return ret;
 }
+#else
+static void scoutfs_readahead(struct readahead_control *rac)
+{
+	struct inode *inode = rac->file->f_inode;
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_lock *inode_lock = NULL;
+	int ret;
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+	if (ret)
+		return;
+
+	ret = scoutfs_data_wait_check(inode, readahead_pos(rac),
+				      readahead_length(rac), SEF_OFFLINE,
+				      SCOUTFS_IOC_DWO_READ, NULL,
+				      inode_lock);
+	if (ret == 0)
+		mpage_readahead(rac, scoutfs_get_block_read);
+
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+}
+#endif
 
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
 {
@@ -1057,7 +1081,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		goto out;
 	}
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -1118,7 +1142,7 @@ out_extent:
 	up_write(&si->extent_sem);
 out_mutex:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 
 out:
 	trace_scoutfs_data_fallocate(sb, ino, mode, offset, len, ret);
@@ -1221,7 +1245,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	struct data_ext_args from_args;
 	struct data_ext_args to_args;
 	struct scoutfs_extent ext;
-	struct timespec cur_time;
+	struct kc_timespec cur_time;
 	LIST_HEAD(locks);
 	bool done = false;
 	loff_t from_size;
@@ -1442,7 +1466,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		up_write(&from_si->extent_sem);
 		up_write(&to_si->extent_sem);
 
-		cur_time = CURRENT_TIME;
+		cur_time = current_time(from);
 		if (!is_stage) {
 			to->i_ctime = to->i_mtime = cur_time;
 			inode_inc_iversion(to);
@@ -1529,7 +1553,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (ret)
 		goto out;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 	down_read(&si->extent_sem);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
@@ -1583,7 +1607,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 unlock:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	up_read(&si->extent_sem);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 
 out:
 	if (ret == 1)
@@ -1783,6 +1807,37 @@ int scoutfs_data_wait_check_iov(struct inode *inode, const struct iovec *iov,
 	return ret;
 }
 
+int scoutfs_data_wait_check_iter(struct inode *inode, loff_t pos, struct iov_iter *iter,
+				 u8 sef, u8 op, struct scoutfs_data_wait *dw,
+				 struct scoutfs_lock *lock)
+{
+	size_t count = iov_iter_count(iter);
+	size_t off = iter->iov_offset;
+	const struct iovec *iov;
+	size_t len;
+	int ret = 0;
+
+	for (iov = iter->iov; count > 0; iov++) {
+		len = iov->iov_len - off;
+		if (len == 0)
+			continue;
+
+		/* aren't we waiting on too much data here ? */
+		ret = scoutfs_data_wait_check(inode, pos, len,
+					      sef, op, dw, lock);
+
+		if (ret != 0)
+			break;
+
+
+		pos += len;
+		count -= len;
+		off = 0;
+	}
+
+	return ret;
+}
+
 int scoutfs_data_wait(struct inode *inode, struct scoutfs_data_wait *dw)
 {
 	DECLARE_DATA_WAIT_ROOT(inode->i_sb, rt);
@@ -1873,7 +1928,11 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 
 const struct address_space_operations scoutfs_file_aops = {
 	.readpage		= scoutfs_readpage,
+#ifndef KC_FILE_AOPS_READAHEAD
 	.readpages		= scoutfs_readpages,
+#else
+	.readahead		= scoutfs_readahead,
+#endif
 	.writepage		= scoutfs_writepage,
 	.writepages		= scoutfs_writepages,
 	.write_begin		= scoutfs_write_begin,
@@ -1881,10 +1940,15 @@ const struct address_space_operations scoutfs_file_aops = {
 };
 
 const struct file_operations scoutfs_file_fops = {
+#ifdef KC_LINUX_HAVE_FOP_AIO_READ
 	.read		= do_sync_read,
 	.write		= do_sync_write,
 	.aio_read	= scoutfs_file_aio_read,
 	.aio_write	= scoutfs_file_aio_write,
+#else
+	.read_iter	= scoutfs_file_read_iter,
+	.write_iter	= scoutfs_file_write_iter,
+#endif
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= scoutfs_file_llseek,

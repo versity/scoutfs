@@ -27,6 +27,16 @@ ccflags-y += -DKC_DIR_EMIT_DOTS
 endif
 
 #
+# v3.18-rc2-19-gb5ae6b15bd73
+# 
+# Folds d_materialise_unique into d_splice_alias. Note reversal
+# of arguments (Also note Documentation/filesystems/porting.rst)
+#
+ifneq (,$(shell grep 'd_materialise_unique' include/linux/dcache.h))
+ccflags-y += -DKC_D_MATERIALISE_UNIQUE=1
+endif
+
+#
 # RHEL extended the fop struct so to use it we have to set
 # a flag to indicate that the struct is large enough and
 # contains the pointer.
@@ -40,6 +50,211 @@ endif
 #
 # Added user_ns argument to posix_acl_valid
 #
-ifneq (,$(shell grep 'posix_acl_valid.*user_ns,' include/linux/posix_acl.h))
+ifneq (,$(shell grep 'posix_acl_valid.*user_namespace' include/linux/posix_acl.h))
 ccflags-y += -DKC_POSIX_ACL_VALID_USER_NS
+endif
+
+#
+# v5.3-12296-g6d2052d188d9
+#
+# The RBCOMPUTE function is now passed an extra flag, and should return a bool
+# to indicate whether the propagated callback should stop or not.
+#
+ifneq (,$(shell grep 'static inline bool RBNAME.*_compute_max' include/linux/rbtree_augmented.h))
+ccflags-y += -DKC_RB_TREE_AUGMENTED_COMPUTE_MAX
+endif
+
+#
+# v3.13-25-g37bc15392a23
+#
+# Renames posix_acl_create to __posix_acl_create and provide some
+# new interfaces for creating ACLs
+#
+ifneq (,$(shell grep '__posix_acl_create' include/linux/posix_acl.h))
+ccflags-y += -DKC___POSIX_ACL_CREATE
+endif
+
+#
+# v4.8-rc1-29-g31051c85b5e2
+#
+# inode_change_ok() removed - replace with setattr_prepare()
+#
+ifneq (,$(shell grep 'extern int setattr_prepare' include/linux/fs.h))
+ccflags-y += -DKC_SETATTR_PREPARE
+endif
+
+#
+# v4.15-rc3-4-gae5e165d855d
+#
+# linux/iversion.h needs to manually be included for code that
+# manipulates this field.
+#
+ifneq (,$(shell grep -s 'define _LINUX_IVERSION_H' include/linux/iversion.h))
+ccflags-y += -DKC_NEED_LINUX_IVERSION_H=1
+endif
+
+# v4.11-12447-g104b4e5139fe
+#
+# Renamed __percpu_counter_add to percpu_counter_add_batch to clarify
+# that the __ wasn't less safe, just took an extra parameter.
+#
+ifneq (,$(shell grep 'percpu_counter_add_batch' include/linux/percpu_counter.h))
+ccflags-y += -DKC_PERCPU_COUNTER_ADD_BATCH
+endif
+
+#
+# v4.11-4550-g7dea19f9ee63
+#
+# Introduced memalloc_nofs_{save,restore} preferred instead of _noio_.
+#
+ifneq (,$(shell grep 'memalloc_nofs_save' include/linux/sched/mm.h))
+ccflags-y += -DKC_MEMALLOC_NOFS_SAVE
+endif
+
+#
+# v4.7-12414-g1eff9d322a44
+#
+# Renamed bi_rw to bi_opf to force old code to catch up.  We use it as a
+# single switch between old and new bio structures.
+#
+ifneq (,$(shell grep 'bi_opf' include/linux/blk_types.h))
+ccflags-y += -DKC_BIO_BI_OPF
+endif
+
+#
+# v4.12-rc2-201-g4e4cbee93d56
+#
+# Moves to bi_status BLK_STS_ API instead of having a mix of error
+# end_io args or bi_error.
+#
+ifneq (,$(shell grep 'bi_status' include/linux/blk_types.h))
+ccflags-y += -DKC_BIO_BI_STATUS
+endif
+
+#
+# v3.11-8765-ga0b02131c5fc
+#
+# Remove the old ->shrink() API, ->{scan,count}_objects is preferred.
+#
+ifneq (,$(shell grep '(*shrink)' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_SHRINK
+endif
+
+#
+# v3.19-4777-g6bec00352861
+#
+# backing_dev_info is removed from address_space. Instead we need to use
+# inode_to_bdi() inline from <backing-dev.h>.
+#
+ifneq (,$(shell grep 'struct backing_dev_info.*backing_dev_info' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_BACKING_DEV_INFO=1
+endif
+
+#
+# v4.3-9290-ge409de992e3e
+#
+# xattr handlers are now passed a struct that contains `flags`
+#
+ifneq (,$(shell grep 'int...get..const struct xattr_handler.*struct dentry.*dentry,' include/linux/xattr.h))
+ccflags-y += -DKC_XATTR_STRUCT_XATTR_HANDLER=1
+endif
+
+#
+# v4.16-rc1-1-g9b2c45d479d0
+#
+# kernel_getsockname() and kernel_getpeername dropped addrlen arg
+#
+ifneq (,$(shell grep 'kernel_getsockname.*,$$' include/linux/net.h))
+ccflags-y += -DKC_KERNEL_GETSOCKNAME_ADDRLEN=1
+endif
+
+#
+# v4.1-rc1-410-geeb1bd5c40ed
+#
+# Adds a struct net parameter to sock_create_kern
+#
+ifneq (,$(shell grep 'sock_create_kern.*struct net' include/linux/net.h))
+ccflags-y += -DKC_SOCK_CREATE_KERN_NET=1
+endif
+
+#
+# v3.18-rc6-1619-gc0371da6047a
+#
+# iov_iter is now part of struct msghdr
+#
+ifneq (,$(shell grep 'struct iov_iter.*msg_iter' include/linux/socket.h))
+ccflags-y += -DKC_MSGHDR_STRUCT_IOV_ITER=1
+endif
+
+#
+# v4.17-rc6-7-g95582b008388
+#
+# Kernel has current_time(inode) to uniformly retreive timespec in the right unit
+#
+ifneq (,$(shell grep 'extern struct timespec64 current_time' include/linux/fs.h))
+ccflags-y += -DKC_CURRENT_TIME_INODE=1
+endif
+
+#
+# v4.9-12228-g530e9b76ae8f
+#
+# register_cpu_notifier and family were all removed and to be
+# replaced with cpuhp_* API calls.
+#
+ifneq (,$(shell grep 'define register_hotcpu_notifier' include/linux/cpu.h))
+ccflags-y += -DKC_CPU_NOTIFIER
+endif
+
+#
+# v3.14-rc8-130-gccad2365668f
+#
+# generic_file_buffered_write is removed, backport it
+#
+ifneq (,$(shell grep 'extern ssize_t generic_file_buffered_write' include/linux/fs.h))
+ccflags-y += -DKC_GENERIC_FILE_BUFFERED_WRITE=1
+endif
+
+#
+# v5.7-438-g8151b4c8bee4
+#
+# struct address_space_operations switches away from .readpages to .readahead
+#
+# RHEL has backported this feature all the way to RHEL8, as part of RHEL_KABI,
+# which means we need to detect this very precisely
+#
+ifneq (,$(shell grep 'readahead.*struct readahead_control' include/linux/fs.h))
+ccflags-y += -DKC_FILE_AOPS_READAHEAD
+endif
+
+#
+# v4.0-rc7-1743-g8436318205b9
+#
+# .aio_read and .aio_write no longer exist. All reads and writes now use the
+# .read_iter and .write_iter methods, or must implement .read and .write (which
+# we don't).
+#
+ifneq (,$(shell grep 'ssize_t.*aio_read' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_HAVE_FOP_AIO_READ=1
+endif
+
+#
+# rhel7 has a custom inode_operations_wrapper struct that is discarded
+# entirely in favor of upstream structure since rhel8.
+#
+ifneq (,$(shell grep 'void.*follow_link.*struct dentry' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_HAVE_RHEL_IOPS_WRAPPER=1
+endif
+
+ifneq (,$(shell grep 'size_t.*ki_left;' include/linux/aio.h))
+ccflags-y += -DKC_LINUX_AIO_KI_LEFT=1
+endif
+
+#
+# v4.4-rc4-4-g98e9cb5711c6
+#
+# Introduces a new xattr_handler .name member that can be used to match the
+# entire field, instead of just a prefix. For these kernels, we must use
+# the new .name field instead.
+ifneq (,$(shell grep 'static inline const char .xattr_prefix' include/linux/xattr.h))
+ccflags-y += -DKC_XATTR_HANDLER_NAME=1
 endif

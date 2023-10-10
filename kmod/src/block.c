@@ -21,6 +21,7 @@
 #include <linux/blkdev.h>
 #include <linux/rhashtable.h>
 #include <linux/random.h>
+#include <linux/sched/mm.h>
 
 #include "format.h"
 #include "super.h"
@@ -30,6 +31,7 @@
 #include "scoutfs_trace.h"
 #include "alloc.h"
 #include "triggers.h"
+#include "util.h"
 
 /*
  * The scoutfs block cache manages metadata blocks that can be larger
@@ -57,7 +59,7 @@ struct block_info {
 	atomic64_t access_counter;
 	struct rhashtable ht;
 	wait_queue_head_t waitq;
-	struct shrinker shrinker;
+	KC_DEFINE_SHRINKER(shrinker);
 	struct work_struct free_work;
 	struct llist_head free_llist;
 };
@@ -128,7 +130,7 @@ static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 {
 	struct block_private *bp;
-	unsigned int noio_flags;
+	unsigned int nofs_flags;
 
 	/*
 	 * If we had multiple blocks per page we'd need to be a little
@@ -156,9 +158,9 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 		 * spurious reclaim-on dependencies and warnings.
 		 */
 		lockdep_off();
-		noio_flags = memalloc_noio_save();
+		nofs_flags = memalloc_nofs_save();
 		bp->virt = __vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM, PAGE_KERNEL);
-		memalloc_noio_restore(noio_flags);
+		memalloc_nofs_restore(nofs_flags);
 		lockdep_on();
 
 		if (!bp->virt) {
@@ -436,11 +438,10 @@ static void block_remove_all(struct super_block *sb)
  * possible.  Final freeing, verifying checksums, and unlinking errored
  * blocks are all done by future users of the blocks.
  */
-static void block_end_io(struct super_block *sb, int rw,
+static void block_end_io(struct super_block *sb, unsigned int opf,
 			 struct block_private *bp, int err)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
-	bool is_read = !(rw & WRITE);
 
 	if (err) {
 		scoutfs_inc_counter(sb, block_cache_end_io_error);
@@ -450,7 +451,7 @@ static void block_end_io(struct super_block *sb, int rw,
 	if (!atomic_dec_and_test(&bp->io_count))
 		return;
 
-	if (is_read && !test_bit(BLOCK_BIT_ERROR, &bp->bits))
+	if (!op_is_write(opf) && !test_bit(BLOCK_BIT_ERROR, &bp->bits))
 		set_bit(BLOCK_BIT_UPTODATE, &bp->bits);
 
 	clear_bit(BLOCK_BIT_IO_BUSY, &bp->bits);
@@ -463,13 +464,13 @@ static void block_end_io(struct super_block *sb, int rw,
 		wake_up(&binf->waitq);
 }
 
-static void block_bio_end_io(struct bio *bio, int err)
+static void KC_DECLARE_BIO_END_IO(block_bio_end_io, struct bio *bio)
 {
 	struct block_private *bp = bio->bi_private;
 	struct super_block *sb = bp->sb;
 
 	TRACE_BLOCK(end_io, bp);
-	block_end_io(sb, bio->bi_rw, bp, err);
+	block_end_io(sb, kc_bio_get_opf(bio), bp, kc_bio_get_errno(bio));
 	bio_put(bio);
 }
 
@@ -477,7 +478,7 @@ static void block_bio_end_io(struct bio *bio, int err)
  * Kick off IO for a single block.
  */
 static int block_submit_bio(struct super_block *sb, struct block_private *bp,
-			    int rw)
+			    unsigned int opf)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct bio *bio = NULL;
@@ -510,8 +511,9 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 				break;
 			}
 
-			bio->bi_sector = sector + (off >> 9);
-			bio->bi_bdev = sbi->meta_bdev;
+			kc_bio_set_opf(bio, opf);
+			kc_bio_set_sector(bio, sector + (off >> 9));
+			bio_set_dev(bio, sbi->meta_bdev);
 			bio->bi_end_io = block_bio_end_io;
 			bio->bi_private = bp;
 
@@ -528,18 +530,18 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 			BUG();
 
 		if (!bio_add_page(bio, page, PAGE_SIZE, 0)) {
-			submit_bio(rw, bio);
+			kc_submit_bio(bio);
 			bio = NULL;
 		}
 	}
 
 	if (bio)
-		submit_bio(rw, bio);
+		kc_submit_bio(bio);
 
 	blk_finish_plug(&plug);
 
 	/* let racing end_io know we're done */
-	block_end_io(sb, rw, bp, ret);
+	block_end_io(sb, opf, bp, ret);
 
 	return ret;
 }
@@ -640,7 +642,7 @@ static struct block_private *block_read(struct super_block *sb, u64 blkno)
 
 	if (!test_bit(BLOCK_BIT_UPTODATE, &bp->bits) &&
 	     test_and_clear_bit(BLOCK_BIT_NEW, &bp->bits)) {
-		ret = block_submit_bio(sb, bp, READ);
+		ret = block_submit_bio(sb, bp, REQ_OP_READ);
 		if (ret < 0)
 			goto out;
 	}
@@ -969,7 +971,7 @@ int scoutfs_block_writer_write(struct super_block *sb,
 		/* retry previous write errors */
 		clear_bit(BLOCK_BIT_ERROR, &bp->bits);
 
-		ret = block_submit_bio(sb, bp, WRITE);
+		ret = block_submit_bio(sb, bp, REQ_OP_WRITE);
 		if (ret < 0)
 			break;
 	}
@@ -1069,6 +1071,16 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
 	return wri->nr_dirty_blocks * SCOUTFS_BLOCK_LG_SIZE;
 }
 
+static unsigned long block_count_objects(struct shrinker *shrink, struct shrink_control *sc)
+{
+	struct block_info *binf = KC_SHRINKER_CONTAINER_OF(shrink, struct block_info);
+	struct super_block *sb = binf->sb;
+
+	scoutfs_inc_counter(sb, block_cache_count_objects);
+
+	return shrinker_min_long(atomic_read(&binf->total_inserted));
+}
+
 /*
  * Remove a number of cached blocks that haven't been used recently.
  *
@@ -1089,24 +1101,18 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
  * atomically remove blocks when the only references are ours and the
  * hash table.
  */
-static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
+static unsigned long block_scan_objects(struct shrinker *shrink, struct shrink_control *sc)
 {
-	struct block_info *binf = container_of(shrink, struct block_info,
-					       shrinker);
+	struct block_info *binf = KC_SHRINKER_CONTAINER_OF(shrink, struct block_info);
 	struct super_block *sb = binf->sb;
 	struct rhashtable_iter iter;
 	struct block_private *bp;
 	bool stop = false;
-	unsigned long nr;
+	unsigned long freed = 0;
+	unsigned long nr = sc->nr_to_scan;
 	u64 recently;
 
-	nr = sc->nr_to_scan;
-	if (nr == 0)
-		goto out;
-
-	scoutfs_inc_counter(sb, block_cache_shrink);
-
-	nr = DIV_ROUND_UP(nr, SCOUTFS_BLOCK_LG_PAGES_PER);
+	scoutfs_inc_counter(sb, block_cache_scan_objects);
 
 	recently = accessed_recently(binf);
 	rhashtable_walk_enter(&binf->ht, &iter);
@@ -1151,6 +1157,7 @@ static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
 			if (block_remove_solo(sb, bp)) {
 				scoutfs_inc_counter(sb, block_cache_shrink_remove);
 				TRACE_BLOCK(shrink, bp);
+				freed++;
 				nr--;
 			}
 			block_put(sb, bp);
@@ -1159,12 +1166,11 @@ static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
 
 	rhashtable_walk_stop(&iter);
 	rhashtable_walk_exit(&iter);
-out:
+
 	if (stop)
-		return -1;
+		return SHRINK_STOP;
 	else
-		return min_t(u64, INT_MAX,
-			     (u64)atomic_read(&binf->total_inserted) * SCOUTFS_BLOCK_LG_PAGES_PER);
+		return freed;
 }
 
 struct sm_block_completion {
@@ -1172,11 +1178,11 @@ struct sm_block_completion {
 	int err;
 };
 
-static void sm_block_bio_end_io(struct bio *bio, int err)
+static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
 {
 	struct sm_block_completion *sbc = bio->bi_private;
 
-	sbc->err = err;
+	sbc->err = kc_bio_get_errno(bio);
 	complete(&sbc->comp);
 	bio_put(bio);
 }
@@ -1191,9 +1197,8 @@ static void sm_block_bio_end_io(struct bio *bio, int err)
  * only layer that sees the full block buffer so we pass the calculated
  * crc to the caller for them to check in their context.
  */
-static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw, u64 blkno,
-		       struct scoutfs_block_header *hdr, size_t len,
-		       __le32 *blk_crc)
+static int sm_block_io(struct super_block *sb, struct block_device *bdev, unsigned int opf,
+		       u64 blkno, struct scoutfs_block_header *hdr, size_t len, __le32 *blk_crc)
 {
 	struct scoutfs_block_header *pg_hdr;
 	struct sm_block_completion sbc;
@@ -1207,7 +1212,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 		return -EIO;
 
 	if (WARN_ON_ONCE(len > SCOUTFS_BLOCK_SM_SIZE) ||
-	    WARN_ON_ONCE(!(rw & WRITE) && !blk_crc))
+	    WARN_ON_ONCE(!op_is_write(opf) && !blk_crc))
 		return -EINVAL;
 
 	page = alloc_page(GFP_NOFS);
@@ -1216,7 +1221,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 
 	pg_hdr = page_address(page);
 
-	if (rw & WRITE) {
+	if (op_is_write(opf)) {
 		memcpy(pg_hdr, hdr, len);
 		if (len < SCOUTFS_BLOCK_SM_SIZE)
 			memset((char *)pg_hdr + len, 0,
@@ -1230,8 +1235,9 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 		goto out;
 	}
 
-	bio->bi_sector = blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9);
-	bio->bi_bdev = bdev;
+	kc_bio_set_opf(bio, opf | REQ_SYNC);
+	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
+	bio_set_dev(bio, bdev);
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
 	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
@@ -1239,12 +1245,12 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 	init_completion(&sbc.comp);
 	sbc.err = 0;
 
-	submit_bio((rw & WRITE) ? WRITE_SYNC : READ_SYNC, bio);
+	kc_submit_bio(bio);
 
 	wait_for_completion(&sbc.comp);
 	ret = sbc.err;
 
-	if (ret == 0 && !(rw & WRITE)) {
+	if (ret == 0 && !op_is_write(opf)) {
 		memcpy(hdr, pg_hdr, len);
 		*blk_crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
@@ -1258,14 +1264,14 @@ int scoutfs_block_read_sm(struct super_block *sb,
 			  struct scoutfs_block_header *hdr, size_t len,
 			  __le32 *blk_crc)
 {
-	return sm_block_io(sb, bdev, READ, blkno, hdr, len, blk_crc);
+	return sm_block_io(sb, bdev, REQ_OP_READ, blkno, hdr, len, blk_crc);
 }
 
 int scoutfs_block_write_sm(struct super_block *sb,
 			   struct block_device *bdev, u64 blkno,
 			   struct scoutfs_block_header *hdr, size_t len)
 {
-	return sm_block_io(sb, bdev, WRITE, blkno, hdr, len, NULL);
+	return sm_block_io(sb, bdev, REQ_OP_WRITE, blkno, hdr, len, NULL);
 }
 
 int scoutfs_block_setup(struct super_block *sb)
@@ -1290,9 +1296,9 @@ int scoutfs_block_setup(struct super_block *sb)
 	atomic_set(&binf->total_inserted, 0);
 	atomic64_set(&binf->access_counter, 0);
 	init_waitqueue_head(&binf->waitq);
-	binf->shrinker.shrink = block_shrink;
-	binf->shrinker.seeks = DEFAULT_SEEKS;
-	register_shrinker(&binf->shrinker);
+	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
+			       block_scan_objects);
+	KC_REGISTER_SHRINKER(&binf->shrinker);
 	INIT_WORK(&binf->free_work, block_free_work);
 	init_llist_head(&binf->free_llist);
 
@@ -1312,7 +1318,7 @@ void scoutfs_block_destroy(struct super_block *sb)
 	struct block_info *binf = SCOUTFS_SB(sb)->block_info;
 
 	if (binf) {
-		unregister_shrinker(&binf->shrinker);
+		KC_UNREGISTER_SHRINKER(&binf->shrinker);
 		block_remove_all(sb);
 		flush_work(&binf->free_work);
 		rhashtable_destroy(&binf->ht);

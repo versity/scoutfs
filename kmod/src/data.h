@@ -65,6 +65,9 @@ int scoutfs_data_wait_check_iov(struct inode *inode, const struct iovec *iov,
 				unsigned long nr_segs, loff_t pos, u8 sef,
 				u8 op, struct scoutfs_data_wait *ow,
 				struct scoutfs_lock *lock);
+int scoutfs_data_wait_check_iter(struct inode *inode, loff_t pos, struct iov_iter *iter,
+				 u8 sef, u8 op, struct scoutfs_data_wait *ow,
+				 struct scoutfs_lock *lock);
 bool scoutfs_data_wait_found(struct scoutfs_data_wait *ow);
 int scoutfs_data_wait(struct inode *inode,
 			      struct scoutfs_data_wait *ow);

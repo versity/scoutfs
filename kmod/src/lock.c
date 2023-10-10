@@ -12,7 +12,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/fs.h>
-#include <linux/preempt_mask.h> /* a rhel shed.h needed preempt_offset? */
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
@@ -36,6 +35,7 @@
 #include "xattr.h"
 #include "item.h"
 #include "omap.h"
+#include "util.h"
 
 /*
  * scoutfs uses a lock service to manage item cache consistency between
@@ -77,7 +77,7 @@ struct lock_info {
 	bool unmounting;
 	struct rb_root lock_tree;
 	struct rb_root lock_range_tree;
-	struct shrinker shrinker;
+	KC_DEFINE_SHRINKER(shrinker);
 	struct list_head lru_list;
 	unsigned long long lru_nr;
 	struct workqueue_struct *workq;
@@ -1346,7 +1346,7 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 			    enum scoutfs_lock_mode mode)
 {
-	signed char lock_mode = ACCESS_ONCE(lock->mode);
+	signed char lock_mode = READ_ONCE(lock->mode);
 
 	return lock_modes_match(lock_mode, mode) &&
 	       scoutfs_key_compare_ranges(key, key,
@@ -1401,6 +1401,17 @@ static void lock_shrink_worker(struct work_struct *work)
 	}
 }
 
+static unsigned long lock_count_objects(struct shrinker *shrink,
+					struct shrink_control *sc)
+{
+	struct lock_info *linfo = KC_SHRINKER_CONTAINER_OF(shrink, struct lock_info);
+	struct super_block *sb = linfo->sb;
+
+	scoutfs_inc_counter(sb, lock_count_objects);
+
+	return shrinker_min_long(linfo->lru_nr);
+}
+
 /*
  * Start the shrinking process for locks on the lru.  If a lock is on
  * the lru then it can't have any active users.  We don't want to block
@@ -1413,21 +1424,18 @@ static void lock_shrink_worker(struct work_struct *work)
  * mode which will prevent the lock from being freed when the null
  * response arrives.
  */
-static int scoutfs_lock_shrink(struct shrinker *shrink,
-			       struct shrink_control *sc)
+static unsigned long lock_scan_objects(struct shrinker *shrink,
+				       struct shrink_control *sc)
 {
-	struct lock_info *linfo = container_of(shrink, struct lock_info,
-					       shrinker);
+	struct lock_info *linfo = KC_SHRINKER_CONTAINER_OF(shrink, struct lock_info);
 	struct super_block *sb = linfo->sb;
 	struct scoutfs_lock *lock;
 	struct scoutfs_lock *tmp;
-	unsigned long nr;
+	unsigned long freed = 0;
+	unsigned long nr = sc->nr_to_scan;
 	bool added = false;
-	int ret;
 
-	nr = sc->nr_to_scan;
-	if (nr == 0)
-		goto out;
+	scoutfs_inc_counter(sb, lock_scan_objects);
 
 	spin_lock(&linfo->lock);
 
@@ -1445,6 +1453,7 @@ restart:
 		lock->request_pending = 1;
 		list_add_tail(&lock->shrink_head, &linfo->shrink_list);
 		added = true;
+		freed++;
 
 		scoutfs_inc_counter(sb, lock_shrink_attempted);
 		trace_scoutfs_lock_shrink(sb, lock);
@@ -1459,10 +1468,8 @@ restart:
 	if (added)
 		queue_work(linfo->workq, &linfo->shrink_work);
 
-out:
-	ret = min_t(unsigned long, linfo->lru_nr, INT_MAX);
-	trace_scoutfs_lock_shrink_exit(sb, sc->nr_to_scan, ret);
-	return ret;
+	trace_scoutfs_lock_shrink_exit(sb, sc->nr_to_scan, freed);
+	return freed;
 }
 
 void scoutfs_free_unused_locks(struct super_block *sb)
@@ -1473,7 +1480,7 @@ void scoutfs_free_unused_locks(struct super_block *sb)
 		.nr_to_scan = INT_MAX,
 	};
 
-	linfo->shrinker.shrink(&linfo->shrinker, &sc);
+	lock_scan_objects(KC_SHRINKER_FN(&linfo->shrinker), &sc);
 }
 
 static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
@@ -1580,7 +1587,7 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 	trace_scoutfs_lock_shutdown(sb, linfo);
 
 	/* stop the shrinker from queueing work */
-	unregister_shrinker(&linfo->shrinker);
+	KC_UNREGISTER_SHRINKER(&linfo->shrinker);
 	flush_work(&linfo->shrink_work);
 
 	/* cause current and future lock calls to return errors */
@@ -1699,9 +1706,9 @@ int scoutfs_lock_setup(struct super_block *sb)
 	spin_lock_init(&linfo->lock);
 	linfo->lock_tree = RB_ROOT;
 	linfo->lock_range_tree = RB_ROOT;
-	linfo->shrinker.shrink = scoutfs_lock_shrink;
-	linfo->shrinker.seeks = DEFAULT_SEEKS;
-	register_shrinker(&linfo->shrinker);
+	KC_INIT_SHRINKER_FUNCS(&linfo->shrinker, lock_count_objects,
+			       lock_scan_objects);
+	KC_REGISTER_SHRINKER(&linfo->shrinker);
 	INIT_LIST_HEAD(&linfo->lru_list);
 	INIT_WORK(&linfo->inv_work, lock_invalidate_worker);
 	INIT_LIST_HEAD(&linfo->inv_list);

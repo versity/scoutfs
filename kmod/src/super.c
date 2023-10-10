@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fs.h>
+#include <linux/blkdev.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
 #include <linux/magic.h>
@@ -178,7 +179,7 @@ static void scoutfs_put_super(struct super_block *sb)
 	/*
 	 * Wait for invalidation and iput to finish with any lingering
 	 * inode references that escaped the evict_inodes in
-	 * generic_shutdown_super.  MS_ACTIVE is clear so final iput
+	 * generic_shutdown_super.  SB_ACTIVE is clear so final iput
 	 * will always evict.
 	 */
 	scoutfs_lock_flush_invalidate(sb);
@@ -485,7 +486,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_d_op = &scoutfs_dentry_ops;
 	sb->s_export_op = &scoutfs_export_ops;
 	sb->s_xattr = scoutfs_xattr_handlers;
-	sb->s_flags |= MS_I_VERSION | MS_POSIXACL;
+	sb->s_flags |= SB_I_VERSION | SB_POSIXACL;
 	sb->s_time_gran = 1;
 
 	/* btree blocks use long lived bh->b_data refs */
@@ -674,14 +675,14 @@ out:
 		teardown_module();
 	return ret;
 }
-module_init(scoutfs_module_init)
+module_init(scoutfs_module_init);
 
 static void __exit scoutfs_module_exit(void)
 {
 	unregister_filesystem(&scoutfs_fs_type);
 	teardown_module();
 }
-module_exit(scoutfs_module_exit)
+module_exit(scoutfs_module_exit);
 
 MODULE_AUTHOR("Zach Brown <zab@versity.com>");
 MODULE_LICENSE("GPL");

@@ -143,10 +143,12 @@ void scoutfs_destroy_inode(struct inode *inode)
 static const struct inode_operations scoutfs_file_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
 	.get_acl	= scoutfs_get_acl,
 	.fiemap		= scoutfs_data_fiemap,
 };
@@ -154,10 +156,12 @@ static const struct inode_operations scoutfs_file_iops = {
 static const struct inode_operations scoutfs_special_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,
-	.listxattr	= scoutfs_listxattr,
 	.removexattr	= generic_removexattr,
+#endif
+	.listxattr	= scoutfs_listxattr,
 	.get_acl	= scoutfs_get_acl,
 };
 
@@ -174,8 +178,12 @@ static void set_inode_ops(struct inode *inode)
 		inode->i_fop = &scoutfs_file_fops;
 		break;
 	case S_IFDIR:
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 		inode->i_op = &scoutfs_dir_iops.ops;
 		inode->i_flags |= S_IOPS_WRAPPER;
+#else
+		inode->i_op = &scoutfs_dir_iops;
+#endif
 		inode->i_fop = &scoutfs_dir_fops;
 		break;
 	case S_IFLNK:
@@ -247,7 +255,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
 	i_size_write(inode, le64_to_cpu(cinode->size));
-	inode->i_version = le64_to_cpu(cinode->version);
+	inode_set_iversion_queried(inode, le64_to_cpu(cinode->version));
 	set_nlink(inode, le32_to_cpu(cinode->nlink));
 	i_uid_write(inode, le32_to_cpu(cinode->uid));
 	i_gid_write(inode, le32_to_cpu(cinode->gid));
@@ -340,10 +348,17 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 	return ret;
 }
 
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat)
 {
 	struct inode *inode = dentry->d_inode;
+#else
+int scoutfs_getattr(const struct path *path, struct kstat *stat,
+		    u32 request_mask, unsigned int query_flags)
+{
+	struct inode *inode = d_inode(path->dentry);
+#endif
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
 	int ret;
@@ -384,7 +399,7 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 		scoutfs_inode_inc_data_version(inode);
 
 	truncate_setsize(inode, new_size);
-	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
+	inode->i_ctime = inode->i_mtime = current_time(inode);
 	if (truncate)
 		si->flags |= SCOUTFS_INO_FLAG_TRUNCATE;
 	scoutfs_inode_set_data_seq(inode);
@@ -467,8 +482,7 @@ retry:
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret)
 		return ret;
-
-	ret = inode_change_ok(inode, attr);
+	ret = setattr_prepare(dentry, attr);
 	if (ret)
 		goto out;
 
@@ -496,9 +510,9 @@ retry:
 				scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 
 				/* XXX callee locks instead? */
-				mutex_unlock(&inode->i_mutex);
+				inode_unlock(inode);
 				ret = scoutfs_data_wait(inode, &dw);
-				mutex_lock(&inode->i_mutex);
+				inode_lock(inode);
 
 				if (ret == 0)
 					goto retry;
@@ -750,7 +764,7 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf)
 		/* XXX ensure refresh, instead clear in drop_inode? */
 		si = SCOUTFS_I(inode);
 		atomic64_set(&si->last_refreshed, 0);
-		inode->i_version = 0;
+		inode_set_iversion_queried(inode, 0);
 	}
 
 	ret = scoutfs_inode_refresh(inode, lock);
@@ -798,7 +812,7 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	scoutfs_inode_get_onoff(inode, &online_blocks, &offline_blocks);
 
 	cinode->size = cpu_to_le64(i_size_read(inode));
-	cinode->version = cpu_to_le64(inode->i_version);
+	cinode->version = cpu_to_le64(inode_peek_iversion(inode));
 	cinode->nlink = cpu_to_le32(inode->i_nlink);
 	cinode->uid = cpu_to_le32(i_uid_read(inode));
 	cinode->gid = cpu_to_le32(i_gid_read(inode));
@@ -1475,7 +1489,7 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	inode->i_ino = ino; /* XXX overflow */
 	inode_init_owner(inode, dir, mode);
 	inode_set_bytes(inode, 0);
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	inode->i_rdev = rdev;
 	set_inode_ops(inode);
 

@@ -22,6 +22,7 @@
 #include <linux/sched.h>
 #include <linux/aio.h>
 #include <linux/list_sort.h>
+#include <linux/backing-dev.h>
 
 #include "format.h"
 #include "key.h"
@@ -302,7 +303,7 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	if (ret)
 		return ret;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -351,7 +352,7 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 
 	trace_scoutfs_ioc_release_ret(sb, scoutfs_ino(inode), ret);
@@ -393,7 +394,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 		goto out;
 	}
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -411,7 +412,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 unlock:
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	iput(inode);
 out:
 	return ret;
@@ -448,7 +449,6 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
-	struct address_space *mapping = inode->i_mapping;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	struct scoutfs_ioctl_stage args;
@@ -480,8 +480,10 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	/* the iocb is really only used for the file pointer :P */
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = args.offset;
+#ifdef KC_LINUX_AIO_KI_LEFT
 	kiocb.ki_left = args.length;
 	kiocb.ki_nbytes = args.length;
+#endif
 	iov.iov_base = (void __user *)(unsigned long)args.buf_ptr;
 	iov.iov_len = args.length;
 
@@ -489,7 +491,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	if (ret)
 		return ret;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -516,7 +518,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	}
 
 	si->staging = true;
-	current->backing_dev_info = mapping->backing_dev_info;
+	current->backing_dev_info = inode_to_bdi(inode);
 
 	pos = args.offset;
 	written = 0;
@@ -533,7 +535,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 out:
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 
 	trace_scoutfs_ioc_stage_ret(sb, scoutfs_ino(inode), ret);
@@ -652,7 +654,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 	if (ret)
 		goto out;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -696,7 +698,7 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 unlock:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 out:
 

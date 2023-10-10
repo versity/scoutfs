@@ -549,12 +549,16 @@ static int recvmsg_full(struct socket *sock, void *buf, unsigned len)
 
 	while (len) {
 		memset(&msg, 0, sizeof(msg));
-		msg.msg_iov = (struct iovec *)&kv;
-		msg.msg_iovlen = 1;
 		msg.msg_flags = MSG_NOSIGNAL;
 		kv.iov_base = buf;
 		kv.iov_len = len;
 
+#ifndef KC_MSGHDR_STRUCT_IOV_ITER
+		msg.msg_iov = (struct iovec *)&kv;
+		msg.msg_iovlen = 1;
+#else
+		iov_iter_init(&msg.msg_iter, READ, (struct iovec *)&kv, len, 1);
+#endif
 		ret = kernel_recvmsg(sock, &msg, &kv, 1, len, msg.msg_flags);
 		if (ret <= 0)
 			return -ECONNABORTED;
@@ -707,12 +711,16 @@ static int sendmsg_full(struct socket *sock, void *buf, unsigned len)
 
 	while (len) {
 		memset(&msg, 0, sizeof(msg));
-		msg.msg_iov = (struct iovec *)&kv;
-		msg.msg_iovlen = 1;
 		msg.msg_flags = MSG_NOSIGNAL;
 		kv.iov_base = buf;
 		kv.iov_len = len;
 
+#ifndef KC_MSGHDR_STRUCT_IOV_ITER
+		msg.msg_iov = (struct iovec *)&kv;
+		msg.msg_iovlen = 1;
+#else
+		iov_iter_init(&msg.msg_iter, WRITE, (struct iovec *)&kv, len, 1);
+#endif
 		ret = kernel_sendmsg(sock, &msg, &kv, 1, len);
 		if (ret <= 0)
 			return -ECONNABORTED;
@@ -897,7 +905,6 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 			       struct socket *sock)
 {
 	struct timeval tv;
-	int addrlen;
 	int optval;
 	int ret;
 
@@ -947,23 +954,18 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 	if (ret)
 		goto out;
 
-	addrlen = sizeof(struct sockaddr_in);
-	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname,
-				 &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		ret = -EAFNOSUPPORT;
-	if (ret)
+	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	if (ret < 0)
 		goto out;
 
-	addrlen = sizeof(struct sockaddr_in);
-	ret = kernel_getpeername(sock, (struct sockaddr *)&conn->peername,
-				 &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		ret = -EAFNOSUPPORT;
-	if (ret)
+	ret = kc_kernel_getpeername(sock, (struct sockaddr *)&conn->peername);
+	if (ret < 0)
 		goto out;
+
+	ret = 0;
 
 	conn->last_peername = conn->peername;
+
 out:
 	return ret;
 }
@@ -1052,7 +1054,7 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 
 	trace_scoutfs_net_connect_work_enter(sb, 0, 0);
 
-	ret = sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 
@@ -1453,7 +1455,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	if (WARN_ON_ONCE(conn->sock))
 		return -EINVAL;
 
-	ret = sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 
@@ -1471,20 +1473,18 @@ int scoutfs_net_bind(struct super_block *sb,
 		goto out;
 
 	ret = kernel_listen(sock, 255);
-	if (ret)
+	if (ret < 0)
 		goto out;
 
-	addrlen = sizeof(struct sockaddr_in);
-	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname,
-				 &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		ret = -EAFNOSUPPORT;
-	if (ret)
+	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	if (ret < 0)
 		goto out;
+
+	ret = 0;
 
 	conn->sock = sock;
 	*sin = conn->sockname;
-	ret = 0;
+
 out:
 	if (ret < 0 && sock)
 		sock_release(sock);

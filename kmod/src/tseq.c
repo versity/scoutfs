@@ -46,6 +46,23 @@ static struct scoutfs_tseq_entry *tseq_rb_next(struct scoutfs_tseq_entry *ent)
 	return rb_entry(node, struct scoutfs_tseq_entry, node);
 }
 
+#ifdef KC_RB_TREE_AUGMENTED_COMPUTE_MAX
+static bool tseq_compute_total(struct scoutfs_tseq_entry *ent, bool exit)
+{
+	loff_t total = 1 + tseq_node_total(ent->node.rb_left) +
+		       tseq_node_total(ent->node.rb_right);
+
+	if (exit && ent->total == total)
+		return true;
+
+	ent->total = total;
+	return false;
+}
+
+RB_DECLARE_CALLBACKS(static, tseq_rb_callbacks, struct scoutfs_tseq_entry,
+		     node, total, tseq_compute_total);
+#else
+
 static loff_t tseq_compute_total(struct scoutfs_tseq_entry *ent)
 {
 	return 1 + tseq_node_total(ent->node.rb_left) +
@@ -53,7 +70,8 @@ static loff_t tseq_compute_total(struct scoutfs_tseq_entry *ent)
 }
 
 RB_DECLARE_CALLBACKS(static, tseq_rb_callbacks, struct scoutfs_tseq_entry,
-		     node, loff_t, total, tseq_compute_total)
+		     node, loff_t, total, tseq_compute_total);
+#endif
 
 void scoutfs_tseq_tree_init(struct scoutfs_tseq_tree *tree,
 			    scoutfs_tseq_show_t show)

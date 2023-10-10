@@ -48,7 +48,7 @@ struct our_handle {
 static void exit_usage(void)
 {
 	printf(" -h/-?         output this usage message and exit\n"
-	       " -e            keep trying on enoent, consider success an error\n"
+	       " -e            keep trying on enoent and estale, consider success an error\n"
 	       " -i <num>      64bit inode number for handle open, can be multiple\n"
 	       " -m <string>   scoutfs mount path string for ioctl fd\n"
 	       " -n <string>   optional xattr name string, defaults to \""DEFAULT_NAME"\"\n"
@@ -149,7 +149,7 @@ int main(int argc, char **argv)
 
 				fd = open_by_handle_at(mntfd, &handle.handle, O_RDWR);
 				if (fd == -1) {
-					if (!enoent_success_err || errno != ENOENT) {
+					if (!enoent_success_err || ( errno != ENOENT && errno != ESTALE )) {
 						perror("open_by_handle_at");
 						return 1;
 					}
