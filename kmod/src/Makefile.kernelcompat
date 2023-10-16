@@ -314,3 +314,11 @@ endif
 ifneq (,$(shell grep 'struct bio .bio_alloc.struct block_device .bdev' include/linux/bio.h))
 ccflags-y += -DKC_BIO_ALLOC_DEV_OPF_ARGS
 endif
+
+#
+# v5.7-rc4-53-gcddf8a2c4a82
+#
+# fiemap_prep() replaces fiemap_check_flags()
+ifneq (,$(shell grep -s 'int fiemap_prep.struct inode' include/linux/fiemap.h))
+ccflags-y += -DKC_FIEMAP_PREP
+endif
