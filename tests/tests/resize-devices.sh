@@ -2,6 +2,8 @@
 # Some basic tests of online resizing metadata and data devices.
 #
 
+t_require_commands bc
+
 statfs_total() {
 	local single="total_$1_blocks"
 	local mnt="$2"
