@@ -696,8 +696,9 @@ out_unlock:
 	return inode;
 }
 
-static int scoutfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
-		       dev_t rdev)
+static int scoutfs_mknod(KC_VFS_NS_DEF
+			 struct inode *dir,
+			 struct dentry *dentry, umode_t mode, dev_t rdev)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode = NULL;
@@ -766,15 +767,20 @@ out:
 }
 
 /* XXX hmm, do something with excl? */
-static int scoutfs_create(struct inode *dir, struct dentry *dentry,
-			  umode_t mode, bool excl)
+static int scoutfs_create(KC_VFS_NS_DEF
+			  struct inode *dir,
+			  struct dentry *dentry, umode_t mode, bool excl)
 {
-	return scoutfs_mknod(dir, dentry, mode | S_IFREG, 0);
+	return scoutfs_mknod(KC_VFS_NS
+			     dir, dentry, mode | S_IFREG, 0);
 }
 
-static int scoutfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+static int scoutfs_mkdir(KC_VFS_NS_DEF
+			 struct inode *dir,
+			 struct dentry *dentry, umode_t mode)
 {
-	return scoutfs_mknod(dir, dentry, mode | S_IFDIR, 0);
+	return scoutfs_mknod(KC_VFS_NS
+			     dir, dentry, mode | S_IFDIR, 0);
 }
 
 static int scoutfs_link(struct dentry *old_dentry,
@@ -1165,7 +1171,8 @@ static const char *scoutfs_get_link(struct dentry *dentry, struct inode *inode, 
  * Symlink target paths can be annoyingly large.  We store relatively
  * rare large paths in multiple items.
  */
-static int scoutfs_symlink(struct inode *dir, struct dentry *dentry,
+static int scoutfs_symlink(KC_VFS_NS_DEF
+			   struct inode *dir, struct dentry *dentry,
 			   const char *symname)
 {
 	struct super_block *sb = dir->i_sb;
@@ -1552,7 +1559,8 @@ static int verify_ancestors(struct super_block *sb, u64 p1, u64 p2,
  * from using parent/child locking orders as two groups can have both
  * parent and child relationships to each other.
  */
-static int scoutfs_rename_common(struct inode *old_dir,
+static int scoutfs_rename_common(KC_VFS_NS_DEF
+				 struct inode *old_dir,
 				 struct dentry *old_dentry, struct inode *new_dir,
 				 struct dentry *new_dentry, unsigned int flags)
 {
@@ -1825,18 +1833,21 @@ static int scoutfs_rename(struct inode *old_dir,
 			  struct dentry *old_dentry, struct inode *new_dir,
 			  struct dentry *new_dentry)
 {
-	return scoutfs_rename_common(old_dir, old_dentry, new_dir, new_dentry, 0);
+	return scoutfs_rename_common(KC_VFS_INIT_NS
+				     old_dir, old_dentry, new_dir, new_dentry, 0);
 }
 #endif
 
-static int scoutfs_rename2(struct inode *old_dir,
+static int scoutfs_rename2(KC_VFS_NS_DEF
+			  struct inode *old_dir,
 			  struct dentry *old_dentry, struct inode *new_dir,
 			  struct dentry *new_dentry, unsigned int flags)
 {
 	if (flags & ~RENAME_NOREPLACE)
 		return -EINVAL;
 
-	return scoutfs_rename_common(old_dir, old_dentry, new_dir, new_dentry, flags);
+	return scoutfs_rename_common(KC_VFS_NS
+				     old_dir, old_dentry, new_dir, new_dentry, flags);
 }
 
 #ifdef KC_FMODE_KABI_ITERATE
@@ -1848,7 +1859,8 @@ static int scoutfs_dir_open(struct inode *inode, struct file *file)
 }
 #endif
 
-static int scoutfs_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mode)
+static int scoutfs_tmpfile(KC_VFS_NS_DEF
+			   struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode = NULL;
