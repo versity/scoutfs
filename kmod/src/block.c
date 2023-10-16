@@ -158,7 +158,7 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 		 */
 		lockdep_off();
 		nofs_flags = memalloc_nofs_save();
-		bp->virt = __vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM, PAGE_KERNEL);
+		bp->virt = kc__vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM);
 		memalloc_nofs_restore(nofs_flags);
 		lockdep_on();
 
