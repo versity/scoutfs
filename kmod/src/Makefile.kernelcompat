@@ -267,3 +267,11 @@ endif
 ifneq (,$(shell grep 'typedef __u32 __bitwise blk_opf_t' include/linux/blk_types.h))
 ccflags-y += -DKC_HAVE_BLK_OPF_T=1
 endif
+
+#
+# v5.12-rc6-9-g4f0f586bf0c8
+#
+# list_sort cmp function takes const list_head args
+ifneq (,$(shell grep 'const struct list_head ., const struct list_head .' include/linux/list_sort.h))
+ccflags-y += -DKC_LIST_CMP_CONST_ARG_LIST_HEAD
+endif
