@@ -716,7 +716,8 @@ static long scoutfs_ioc_listxattr_hidden(struct file *file, unsigned long arg)
 	int total = 0;
 	int ret;
 
-	ret = inode_permission(inode, MAY_READ);
+	ret = inode_permission(KC_VFS_INIT_NS
+			       inode, MAY_READ);
 	if (ret < 0)
 		goto out;
 
