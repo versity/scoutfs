@@ -275,3 +275,10 @@ endif
 ifneq (,$(shell grep 'const struct list_head ., const struct list_head .' include/linux/list_sort.h))
 ccflags-y += -DKC_LIST_CMP_CONST_ARG_LIST_HEAD
 endif
+
+# v5.7-523-g88dca4ca5a93
+#
+# The pgprot argument to vmalloc is always PAGE_KERNEL, so it is removed.
+ifneq (,$(shell grep 'extern void .__vmalloc.unsigned long size, gfp_t gfp_mask, pgprot_t prot' include/linux/vmalloc.h))
+ccflags-y += -DKC_VMALLOC_PGPROT_T
+endif
