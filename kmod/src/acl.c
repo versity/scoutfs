@@ -253,7 +253,9 @@ int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, 
 }
 
 #ifdef KC_XATTR_STRUCT_XATTR_HANDLER
-int scoutfs_acl_set_xattr(const struct xattr_handler *handler, struct dentry *dentry,
+int scoutfs_acl_set_xattr(const struct xattr_handler *handler,
+			  KC_VFS_NS_DEF
+			  struct dentry *dentry,
 			  struct inode *inode, const char *name, const void *value,
 			  size_t size, int flags)
 {
