@@ -2202,18 +2202,18 @@ u64 scoutfs_item_dirty_pages(struct super_block *sb)
 	return (u64)atomic_read(&cinf->dirty_pages);
 }
 
-static int cmp_pg_start(void *priv, struct list_head *A, struct list_head *B)
+static int cmp_pg_start(void *priv, KC_LIST_CMP_CONST struct list_head *A, KC_LIST_CMP_CONST struct list_head *B)
 {
-	struct cached_page *a = list_entry(A, struct cached_page, dirty_head);
-	struct cached_page *b = list_entry(B, struct cached_page, dirty_head);
+	KC_LIST_CMP_CONST struct cached_page *a = list_entry(A, KC_LIST_CMP_CONST struct cached_page, dirty_head);
+	KC_LIST_CMP_CONST struct cached_page *b = list_entry(B, KC_LIST_CMP_CONST struct cached_page, dirty_head);
 
 	return scoutfs_key_compare(&a->start, &b->start);
 }
 
-static int cmp_item_key(void *priv, struct list_head *A, struct list_head *B)
+static int cmp_item_key(void *priv, KC_LIST_CMP_CONST struct list_head *A, KC_LIST_CMP_CONST struct list_head *B)
 {
-	struct cached_item *a = list_entry(A, struct cached_item, dirty_head);
-	struct cached_item *b = list_entry(B, struct cached_item, dirty_head);
+	KC_LIST_CMP_CONST struct cached_item *a = list_entry(A, KC_LIST_CMP_CONST struct cached_item, dirty_head);
+	KC_LIST_CMP_CONST struct cached_item *b = list_entry(B, KC_LIST_CMP_CONST struct cached_item, dirty_head);
 
 	return scoutfs_key_compare(&a->key, &b->key);
 }
