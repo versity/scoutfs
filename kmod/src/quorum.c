@@ -1325,8 +1325,8 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	qinf = kzalloc(sizeof(struct quorum_info), GFP_KERNEL);
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_KERNEL);
 	if (qinf)
-		qinf->hb_delay = __vmalloc(HB_DELAY_NR * sizeof(struct count_recent),
-					   GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL);
+		qinf->hb_delay = kc__vmalloc(HB_DELAY_NR * sizeof(struct count_recent),
+					   GFP_KERNEL | __GFP_ZERO);
 	if (!qinf || !super || !qinf->hb_delay) {
 		if (qinf)
 			vfree(qinf->hb_delay);

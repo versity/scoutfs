@@ -284,4 +284,10 @@ typedef unsigned int blk_opf_t;
 #define KC_LIST_CMP_CONST
 #endif
 
+#ifdef KC_VMALLOC_PGPROT_T
+#define kc__vmalloc(size, gfp_mask) __vmalloc(size, gfp_mask, PAGE_KERNEL)
+#else
+#define kc__vmalloc __vmalloc
+#endif
+
 #endif
