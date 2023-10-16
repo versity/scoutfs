@@ -316,4 +316,8 @@ static inline struct bio *kc_bio_alloc(struct block_device *bdev, unsigned short
 }
 #endif
 
+#ifndef KC_FIEMAP_PREP
+#define fiemap_prep(inode, fieinfo, start, len, flags) fiemap_check_flags(fieinfo, flags)
+#endif
+
 #endif
