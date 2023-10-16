@@ -504,15 +504,13 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 
 	for (off = 0; off < SCOUTFS_BLOCK_LG_SIZE; off += PAGE_SIZE) {
 		if (!bio) {
-			bio = bio_alloc(GFP_NOFS, SCOUTFS_BLOCK_LG_PAGES_PER);
+			bio = kc_bio_alloc(sbi->meta_bdev, SCOUTFS_BLOCK_LG_PAGES_PER, opf, GFP_NOFS);
 			if (!bio) {
 				ret = -ENOMEM;
 				break;
 			}
 
-			kc_bio_set_opf(bio, opf);
 			kc_bio_set_sector(bio, sector + (off >> 9));
-			bio_set_dev(bio, sbi->meta_bdev);
 			bio->bi_end_io = block_bio_end_io;
 			bio->bi_private = bp;
 
@@ -1228,15 +1226,13 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_op
 		pg_hdr->crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
 
-	bio = bio_alloc(GFP_NOFS, 1);
+	bio = kc_bio_alloc(bdev, 1, opf, GFP_NOFS);
 	if (!bio) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	kc_bio_set_opf(bio, opf | REQ_SYNC);
 	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
-	bio_set_dev(bio, bdev);
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
 	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);

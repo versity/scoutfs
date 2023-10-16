@@ -282,3 +282,11 @@ endif
 ifneq (,$(shell grep 'extern void .__vmalloc.unsigned long size, gfp_t gfp_mask, pgprot_t prot' include/linux/vmalloc.h))
 ccflags-y += -DKC_VMALLOC_PGPROT_T
 endif
+
+#
+# v5.17-rc2-21-g07888c665b40
+#
+# Detect new style bio_alloc - pass bdev and opf.
+ifneq (,$(shell grep 'struct bio .bio_alloc.struct block_device .bdev' include/linux/bio.h))
+ccflags-y += -DKC_BIO_ALLOC_DEV_OPF_ARGS
+endif
