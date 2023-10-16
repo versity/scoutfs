@@ -290,4 +290,20 @@ typedef unsigned int blk_opf_t;
 #define kc__vmalloc __vmalloc
 #endif
 
+#ifdef KC_BIO_ALLOC_DEV_OPF_ARGS
+#define kc_bio_alloc bio_alloc
+#else
+#include <linux/bio.h>
+static inline struct bio *kc_bio_alloc(struct block_device *bdev, unsigned short nr_vecs,
+				       blk_opf_t opf, gfp_t gfp_mask)
+{
+	struct bio *b = bio_alloc(gfp_mask, nr_vecs);
+	if (b) {
+		kc_bio_set_opf(b, opf);
+		bio_set_dev(b, bdev);
+	}
+	return b;
+}
+#endif
+
 #endif
