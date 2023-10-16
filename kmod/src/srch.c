@@ -18,6 +18,7 @@
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
 #include <linux/sort.h>
+#include <asm/unaligned.h>
 
 #include "super.h"
 #include "format.h"
