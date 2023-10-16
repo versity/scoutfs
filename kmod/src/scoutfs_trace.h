@@ -24,7 +24,6 @@
 
 #include <linux/tracepoint.h>
 #include <linux/in.h>
-#include <linux/unaligned/access_ok.h>
 
 #include "key.h"
 #include "format.h"
