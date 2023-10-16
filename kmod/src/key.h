@@ -125,8 +125,8 @@ static inline bool scoutfs_key_is_ones(struct scoutfs_key *key)
  * other alternatives across keys that first differ in any of the
  * values.  Say maybe 20% faster than memcmp.
  */
-static inline int scoutfs_key_compare(struct scoutfs_key *a,
-				      struct scoutfs_key *b)
+static inline int scoutfs_key_compare(const struct scoutfs_key *a,
+				      const struct scoutfs_key *b)
 {
 	return scoutfs_cmp(a->sk_zone, b->sk_zone) ?:
 	  scoutfs_cmp(le64_to_cpu(a->_sk_first), le64_to_cpu(b->_sk_first)) ?:
@@ -142,10 +142,10 @@ static inline int scoutfs_key_compare(struct scoutfs_key *a,
  *       1: a_start > b_end
  *  else 0: ranges overlap
  */
-static inline int scoutfs_key_compare_ranges(struct scoutfs_key *a_start,
-				             struct scoutfs_key *a_end,
-				             struct scoutfs_key *b_start,
-				             struct scoutfs_key *b_end)
+static inline int scoutfs_key_compare_ranges(const struct scoutfs_key *a_start,
+				             const struct scoutfs_key *a_end,
+				             const struct scoutfs_key *b_start,
+				             const struct scoutfs_key *b_end)
 {
 	return scoutfs_key_compare(a_end, b_start) < 0 ? -1 :
 	       scoutfs_key_compare(a_start, b_end) > 0 ? 1 :
