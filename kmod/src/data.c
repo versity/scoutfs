@@ -20,6 +20,7 @@
 #include <linux/hash.h>
 #include <linux/log2.h>
 #include <linux/falloc.h>
+#include <linux/fiemap.h>
 #include <linux/writeback.h>
 
 #include "format.h"
