@@ -290,6 +290,16 @@ typedef unsigned int blk_opf_t;
 #define kc__vmalloc __vmalloc
 #endif
 
+#ifdef KC_VFS_METHOD_USER_NAMESPACE_ARG
+#define KC_VFS_NS_DEF struct user_namespace *mnt_user_ns,
+#define KC_VFS_NS mnt_user_ns,
+#define KC_VFS_INIT_NS &init_user_ns,
+#else
+#define KC_VFS_NS_DEF
+#define KC_VFS_NS
+#define KC_VFS_INIT_NS
+#endif
+
 #ifdef KC_BIO_ALLOC_DEV_OPF_ARGS
 #define kc_bio_alloc bio_alloc
 #else

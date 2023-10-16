@@ -269,7 +269,7 @@ int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *v
 	struct posix_acl *acl = NULL;
 	int ret;
 
-	if (!inode_owner_or_capable(dentry->d_inode))
+	if (!inode_owner_or_capable(KC_VFS_INIT_NS dentry->d_inode))
 		return -EPERM;
 
 	if (!IS_POSIXACL(dentry->d_inode))
