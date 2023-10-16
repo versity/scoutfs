@@ -1305,8 +1305,8 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		goto out;
 	}
 
-	ret = inode_permission(from, MAY_WRITE) ?:
-	      inode_permission(to, MAY_WRITE);
+	ret = inode_permission(KC_VFS_INIT_NS from, MAY_WRITE) ?:
+	      inode_permission(KC_VFS_INIT_NS to, MAY_WRITE);
 	if (ret < 0)
 		goto out;
 

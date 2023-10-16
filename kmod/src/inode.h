@@ -135,10 +135,12 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock);
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat);
 #else
-int scoutfs_getattr(const struct path *path, struct kstat *stat,
+int scoutfs_getattr(KC_VFS_NS_DEF
+		    const struct path *path, struct kstat *stat,
 		    u32 request_mask, unsigned int query_flags);
 #endif
-int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
+int scoutfs_setattr(KC_VFS_NS_DEF
+		    struct dentry *dentry, struct iattr *attr);
 
 int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
 				struct scoutfs_lock *primary);

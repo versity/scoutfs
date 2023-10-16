@@ -283,6 +283,30 @@ ifneq (,$(shell grep 'extern void .__vmalloc.unsigned long size, gfp_t gfp_mask,
 ccflags-y += -DKC_VMALLOC_PGPROT_T
 endif
 
+# v6.2-rc1-18-g01beba7957a2
+#
+# fs: port inode_owner_or_capable() to mnt_idmap
+ifneq (,$(shell grep 'bool inode_owner_or_capable.struct user_namespace .mnt_userns' include/linux/fs.h))
+ccflags-y += -DKC_INODE_OWNER_OR_CAPABLE_USERNS
+endif
+
+#
+# v5.11-rc4-5-g47291baa8ddf
+#
+# namei: make permission helpers idmapped mount aware
+ifneq (,$(shell grep 'int inode_permission.struct user_namespace' include/linux/fs.h))
+ccflags-y += -DKC_INODE_PERMISSION_USERNS
+endif
+
+#
+# v5.11-rc4-24-g549c7297717c
+#
+# fs: make helpers idmap mount aware
+# Enlarges the VFS API methods to include user namespace argument.
+ifneq (,$(shell grep 'int ..mknod. .struct user_namespace' include/linux/fs.h))
+ccflags-y += -DKC_VFS_METHOD_USER_NAMESPACE_ARG
+endif
+
 #
 # v5.17-rc2-21-g07888c665b40
 #
