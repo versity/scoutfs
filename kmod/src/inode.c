@@ -447,7 +447,7 @@ int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock)
 	start = (i_size_read(inode) + SCOUTFS_BLOCK_SM_SIZE - 1) >>
 		SCOUTFS_BLOCK_SM_SHIFT;
 	ret = scoutfs_data_truncate_items(inode->i_sb, inode,
-					  scoutfs_ino(inode), start, ~0ULL,
+					  scoutfs_ino(inode), start, ~0ULL, 0,
 					  false, lock);
 	err = clear_truncate_flag(inode, lock);
 
@@ -1571,7 +1571,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_in
 
 	/* remove data items in their own transactions */
 	if (S_ISREG(mode)) {
-		ret = scoutfs_data_truncate_items(sb, NULL, ino, 0, ~0ULL,
+		ret = scoutfs_data_truncate_items(sb, NULL, ino, 0, ~0ULL, 32,
 						  false, lock);
 		if (ret)
 			goto out;
@@ -1782,6 +1782,21 @@ out:
 }
 
 /*
+ * Keep calling try_ as long as we see that we had to back off after too
+ * many transactions under a single lock hold.
+ */
+static int keep_trying_delete_inode_items(struct super_block *sb, u64 ino)
+{
+	int ret;
+
+	do {
+		ret = try_delete_inode_items(sb, ino);
+	} while (ret == -EINPROGRESS);
+
+	return ret;
+}
+
+/*
  * As we evicted an inode we need to decide to try and delete its items
  * or not, which is expensive.  We only try when we have lock coverage
  * and the inode has been unlinked.  This catches the common case of
@@ -1810,7 +1825,7 @@ void scoutfs_evict_inode(struct inode *inode)
 		scoutfs_omap_clear(sb, ino);
 
 		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink == 0)
-			try_delete_inode_items(sb, scoutfs_ino(inode));
+			keep_trying_delete_inode_items(sb, scoutfs_ino(inode));
 	}
 
 	clear_inode(inode);
@@ -2041,7 +2056,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 
 		/* seemingly orphaned and unused, get locks and check for sure */
 		scoutfs_inc_counter(sb, orphan_scan_attempts);
-		ret = try_delete_inode_items(sb, ino);
+		keep_trying_delete_inode_items(sb, ino);
 	}
 
 	ret = 0;

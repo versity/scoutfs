@@ -298,13 +298,20 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
  * have to modify far more items than fit in a transaction so we're in
  * charge of batching updates into transactions.  If the inode is
  * provided then we're responsible for updating its item as we go.
+ *
+ * The caller can limit the number of transactions that will be
+ * performed while deleting items.  If the limit is hit then
+ * -EINPROGRESS is returned to indicate that there's still work to do.
+ * This is used sparingly because most callers have atomicity promises
+ * that force them to complete all the deletions in one lock hold.
  */
 int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
-				u64 ino, u64 iblock, u64 last, bool offline,
-				struct scoutfs_lock *lock)
+				u64 ino, u64 iblock, u64 last, unsigned txn_limit,
+				bool offline, struct scoutfs_lock *lock)
 {
 	struct scoutfs_inode_info *si = NULL;
 	LIST_HEAD(ind_locks);
+	unsigned txn = 0;
 	s64 ret = 0;
 
 	WARN_ON_ONCE(inode && !inode_is_locked(inode));
@@ -323,7 +330,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		down_write(&si->extent_sem);
 	}
 
-	while (iblock <= last) {
+	while (iblock <= last && (!txn_limit || txn++ < txn_limit)) {
 		if (inode)
 			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true, false);
 		else
@@ -352,6 +359,9 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		iblock = ret;
 		ret = 0;
 	}
+
+	if (ret == 0 && txn_limit > 0 && txn > txn_limit)
+		ret = -EINPROGRESS;
 
 	if (si)
 		up_write(&si->extent_sem);
