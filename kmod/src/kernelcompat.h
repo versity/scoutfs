@@ -278,4 +278,10 @@ ssize_t kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *i
 typedef unsigned int blk_opf_t;
 #endif
 
+#ifdef KC_LIST_CMP_CONST_ARG_LIST_HEAD
+#define KC_LIST_CMP_CONST const
+#else
+#define KC_LIST_CMP_CONST
+#endif
+
 #endif
