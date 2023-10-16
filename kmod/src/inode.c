@@ -979,10 +979,10 @@ static bool inode_has_index(umode_t mode, u8 type)
 	}
 }
 
-static int cmp_index_lock(void *priv, struct list_head *A, struct list_head *B)
+static int cmp_index_lock(void *priv, KC_LIST_CMP_CONST struct list_head *A, KC_LIST_CMP_CONST struct list_head *B)
 {
-	struct index_lock *a = list_entry(A, struct index_lock, head);
-	struct index_lock *b = list_entry(B, struct index_lock, head);
+	KC_LIST_CMP_CONST struct index_lock *a = list_entry(A, KC_LIST_CMP_CONST struct index_lock, head);
+	KC_LIST_CMP_CONST struct index_lock *b = list_entry(B, KC_LIST_CMP_CONST struct index_lock, head);
 
 	return ((int)a->type - (int)b->type) ?:
 	       scoutfs_cmp_u64s(a->major, b->major) ?:
