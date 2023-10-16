@@ -255,7 +255,8 @@ out:
 }
 #endif
 
-int scoutfs_permission(struct inode *inode, int mask)
+int scoutfs_permission(KC_VFS_NS_DEF
+		       struct inode *inode, int mask)
 {
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
@@ -269,7 +270,8 @@ int scoutfs_permission(struct inode *inode, int mask)
 	if (ret)
 		return ret;
 
-	ret = generic_permission(inode, mask);
+	ret = generic_permission(KC_VFS_INIT_NS
+				 inode, mask);
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 
