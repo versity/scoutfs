@@ -882,7 +882,9 @@ static int scoutfs_xattr_get_handler
 
 static int scoutfs_xattr_set_handler
 #ifdef KC_XATTR_STRUCT_XATTR_HANDLER
-		(const struct xattr_handler *handler, struct dentry *dentry,
+		(const struct xattr_handler *handler,
+		 KC_VFS_NS_DEF
+		 struct dentry *dentry,
 		 struct inode *inode, const char *name, const void *value,
 		 size_t size, int flags)
 {
