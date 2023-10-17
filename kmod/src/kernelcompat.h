@@ -333,4 +333,105 @@ static inline struct bio *kc_bio_alloc(struct block_device *bdev, unsigned short
 #define fiemap_prep(inode, fieinfo, start, len, flags) fiemap_check_flags(fieinfo, flags)
 #endif
 
+#ifndef KC_KERNEL_OLD_TIMEVAL_STRUCT
+#define __kernel_old_timeval timeval
+#define ns_to_kernel_old_timeval(ktime) ns_to_timeval(ktime.tv64)
+#endif
+
+#ifdef KC_SOCK_SET_SNDTIMEO
+#include <net/sock.h>
+static inline int kc_sock_set_sndtimeo(struct socket *sock, s64 secs)
+{
+	sock_set_sndtimeo(sock->sk, secs);
+	return 0;
+}
+static inline int kc_tcp_sock_set_rcvtimeo(struct socket *sock, ktime_t to)
+{
+	struct __kernel_old_timeval tv;
+	sockptr_t kopt;
+
+	tv = ns_to_kernel_old_timeval(to);
+
+	kopt = KERNEL_SOCKPTR(&tv);
+
+	return sock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO_NEW,
+			       kopt, sizeof(tv));
+}
+#else
+#include <net/sock.h>
+static inline int kc_sock_set_sndtimeo(struct socket *sock, s64 secs)
+{
+	struct timeval tv = { .tv_sec = secs, .tv_usec = 0 };
+	return kernel_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+				 (char *)&tv, sizeof(tv));
+}
+static inline int kc_tcp_sock_set_rcvtimeo(struct socket *sock, ktime_t to)
+{
+	struct __kernel_old_timeval tv;
+
+	tv = ns_to_kernel_old_timeval(to);
+	return kernel_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+				 (char *)&tv, sizeof(tv));
+}
+#endif
+
+#ifdef KC_SETSOCKOPT_SOCKPTR_T
+static inline int kc_sock_setsockopt(struct socket *sock, int level, int op, int *optval, unsigned int optlen)
+{
+	sockptr_t kopt = KERNEL_SOCKPTR(optval);
+	return sock_setsockopt(sock, level, op, kopt, sizeof(optval));
+}
+#else
+static inline int kc_sock_setsockopt(struct socket *sock, int level, int op, int *optval, unsigned int optlen)
+{
+	return kernel_setsockopt(sock, level, op, (char *)optval, sizeof(optval));
+}
+#endif
+
+#ifdef KC_HAVE_TCP_SET_SOCKFN
+#include <linux/net.h>
+#include <net/tcp.h>
+static inline int kc_tcp_sock_set_keepintvl(struct socket *sock, int val)
+{
+	return tcp_sock_set_keepintvl(sock->sk, val);
+}
+static inline int kc_tcp_sock_set_keepidle(struct socket *sock, int val)
+{
+	return tcp_sock_set_keepidle(sock->sk, val);
+}
+static inline int kc_tcp_sock_set_user_timeout(struct socket *sock, int val)
+{
+	tcp_sock_set_user_timeout(sock->sk, val);
+	return 0;
+}
+static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
+{
+	tcp_sock_set_nodelay(sock->sk);
+	return 0;
+}
+#else
+#include <linux/net.h>
+#include <net/tcp.h>
+static inline int kc_tcp_sock_set_keepintvl(struct socket *sock, int val)
+{
+	int optval = val;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_KEEPINTVL, (char *)&optval, sizeof(optval));
+}
+static inline int kc_tcp_sock_set_keepidle(struct socket *sock, int val)
+{
+	int optval = val;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_KEEPIDLE, (char *)&optval, sizeof(optval));
+}
+static inline int kc_tcp_sock_set_user_timeout(struct socket *sock, int val)
+{
+	int optval = val;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_USER_TIMEOUT, (char *)&optval, sizeof(optval));
+}
+static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
+{
+	int optval = 1;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_NODELAY, (char *)&optval, sizeof(optval));
+}
+#endif
+
 #endif

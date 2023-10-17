@@ -303,7 +303,6 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	DECLARE_QUORUM_INFO(sb, qinf);
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_quorum_message qmes;
-	struct timeval tv;
 	ktime_t rel_to;
 	ktime_t now;
 	int ret;
@@ -328,14 +327,10 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	else
 		rel_to = ns_to_ktime(0);
 
-	tv = ktime_to_timeval(rel_to);
-	if (tv.tv_sec == 0 && tv.tv_usec == 0) {
+	if (ktime_compare(rel_to, ns_to_ktime(NSEC_PER_USEC)) <= 0) {
 		mh.msg_flags |= MSG_DONTWAIT;
 	} else {
-		ret = kernel_setsockopt(qinf->sock, SOL_SOCKET, SO_RCVTIMEO,
-					(char *)&tv, sizeof(tv));
-		if (ret < 0)
-			return ret;
+		ret = kc_tcp_sock_set_rcvtimeo(qinf->sock, rel_to);
 	}
 
 #ifdef KC_MSGHDR_STRUCT_IOV_ITER
