@@ -298,7 +298,7 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 {
 	static bool exceeded_once = false;
 	struct commit_hold *hold;
-	struct timespec ts;
+	struct timespec64 ts;
 	u32 avail_used;
 	u32 freed_used;
 	u32 avail_now;
@@ -330,7 +330,7 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 		    cusers->freed_before, freed_now);
 
 	list_for_each_entry(hold, &cusers->holding, entry) {
-		ts = ktime_to_timespec(hold->start);
+		ts = ktime_to_timespec64(hold->start);
 		scoutfs_err(sb, "exceeding hold start %llu.%09llu av %u fr %u",
 			    (u64)ts.tv_sec, (u64)ts.tv_nsec, hold->avail, hold->freed);
 		hold->exceeded = true;
@@ -445,7 +445,7 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct commit_users *cusers = &server->cusers;
-	struct timespec ts;
+	struct timespec64 ts;
 
 	spin_lock(&cusers->lock);
 
@@ -454,7 +454,7 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 	check_holder_budget(sb, server, cusers);
 
 	if (hold->exceeded) {
-		ts = ktime_to_timespec(hold->start);
+		ts = ktime_to_timespec64(hold->start);
 		scoutfs_err(sb, "exceeding hold start %llu.%09llu stack:",
 			    (u64)ts.tv_sec, (u64)ts.tv_nsec);
 		dump_stack();

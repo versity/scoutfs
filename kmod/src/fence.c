@@ -105,12 +105,12 @@ static ssize_t elapsed_secs_show(struct kobject *kobj,
 {
 	DECLARE_FENCE_FROM_KOBJ(fence, kobj);
 	ktime_t now = ktime_get();
-	struct timeval tv = { 0, };
+	ktime_t t = ns_to_ktime(0);
 
 	if (ktime_after(now, fence->start_kt))
-		tv = ktime_to_timeval(ktime_sub(now, fence->start_kt));
+		t = ktime_sub(now, fence->start_kt);
 
-	return snprintf(buf, PAGE_SIZE, "%llu", (long long)tv.tv_sec);
+	return snprintf(buf, PAGE_SIZE, "%llu", (long long)ktime_divns(t, NSEC_PER_SEC));
 }
 SCOUTFS_ATTR_RO(elapsed_secs);
 
