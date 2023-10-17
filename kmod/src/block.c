@@ -437,7 +437,7 @@ static void block_remove_all(struct super_block *sb)
  * possible.  Final freeing, verifying checksums, and unlinking errored
  * blocks are all done by future users of the blocks.
  */
-static void block_end_io(struct super_block *sb, unsigned int opf,
+static void block_end_io(struct super_block *sb, blk_opf_t opf,
 			 struct block_private *bp, int err)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
@@ -477,7 +477,7 @@ static void KC_DECLARE_BIO_END_IO(block_bio_end_io, struct bio *bio)
  * Kick off IO for a single block.
  */
 static int block_submit_bio(struct super_block *sb, struct block_private *bp,
-			    unsigned int opf)
+			    blk_opf_t opf)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct bio *bio = NULL;
@@ -1200,7 +1200,7 @@ static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
  * only layer that sees the full block buffer so we pass the calculated
  * crc to the caller for them to check in their context.
  */
-static int sm_block_io(struct super_block *sb, struct block_device *bdev, unsigned int opf,
+static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_opf_t opf,
 		       u64 blkno, struct scoutfs_block_header *hdr, size_t len, __le32 *blk_crc)
 {
 	struct scoutfs_block_header *pg_hdr;

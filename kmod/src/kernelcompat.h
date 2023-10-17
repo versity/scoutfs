@@ -273,4 +273,9 @@ ssize_t kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *i
 #define generic_file_buffered_write kc_generic_file_buffered_write
 #endif
 
+#ifndef KC_HAVE_BLK_OPF_T
+/* typedef __u32 __bitwise blk_opf_t; */
+typedef unsigned int blk_opf_t;
+#endif
+
 #endif
