@@ -486,7 +486,7 @@ static void set_quorum_block_event(struct super_block *sb, struct scoutfs_quorum
 	if (WARN_ON_ONCE(event < 0 || event >= SCOUTFS_QUORUM_EVENT_NR))
 		return;
 
-	getnstimeofday64(&ts);
+	ktime_get_ts64(&ts);
 	le64_add_cpu(&blk->write_nr, 1);
 
 	ev = &blk->events[event];
