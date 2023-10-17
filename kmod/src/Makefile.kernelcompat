@@ -322,3 +322,11 @@ endif
 ifneq (,$(shell grep -s 'int fiemap_prep.struct inode' include/linux/fiemap.h))
 ccflags-y += -DKC_FIEMAP_PREP
 endif
+
+#
+# v5.17-13043-g800ba29547e1
+#
+# generic_perform_write args use kiocb for passing filp and pos
+ifneq (,$(shell grep 'ssize_t generic_perform_write.struct kiocb ., struct iov_iter' include/linux/fs.h))
+ccflags-y += -DKC_GENERIC_PERFORM_WRITE_KIOCB_IOV_ITER
+endif
