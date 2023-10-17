@@ -271,7 +271,20 @@ ssize_t kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *i
                unsigned long nr_segs, loff_t pos, loff_t *ppos,
                size_t count, ssize_t written);
 #define generic_file_buffered_write kc_generic_file_buffered_write
+#ifdef KC_GENERIC_PERFORM_WRITE_KIOCB_IOV_ITER
+static inline int kc_generic_perform_write(struct kiocb *iocb, struct iov_iter *iter, loff_t pos)
+{
+	iocb->ki_pos = pos;
+	return generic_perform_write(iocb, iter);
+}
+#else
+static inline int kc_generic_perform_write(struct kiocb *iocb, struct iov_iter *iter, loff_t pos)
+{
+	struct file *file = iocb->ki_filp;
+	return generic_perform_write(file, iter, pos);
+}
 #endif
+#endif // KC_GENERIC_FILE_BUFFERED_WRITE
 
 #ifndef KC_HAVE_BLK_OPF_T
 /* typedef __u32 __bitwise blk_opf_t; */
