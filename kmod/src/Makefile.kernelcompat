@@ -330,3 +330,35 @@ endif
 ifneq (,$(shell grep 'ssize_t generic_perform_write.struct kiocb ., struct iov_iter' include/linux/fs.h))
 ccflags-y += -DKC_GENERIC_PERFORM_WRITE_KIOCB_IOV_ITER
 endif
+
+#
+# v5.7-rc6-2496-g76ee0785f42a
+#
+# net: add sock_set_sndtimeo
+ifneq (,$(shell grep 'void sock_set_sndtimeo.struct sock' include/net/sock.h))
+ccflags-y += -DKC_SOCK_SET_SNDTIMEO
+endif
+
+#
+# v5.8-rc4-1931-gba423fdaa589
+#
+# setsockopt functions are now passed a sockptr_t value instead of char*
+ifneq (,$(shell grep -s 'include .linux/sockptr.h.' include/linux/net.h))
+ccflags-y += -DKC_SETSOCKOPT_SOCKPTR_T
+endif
+
+#
+# v5.7-rc6-2507-g71c48eb81c9e
+#
+# Adds a bunch of low level TCP sock parameter functions that we want to use.
+ifneq (,$(shell grep 'int tcp_sock_set_keepintvl' include/linux/tcp.h))
+ccflags-y += -DKC_HAVE_TCP_SET_SOCKFN
+endif
+
+#
+# v4.16-rc3-13-ga84d1169164b
+#
+# Fixes y2038 issues with struct timeval.
+ifneq (,$(shell grep -s '^struct __kernel_old_timeval .' include/uapi/linux/time_types.h))
+ccflags-y += -DKC_KERNEL_OLD_TIMEVAL_STRUCT
+endif
