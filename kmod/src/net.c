@@ -904,53 +904,44 @@ static void destroy_conn(struct scoutfs_net_connection *conn)
 static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 			       struct socket *sock)
 {
-	struct timeval tv;
 	int optval;
 	int ret;
 
 	/* we use a keepalive timeout instead of send timeout */
-	tv.tv_sec = 0;
-	tv.tv_usec = 0;
-	ret = kernel_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
-				(char *)&tv, sizeof(tv));
+	ret = kc_sock_set_sndtimeo(sock, 0);
 	if (ret)
 		goto out;
 
 	/* not checked when user_timeout != 0, but for clarity */
 	optval = UNRESPONSIVE_PROBES;
-	ret = kernel_setsockopt(sock, SOL_TCP, TCP_KEEPCNT,
-				(char *)&optval, sizeof(optval));
+	ret = kc_sock_setsockopt(sock, SOL_TCP, TCP_KEEPCNT,
+				&optval, sizeof(optval));
 	if (ret)
 		goto out;
 
 	BUILD_BUG_ON(UNRESPONSIVE_PROBES >= UNRESPONSIVE_TIMEOUT_SECS);
 	optval = UNRESPONSIVE_TIMEOUT_SECS - (UNRESPONSIVE_PROBES);
-	ret = kernel_setsockopt(sock, SOL_TCP, TCP_KEEPIDLE,
-				(char *)&optval, sizeof(optval));
+	ret = kc_tcp_sock_set_keepidle(sock, optval);
 	if (ret)
 		goto out;
 
 	optval = 1;
-	ret = kernel_setsockopt(sock, SOL_TCP, TCP_KEEPINTVL,
-				(char *)&optval, sizeof(optval));
+	ret = kc_tcp_sock_set_keepintvl(sock, optval);
 	if (ret)
 		goto out;
 
 	optval = UNRESPONSIVE_TIMEOUT_SECS * MSEC_PER_SEC;
-	ret = kernel_setsockopt(sock, SOL_TCP, TCP_USER_TIMEOUT,
-				(char *)&optval, sizeof(optval));
+	ret = kc_tcp_sock_set_user_timeout(sock, optval);
 	if (ret)
 		goto out;
 
 	optval = 1;
-	ret = kernel_setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
-				(char *)&optval, sizeof(optval));
+	ret = kc_sock_setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
+				&optval, sizeof(optval));
 	if (ret)
 		goto out;
 
-	optval = 1;
-	ret = kernel_setsockopt(sock, SOL_TCP, TCP_NODELAY,
-				(char *)&optval, sizeof(optval));
+	ret = kc_tcp_sock_set_nodelay(sock);
 	if (ret)
 		goto out;
 
@@ -1049,7 +1040,6 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 	DEFINE_CONN_FROM_WORK(conn, work, connect_work);
 	struct super_block *sb = conn->sb;
 	struct socket *sock;
-	struct timeval tv;
 	int ret;
 
 	trace_scoutfs_net_connect_work_enter(sb, 0, 0);
@@ -1060,11 +1050,8 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 
 	sock->sk->sk_allocation = GFP_NOFS;
 
-	/* caller specified connect timeout */
-	tv.tv_sec = conn->connect_timeout_ms / MSEC_PER_SEC;
-	tv.tv_usec = (conn->connect_timeout_ms % MSEC_PER_SEC) * USEC_PER_MSEC;
-	ret = kernel_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
-				(char *)&tv, sizeof(tv));
+	/* caller specified connect timeout, defaults to 1 sec */
+	ret = kc_sock_set_sndtimeo(sock, conn->connect_timeout_ms / MSEC_PER_SEC);
 	if (ret) {
 		sock_release(sock);
 		goto out;
@@ -1462,8 +1449,8 @@ int scoutfs_net_bind(struct super_block *sb,
 	sock->sk->sk_allocation = GFP_NOFS;
 
 	optval = 1;
-	ret = kernel_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
-				(char *)&optval, sizeof(optval));
+	ret = kc_sock_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+				&optval, sizeof(optval));
 	if (ret)
 		goto out;
 
