@@ -93,13 +93,9 @@ int scoutfs_setup_triggers(struct super_block *sb)
 		goto out;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(triggers->atomics); i++) {
-		if (!debugfs_create_atomic_t(names[i], 0644, triggers->dir,
-					     &triggers->atomics[i])) {
-			ret = -ENOMEM;
-			goto out;
-		}
-	}
+	for (i = 0; i < ARRAY_SIZE(triggers->atomics); i++)
+		debugfs_create_atomic_t(names[i], 0644, triggers->dir,
+					&triggers->atomics[i]);
 
 	ret = 0;
 out:
