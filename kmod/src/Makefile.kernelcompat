@@ -258,3 +258,11 @@ endif
 ifneq (,$(shell grep 'static inline const char .xattr_prefix' include/linux/xattr.h))
 ccflags-y += -DKC_XATTR_HANDLER_NAME=1
 endif
+
+#
+# v5.19-rc4-96-g342a72a33407
+#
+# Adds `typedef __u32 __bitwise blk_opf_t` to aid flag checking
+ifneq (,$(shell grep 'typedef __u32 __bitwise blk_opf_t' include/linux/blk_types.h))
+ccflags-y += -DKC_HAVE_BLK_OPF_T=1
+endif
