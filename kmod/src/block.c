@@ -120,8 +120,7 @@ do {												\
 
 static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 {
-	int off = offsetof(struct scoutfs_block_header, crc) +
-		  FIELD_SIZEOF(struct scoutfs_block_header, crc);
+	int off = offsetofend(struct scoutfs_block_header, crc);
 	u32 calc = crc32c(~0, (char *)hdr + off, size - off);
 
 	return cpu_to_le32(calc);
