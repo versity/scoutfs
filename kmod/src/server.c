@@ -91,6 +91,7 @@ do {												\
 struct server_info {
 	struct super_block *sb;
 	spinlock_t lock;
+	seqlock_t seqlock;
 	wait_queue_head_t waitq;
 
 	struct workqueue_struct *wq;
@@ -132,11 +133,9 @@ struct server_info {
 	struct mutex mounted_clients_mutex;
 
 	/* stable super stored from commits, given in locks and rpcs */
-	seqcount_t stable_seqcount;
 	struct scoutfs_super_block stable_super;
 
 	/* serializing and get and set volume options */
-	seqcount_t volopt_seqcount;
 	struct mutex volopt_mutex;
 	struct scoutfs_volume_options volopt;
 
@@ -182,7 +181,7 @@ static bool get_volopt_val(struct server_info *server, int nr, u64 *val)
 	unsigned seq;
 
 	do {
-		seq = read_seqcount_begin(&server->volopt_seqcount);
+		seq = read_seqbegin(&server->seqlock);
 		if ((le64_to_cpu(server->volopt.set_bits) & bit)) {
 			is_set = true;
 			*val = le64_to_cpup(opt);
@@ -190,7 +189,7 @@ static bool get_volopt_val(struct server_info *server, int nr, u64 *val)
 			is_set = false;
 			*val = 0;
 		};
-	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+	} while (read_seqretry(&server->seqlock, seq));
 
 	return is_set;
 }
@@ -506,7 +505,7 @@ static void get_stable(struct super_block *sb, struct scoutfs_super_block *super
 	unsigned int seq;
 
 	do {
-		seq = read_seqcount_begin(&server->stable_seqcount);
+		seq = read_seqbegin(&server->seqlock);
 		if (super)
 			*super = server->stable_super;
 		if (roots) {
@@ -514,7 +513,7 @@ static void get_stable(struct super_block *sb, struct scoutfs_super_block *super
 			roots->logs_root = server->stable_super.logs_root;
 			roots->srch_root = server->stable_super.srch_root;
 		}
-	} while (read_seqcount_retry(&server->stable_seqcount, seq));
+	} while (read_seqretry(&server->seqlock, seq));
 }
 
 u64 scoutfs_server_seq(struct super_block *sb)
@@ -548,11 +547,9 @@ void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq)
 
 static void set_stable_super(struct server_info *server, struct scoutfs_super_block *super)
 {
-	preempt_disable();
-	write_seqcount_begin(&server->stable_seqcount);
+	write_seqlock(&server->seqlock);
 	server->stable_super = *super;
-	write_seqcount_end(&server->stable_seqcount);
-	preempt_enable();
+	write_sequnlock(&server->seqlock);
 }
 
 /*
@@ -3073,9 +3070,9 @@ static int server_get_volopt(struct super_block *sb, struct scoutfs_net_connecti
 	}
 
 	do {
-		seq = read_seqcount_begin(&server->volopt_seqcount);
+		seq = read_seqbegin(&server->seqlock);
 		volopt = server->volopt;
-	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+	} while (read_seqretry(&server->seqlock, seq));
 
 out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, &volopt, sizeof(volopt));
@@ -3144,12 +3141,12 @@ static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connecti
 apply:
 	ret = server_apply_commit(sb, &hold, ret);
 
-	write_seqcount_begin(&server->volopt_seqcount);
+	write_seqlock(&server->seqlock);
 	if (ret == 0)
 		server->volopt = super->volopt;
 	else
 		super->volopt = server->volopt;
-	write_seqcount_end(&server->volopt_seqcount);
+	write_sequnlock(&server->seqlock);
 
 	mutex_unlock(&server->volopt_mutex);
 out:
@@ -3192,12 +3189,12 @@ static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connec
 
 	ret = server_apply_commit(sb, &hold, ret);
 
-	write_seqcount_begin(&server->volopt_seqcount);
+	write_seqlock(&server->seqlock);
 	if (ret == 0)
 		server->volopt = super->volopt;
 	else
 		super->volopt = server->volopt;
-	write_seqcount_end(&server->volopt_seqcount);
+	write_sequnlock(&server->seqlock);
 
 	mutex_unlock(&server->volopt_mutex);
 out:
@@ -4336,9 +4333,9 @@ static void scoutfs_server_worker(struct work_struct *work)
 	}
 
 	/* update volume options early, possibly for use during startup */
-	write_seqcount_begin(&server->volopt_seqcount);
+	write_seqlock(&server->seqlock);
 	server->volopt = super->volopt;
-	write_seqcount_end(&server->volopt_seqcount);
+	write_sequnlock(&server->seqlock);
 
 	atomic64_set(&server->seq_atomic, le64_to_cpu(super->seq));
 	set_stable_super(server, super);
@@ -4478,6 +4475,7 @@ int scoutfs_server_setup(struct super_block *sb)
 
 	server->sb = sb;
 	spin_lock_init(&server->lock);
+	seqlock_init(&server->seqlock);
 	init_waitqueue_head(&server->waitq);
 	INIT_WORK(&server->work, scoutfs_server_worker);
 	server->status = SERVER_DOWN;
@@ -4492,8 +4490,6 @@ int scoutfs_server_setup(struct super_block *sb)
 	INIT_WORK(&server->log_merge_free_work, server_log_merge_free_work);
 	mutex_init(&server->srch_mutex);
 	mutex_init(&server->mounted_clients_mutex);
-	seqcount_init(&server->stable_seqcount);
-	seqcount_init(&server->volopt_seqcount);
 	mutex_init(&server->volopt_mutex);
 	INIT_WORK(&server->fence_pending_recov_work, fence_pending_recov_worker);
 	INIT_DELAYED_WORK(&server->reclaim_dwork, reclaim_worker);
