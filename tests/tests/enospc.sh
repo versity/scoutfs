@@ -23,7 +23,6 @@ done
 sync
 
 echo "== fallocate until enospc"
-before=$(free_blocks Data "$T_M0")
 finished=0
 while [ $finished != 1 ]; do
 	for n in $(t_fs_nrs); do
@@ -43,16 +42,33 @@ while [ $finished != 1 ]; do
 	done
 done
 
-echo "== remove all the files and verify free data blocks"
+echo "== remove files and check that blocks were freed"
+before=$(free_blocks Data "$T_M0")
+deleted=0
 for n in $(t_fs_nrs); do
 	eval dir="\$T_D${n}/dir-$n"
-	rm -rf "$dir"
+	path="$dir/file-$n"
+
+	ino=$(stat -c "%i" "$path")
+	((deleted+=$(stat -c '%b' "$path")))
+	rm -f "$path"
+	echo "waiting for ino $ino path $path to delete " >> $T_TMP.waiting 2>&1
+	while t_ino_has_items $ino "$T_M0"; do sleep .5; done
+
+	rmdir "$dir"
 done
+# make dirty data_freed allocator trees visible
 sync
+#
+# make sure that free data blocks increased by at least as much as we
+# deleted.  This can miss problems if our deletion didn't happen but
+# some other unrelated large orphan inode was still being deleted,
+# perhaps by a previous test.  If that were the case it'd be
+# inconsistent and we'd see sporadic failures.
+#
 after=$(free_blocks Data "$T_M0")
-# nothing else should be modifying data blocks
-test "$before" == "$after" || \
-	t_fail "$after free data blocks after rm, expected $before"
+test "$after" -ge "$((before + deleted))" || \
+	t_fail "$after free data blocks after rm, less than $before + $deleted"
 
 # XXX this is all pretty manual, would be nice to have helpers
 echo "== make small meta fs"
