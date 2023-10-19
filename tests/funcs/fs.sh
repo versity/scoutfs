@@ -459,3 +459,17 @@ t_restore_all_sysfs_mount_options() {
 		t_set_sysfs_mount_option $i $name "${_saved_opts[$ind]}"
 	done
 }
+
+#
+# Return success if the inode number still has visible fs items.  This
+# can be used to probe if an inode's items have been fully deleted, or not.
+# This operates under cluster locking so it is coherent with respect to
+# local item deletions which are in the current dirty transaction.
+#
+t_ino_has_items() {
+	local ino="$1"
+	local path="$2"
+
+	scoutfs get-allocated-inos -i "$ino" -s -p "$path" > $T_TMP.inos.log 2>&1
+	test "$?" == 0 -a "$(head -1 $T_TMP.inos.log)" == "$ino"
+}

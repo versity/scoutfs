@@ -17,19 +17,6 @@ silent_kill() {
 	exec 2>&$ERR {ERR}>&-
 }
 
-#
-# We don't have a great way to test that inode items still exist.   We
-# don't prevent opening handles with nlink 0 today, so we'll use that.
-# This would have to change to some other method.
-#
-inode_exists()
-{
-	local ino="$1"
-
-	scoutfs get-allocated-inos -i "$ino" -s -p "$T_M0" > $T_TMP.inos.log 2>&1
-	test "$?" == 0 -a "$(head -1 $T_TMP.inos.log)" == "$ino"
-}
-
 t_save_all_sysfs_mount_options orphan_scan_delay_ms
 restore_delays()
 {
@@ -41,21 +28,21 @@ echo "== test our inode existance function"
 path="$T_D0/file"
 touch "$path"
 ino=$(stat -c "%i" "$path")
-inode_exists $ino || echo "$ino didn't exist"
+t_ino_has_items $ino "$T_M0"|| echo "$ino didn't exist"
 
 echo "== unlinked and opened inodes still exist"
 sleep 1000000 < "$path" &
 sleep .1 # wait for background sleep to run and open stdin
 pid="$!"
 rm -f "$path"
-inode_exists $ino || echo "$ino didn't exist"
+t_ino_has_items $ino "$T_M0" || echo "$ino didn't exist"
 
 echo "== orphan from failed evict deletion is picked up"
 # pending kill signal stops evict from getting locks and deleting
 silent_kill $pid
 t_set_sysfs_mount_option 0 orphan_scan_delay_ms 1000
 sleep 5
-inode_exists $ino && echo "$ino still exists"
+t_ino_has_items $ino "$T_M0" && echo "$ino still exists"
 
 echo "== orphaned inos in all mounts all deleted"
 pids=""
@@ -84,7 +71,7 @@ t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
 # also have to wait for delayed log merge work from mount
 sleep 15
 for ino in $inos; do
-	inode_exists $ino && echo "$ino still exists"
+	t_ino_has_items $ino "$T_M0" && echo "$ino still exists"
 done
 
 RUNTIME=30
