@@ -2,6 +2,13 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.17
+\
+*Oct 23, 2023*
+
+Add support for EL8 generation kernels.
+
+---
 v1.16
 \
 *Oct 4, 2023*
