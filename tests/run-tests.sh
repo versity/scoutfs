@@ -326,17 +326,10 @@ unmount_all() {
 		cmd wait $p
 	done
 
-	# delete all temp meta devices
-	for dev in $(losetup --associated "$T_META_DEVICE" | cut -d : -f 1); do
-		if [ -e "$dev" ]; then
-			cmd losetup -d "$dev"
-		fi
-	done
-	# delete all temp data devices
-	for dev in $(losetup --associated "$T_DATA_DEVICE" | cut -d : -f 1); do
-		if [ -e "$dev" ]; then
-			cmd losetup -d "$dev"
-		fi
+	# delete all temp devices
+	for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
+		dmsetup remove "/dev/mapper/data_$i"
+		dmsetup remove "/dev/mapper/meta_$i"
 	done
 }
 if [ -n "$T_UNMOUNT" ]; then
@@ -442,9 +435,12 @@ msg "mounting $T_NR_MOUNTS mounts on meta $T_META_DEVICE data $T_DATA_DEVICE"
 pids=""
 for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 
-	meta_dev=$(losetup --find --show $T_META_DEVICE)
+	echo "0 `blockdev --getsz $T_META_DEVICE` linear $T_META_DEVICE 0" | dmsetup create "meta_$i"
+	meta_dev="/dev/mapper/meta_$i"
 	test -b "$meta_dev" || die "failed to create temp device $meta_dev"
-	data_dev=$(losetup --find --show $T_DATA_DEVICE)
+
+	echo "0 `blockdev --getsz $T_DATA_DEVICE` linear $T_DATA_DEVICE 0" | dmsetup create "data_$i"
+	data_dev="/dev/mapper/data_$i"
 	test -b "$data_dev" || die "failed to create temp device $data_dev"
 
 	dir="/mnt/test.$i"
