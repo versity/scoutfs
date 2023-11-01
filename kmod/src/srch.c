@@ -30,6 +30,7 @@
 #include "client.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
+#include "triggers.h"
 
 /*
  * This srch subsystem gives us a way to find inodes that have a given
@@ -521,6 +522,95 @@ out:
 }
 
 /*
+ * Padded entries are encoded in pairs after an existing entry.  All of
+ * the pairs cancel each other out by all readers (the second encoding
+ * looks like deletion) so they aren't visible to the first/last bounds of
+ * the block or file.
+ */
+static int append_padded_entry(struct scoutfs_srch_file *sfl, u64 blk,
+			       struct scoutfs_srch_block *srb, struct scoutfs_srch_entry *sre)
+{
+	int ret;
+
+	ret = encode_entry(srb->entries + le32_to_cpu(srb->entry_bytes),
+			   sre, &srb->tail);
+	if (ret > 0) {
+		srb->tail = *sre;
+		le32_add_cpu(&srb->entry_nr, 1);
+		le32_add_cpu(&srb->entry_bytes, ret);
+		le64_add_cpu(&sfl->entries, 1);
+		ret = 0;
+	}
+
+	return ret;
+}
+
+/*
+ * This is called by a testing trigger to create a very specific case of
+ * encoded entry offsets.  We want the last entry in the block to start
+ * precisely at the _SAFE_BYTES offset.
+ *
+ * This is called when there is a single existing entry in the block.
+ * We have the entire block to work with.  We encode pairs of matching
+ * entries.  This hides them from readers (both searches and merging) as
+ * they're interpreted as creation and deletion and are deleted.  We use
+ * the existing hash value of the first entry in the block but then set
+ * the inode to an impossibly large number so it doesn't interfere with
+ * anything.
+ *
+ * To hit the specific offset we very carefully manage the amount of
+ * bytes of change between fields in the entry.  We know that if we
+ * change all the byte of the ino and id we end up with a 20 byte
+ * (2+8+8,2) encoding of the pair of entries.  To have the last entry
+ * start at the _SAFE_POS offset we know that the final 20 byte pair
+ * encoding needs to end at 2 bytes (second entry encoding) after the
+ * _SAFE_POS offset.
+ *
+ * So as we encode pairs we watch the delta of our current offset from
+ * that desired final offset of 2 past _SAFE_POS.  If we're a multiple
+ * of 20 away then we encode the full 20 byte pairs.  If we're not, then
+ * we drop a byte to encode 19 bytes.  That'll slowly change the offset
+ * to be a multiple of 20 again while encoding large entries.
+ */
+static void pad_entries_at_safe(struct scoutfs_srch_file *sfl, u64 blk,
+				struct scoutfs_srch_block *srb)
+{
+	struct scoutfs_srch_entry sre;
+	u32 target;
+	s32 diff;
+	u64 hash;
+	u64 ino;
+	u64 id;
+	int ret;
+
+	hash = le64_to_cpu(srb->tail.hash);
+	ino = le64_to_cpu(srb->tail.ino) | (1ULL << 62);
+	id = le64_to_cpu(srb->tail.id);
+
+	target = SCOUTFS_SRCH_BLOCK_SAFE_BYTES + 2;
+
+	while ((diff = target - le32_to_cpu(srb->entry_bytes)) > 0) {
+		ino ^= 1ULL << (7 * 8);
+		if (diff % 20 == 0) {
+			id ^= 1ULL << (7 * 8);
+		} else {
+			id ^= 1ULL << (6 * 8);
+		}
+
+		sre.hash = cpu_to_le64(hash);
+		sre.ino = cpu_to_le64(ino);
+		sre.id = cpu_to_le64(id);
+
+		ret = append_padded_entry(sfl, blk, srb, &sre);
+		if (ret == 0)
+			ret = append_padded_entry(sfl, blk, srb, &sre);
+		BUG_ON(ret != 0);
+
+		diff = target - le32_to_cpu(srb->entry_bytes);
+	}
+}
+
+/*
  * The caller is dropping an ino/id because the tracking rbtree is full.
  * This loses information so we can't return any entries at or after the
  * one that we dropped.  Update end to the entry before the dropped
@@ -986,6 +1076,9 @@ int scoutfs_srch_rotate_log(struct super_block *sb,
 {
 	struct scoutfs_key key;
 	int ret;
+
+	if (sfl->ref.blkno && !force && scoutfs_trigger(sb, SRCH_FORCE_LOG_ROTATE))
+		force = true;
 
 	if (sfl->ref.blkno == 0 ||
 	    (!force && le64_to_cpu(sfl->blocks) < SCOUTFS_SRCH_LOG_BLOCK_LIMIT))
@@ -1462,7 +1555,7 @@ static int kway_merge(struct super_block *sb,
 		      struct scoutfs_block_writer *wri,
 		      struct scoutfs_srch_file *sfl,
 		      kway_get_t kway_get, kway_advance_t kway_adv,
-		      void **args, int nr)
+		      void **args, int nr, bool logs_input)
 {
 	DECLARE_SRCH_INFO(sb, srinf);
 	struct scoutfs_srch_block *srb = NULL;
@@ -1567,6 +1660,15 @@ static int kway_merge(struct super_block *sb,
 				blk++;
 			}
 
+			/* end sorted block on _SAFE offset for testing */
+			if (bl && le32_to_cpu(srb->entry_nr) == 1 && logs_input &&
+			    scoutfs_trigger(sb, SRCH_COMPACT_LOGS_PAD_SAFE)) {
+				pad_entries_at_safe(sfl, blk, srb);
+				scoutfs_block_put(sb, bl);
+				bl = NULL;
+				blk++;
+			}
+
 			scoutfs_inc_counter(sb, srch_compact_entry);
 
 		} else {
@@ -1609,6 +1711,8 @@ static int kway_merge(struct super_block *sb,
 			empty++;
 			ret = 0;
 		} else if (ret < 0) {
+			if (ret == -ENOANO) /* just testing trigger */
+				ret = 0;
 			goto out;
 		}
 
@@ -1816,7 +1920,7 @@ static int compact_logs(struct super_block *sb,
 	}
 
 	ret = kway_merge(sb, alloc, wri, &sc->out, kway_get_page, kway_adv_page,
-			 args, nr_pages);
+			 args, nr_pages, true);
 	if (ret < 0)
 		goto out;
 
@@ -1878,6 +1982,12 @@ static int kway_get_reader(struct super_block *sb,
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
 		return -EIO;
+	}
+
+	if (rdr->decoded_bytes == 0 && rdr->pos == SCOUTFS_SRCH_BLOCK_SAFE_BYTES &&
+	    scoutfs_trigger(sb, SRCH_MERGE_STOP_SAFE)) {
+		/* only used in testing */
+		return -ENOANO;
 	}
 
 	/* decode entry, possibly skipping start of the block */
@@ -1969,7 +2079,7 @@ static int compact_sorted(struct super_block *sb,
 	}
 
 	ret = kway_merge(sb, alloc, wri, &sc->out, kway_get_reader,
-			 kway_adv_reader, args, nr);
+			 kway_adv_reader, args, nr, false);
 
 	sc->flags |= SCOUTFS_SRCH_COMPACT_FLAG_DONE;
 	for (i = 0; i < nr; i++) {

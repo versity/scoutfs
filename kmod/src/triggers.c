@@ -39,6 +39,9 @@ struct scoutfs_triggers {
 
 static char *names[] = {
 	[SCOUTFS_TRIGGER_BLOCK_REMOVE_STALE] = "block_remove_stale",
+	[SCOUTFS_TRIGGER_SRCH_COMPACT_LOGS_PAD_SAFE] = "srch_compact_logs_pad_safe",
+	[SCOUTFS_TRIGGER_SRCH_FORCE_LOG_ROTATE] = "srch_force_log_rotate",
+	[SCOUTFS_TRIGGER_SRCH_MERGE_STOP_SAFE] = "srch_merge_stop_safe",
 	[SCOUTFS_TRIGGER_STATFS_LOCK_PURGE] = "statfs_lock_purge",
 };
 
