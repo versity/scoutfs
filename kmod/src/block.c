@@ -62,6 +62,9 @@ struct block_info {
 	KC_DEFINE_SHRINKER(shrinker);
 	struct work_struct free_work;
 	struct llist_head free_llist;
+
+	spinlock_t hack_lock;
+	struct page *hack_pages[2];
 };
 
 #define DECLARE_BLOCK_INFO(sb, name) \
@@ -1198,8 +1201,10 @@ static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
  * crc to the caller for them to check in their context.
  */
 static int sm_block_io(struct super_block *sb, struct block_device *bdev, unsigned int opf,
-		       u64 blkno, struct scoutfs_block_header *hdr, size_t len, __le32 *blk_crc)
+		       u64 blkno, struct scoutfs_block_header *hdr, size_t len, __le32 *blk_crc,
+		       bool check_crc)
 {
+	DECLARE_BLOCK_INFO(sb, binf);
 	struct scoutfs_block_header *pg_hdr;
 	struct sm_block_completion sbc;
 	struct page *page;
@@ -1251,8 +1256,48 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, unsign
 	ret = sbc.err;
 
 	if (ret == 0 && !op_is_write(opf)) {
+		static bool found = false;
+
 		memcpy(hdr, pg_hdr, len);
 		*blk_crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
+
+		if (!found && check_crc) {
+			struct scoutfs_block_header *hack_hdr;
+			int i;
+
+			if (*blk_crc != hdr->crc) {
+				found = true;
+				printk(KERN_ERR "read block with bad crc, calc 0x%08x != hdr 0x%08x\n",
+					le32_to_cpu(*blk_crc), le32_to_cpu(hdr->crc));
+				dump_stack();
+				print_hex_dump(KERN_ERR, "this bad ", DUMP_PREFIX_OFFSET,
+					       16, 1, page_address(page), SCOUTFS_BLOCK_SM_SIZE,
+					       false);
+				spin_lock(&binf->hack_lock);
+				for (i = 0; i < ARRAY_SIZE(binf->hack_pages); i++) {
+					hack_hdr = page_address(binf->hack_pages[i]);
+					if (hack_hdr->magic == hdr->magic) {
+						print_hex_dump(KERN_ERR, "last good ",
+							DUMP_PREFIX_OFFSET, 16, 1,
+							page_address(binf->hack_pages[i]),
+							SCOUTFS_BLOCK_SM_SIZE, false);
+						break;
+					}
+				}
+				spin_unlock(&binf->hack_lock);
+			} else {
+				/* save last good examples of a few block types */
+				spin_lock(&binf->hack_lock);
+				for (i = 0; i < ARRAY_SIZE(binf->hack_pages); i++) {
+					hack_hdr = page_address(binf->hack_pages[i]);
+					if (hack_hdr->magic == 0 || hack_hdr->magic == hdr->magic) {
+						swap(page, binf->hack_pages[i]);
+						break;
+					}
+				}
+				spin_unlock(&binf->hack_lock);
+			}
+		}
 	}
 out:
 	__free_page(page);
@@ -1262,16 +1307,16 @@ out:
 int scoutfs_block_read_sm(struct super_block *sb,
 			  struct block_device *bdev, u64 blkno,
 			  struct scoutfs_block_header *hdr, size_t len,
-			  __le32 *blk_crc)
+			  __le32 *blk_crc, bool check_crc)
 {
-	return sm_block_io(sb, bdev, REQ_OP_READ, blkno, hdr, len, blk_crc);
+	return sm_block_io(sb, bdev, REQ_OP_READ, blkno, hdr, len, blk_crc, check_crc);
 }
 
 int scoutfs_block_write_sm(struct super_block *sb,
 			   struct block_device *bdev, u64 blkno,
 			   struct scoutfs_block_header *hdr, size_t len)
 {
-	return sm_block_io(sb, bdev, REQ_OP_WRITE, blkno, hdr, len, NULL);
+	return sm_block_io(sb, bdev, REQ_OP_WRITE, blkno, hdr, len, NULL, false);
 }
 
 int scoutfs_block_setup(struct super_block *sb)
@@ -1279,6 +1324,7 @@ int scoutfs_block_setup(struct super_block *sb)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct block_info *binf;
 	int ret;
+	int i;
 
 	binf = kzalloc(sizeof(struct block_info), GFP_KERNEL);
 	if (!binf) {
@@ -1304,6 +1350,16 @@ int scoutfs_block_setup(struct super_block *sb)
 
 	sbi->block_info = binf;
 
+	spin_lock_init(&binf->hack_lock);
+	for (i = 0; i < ARRAY_SIZE(binf->hack_pages); i++) {
+		binf->hack_pages[i] = alloc_page(GFP_NOFS | __GFP_ZERO);
+		if (!binf->hack_pages[i]) {
+			ret = -ENOMEM;
+			goto out;
+		}
+	}
+
+
 	ret = 0;
 out:
 	if (ret)
@@ -1316,12 +1372,18 @@ void scoutfs_block_destroy(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct block_info *binf = SCOUTFS_SB(sb)->block_info;
+	int i;
 
 	if (binf) {
 		KC_UNREGISTER_SHRINKER(&binf->shrinker);
 		block_remove_all(sb);
 		flush_work(&binf->free_work);
 		rhashtable_destroy(&binf->ht);
+
+		for (i = 0; i < ARRAY_SIZE(binf->hack_pages); i++) {
+			if (binf->hack_pages[i])
+				__free_page(binf->hack_pages[i]);
+		}
 
 		kfree(binf);
 		sbi->block_info = NULL;

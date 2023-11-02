@@ -299,7 +299,7 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 		return -ENOMEM;
 
 	ret = scoutfs_block_read_sm(sb, bdev, SCOUTFS_SUPER_BLKNO, &super->hdr,
-				    sizeof(struct scoutfs_super_block), &calc);
+				    sizeof(struct scoutfs_super_block), &calc, true);
 	if (ret < 0)
 		goto out;
 
@@ -534,14 +534,14 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 
-	ret = scoutfs_read_supers(sb) ?:
+	ret = scoutfs_block_setup(sb) ?:
+		scoutfs_read_supers(sb) ?:
 	      scoutfs_debugfs_setup(sb) ?:
 	      scoutfs_setup_sysfs(sb) ?:
 	      scoutfs_setup_counters(sb) ?:
 	      scoutfs_options_setup(sb) ?:
 	      scoutfs_setup_triggers(sb) ?:
 	      scoutfs_fence_setup(sb) ?:
-	      scoutfs_block_setup(sb) ?:
 	      scoutfs_forest_setup(sb) ?:
 	      scoutfs_item_setup(sb) ?:
 	      scoutfs_inode_setup(sb) ?:
