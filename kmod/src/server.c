@@ -1966,9 +1966,7 @@ static int server_srch_get_compact(struct super_block *sb,
 	ret = scoutfs_srch_get_compact(sb, &server->alloc, &server->wri,
 				       &super->srch_root, rid, sc);
 	mutex_unlock(&server->srch_mutex);
-	if (ret == 0 && sc->nr == 0)
-		ret = -ENOENT;
-	if (ret < 0)
+	if (ret < 0 || (ret == 0 && sc->nr == 0))
 		goto apply;
 
 	mutex_lock(&server->alloc_mutex);

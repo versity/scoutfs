@@ -2179,7 +2179,7 @@ out:
 
 	scoutfs_block_writer_forget_all(sb, &wri);
 	if (!atomic_read(&srinf->shutdown)) {
-		delay = ret == 0 ? 0 : msecs_to_jiffies(SRCH_COMPACT_DELAY_MS);
+		delay = (sc->nr > 0 && ret == 0) ? 0 : msecs_to_jiffies(SRCH_COMPACT_DELAY_MS);
 		queue_delayed_work(srinf->workq, &srinf->compact_dwork, delay);
 	}
 
