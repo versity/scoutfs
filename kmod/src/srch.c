@@ -1978,7 +1978,7 @@ static int kway_get_reader(struct super_block *sb,
 	srb = rdr->bl->data;
 
 	if (rdr->pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
-	    rdr->skip >= SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
+	    rdr->skip > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
 		return -EIO;
