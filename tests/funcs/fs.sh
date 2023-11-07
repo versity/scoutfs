@@ -265,6 +265,15 @@ t_trigger_get() {
 	cat "$(t_trigger_path "$nr")/$which"
 }
 
+t_trigger_set() {
+	local which="$1"
+	local nr="$2"
+	local val="$3"
+	local path=$(t_trigger_path "$nr")
+
+	echo "$val" > "$path/$which"
+}
+
 t_trigger_show() {
 	local which="$1"
 	local string="$2"
@@ -276,9 +285,8 @@ t_trigger_show() {
 t_trigger_arm_silent() {
 	local which="$1"
 	local nr="$2"
-	local path=$(t_trigger_path "$nr")
 
-	echo 1 > "$path/$which"
+	t_trigger_set "$which" "$nr" 1
 }
 
 t_trigger_arm() {
