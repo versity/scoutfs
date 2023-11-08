@@ -1,4 +1,4 @@
-== snapshot errors
+== initialize per-mount values
 == arm compaction triggers
 trigger srch_compact_logs_pad_safe armed: 1
 trigger srch_merge_stop_safe armed: 1
@@ -10,72 +10,28 @@ trigger srch_compact_logs_pad_safe armed: 1
 trigger srch_merge_stop_safe armed: 1
 trigger srch_compact_logs_pad_safe armed: 1
 trigger srch_merge_stop_safe armed: 1
-== force lots of small rotated log files for compaction
+== compact more often
+== create padded sorted inputs by forcing log rotation
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
+trigger srch_compact_logs_pad_safe armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
+trigger srch_compact_logs_pad_safe armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
+trigger srch_compact_logs_pad_safe armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
 trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-trigger srch_force_log_rotate armed: 1
-== wait for compaction
-== test and disarm compaction triggers
-== verify triggers and errors
+trigger srch_compact_logs_pad_safe armed: 1
+== compaction of padded should stop at safe
+== verify no compaction errors
 == cleanup
