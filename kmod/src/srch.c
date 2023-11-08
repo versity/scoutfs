@@ -31,6 +31,8 @@
 #include "counters.h"
 #include "scoutfs_trace.h"
 #include "triggers.h"
+#include "sysfs.h"
+#include "msg.h"
 
 /*
  * This srch subsystem gives us a way to find inodes that have a given
@@ -69,10 +71,14 @@ struct srch_info {
 	atomic_t shutdown;
 	struct workqueue_struct *workq;
 	struct delayed_work compact_dwork;
+	struct scoutfs_sysfs_attrs ssa;
+	atomic_t compact_delay_ms;
 };
 
 #define DECLARE_SRCH_INFO(sb, name) \
 	struct srch_info *name = SCOUTFS_SB(sb)->srch_info
+#define DECLARE_SRCH_INFO_KOBJ(kobj, name) \
+	DECLARE_SRCH_INFO(SCOUTFS_SYSFS_ATTRS_SB(kobj), name)
 
 #define SRE_FMT "%016llx.%llu.%llu"
 #define SRE_ARG(sre)						\
@@ -2208,8 +2214,15 @@ static int delete_files(struct super_block *sb, struct scoutfs_alloc *alloc,
 	return ret;
 }
 
-/* wait 10s between compact attempts on error, immediate after success */
-#define SRCH_COMPACT_DELAY_MS (10 * MSEC_PER_SEC)
+static void queue_compact_work(struct srch_info *srinf, bool immediate)
+{
+	unsigned long delay;
+
+	if (!atomic_read(&srinf->shutdown)) {
+		delay = immediate ? 0 : msecs_to_jiffies(atomic_read(&srinf->compact_delay_ms));
+		queue_delayed_work(srinf->workq, &srinf->compact_dwork, delay);
+	}
+}
 
 /*
  * Get a compaction operation from the server, sort the entries from the
@@ -2237,7 +2250,6 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	struct super_block *sb = srinf->sb;
 	struct scoutfs_block_writer wri;
 	struct scoutfs_alloc alloc;
-	unsigned long delay;
 	int ret;
 	int err;
 
@@ -2288,13 +2300,55 @@ out:
 		scoutfs_inc_counter(sb, srch_compact_error);
 
 	scoutfs_block_writer_forget_all(sb, &wri);
-	if (!atomic_read(&srinf->shutdown)) {
-		delay = (sc->nr > 0 && ret == 0) ? 0 : msecs_to_jiffies(SRCH_COMPACT_DELAY_MS);
-		queue_delayed_work(srinf->workq, &srinf->compact_dwork, delay);
-	}
+	queue_compact_work(srinf, sc->nr > 0 && ret == 0);
 
 	kfree(sc);
 }
+
+static ssize_t compact_delay_ms_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	DECLARE_SRCH_INFO_KOBJ(kobj, srinf);
+
+	return snprintf(buf, PAGE_SIZE, "%u", atomic_read(&srinf->compact_delay_ms));
+}
+
+#define MIN_COMPACT_DELAY_MS MSEC_PER_SEC
+#define DEF_COMPACT_DELAY_MS (10 * MSEC_PER_SEC)
+#define MAX_COMPACT_DELAY_MS (60 * MSEC_PER_SEC)
+
+static ssize_t compact_delay_ms_store(struct kobject *kobj, struct kobj_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_SRCH_INFO(sb, srinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	u64 val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoll(nullterm, 0, &val);
+	if (ret < 0 || val < MIN_COMPACT_DELAY_MS || val > MAX_COMPACT_DELAY_MS) {
+		scoutfs_err(sb, "invalid compact_delay_ms value, must be between %lu and %lu",
+			    MIN_COMPACT_DELAY_MS, MAX_COMPACT_DELAY_MS);
+		return -EINVAL;
+	}
+
+	atomic_set(&srinf->compact_delay_ms, val);
+	cancel_delayed_work(&srinf->compact_dwork);
+	queue_compact_work(srinf, false);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(compact_delay_ms);
+
+static struct attribute *srch_attrs[] = {
+	SCOUTFS_ATTR_PTR(compact_delay_ms),
+	NULL,
+};
 
 void scoutfs_srch_destroy(struct super_block *sb)
 {
@@ -2311,6 +2365,8 @@ void scoutfs_srch_destroy(struct super_block *sb)
 		flush_workqueue(srinf->workq);
 		destroy_workqueue(srinf->workq);
 	}
+
+	scoutfs_sysfs_destroy_attrs(sb, &srinf->ssa);
 
 	kfree(srinf);
 	sbi->srch_info = NULL;
@@ -2329,7 +2385,14 @@ int scoutfs_srch_setup(struct super_block *sb)
 	srinf->sb = sb;
 	atomic_set(&srinf->shutdown, 0);
 	INIT_DELAYED_WORK(&srinf->compact_dwork, scoutfs_srch_compact_worker);
+	scoutfs_sysfs_init_attrs(sb, &srinf->ssa);
+	atomic_set(&srinf->compact_delay_ms, DEF_COMPACT_DELAY_MS);
+
 	sbi->srch_info = srinf;
+
+	ret = scoutfs_sysfs_create_attrs(sb, &srinf->ssa, srch_attrs, "srch");
+	if (ret < 0)
+		goto out;
 
 	srinf->workq = alloc_workqueue("scoutfs_srch_compact",
 				       WQ_NON_REENTRANT | WQ_UNBOUND |
@@ -2339,8 +2402,7 @@ int scoutfs_srch_setup(struct super_block *sb)
 		goto out;
 	}
 
-	queue_delayed_work(srinf->workq, &srinf->compact_dwork,
-			   msecs_to_jiffies(SRCH_COMPACT_DELAY_MS));
+	queue_compact_work(srinf, false);
 
 	ret = 0;
 out:
