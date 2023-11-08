@@ -2799,6 +2799,81 @@ TRACE_EVENT(scoutfs_omap_should_delete,
 		  SCSB_TRACE_ARGS, __entry->ino, __entry->nlink, __entry->ret)
 );
 
+#define SSCF_FMT "[bo %llu bs %llu es %llu]"
+#define SSCF_FIELDS(pref)					\
+	__field(__u64, pref##_blkno)				\
+	__field(__u64, pref##_blocks)				\
+	__field(__u64, pref##_entries)
+#define SSCF_ASSIGN(pref, sfl)					\
+	__entry->pref##_blkno = le64_to_cpu((sfl)->ref.blkno);	\
+	__entry->pref##_blocks = le64_to_cpu((sfl)->blocks);	\
+	__entry->pref##_entries = le64_to_cpu((sfl)->entries);
+#define SSCF_ENTRY_ARGS(pref)					\
+	__entry->pref##_blkno,					\
+	__entry->pref##_blocks,					\
+	__entry->pref##_entries
+
+DECLARE_EVENT_CLASS(scoutfs_srch_compact_class,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
+
+	TP_ARGS(sb, sc),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, id)
+		__field(__u8, nr)
+		__field(__u8, flags)
+		SSCF_FIELDS(out)
+		__field(__u64, in0_blk)
+		__field(__u64, in0_pos)
+		SSCF_FIELDS(in0)
+		__field(__u64, in1_blk)
+		__field(__u64, in1_pos)
+		SSCF_FIELDS(in1)
+		__field(__u64, in2_blk)
+		__field(__u64, in2_pos)
+		SSCF_FIELDS(in2)
+		__field(__u64, in3_blk)
+		__field(__u64, in3_pos)
+		SSCF_FIELDS(in3)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->id = le64_to_cpu(sc->id);
+		__entry->nr = sc->nr;
+		__entry->flags = sc->flags;
+		SSCF_ASSIGN(out, &sc->out)
+		__entry->in0_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in0_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in0, &sc->in[0].sfl)
+		__entry->in1_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in1_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in1, &sc->in[1].sfl)
+		__entry->in2_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in2_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in2, &sc->in[2].sfl)
+		__entry->in3_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in3_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in3, &sc->in[3].sfl)
+	),
+
+	TP_printk(SCSBF" id %llu nr %u flags 0x%x out "SSCF_FMT" in0 b %llu p %llu "SSCF_FMT" in1 b %llu p %llu "SSCF_FMT" in2 b %llu p %llu "SSCF_FMT" in3 b %llu p %llu "SSCF_FMT,
+		  SCSB_TRACE_ARGS, __entry->id, __entry->nr, __entry->flags, SSCF_ENTRY_ARGS(out),
+		  __entry->in0_blk, __entry->in0_pos, SSCF_ENTRY_ARGS(in0),
+		  __entry->in1_blk, __entry->in1_pos, SSCF_ENTRY_ARGS(in1),
+		  __entry->in2_blk, __entry->in2_pos, SSCF_ENTRY_ARGS(in2),
+		  __entry->in3_blk, __entry->in3_pos, SSCF_ENTRY_ARGS(in3))
+);
+DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_send,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
+	TP_ARGS(sb, sc)
+);
+DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_recv,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
+	TP_ARGS(sb, sc)
+);
+
 #endif /* _TRACE_SCOUTFS_H */
 
 /* This part must be outside protection */

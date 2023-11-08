@@ -2262,6 +2262,8 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	scoutfs_block_writer_init(sb, &wri);
 
 	ret = scoutfs_client_srch_get_compact(sb, sc);
+	if (ret >= 0)
+		trace_scoutfs_srch_compact_client_recv(sb, sc);
 	if (ret < 0 || sc->nr == 0)
 		goto out;
 
@@ -2290,6 +2292,7 @@ commit:
 	sc->meta_freed = alloc.freed;
 	sc->flags |= ret < 0 ? SCOUTFS_SRCH_COMPACT_FLAG_ERROR : 0;
 
+	trace_scoutfs_srch_compact_client_send(sb, sc);
 	err = scoutfs_client_srch_commit_compact(sb, sc);
 	if (err < 0 && ret == 0)
 		ret = err;
