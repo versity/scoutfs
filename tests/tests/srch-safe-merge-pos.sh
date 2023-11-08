@@ -47,7 +47,7 @@ for i in $(seq 1 $COMPACT_NR); do
 		t_trigger_arm srch_force_log_rotate $sv
 
 		seq -f "f-$i-$j-$SEQF" 1 10 | \
-			bulk_create_paths -S -d "$T_D0" > \
+			bulk_create_paths -X "scoutfs.srch.t-srch-safe-merge-pos" -d "$T_D0" > \
 			/dev/null
 		sync
 
