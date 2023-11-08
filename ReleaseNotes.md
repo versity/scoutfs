@@ -2,6 +2,18 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.18
+\
+*Nov 7, 2023*
+
+Fixed a bug where background srch file compaction could stop making
+forward progress if a partial compaction operation was committed at a
+specific byte offset in a block.  This would cause srch file searches to
+be progressively more expensive over time.  Once this fix is running
+background compaction will resume, bringing the cost of searches back
+down.
+
+---
 v1.17
 \
 *Oct 23, 2023*
