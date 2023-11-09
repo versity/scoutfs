@@ -66,7 +66,7 @@ while [ "$i" -lt "8" ]; do
 done
 # wait for srch compaction worker delay
 sleep 10
-rm -rf "$T_D0/single-block-*"
+find "$T_D0" -type f -name 'single-block-*' -delete
 
 echo "== create entries in current log"
 DIR="$T_D0/dir"
