@@ -80,7 +80,7 @@ int scoutfs_client_alloc_inodes(struct super_block *sb, u64 count,
 
 		if (*nr == 0)
 			ret = -ENOSPC;
-		else if (*ino + *nr < *ino)
+		else if ((*ino + (*nr - 1) < *ino) || (*nr < 0))
 			ret = -EINVAL;
 	}
 
