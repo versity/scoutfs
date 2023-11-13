@@ -4,10 +4,9 @@
 # block.  Resuming from that position would return an error and
 # compaction would stop making forward progress.
 #
-# We use triggers to make sure that we create the circumstance where a
-# sorted srch block ends at the _SAFE_BYTES offsset and that a merge
-# request stops with a partial block at that specific offset.  We then
-# watch error counters to make sure compaction doesn't get stuck.
+# We use triggers to pad the output of log compaction to end on the safe
+# offset and then cause compaction of those padded inputs to stop at the
+# safe offset.  Continuation will either succeed or return errors.  
 #
 
 # forcing rotation, so just a few
@@ -15,11 +14,20 @@ NR=10
 SEQF="%.20g"
 COMPACT_NR=4
 
-echo "== snapshot errors"
+echo "== initialize per-mount values"
 declare -a err
+declare -a compact_delay
 for nr in $(t_fs_nrs); do
 	err[$nr]=$(t_counter srch_compact_error $nr)
+	compact_delay[$nr]=$(cat $(t_sysfs_path $nr)/srch/compact_delay_ms)
 done
+restore_compact_delay()
+{
+	for nr in $(t_fs_nrs); do
+		echo ${compact_delay[$nr]} > $(t_sysfs_path $nr)/srch/compact_delay_ms
+	done
+}
+trap restore_compact_delay EXIT
 
 echo "== arm compaction triggers"
 for nr in $(t_fs_nrs); do
@@ -27,37 +35,50 @@ for nr in $(t_fs_nrs); do
 	t_trigger_arm srch_merge_stop_safe $nr
 done
 
-echo "== force lots of small rotated log files for compaction"
-sv=$(t_server_nr)
-iter=1
-while [ $iter -le $((COMPACT_NR * COMPACT_NR * COMPACT_NR)) ]; do
-	t_trigger_arm srch_force_log_rotate $sv
-
-	seq -f "f-$iter-$SEQF" 1 10 | src/bulk_create_paths -S -d "$T_D0" > /dev/null
-	sync
-
-	test "$(t_trigger_get srch_force_log_rotate $sv)" == "0" || \
-		t_fail "srch_force_log_rotate didn't trigger"
-
-	((iter++))
-done
-
-echo "== wait for compaction"
-sleep 15
-
-echo "== test and disarm compaction triggers"
-pad=0
-merge_stop=0
+echo "== compact more often"
 for nr in $(t_fs_nrs); do
-	test "$(t_trigger_get srch_compact_logs_pad_safe $nr)" == "0" && pad=1
-	t_trigger_set srch_compact_logs_pad_safe $nr 0
-	test "$(t_trigger_get srch_merge_stop_safe $nr)" == "0" && merge_stop=1
-	t_trigger_set srch_merge_stop_safe $nr 0
+	echo 1000 > $(t_sysfs_path $nr)/srch/compact_delay_ms
 done
 
-echo "== verify triggers and errors" 
-test $pad == 1 || t_fail "srch_compact_logs_pad_safe didn't trigger"
-test $merge_stop == 1 || t_fail "srch_merge_stop_safe didn't trigger"
+echo "== create padded sorted inputs by forcing log rotation"
+sv=$(t_server_nr)
+for i in $(seq 1 $COMPACT_NR); do
+	for j in $(seq 1 $COMPACT_NR); do
+		t_trigger_arm srch_force_log_rotate $sv
+
+		seq -f "f-$i-$j-$SEQF" 1 10 | \
+			bulk_create_paths -X "scoutfs.srch.t-srch-safe-merge-pos" -d "$T_D0" > \
+			/dev/null
+		sync
+
+		test "$(t_trigger_get srch_force_log_rotate $sv)" == "0" || \
+			t_fail "srch_force_log_rotate didn't trigger"
+	done
+
+	padded=0
+	while test $padded == 0 && sleep .5; do
+		for nr in $(t_fs_nrs); do
+			if [ "$(t_trigger_get srch_compact_logs_pad_safe $nr)" == "0" ]; then
+				t_trigger_arm srch_compact_logs_pad_safe $nr
+				padded=1
+				break
+			fi
+			test "$(t_counter srch_compact_error $nr)" == "${err[$nr]}" || \
+				t_fail "srch_compact_error counter increased on mount $nr"
+		done
+	done
+done
+
+echo "== compaction of padded should stop at safe"
+sleep 2
+for nr in $(t_fs_nrs); do
+	if [ "$(t_trigger_get srch_merge_stop_safe $nr)" == "0" ]; then
+		break
+	fi
+done
+
+echo "== verify no compaction errors"
+sleep 2
 for nr in $(t_fs_nrs); do
 	test "$(t_counter srch_compact_error $nr)" == "${err[$nr]}" || \
 		t_fail "srch_compact_error counter increased on mount $nr"

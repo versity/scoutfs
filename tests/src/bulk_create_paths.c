@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -35,10 +36,10 @@ struct opts {
 	unsigned int dry_run:1,
 		     ls_output:1,
 		     quiet:1,
-		     user_xattr:1,
-		     same_srch_xattr:1,
-		     group_srch_xattr:1,
-		     unique_srch_xattr:1;
+		     xattr_set:1,
+		     xattr_file:1,
+		     xattr_group:1;
+	char *xattr_name;
 };
 
 struct stats {
@@ -149,12 +150,31 @@ static void free_dir(struct dir *dir)
 	free(dir);
 }
 
+static size_t snprintf_off(void *buf, size_t sz, size_t off, char *fmt, ...)
+{
+	va_list ap;
+	int ret;
+
+	if (off >= sz)
+		return sz;
+
+	va_start(ap, fmt);
+	ret = vsnprintf(buf + off, sz - off, fmt, ap);
+	va_end(ap);
+
+	if (ret <= 0)
+		return sz;
+
+	return off + ret;
+}
+
 static void create_dir(struct dir *dir, struct opts *opts,
 		       struct stats *stats)
 {
 	struct str_list *s;
-	char name[100];
+	char name[256]; /* max len and null term */
 	char val = 'v';
+	size_t off;
 	int rc;
 	int i;
 
@@ -175,29 +195,21 @@ static void create_dir(struct dir *dir, struct opts *opts,
 		rc = mknod(s->str, S_IFREG | 0644, 0);
 		error_exit(rc, "mknod %s failed"ERRF, s->str, ERRA);
 
-		rc = 0;
-		if (rc == 0 && opts->user_xattr) {
-			strcpy(name, "user.scoutfs_bcp");
+		if (opts->xattr_set) {
+			off = snprintf_off(name, sizeof(name), 0, "%s", opts->xattr_name);
+			if (opts->xattr_file)
+				off = snprintf_off(name, sizeof(name), off,
+						   "-f-%lu", stats->files);
+			if (opts->xattr_group)
+				off = snprintf_off(name, sizeof(name), off,
+						   "-g-%lu", stats->files / 10000);
+
+			error_exit(off >= sizeof(name), "xattr name longer than 255 bytes");
+
 			rc = setxattr(s->str, name, &val, 1, 0);
-		}
-		if (rc == 0 && opts->same_srch_xattr) {
-			strcpy(name, "scoutfs.srch.scoutfs_bcp");
-			rc = setxattr(s->str, name, &val, 1, 0);
-		}
-		if (rc == 0 && opts->group_srch_xattr) {
-			snprintf(name, sizeof(name),
-				 "scoutfs.srch.scoutfs_bcp.group.%lu",
-				 stats->files / 10000);
-			rc = setxattr(s->str, name, &val, 1, 0);
-		}
-		if (rc == 0 && opts->unique_srch_xattr) {
-			snprintf(name, sizeof(name),
-				 "scoutfs.srch.scoutfs_bcp.unique.%lu",
-				 stats->files);
-			rc = setxattr(s->str, name, &val, 1, 0);
+			error_exit(rc, "setxattr %s %s failed"ERRF, s->str, name, ERRA);
 		}
 
-		error_exit(rc, "setxattr %s %s failed"ERRF, s->str, name, ERRA);
 
 		stats->files++;
 		rate_banner(opts, stats);
@@ -365,11 +377,10 @@ static void usage(void)
 	       " -d DIR | create all files in DIR top level directory\n"
 	       " -n     | dry run, only parse, don't create any files\n"
 	       " -q     | quiet, don't regularly print rates\n"
+	       " -F     | append \"-f-NR\" file nr to xattr name, requires -X\n"
+	       " -G     | append \"-g-NR\" file nr/10000 to xattr name, requires -X\n"
 	       " -L     | parse ls output; only reg, skip meta, paths at ./\n"
-	       " -X     | set the same user. xattr name in all files\n"
-	       " -S     | set the same .srch. xattr name in all files\n"
-	       " -G     | set a .srch. xattr name shared by groups of files\n"
-	       " -U     | set a unique .srch. xattr name in all files\n");
+	       " -X NAM | set named xattr in all files\n");
 }
 
 int main(int argc, char **argv)
@@ -386,7 +397,7 @@ int main(int argc, char **argv)
 
 	memset(&opts, 0, sizeof(opts));
 
-        while ((c = getopt(argc, argv, "d:nqLXSGU")) != -1) {
+        while ((c = getopt(argc, argv, "d:nqFGLX:")) != -1) {
                 switch(c) {
                 case 'd':
                         top_dir = strdup(optarg);
@@ -397,20 +408,19 @@ int main(int argc, char **argv)
                 case 'q':
                         opts.quiet = 1;
                         break;
+                case 'F':
+                        opts.xattr_file = 1;
+                        break;
+                case 'G':
+                        opts.xattr_group = 1;
+                        break;
                 case 'L':
                         opts.ls_output = 1;
                         break;
                 case 'X':
-                        opts.user_xattr = 1;
-                        break;
-                case 'S':
-                        opts.same_srch_xattr = 1;
-                        break;
-                case 'G':
-                        opts.group_srch_xattr = 1;
-                        break;
-                case 'U':
-                        opts.unique_srch_xattr = 1;
+			opts.xattr_set = 1;
+			opts.xattr_name = strdup(optarg);
+			error_exit(!opts.xattr_name, "error allocating xattr name");
                         break;
                 case '?':
                         printf("Unknown option '%c'\n", optopt);
@@ -418,6 +428,11 @@ int main(int argc, char **argv)
 			exit(1);
                 }
         }
+
+	error_exit(opts.xattr_file && !opts.xattr_set,
+		   "must specify xattr -X when appending file nr with -F");
+	error_exit(opts.xattr_group && !opts.xattr_set,
+		   "must specify xattr -X when appending file nr with -G");
 
 	if (!opts.dry_run) {
 		error_exit(!top_dir,
