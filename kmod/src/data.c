@@ -1730,6 +1730,9 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 	u64 off;
 	int ret = 0;
 
+	if (len == 0)
+		goto out;
+
 	if (WARN_ON_ONCE(sef & SEF_UNKNOWN) ||
 	    WARN_ON_ONCE(op & SCOUTFS_IOC_DWO_UNKNOWN) ||
 	    WARN_ON_ONCE(dw && !RB_EMPTY_NODE(&dw->node)) ||
