@@ -86,6 +86,7 @@ t_filter_dmesg()
 	re="$re|scoutfs .* critical transaction commit failure.*"
 
 	# change-devices causes loop device resizing
+	re="$re|loop: module loaded"
 	re="$re|loop[0-9].* detected capacity change from.*"
 
 	# ignore systemd-journal rotating
