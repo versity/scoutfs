@@ -326,16 +326,10 @@ unmount_all() {
 		cmd wait $p
 	done
 
-	# delete all temp meta devices
-	for dev in $(losetup --associated "$T_META_DEVICE" | cut -d : -f 1); do
-		if [ -e "$dev" ]; then
-			cmd losetup -d "$dev"
-		fi
-	done
-	# delete all temp data devices
-	for dev in $(losetup --associated "$T_DATA_DEVICE" | cut -d : -f 1); do
-		if [ -e "$dev" ]; then
-			cmd losetup -d "$dev"
+	# delete all temp devices
+	for dev in /dev/mapper/_scoutfs_test_*; do
+		if [ -b "$dev" ]; then
+			cmd dmsetup remove $dev
 		fi
 	done
 }
@@ -434,6 +428,12 @@ $T_UTILS/fenced/scoutfs-fenced > "$T_FENCED_LOG" 2>&1 &
 fenced_pid=$!
 fenced_log "started fenced pid $fenced_pid in the background"
 
+# setup dm tables
+echo "0 $(blockdev --getsz $T_META_DEVICE) linear $T_META_DEVICE 0" > \
+	$T_RESULTS/dmtable.meta
+echo "0 $(blockdev --getsz $T_DATA_DEVICE) linear $T_DATA_DEVICE 0" > \
+	$T_RESULTS/dmtable.data
+
 #
 # mount concurrently so that a quorum is present to elect the leader and
 # start a server.
@@ -442,10 +442,13 @@ msg "mounting $T_NR_MOUNTS mounts on meta $T_META_DEVICE data $T_DATA_DEVICE"
 pids=""
 for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 
-	meta_dev=$(losetup --find --show $T_META_DEVICE)
-	test -b "$meta_dev" || die "failed to create temp device $meta_dev"
-	data_dev=$(losetup --find --show $T_DATA_DEVICE)
-	test -b "$data_dev" || die "failed to create temp device $data_dev"
+	name="_scoutfs_test_meta_$i"
+	cmd dmsetup create "$name" --table "$(cat $T_RESULTS/dmtable.meta)"
+	meta_dev="/dev/mapper/$name"
+
+	name="_scoutfs_test_data_$i"
+	cmd dmsetup create "$name" --table "$(cat $T_RESULTS/dmtable.data)"
+	data_dev="/dev/mapper/$name"
 
 	dir="/mnt/test.$i"
 	test -d "$dir" || cmd mkdir -p "$dir"
