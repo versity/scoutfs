@@ -7,9 +7,11 @@ t_require_mounts 2
 
 COUNT=50000
 
-# Prep dirs for test. Each mount needs to make their own parent dir for
-# the createmany run, otherwise both dirs will end up in the same inode
-# group, causing updates to bounce that lock around.
+#
+# Prep dirs for test.  We have per-directory inode number allocators so
+# by putting each createmany in a per-mount dir they get their own inode
+# number region and cluster locks.
+#
 echo "== measure initial createmany"
 mkdir -p $T_D0/dir/0
 mkdir $T_D1/dir/1
@@ -17,18 +19,20 @@ mkdir $T_D1/dir/1
 echo "== measure initial createmany"
 START=$SECONDS
 createmany -o "$T_D0/file_" $COUNT >> $T_TMP.full
+sync
 SINGLE=$((SECONDS - START))
 echo single $SINGLE >> $T_TMP.full
 
 echo "== measure two concurrent createmany runs"
 START=$SECONDS
-createmany -o $T_D0/dir/0/file $COUNT > /dev/null &
+(cd $T_D0/dir/0; createmany -o ./file_ $COUNT > /dev/null) &
 pids="$!"
-createmany -o $T_D1/dir/1/file $COUNT > /dev/null &
+(cd $T_D1/dir/1; createmany -o ./file_ $COUNT > /dev/null) &
 pids="$pids $!"
 for p in $pids; do
         wait $p
 done
+sync
 BOTH=$((SECONDS - START))
 echo both $BOTH >> $T_TMP.full
 
@@ -41,7 +45,10 @@ echo both $BOTH >> $T_TMP.full
 # synchronized operation.
 FACTOR=200
 if [ "$BOTH" -gt $(($SINGLE*$FACTOR)) ]; then
-	echo "both createmany took $BOTH sec, more than $FACTOR x single $SINGLE sec"
+	t_fail "both createmany took $BOTH sec, more than $FACTOR x single $SINGLE sec"
 fi
+
+echo "== cleanup"
+find $T_D0/dir -delete
 
 t_pass
