@@ -7,6 +7,61 @@ t_filter_fs()
 }
 
 #
+# We can hit a spurious kasan warning that was fixed upstream:
+#
+#  e504e74cc3a2 x86/unwind/orc: Disable KASAN checking in the ORC unwinder, part 2
+#
+# KASAN can get mad when the unwinder doesn't find ORC metadata and
+# wanders up without using frames and hits the KASAN stack red zones.
+# We can ignore these messages.
+#
+# They're bracketed by:
+# [ 2687.690127] ==================================================================
+# [ 2687.691366] BUG: KASAN: stack-out-of-bounds in get_reg+0x1bc/0x230
+# ...
+# [ 2687.706220] ==================================================================
+# [ 2687.707284] Disabling lock debugging due to kernel taint
+#
+# That final lock debugging message may not be included.
+#
+ignore_harmless_unwind_kasan_stack_oob()
+{
+awk '
+        BEGIN {
+                in_soob = 0
+                soob_nr = 0
+        }
+        ( !in_soob && $0 ~ /==================================================================/ ) {
+                in_soob = 1
+                soob_nr = NR
+                saved = $0
+        }
+        ( in_soob == 1 && NR == (soob_nr + 1) ) {
+                if (match($0, /KASAN: stack-out-of-bounds in get_reg/) != 0) {
+                        in_soob = 2
+                } else {
+                        in_soob = 0
+                        print saved
+                }
+		saved=""
+        }
+        ( in_soob == 2 && $0 ~ /==================================================================/ ) {
+                in_soob = 3
+                soob_nr = NR
+        }
+        ( in_soob == 3 && NR > soob_nr && $0 !~ /Disabling lock debugging/ ) {
+                in_soob = 0
+        }
+        ( !in_soob ) { print $0 }
+        END {
+                if (saved) {
+                        print saved
+                }
+        }
+'
+}
+
+#
 # Filter out expected messages.  Putting messages here implies that
 # tests aren't relying on messages to discover failures.. they're
 # directly testing the result of whatever it is that's generating the
@@ -92,5 +147,6 @@ t_filter_dmesg()
 	# ignore systemd-journal rotating
 	re="$re|systemd-journald.*"
 
-	egrep -v "($re)" 
+	egrep -v "($re)" | \
+		ignore_harmless_unwind_kasan_stack_oob
 }
