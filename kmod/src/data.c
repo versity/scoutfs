@@ -1818,6 +1818,10 @@ int scoutfs_data_wait_check_iter(struct inode *inode, loff_t pos, struct iov_ite
 	size_t len;
 	int ret = 0;
 
+	if (!iter_is_iovec(iter))
+		return scoutfs_data_wait_check(inode, pos, count,
+					       sef, op, dw, lock);
+
 	for (iov = iter->iov; count > 0; iov++) {
 		len = iov->iov_len - off;
 		if (len == 0)
