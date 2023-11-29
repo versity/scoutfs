@@ -434,4 +434,8 @@ static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
 }
 #endif
 
+#ifndef KC_ITER_IS_IOVEC
+#define iter_is_iovec(iter) true
+#endif
+
 #endif
