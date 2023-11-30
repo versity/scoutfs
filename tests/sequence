@@ -21,6 +21,7 @@ srch-basic-functionality.sh
 simple-xattr-unit.sh
 retention-basic.sh
 totl-xattr-tag.sh
+quota.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
 lock-pr-cw-conflict.sh
