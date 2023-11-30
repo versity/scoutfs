@@ -19,6 +19,7 @@ srch-safe-merge-pos.sh
 srch-basic-functionality.sh
 simple-xattr-unit.sh
 totl-xattr-tag.sh
+quota.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
 lock-pr-cw-conflict.sh

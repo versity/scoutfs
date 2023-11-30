@@ -1,0 +1,40 @@
+== prepare dir with write perm for test ids
+== test assumes starting with no rules, empty list
+== add rule
+  7 13,L,- 15,L,- 17,L,- I 33 -
+== list is empty again after delete
+== can change limits without deleting
+  1 1,L,- 1,L,- 1,L,- I 100 -
+  1 1,L,- 1,L,- 1,L,- I 101 -
+  1 1,L,- 1,L,- 1,L,- I 99 -
+== wipe and restore rules in bulk
+  7 15,L,- 0,L,- 0,L,- I 33 -
+  7 14,L,- 0,L,- 0,L,- I 33 -
+  7 13,L,- 0,L,- 0,L,- I 33 -
+  7 12,L,- 0,L,- 0,L,- I 33 -
+  7 11,L,- 0,L,- 0,L,- I 33 -
+  7 10,L,- 0,L,- 0,L,- I 33 -
+  7 15,L,- 0,L,- 0,L,- I 33 -
+  7 14,L,- 0,L,- 0,L,- I 33 -
+  7 13,L,- 0,L,- 0,L,- I 33 -
+  7 12,L,- 0,L,- 0,L,- I 33 -
+  7 11,L,- 0,L,- 0,L,- I 33 -
+  7 10,L,- 0,L,- 0,L,- I 33 -
+== default rule prevents file creation
+touch: cannot touch '/mnt/test/test/quota/dir/file': Disk quota exceeded
+== decreasing totl allows file creation again
+== attr selecting rules prevent creation
+touch: cannot touch '/mnt/test/test/quota/dir/file': Disk quota exceeded
+touch: cannot touch '/mnt/test/test/quota/dir/file': Disk quota exceeded
+== multi attr selecting doesn't prevent partial
+touch: cannot touch '/mnt/test/test/quota/dir/file': Disk quota exceeded
+== op differentiates
+== higher priority rule applies
+touch: cannot touch '/mnt/test/test/quota/dir/file': Disk quota exceeded
+== data rules with total and count prevent write and fallocate
+dd: error writing '/mnt/test/test/quota/dir/file': Disk quota exceeded
+fallocate: fallocate failed: Disk quota exceeded
+dd: error writing '/mnt/test/test/quota/dir/file': Disk quota exceeded
+fallocate: fallocate failed: Disk quota exceeded
+== added rules work after bulk restore
+touch: cannot touch '/mnt/test/test/quota/dir/file': Disk quota exceeded
