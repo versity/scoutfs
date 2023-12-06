@@ -1254,6 +1254,17 @@ int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode,
 	return lock_key_range(sb, mode, flags, &start, &end, lock);
 }
 
+int scoutfs_lock_xattr_indx(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+			    struct scoutfs_lock **lock)
+{
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+
+	scoutfs_xattr_indx_get_range(&start, &end);
+
+	return lock_key_range(sb, mode, flags, &start, &end, lock);
+}
+
 int scoutfs_lock_quota(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
 		       struct scoutfs_lock **lock)
 {
