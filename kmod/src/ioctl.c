@@ -1461,6 +1461,130 @@ static long scoutfs_ioc_mod_quota_rule(struct file *file, unsigned long arg, boo
 	return scoutfs_quota_mod_rule(sb, is_add, &irule);
 }
 
+struct read_index_buf {
+	int nr;
+	int size;
+	struct scoutfs_ioctl_xattr_index_entry ents[0];
+};
+
+#define READ_INDEX_BUF_MAX_ENTS \
+	((PAGE_SIZE - sizeof(struct read_index_buf)) / \
+		sizeof(struct scoutfs_ioctl_xattr_index_entry))
+
+/*
+ * This doesn't filter out duplicates, the caller filters them out to
+ * catch duplicates between iteration calls.
+ */
+static int read_index_cb(struct scoutfs_key *key, void *val, unsigned int val_len, void *cb_arg)
+{
+	struct read_index_buf *rib = cb_arg;
+	struct scoutfs_ioctl_xattr_index_entry *ent = &rib->ents[rib->nr];
+	u64 xid;
+
+	if (val_len != 0)
+		return -EIO;
+
+	/* discard the xid, they're not exposed to ioctl callers */
+	scoutfs_xattr_get_indx_key(key, &ent->major, &ent->minor, &ent->ino, &xid);
+
+	if (++rib->nr == rib->size)
+		return rib->nr;
+
+	return -EAGAIN;
+}
+
+static long scoutfs_ioc_read_xattr_index(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_read_xattr_index __user *urxi = (void __user *)arg;
+	struct scoutfs_ioctl_xattr_index_entry __user *uents;
+	struct scoutfs_ioctl_xattr_index_entry *ent;
+	struct scoutfs_ioctl_xattr_index_entry prev;
+	struct scoutfs_ioctl_read_xattr_index rxi;
+	struct read_index_buf *rib;
+	struct page *page = NULL;
+	struct scoutfs_key first;
+	struct scoutfs_key last;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	int copied = 0;
+	int ret;
+	int i;
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&rxi, urxi, sizeof(rxi))) {
+		ret = -EFAULT;
+		goto out;
+	}
+	uents = (void __user *)rxi.entries_ptr;
+	rxi.entries_nr = min_t(u64, rxi.entries_nr, INT_MAX);
+
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	rib = page_address(page);
+
+	scoutfs_xattr_init_indx_key(&first, rxi.first.major, rxi.first.minor, rxi.first.ino, 0);
+	scoutfs_xattr_init_indx_key(&last, rxi.last.major, rxi.last.minor, rxi.last.ino, U64_MAX);
+	scoutfs_xattr_indx_get_range(&start, &end);
+
+	if (scoutfs_key_compare(&first, &last) > 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* 0 ino doesn't exist, can't ever match entry to return */
+	memset(&prev, 0, sizeof(prev));
+
+	while (copied < rxi.entries_nr) {
+		rib->nr = 0;
+		rib->size = min_t(u64, rxi.entries_nr - copied, READ_INDEX_BUF_MAX_ENTS);
+		ret = scoutfs_wkic_iterate(sb, &first, &last, &start, &end,
+					   read_index_cb, rib);
+		if (ret < 0)
+			goto out;
+		if (rib->nr == 0)
+			break;
+
+		/*
+		 * Copy entries to userspace, skipping duplicate entries
+		 * that can result from multiple xattrs indexing an
+		 * inode at the same position and which can span
+		 * multiple cache iterations.  (Comparing in order of
+		 * most likely to change to fail fast.)
+		 */
+		for (i = 0, ent = rib->ents; i < rib->nr; i++, ent++) {
+			if (ent->ino == prev.ino && ent->minor == prev.minor &&
+			    ent->major == prev.major)
+				continue;
+
+			if (copy_to_user(&uents[copied], ent, sizeof(*ent))) {
+				ret = -EFAULT;
+				goto out;
+			}
+
+			prev = *ent;
+			copied++;
+		}
+
+		scoutfs_xattr_init_indx_key(&first, prev.major, prev.minor, prev.ino, U64_MAX);
+		scoutfs_key_inc(&first);
+	}
+
+	ret = copied;
+out:
+	if (page)
+		__free_page(page);
+
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1508,6 +1632,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_mod_quota_rule(file, arg, true);
 	case SCOUTFS_IOC_DEL_QUOTA_RULE:
 		return scoutfs_ioc_mod_quota_rule(file, arg, false);
+	case SCOUTFS_IOC_READ_XATTR_INDEX:
+		return scoutfs_ioc_read_xattr_index(file, arg);
 	}
 
 	return -ENOTTY;

@@ -14,6 +14,7 @@
 #define SCOUTFS_FORMAT_VERSION_FEAT_RETENTION	2
 #define SCOUTFS_FORMAT_VERSION_FEAT_PROJECT_ID	2
 #define SCOUTFS_FORMAT_VERSION_FEAT_QUOTA	2
+#define SCOUTFS_FORMAT_VERSION_FEAT_INDX_TAG	2
 
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */
@@ -595,6 +596,7 @@ struct scoutfs_log_merge_freeing {
 #define SCOUTFS_ORPHAN_ZONE			8
 #define SCOUTFS_QUOTA_ZONE			10
 #define SCOUTFS_XATTR_TOTL_ZONE			12
+#define SCOUTFS_XATTR_INDX_ZONE			14
 #define SCOUTFS_FS_ZONE				16
 #define SCOUTFS_LOCK_ZONE			20
 /* Items only stored in server btrees */
