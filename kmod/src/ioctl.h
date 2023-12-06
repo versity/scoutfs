@@ -747,4 +747,26 @@ struct scoutfs_ioctl_get_quota_rules {
 #define SCOUTFS_IOC_DEL_QUOTA_RULE \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 22, struct scoutfs_ioctl_quota_rule)
 
+/*
+ * Inodes can be indexed in a global key space at a position determined
+ * by a single scoutfs.hide.indx xattr per inode.  The xattr sets the
+ * two index position values, with a being higher significance.
+ */
+struct scoutfs_ioctl_xattr_index_entry {
+	__u64 a;
+	__u64 b;
+	__u64 ino;
+};
+
+struct scoutfs_ioctl_read_xattr_index {
+	__u64 flags;
+	struct scoutfs_ioctl_xattr_index_entry first;
+	struct scoutfs_ioctl_xattr_index_entry last;
+	__u64 entries_ptr;
+	__u64 entries_nr;
+};
+
+#define SCOUTFS_IOC_READ_XATTR_INDEX \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 23, struct scoutfs_ioctl_read_xattr_index)
+
 #endif

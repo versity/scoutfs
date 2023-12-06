@@ -1481,6 +1481,109 @@ static long scoutfs_ioc_mod_quota_rule(struct file *file, unsigned long arg, boo
 	return scoutfs_quota_mod_rule(sb, is_add, &irule);
 }
 
+struct read_index_buf {
+	int nr;
+	int size;
+	struct scoutfs_ioctl_xattr_index_entry ents[0];
+};
+
+#define READ_INDEX_BUF_MAX_ENTS \
+	((PAGE_SIZE - sizeof(struct read_index_buf)) / \
+		sizeof(struct scoutfs_ioctl_xattr_index_entry))
+
+static int read_index_cb(struct scoutfs_key *key, void *val, unsigned int val_len, void *cb_arg)
+{
+	struct read_index_buf *rib = cb_arg;
+	struct scoutfs_ioctl_xattr_index_entry *ent = &rib->ents[rib->nr];
+
+	if (val_len != 0)
+		return -EIO;
+
+	ent->a = le64_to_cpu(key->skxi_a);
+	ent->b = le64_to_cpu(key->skxi_b);
+	ent->ino = le64_to_cpu(key->skxi_ino);
+
+	if (++rib->nr == rib->size)
+		return rib->nr;
+
+	return -EAGAIN;
+}
+
+static long scoutfs_ioc_read_xattr_index(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_read_xattr_index __user *urxi = (void __user *)arg;
+	struct scoutfs_ioctl_xattr_index_entry __user *uents;
+	struct scoutfs_ioctl_xattr_index_entry *ent;
+	struct scoutfs_ioctl_read_xattr_index rxi;
+	struct read_index_buf *rib;
+	struct page *page = NULL;
+	struct scoutfs_key first;
+	struct scoutfs_key last;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	int copied = 0;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&rxi, urxi, sizeof(rxi))) {
+		ret = -EFAULT;
+		goto out;
+	}
+	uents = (void __user *)rxi.entries_ptr;
+	rxi.entries_nr = min_t(u64, rxi.entries_nr, INT_MAX);
+
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	rib = page_address(page);
+
+	scoutfs_xattr_init_indx_key(&first, rxi.first.a, rxi.first.b, rxi.first.ino);
+	scoutfs_xattr_init_indx_key(&last, rxi.last.a, rxi.last.b, rxi.last.ino);
+	scoutfs_xattr_indx_get_range(&start, &end);
+
+	if (scoutfs_key_compare(&first, &last) > 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	while (copied < rxi.entries_nr) {
+		rib->nr = 0;
+		rib->size = min_t(u64, rxi.entries_nr - copied, READ_INDEX_BUF_MAX_ENTS);
+		ret = scoutfs_wkic_iterate(sb, &first, &last, &start, &end,
+					   read_index_cb, rib);
+		if (ret < 0)
+			goto out;
+		if (rib->nr == 0)
+			break;
+
+		if (copy_to_user(&uents[copied], rib->ents, rib->nr * sizeof(rib->ents[0]))) {
+			ret = -EFAULT;
+			goto out;
+		}
+
+		copied += rib->nr;
+
+		ent = &rib->ents[rib->nr - 1];
+		scoutfs_xattr_init_indx_key(&first, ent->a, ent->b, ent->ino);
+		scoutfs_key_inc(&first);
+	}
+
+	ret = copied;
+
+out:
+	if (page)
+		__free_page(page);
+
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1528,6 +1631,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_mod_quota_rule(file, arg, true);
 	case SCOUTFS_IOC_DEL_QUOTA_RULE:
 		return scoutfs_ioc_mod_quota_rule(file, arg, false);
+	case SCOUTFS_IOC_READ_XATTR_INDEX:
+		return scoutfs_ioc_read_xattr_index(file, arg);
 	}
 
 	return -ENOTTY;
