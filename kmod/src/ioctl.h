@@ -747,4 +747,21 @@ struct scoutfs_ioctl_get_quota_rules {
 #define SCOUTFS_IOC_DEL_QUOTA_RULE \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 22, struct scoutfs_ioctl_quota_rule)
 
+struct scoutfs_ioctl_xattr_index_entry {
+	__u64 a;
+	__u64 b;
+	__u64 ino;
+};
+
+struct scoutfs_ioctl_read_xattr_index {
+	__u64 flags;
+	struct scoutfs_ioctl_xattr_index_entry first;
+	struct scoutfs_ioctl_xattr_index_entry last;
+	__u64 entries_ptr;
+	__u64 entries_nr;
+};
+
+#define SCOUTFS_IOC_READ_XATTR_INDEX \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 22, struct scoutfs_ioctl_read_xattr_index)
+
 #endif
