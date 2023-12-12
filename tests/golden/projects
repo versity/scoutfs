@@ -1,0 +1,22 @@
+== default new files don't have project
+0
+== set new project on files and dirs
+/mnt/test.0/test/projects/file: 1
+/mnt/test.0/test/projects/dir: 1
+== can use interesting IDs
+2147483647
+2147483648
+4294967295
+9223372036854775807
+9223372036854775808
+18446744073709551615
+== created files and dirs inherit project id
+/mnt/test.0/test/projects/dir/file: 1
+/mnt/test.0/test/projects/dir/sub: 1
+== inheritance continues
+1
+== clearing project id stops inheritance
+/mnt/test.0/test/projects/dir/another-file: 0
+/mnt/test.0/test/projects/dir/another-sub: 0
+== o_tmpfile creations inherit dir
+1
