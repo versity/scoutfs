@@ -12,6 +12,7 @@ data-prealloc.sh
 setattr_more.sh
 offline-extent-waiting.sh
 move-blocks.sh
+projects.sh
 large-fragmented-free.sh
 enospc.sh
 srch-safe-merge-pos.sh
