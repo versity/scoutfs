@@ -439,6 +439,7 @@ DECLARE_EVENT_CLASS(scoutfs_trans_hold_release_class,
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->journal_info = (unsigned long)journal_info;
 		__entry->holders = holders;
+		__entry->ret = ret;
 	),
 
 	TP_printk(SCSBF" journal_info 0x%0lx holders %d ret %d",
