@@ -938,22 +938,24 @@ static int find_log_trees_item(struct super_block *sb,
 }
 
 /*
- * Find the next log_trees item from the key.  Fills the caller's log_trees and sets
- * the key past the returned log_trees for iteration.  Returns 0 when done, > 0 for each
- * item, and -errno on fatal errors.
+ * Find the log_trees item with the greatest nr for each rid.  Fills the
+ * caller's log_trees and sets the key before the returned log_trees for
+ * the next iteration.  Returns 0 when done, > 0 for each item, and
+ * -errno on fatal errors.
  */
-static int for_each_lt(struct super_block *sb, struct scoutfs_btree_root *root,
-		       struct scoutfs_key *key, struct scoutfs_log_trees *lt)
+static int for_each_rid_last_lt(struct super_block *sb, struct scoutfs_btree_root *root,
+				struct scoutfs_key *key, struct scoutfs_log_trees *lt)
 {
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	int ret;
 
-	ret = scoutfs_btree_next(sb, root, key, &iref);
+	ret = scoutfs_btree_prev(sb, root, key, &iref);
 	if (ret == 0) {
 		if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
 			memcpy(lt, iref.val, iref.val_len);
 			*key = *iref.key;
-			scoutfs_key_inc(key);
+			key->sklt_nr = 0;
+			scoutfs_key_dec(key);
 			ret = 1;
 		} else {
 			ret = -EIO;
@@ -1099,8 +1101,8 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		saw_finalized = false;
 		others_active = false;
 		ours_visible = false;
-		scoutfs_key_init_log_trees(&key, 0, 0);
-		while ((ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+		scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
+		while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
 
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
 				saw_finalized = true;
@@ -1132,9 +1134,9 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		}
 
 		/* send sync requests soon to give time to commit */
-		scoutfs_key_init_log_trees(&key, 0, 0);
+		scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
 		while (others_active &&
-		       (ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+		       (ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
 
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) ||
 			    (le64_to_cpu(each_lt.rid) == rid))
