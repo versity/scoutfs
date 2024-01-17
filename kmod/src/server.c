@@ -148,6 +148,8 @@ struct server_info {
 	struct scoutfs_quorum_config qconf;
 	/* a running server maintains a private dirty super */
 	struct scoutfs_super_block dirty_super;
+
+	u64 finalize_sent_seq;
 };
 
 #define DECLARE_SERVER_INFO(sb, name) \
@@ -1139,7 +1141,8 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		       (ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
 
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) ||
-			    (le64_to_cpu(each_lt.rid) == rid))
+			    (le64_to_cpu(each_lt.rid) == rid) ||
+			    (le64_to_cpu(each_lt.get_trans_seq) <= server->finalize_sent_seq))
 				continue;
 
 			ret = scoutfs_net_submit_request_node(sb, server->conn,
@@ -1158,6 +1161,8 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			err_str = "sending sync log tree request";
 			break;
 		}
+
+		server->finalize_sent_seq = scoutfs_server_seq(sb);
 
 		/* Finalize ours if it's visible to others */
 		if (ours_visible) {
@@ -4286,6 +4291,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
 
 	scoutfs_block_writer_init(sb, &server->wri);
+	server->finalize_sent_seq = 0;
 
 	/* first make sure no other servers are still running */
 	ret = scoutfs_quorum_fence_leaders(sb, &server->qconf, server->term);
