@@ -1785,43 +1785,29 @@ out:
  * Give the caller the last seq before outstanding client commits.  All
  * seqs up to and including this are stable, new client transactions can
  * only have greater seqs.
+ *
+ * For each rid, only its greatest log trees nr can be an open commit.
+ * We look at the last log_trees item for each client rid and record its
+ * trans seq if it hasn't been committed.
  */
 static int get_stable_trans_seq(struct super_block *sb, u64 *last_seq_ret)
 {
 	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	DECLARE_SERVER_INFO(sb, server);
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_log_trees *lt;
+	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
 	u64 last_seq = 0;
 	int ret;
 
 	last_seq = scoutfs_server_seq(sb) - 1;
-	scoutfs_key_init_log_trees(&key, 0, 0);
 
 	mutex_lock(&server->logs_mutex);
 
-	for (;; scoutfs_key_inc(&key)) {
-		ret = scoutfs_btree_next(sb, &super->logs_root, &key, &iref);
-		if (ret == 0) {
-			if (iref.val_len == sizeof(*lt)) {
-				lt = iref.val;
-				if ((le64_to_cpu(lt->get_trans_seq) >
-				     le64_to_cpu(lt->commit_trans_seq)) &&
-				     le64_to_cpu(lt->get_trans_seq) <= last_seq) {
-					last_seq = le64_to_cpu(lt->get_trans_seq) - 1;
-				}
-				key = *iref.key;
-			} else {
-				ret = -EIO;
-			}
-			scoutfs_btree_put_iref(&iref);
-		}
-		if (ret < 0) {
-			if (ret == -ENOENT) {
-				ret = 0;
-				break;
-			}
+	scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
+	while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &lt)) > 0) {
+		if ((le64_to_cpu(lt.get_trans_seq) > le64_to_cpu(lt.commit_trans_seq)) &&
+		     le64_to_cpu(lt.get_trans_seq) <= last_seq) {
+			last_seq = le64_to_cpu(lt.get_trans_seq) - 1;
 		}
 	}
 
