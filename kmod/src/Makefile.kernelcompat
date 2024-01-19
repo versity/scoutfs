@@ -378,3 +378,11 @@ endif
 ifneq (,$(shell grep 'int __printf.*register_shrinker.struct shrinker .shrinker,' include/linux/shrinker.h))
 ccflags-y += -DKC_SHRINKER_NAME
 endif
+
+#
+# v5.18-rc5-246-gf132ab7d3ab0
+#
+# mpage_readpage() is now replaced with mpage_read_folio.
+ifneq (,$(shell grep 'int mpage_read_folio.struct folio .folio' include/linux/mpage.h))
+ccflags-y += -DKC_MPAGE_READ_FOLIO
+endif
