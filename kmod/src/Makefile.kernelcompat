@@ -386,3 +386,11 @@ endif
 ifneq (,$(shell grep 'int mpage_read_folio.struct folio .folio' include/linux/mpage.h))
 ccflags-y += -DKC_MPAGE_READ_FOLIO
 endif
+
+#
+# v5.18-rc5-219-gb3992d1e2ebc
+#
+# block_write_begin() no longer is being passed aop_flags
+ifneq (,$(shell grep -C1 'int block_write_begin' include/linux/buffer_head.h | tail -n 2 | grep 'unsigned flags'))
+ccflags-y += -DKC_BLOCK_WRITE_BEGIN_AOP_FLAGS
+endif
