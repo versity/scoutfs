@@ -2693,7 +2693,7 @@ int scoutfs_item_setup(struct super_block *sb)
 
 	KC_INIT_SHRINKER_FUNCS(&cinf->shrinker, item_cache_count_objects,
 			       item_cache_scan_objects);
-	KC_REGISTER_SHRINKER(&cinf->shrinker);
+	KC_REGISTER_SHRINKER(&cinf->shrinker, "scoutfs-item_cache:" SCSBF, SCSB_ARGS(sb));
 #ifdef KC_CPU_NOTIFIER
         cinf->notifier.notifier_call = item_cpu_callback;
         register_hotcpu_notifier(&cinf->notifier);

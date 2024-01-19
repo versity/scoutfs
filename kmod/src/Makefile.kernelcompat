@@ -370,3 +370,11 @@ endif
 ifneq (,$(shell grep 'static inline bool iter_is_iovec' include/linux/uio.h))
 ccflags-y += -DKC_ITER_IS_IOVEC
 endif
+
+#
+# v5.19-rc4-52-ge33c267ab70d
+#
+# register_shrinker now requires a name, used for debug stats etc.
+ifneq (,$(shell grep 'int __printf.*register_shrinker.struct shrinker .shrinker,' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_NAME
+endif

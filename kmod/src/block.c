@@ -1297,7 +1297,7 @@ int scoutfs_block_setup(struct super_block *sb)
 	init_waitqueue_head(&binf->waitq);
 	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
 			       block_scan_objects);
-	KC_REGISTER_SHRINKER(&binf->shrinker);
+	KC_REGISTER_SHRINKER(&binf->shrinker, "scoutfs-block_info:" SCSBF, SCSB_ARGS(sb));
 	INIT_WORK(&binf->free_work, block_free_work);
 	init_llist_head(&binf->free_llist);
 

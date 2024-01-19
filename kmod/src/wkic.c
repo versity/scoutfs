@@ -1113,7 +1113,7 @@ int scoutfs_wkic_setup(struct super_block *sb)
 
 	winf->sb = sb;
 	KC_INIT_SHRINKER_FUNCS(&winf->shrinker, wkic_shrink_count, wkic_shrink_scan);
-	KC_REGISTER_SHRINKER(&winf->shrinker);
+	KC_REGISTER_SHRINKER(&winf->shrinker, "scoutfs-weak_item_info:" SCSBF, SCSB_ARGS(sb));
 
 	sbi->wkic_info = winf;
 	return 0;
