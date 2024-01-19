@@ -847,7 +847,10 @@ struct write_begin_data {
 
 static int scoutfs_write_begin(struct file *file,
 			       struct address_space *mapping, loff_t pos,
-			       unsigned len, unsigned flags,
+			       unsigned len,
+#ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
+			       unsigned flags,
+#endif
 			       struct page **pagep, void **fsdata)
 {
 	struct inode *inode = mapping->host;
@@ -882,13 +885,18 @@ retry:
 	if (ret < 0)
 		goto out;
 
+#ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
 	/* can't re-enter fs, have trans */
 	flags |= AOP_FLAG_NOFS;
+#endif
 
 	/* generic write_end updates i_size and calls dirty_inode */
 	ret = scoutfs_dirty_inode_item(inode, wbd->lock) ?:
-	      block_write_begin(mapping, pos, len, flags, pagep,
-				scoutfs_get_block_write);
+	      block_write_begin(mapping, pos, len,
+#ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
+				flags,
+#endif
+				pagep, scoutfs_get_block_write);
 	if (ret < 0) {
 		scoutfs_release_trans(sb);
 		scoutfs_inode_index_unlock(sb, &wbd->ind_locks);
