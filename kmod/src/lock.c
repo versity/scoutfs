@@ -1732,7 +1732,7 @@ int scoutfs_lock_setup(struct super_block *sb)
 	linfo->lock_range_tree = RB_ROOT;
 	KC_INIT_SHRINKER_FUNCS(&linfo->shrinker, lock_count_objects,
 			       lock_scan_objects);
-	KC_REGISTER_SHRINKER(&linfo->shrinker);
+	KC_REGISTER_SHRINKER(&linfo->shrinker, "scoutfs-lock_info:" SCSBF, SCSB_ARGS(sb));
 	INIT_LIST_HEAD(&linfo->lru_list);
 	INIT_WORK(&linfo->inv_work, lock_invalidate_worker);
 	INIT_LIST_HEAD(&linfo->inv_list);
