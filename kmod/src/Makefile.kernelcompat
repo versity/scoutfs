@@ -362,3 +362,11 @@ endif
 ifneq (,$(shell grep -s '^struct __kernel_old_timeval .' include/uapi/linux/time_types.h))
 ccflags-y += -DKC_KERNEL_OLD_TIMEVAL_STRUCT
 endif
+
+#
+# v5.19-rc4-52-ge33c267ab70d
+#
+# register_shrinker now requires a name, used for debug stats etc.
+ifneq (,$(shell grep 'int __printf.*register_shrinker.struct shrinker .shrinker,' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_NAME
+endif

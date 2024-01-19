@@ -197,7 +197,11 @@ struct timespec64 kc_current_time(struct inode *inode);
 } while (0)
 
 #define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(ptr, type, shrinker)
-#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(ptr))
+#ifdef KC_SHRINKER_NAME
+#define KC_REGISTER_SHRINKER register_shrinker
+#else
+#define KC_REGISTER_SHRINKER(ptr, fmt, ...) (register_shrinker(ptr))
+#endif /* KC_SHRINKER_NAME */
 #define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr))
 #define KC_SHRINKER_FN(ptr) (ptr)
 #else
@@ -224,7 +228,7 @@ struct kc_shrinker_wrapper {
 	_wrap->shrink.seeks = DEFAULT_SEEKS;			\
 } while (0)
 #define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(container_of(ptr, struct kc_shrinker_wrapper, shrink), type, shrinker)
-#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(ptr.shrink))
+#define KC_REGISTER_SHRINKER(ptr, fmt, ...) (register_shrinker(ptr.shrink))
 #define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr.shrink))
 #define KC_SHRINKER_FN(ptr) (ptr.shrink)
 
