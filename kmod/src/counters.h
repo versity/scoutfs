@@ -145,6 +145,7 @@
 	EXPAND_COUNTER(lock_shrink_work)			\
 	EXPAND_COUNTER(lock_unlock)				\
 	EXPAND_COUNTER(lock_wait)				\
+	EXPAND_COUNTER(log_merge_wait_timeout)			\
 	EXPAND_COUNTER(net_dropped_response)			\
 	EXPAND_COUNTER(net_send_bytes)				\
 	EXPAND_COUNTER(net_send_error)				\

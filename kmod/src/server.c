@@ -1052,21 +1052,13 @@ static int next_log_merge_item(struct super_block *sb,
  * abandoned log btree finalized.  If it takes too long each client has
  * a change to make forward progress before being asked to commit again.
  *
- * We're waiting on heavy state that is protected by mutexes and
- * transaction machinery.  It's tricky to recreate that state for
- * lightweight condition tests that don't change task state.  Instead of
- * trying to get that right, particularly as we unwind after success or
- * after timeouts, waiters use an unsatisfying poll.   Short enough to
- * not add terrible latency, given how heavy and infrequent this already
- * is, and long enough to not melt the cpu.  This could be tuned if it
- * becomes a problem.
- *
  * This can end up finalizing a new empty log btree if a new mount
  * happens to arrive at just the right time.  That's fine, merging will
  * ignore and tear down the empty input.
  */
-#define FINALIZE_POLL_MS	(11)
-#define FINALIZE_TIMEOUT_MS	(MSEC_PER_SEC / 2)
+#define FINALIZE_POLL_MIN_DELAY_MS	5U
+#define FINALIZE_POLL_MAX_DELAY_MS	100U
+#define FINALIZE_POLL_DELAY_GROWTH_PCT	150U
 static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_log_trees *lt,
 					u64 rid, struct commit_hold *hold)
 {
@@ -1074,8 +1066,10 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_range rng;
+	struct scoutfs_mount_options opts;
 	struct scoutfs_log_trees each_lt;
 	struct scoutfs_log_trees fin;
+	unsigned int delay_ms;
 	unsigned long timeo;
 	bool saw_finalized;
 	bool others_active;
@@ -1083,10 +1077,14 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 	bool ours_visible;
 	struct scoutfs_key key;
 	char *err_str = NULL;
+	ktime_t start;
 	int ret;
 	int err;
 
-	timeo = jiffies + msecs_to_jiffies(FINALIZE_TIMEOUT_MS);
+	scoutfs_options_read(sb, &opts);
+	timeo = jiffies + msecs_to_jiffies(opts.log_merge_wait_timeout_ms);
+	delay_ms = FINALIZE_POLL_MIN_DELAY_MS;
+	start = ktime_get_raw();
 
 	for (;;) {
 		/* nothing to do if there's already a merge in flight */
@@ -1201,13 +1199,16 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			if (ret < 0)
 				err_str = "applying commit before waiting for finalized";
 
-			msleep(FINALIZE_POLL_MS);
+			msleep(delay_ms);
+			delay_ms = min(delay_ms * FINALIZE_POLL_DELAY_GROWTH_PCT / 100,
+				       FINALIZE_POLL_MAX_DELAY_MS);
 
 			server_hold_commit(sb, hold);
 			mutex_lock(&server->logs_mutex);
 
 			/* done if we timed out */
 			if (time_after(jiffies, timeo)) {
+				scoutfs_inc_counter(sb, log_merge_wait_timeout);
 				ret = 0;
 				break;
 			}
