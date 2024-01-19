@@ -674,7 +674,11 @@ int scoutfs_get_block_write(struct inode *inode, sector_t iblock, struct buffer_
  * We can return errors from locking and checking offline extents.  The
  * page is unlocked if we return an error.
  */
+#ifdef KC_MPAGE_READ_FOLIO
+static int scoutfs_read_folio(struct file *file, struct folio *folio)
+#else
 static int scoutfs_readpage(struct file *file, struct page *page)
+#endif
 {
 	struct inode *inode = file->f_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -689,7 +693,11 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, flags, inode,
 				 &inode_lock);
 	if (ret < 0) {
+#ifdef KC_MPAGE_READ_FOLIO
+		unlock_page(&folio->page);
+#else
 		unlock_page(page);
+#endif
 		if (ret == -EAGAIN) {
 			flags &= ~SCOUTFS_LKF_NONBLOCK;
 			ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, flags,
@@ -704,12 +712,21 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	}
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
-		ret = scoutfs_data_wait_check(inode, page_offset(page),
+		ret = scoutfs_data_wait_check(inode,
+#ifdef KC_MPAGE_READ_FOLIO
+					      page_offset(&folio->page),
+#else
+					      page_offset(page),
+#endif
 					      PAGE_SIZE, SEF_OFFLINE,
 					      SCOUTFS_IOC_DWO_READ, &dw,
 					      inode_lock);
 		if (ret != 0) {
+#ifdef KC_MPAGE_READ_FOLIO
+			unlock_page(&folio->page);
+#else
 			unlock_page(page);
+#endif
 			scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 			scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 		}
@@ -722,7 +739,11 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 			return ret;
 	}
 
+#ifdef KC_MPAGE_READ_FOLIO
+	ret = mpage_read_folio(folio, scoutfs_get_block_read);
+#else
 	ret = mpage_readpage(page, scoutfs_get_block_read);
+#endif
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
@@ -1932,7 +1953,11 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 }
 
 const struct address_space_operations scoutfs_file_aops = {
+#ifdef KC_MPAGE_READ_FOLIO
+	.read_folio		= scoutfs_read_folio,
+#else
 	.readpage		= scoutfs_readpage,
+#endif
 #ifndef KC_FILE_AOPS_READAHEAD
 	.readpages		= scoutfs_readpages,
 #else
