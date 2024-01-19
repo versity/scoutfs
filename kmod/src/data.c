@@ -680,8 +680,14 @@ int scoutfs_get_block_write(struct inode *inode, sector_t iblock, struct buffer_
  * We can return errors from locking and checking offline extents.  The
  * page is unlocked if we return an error.
  */
+#ifdef KC_MPAGE_READ_FOLIO
+static int scoutfs_read_folio(struct file *file, struct folio *folio)
+{
+	struct page *page = &folio->page;
+#else
 static int scoutfs_readpage(struct file *file, struct page *page)
 {
+#endif
 	struct inode *inode = file->f_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
@@ -728,7 +734,11 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 			return ret;
 	}
 
+#ifdef KC_MPAGE_READ_FOLIO
+	ret = mpage_read_folio(folio, scoutfs_get_block_read);
+#else
 	ret = mpage_readpage(page, scoutfs_get_block_read);
+#endif
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
@@ -1891,7 +1901,11 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 }
 
 const struct address_space_operations scoutfs_file_aops = {
+#ifdef KC_MPAGE_READ_FOLIO
+	.read_folio		= scoutfs_read_folio,
+#else
 	.readpage		= scoutfs_readpage,
+#endif
 #ifndef KC_FILE_AOPS_READAHEAD
 	.readpages		= scoutfs_readpages,
 #else
