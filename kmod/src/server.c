@@ -416,6 +416,27 @@ static void server_hold_commit(struct super_block *sb, struct commit_hold *hold)
 }
 
 /*
+ * Return the higher of the avail or freed used by the active commit
+ * since this holder joined the commit.  This is *not* the amount used
+ * by the holder, we don't track per-holder alloc use.
+ */
+static u32 server_hold_alloc_used_since(struct super_block *sb, struct commit_hold *hold)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	u32 avail_used;
+	u32 freed_used;
+	u32 avail_now;
+	u32 freed_now;
+
+	scoutfs_alloc_meta_remaining(&server->alloc, &avail_now, &freed_now);
+
+	avail_used = hold->avail - avail_now;
+	freed_used = hold->freed - freed_now;
+
+	return max(avail_used, freed_used);
+}
+
+/*
  * This is called while holding the commit and returns once the commit
  * is successfully written.  Many holders can all wait for all holders
  * to drain before their shared commit is applied and they're all woken.
@@ -2474,9 +2495,11 @@ static void server_log_merge_free_work(struct work_struct *work)
 
 	while (!server_is_stopping(server)) {
 
-		server_hold_commit(sb, &hold);
-		mutex_lock(&server->logs_mutex);
-		commit = true;
+		if (!commit) {
+			server_hold_commit(sb, &hold);
+			mutex_lock(&server->logs_mutex);
+			commit = true;
+		}
 
 		ret = next_log_merge_item(sb, &super->log_merge,
 					  SCOUTFS_LOG_MERGE_FREEING_ZONE,
@@ -2523,12 +2546,14 @@ static void server_log_merge_free_work(struct work_struct *work)
 		/* freed blocks are in allocator, we *have* to update fr */
 		BUG_ON(ret < 0);
 
-		mutex_unlock(&server->logs_mutex);
-		ret = server_apply_commit(sb, &hold, ret);
-		commit = false;
-		if (ret < 0) {
-			err_str = "looping commit del/upd freeing item";
-			break;
+		if (server_hold_alloc_used_since(sb, &hold) >= COMMIT_HOLD_ALLOC_BUDGET / 2) {
+			mutex_unlock(&server->logs_mutex);
+			ret = server_apply_commit(sb, &hold, ret);
+			commit = false;
+			if (ret < 0) {
+				err_str = "looping commit del/upd freeing item";
+				break;
+			}
 		}
 	}
 
