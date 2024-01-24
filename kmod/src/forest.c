@@ -721,7 +721,8 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 	ret = scoutfs_btree_merge(sb, &alloc, &wri, &req.start, &req.end,
 				  &next, &comp.root, &inputs,
 				  !!(req.flags & cpu_to_le64(SCOUTFS_LOG_MERGE_REQUEST_SUBTREE)),
-				  SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT, 10);
+				  SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT, 10,
+				  (2 * 1024 * 1024));
 	if (ret == -ERANGE) {
 		comp.remain = next;
 		le64_add_cpu(&comp.flags, SCOUTFS_LOG_MERGE_COMP_REMAIN);
