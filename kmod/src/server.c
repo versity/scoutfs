@@ -1104,6 +1104,11 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
 		while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
 
+			trace_scoutfs_server_finalize_items(sb, rid, le64_to_cpu(each_lt.rid),
+							    le64_to_cpu(each_lt.nr),
+							    le64_to_cpu(each_lt.flags),
+							    le64_to_cpu(each_lt.get_trans_seq));
+
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
 				saw_finalized = true;
 			else if (le64_to_cpu(each_lt.rid) != rid)
@@ -1126,6 +1131,10 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		 */
 		finalize_ours = (lt->item_root.height > 2) ||
 				(le32_to_cpu(lt->meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW);
+
+		trace_scoutfs_server_finalize_decision(sb, rid, saw_finalized, others_active,
+						       ours_visible, finalize_ours, delay_ms,
+						       server->finalize_sent_seq);
 
 		/* done if we're not finalizing and there's no finalized */
 		if (!finalize_ours && !saw_finalized) {

@@ -2075,6 +2075,71 @@ TRACE_EVENT(scoutfs_trans_seq_last,
 		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
 );
 
+TRACE_EVENT(scoutfs_server_finalize_items,
+	TP_PROTO(struct super_block *sb, u64 rid, u64 item_rid, u64 item_nr, u64 item_flags,
+		 u64 item_get_trans_seq),
+
+	TP_ARGS(sb, rid, item_rid, item_nr, item_flags, item_get_trans_seq),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(__u64, item_rid)
+		__field(__u64, item_nr)
+		__field(__u64, item_flags)
+		__field(__u64, item_get_trans_seq)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->item_rid = item_rid;
+		__entry->item_nr = item_nr;
+		__entry->item_flags = item_flags;
+		__entry->item_get_trans_seq = item_get_trans_seq;
+	),
+
+	TP_printk(SCSBF" rid %016llx item_rid %016llx item_nr %llu item_flags 0x%llx item_get_trans_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->item_rid, __entry->item_nr,
+		  __entry->item_flags, __entry->item_get_trans_seq)
+);
+
+TRACE_EVENT(scoutfs_server_finalize_decision,
+	TP_PROTO(struct super_block *sb, u64 rid, bool saw_finalized, bool others_active,
+		 bool ours_visible, bool finalize_ours, unsigned int delay_ms,
+		 u64 finalize_sent_seq),
+
+	TP_ARGS(sb, rid, saw_finalized, others_active, ours_visible, finalize_ours, delay_ms,
+		finalize_sent_seq),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(bool, saw_finalized)
+		__field(bool, others_active)
+		__field(bool, ours_visible)
+		__field(bool, finalize_ours)
+		__field(unsigned int, delay_ms)
+		__field(__u64, finalize_sent_seq)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->saw_finalized = saw_finalized;
+		__entry->others_active = others_active;
+		__entry->ours_visible = ours_visible;
+		__entry->finalize_ours = finalize_ours;
+		__entry->delay_ms = delay_ms;
+		__entry->finalize_sent_seq = finalize_sent_seq;
+	),
+
+	TP_printk(SCSBF" rid %016llx saw_finalized %u others_active %u ours_visible %u finalize_ours %u delay_ms %u finalize_sent_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->saw_finalized, __entry->others_active,
+		  __entry->ours_visible, __entry->finalize_ours, __entry->delay_ms,
+		  __entry->finalize_sent_seq)
+);
+
 TRACE_EVENT(scoutfs_get_log_merge_status,
 	TP_PROTO(struct super_block *sb, u64 rid, struct scoutfs_key *next_range_key,
 		 u64 nr_requests, u64 nr_complete, u64 seq),
