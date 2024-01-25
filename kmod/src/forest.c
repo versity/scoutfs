@@ -68,6 +68,8 @@ struct forest_info {
 	struct delayed_work log_merge_dwork;
 
 	atomic64_t inode_count_delta;
+
+	struct dentry *dent;
 };
 
 #define DECLARE_FOREST_INFO(sb, name) \
@@ -750,6 +752,60 @@ resched:
 	queue_delayed_work(finf->workq, &finf->log_merge_dwork, delay);
 }
 
+static int count_log_trees(struct super_block *sb, struct scoutfs_key *key, u64 seq,
+			   u8 flags, void *val, int val_len, void *arg)
+{
+	u64 *count = arg;
+
+	(*count)++;
+	return 0;
+}
+
+static int debugfs_nr_log_trees_get(void *data, u64 *val)
+{
+	struct super_block *sb = data;
+	struct scoutfs_super_block *super = NULL;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	struct scoutfs_key key;
+	u64 count;
+	int ret;
+
+	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
+	if (!super) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = scoutfs_read_super(sb, super);
+	if (ret < 0)
+		goto out;
+
+	scoutfs_key_init_log_trees(&key, 0, 0);
+	count = 0;
+	for (;;) {
+		scoutfs_key_set_zeros(&start);
+		scoutfs_key_set_ones(&end);
+		ret = scoutfs_btree_read_items(sb, &super->logs_root, &key, &start, &end,
+					       count_log_trees, &count);
+		if (ret == -ENOENT || scoutfs_key_is_ones(&end))
+			break;
+		if (ret < 0)
+			goto out;
+
+		key = end;
+		scoutfs_key_inc(&key);
+	}
+
+	*val = count;
+	ret = 0;
+out:
+	kfree(super);
+	return ret ? -EIO : 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(fops_nr_log_trees, debugfs_nr_log_trees_get, NULL, "%llu\n");
+
 int scoutfs_forest_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
@@ -769,6 +825,13 @@ int scoutfs_forest_setup(struct super_block *sb)
 	INIT_DELAYED_WORK(&finf->log_merge_dwork,
 			  scoutfs_forest_log_merge_worker);
 	sbi->forest_info = finf;
+
+	finf->dent = debugfs_create_file("nr_log_trees", S_IFREG|S_IRUSR, sbi->debug_root, sb,
+					 &fops_nr_log_trees);
+	if (IS_ERR(finf->dent)) {
+		ret = PTR_ERR(finf->dent);
+		goto out;
+	}
 
 	finf->workq = alloc_workqueue("scoutfs_log_merge", WQ_NON_REENTRANT |
 				      WQ_UNBOUND | WQ_HIGHPRI, 0);
@@ -799,6 +862,8 @@ void scoutfs_forest_stop(struct super_block *sb)
 
 	if (finf && finf->workq) {
 		cancel_delayed_work_sync(&finf->log_merge_dwork);
+		if (!IS_ERR_OR_NULL(finf->dent))
+			debugfs_remove(finf->dent);
 		destroy_workqueue(finf->workq);
 	}
 }
