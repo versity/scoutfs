@@ -1200,7 +1200,7 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			mutex_lock(&server->logs_mutex);
 
 			/* done if we timed out */
-			if (time_after(jiffies, timeo)) {
+			if (1 || time_after(jiffies, timeo)) {
 				ret = 0;
 				break;
 			}
