@@ -148,6 +148,8 @@ struct server_info {
 	struct scoutfs_quorum_config qconf;
 	/* a running server maintains a private dirty super */
 	struct scoutfs_super_block dirty_super;
+
+	u64 finalize_sent_seq;
 };
 
 #define DECLARE_SERVER_INFO(sb, name) \
@@ -411,6 +413,27 @@ static void server_hold_commit(struct super_block *sb, struct commit_hold *hold)
 
 	scoutfs_inc_counter(sb, server_commit_hold);
 	wait_event(cusers->waitq, hold_commit(sb, server, cusers, hold));
+}
+
+/*
+ * Return the higher of the avail or freed used by the active commit
+ * since this holder joined the commit.  This is *not* the amount used
+ * by the holder, we don't track per-holder alloc use.
+ */
+static u32 server_hold_alloc_used_since(struct super_block *sb, struct commit_hold *hold)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	u32 avail_used;
+	u32 freed_used;
+	u32 avail_now;
+	u32 freed_now;
+
+	scoutfs_alloc_meta_remaining(&server->alloc, &avail_now, &freed_now);
+
+	avail_used = hold->avail - avail_now;
+	freed_used = hold->freed - freed_now;
+
+	return max(avail_used, freed_used);
 }
 
 /*
@@ -938,22 +961,24 @@ static int find_log_trees_item(struct super_block *sb,
 }
 
 /*
- * Find the next log_trees item from the key.  Fills the caller's log_trees and sets
- * the key past the returned log_trees for iteration.  Returns 0 when done, > 0 for each
- * item, and -errno on fatal errors.
+ * Find the log_trees item with the greatest nr for each rid.  Fills the
+ * caller's log_trees and sets the key before the returned log_trees for
+ * the next iteration.  Returns 0 when done, > 0 for each item, and
+ * -errno on fatal errors.
  */
-static int for_each_lt(struct super_block *sb, struct scoutfs_btree_root *root,
-		       struct scoutfs_key *key, struct scoutfs_log_trees *lt)
+static int for_each_rid_last_lt(struct super_block *sb, struct scoutfs_btree_root *root,
+				struct scoutfs_key *key, struct scoutfs_log_trees *lt)
 {
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	int ret;
 
-	ret = scoutfs_btree_next(sb, root, key, &iref);
+	ret = scoutfs_btree_prev(sb, root, key, &iref);
 	if (ret == 0) {
 		if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
 			memcpy(lt, iref.val, iref.val_len);
 			*key = *iref.key;
-			scoutfs_key_inc(key);
+			key->sklt_nr = 0;
+			scoutfs_key_dec(key);
 			ret = 1;
 		} else {
 			ret = -EIO;
@@ -1048,21 +1073,13 @@ static int next_log_merge_item(struct super_block *sb,
  * abandoned log btree finalized.  If it takes too long each client has
  * a change to make forward progress before being asked to commit again.
  *
- * We're waiting on heavy state that is protected by mutexes and
- * transaction machinery.  It's tricky to recreate that state for
- * lightweight condition tests that don't change task state.  Instead of
- * trying to get that right, particularly as we unwind after success or
- * after timeouts, waiters use an unsatisfying poll.   Short enough to
- * not add terrible latency, given how heavy and infrequent this already
- * is, and long enough to not melt the cpu.  This could be tuned if it
- * becomes a problem.
- *
  * This can end up finalizing a new empty log btree if a new mount
  * happens to arrive at just the right time.  That's fine, merging will
  * ignore and tear down the empty input.
  */
-#define FINALIZE_POLL_MS	(11)
-#define FINALIZE_TIMEOUT_MS	(MSEC_PER_SEC / 2)
+#define FINALIZE_POLL_MIN_DELAY_MS	5U
+#define FINALIZE_POLL_MAX_DELAY_MS	100U
+#define FINALIZE_POLL_DELAY_GROWTH_PCT	150U
 static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_log_trees *lt,
 					u64 rid, struct commit_hold *hold)
 {
@@ -1070,8 +1087,10 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_range rng;
+	struct scoutfs_mount_options opts;
 	struct scoutfs_log_trees each_lt;
 	struct scoutfs_log_trees fin;
+	unsigned int delay_ms;
 	unsigned long timeo;
 	bool saw_finalized;
 	bool others_active;
@@ -1079,10 +1098,14 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 	bool ours_visible;
 	struct scoutfs_key key;
 	char *err_str = NULL;
+	ktime_t start;
 	int ret;
 	int err;
 
-	timeo = jiffies + msecs_to_jiffies(FINALIZE_TIMEOUT_MS);
+	scoutfs_options_read(sb, &opts);
+	timeo = jiffies + msecs_to_jiffies(opts.log_merge_wait_timeout_ms);
+	delay_ms = FINALIZE_POLL_MIN_DELAY_MS;
+	start = ktime_get_raw();
 
 	for (;;) {
 		/* nothing to do if there's already a merge in flight */
@@ -1099,8 +1122,13 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		saw_finalized = false;
 		others_active = false;
 		ours_visible = false;
-		scoutfs_key_init_log_trees(&key, 0, 0);
-		while ((ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+		scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
+		while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+
+			trace_scoutfs_server_finalize_items(sb, rid, le64_to_cpu(each_lt.rid),
+							    le64_to_cpu(each_lt.nr),
+							    le64_to_cpu(each_lt.flags),
+							    le64_to_cpu(each_lt.get_trans_seq));
 
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
 				saw_finalized = true;
@@ -1125,6 +1153,10 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		finalize_ours = (lt->item_root.height > 2) ||
 				(le32_to_cpu(lt->meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW);
 
+		trace_scoutfs_server_finalize_decision(sb, rid, saw_finalized, others_active,
+						       ours_visible, finalize_ours, delay_ms,
+						       server->finalize_sent_seq);
+
 		/* done if we're not finalizing and there's no finalized */
 		if (!finalize_ours && !saw_finalized) {
 			ret = 0;
@@ -1132,12 +1164,13 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		}
 
 		/* send sync requests soon to give time to commit */
-		scoutfs_key_init_log_trees(&key, 0, 0);
+		scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
 		while (others_active &&
-		       (ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+		       (ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
 
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) ||
-			    (le64_to_cpu(each_lt.rid) == rid))
+			    (le64_to_cpu(each_lt.rid) == rid) ||
+			    (le64_to_cpu(each_lt.get_trans_seq) <= server->finalize_sent_seq))
 				continue;
 
 			ret = scoutfs_net_submit_request_node(sb, server->conn,
@@ -1156,6 +1189,8 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			err_str = "sending sync log tree request";
 			break;
 		}
+
+		server->finalize_sent_seq = scoutfs_server_seq(sb);
 
 		/* Finalize ours if it's visible to others */
 		if (ours_visible) {
@@ -1194,13 +1229,16 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			if (ret < 0)
 				err_str = "applying commit before waiting for finalized";
 
-			msleep(FINALIZE_POLL_MS);
+			msleep(delay_ms);
+			delay_ms = min(delay_ms * FINALIZE_POLL_DELAY_GROWTH_PCT / 100,
+				       FINALIZE_POLL_MAX_DELAY_MS);
 
 			server_hold_commit(sb, hold);
 			mutex_lock(&server->logs_mutex);
 
 			/* done if we timed out */
 			if (time_after(jiffies, timeo)) {
+				scoutfs_inc_counter(sb, log_merge_wait_timeout);
 				ret = 0;
 				break;
 			}
@@ -1783,43 +1821,29 @@ out:
  * Give the caller the last seq before outstanding client commits.  All
  * seqs up to and including this are stable, new client transactions can
  * only have greater seqs.
+ *
+ * For each rid, only its greatest log trees nr can be an open commit.
+ * We look at the last log_trees item for each client rid and record its
+ * trans seq if it hasn't been committed.
  */
 static int get_stable_trans_seq(struct super_block *sb, u64 *last_seq_ret)
 {
 	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	DECLARE_SERVER_INFO(sb, server);
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_log_trees *lt;
+	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
 	u64 last_seq = 0;
 	int ret;
 
 	last_seq = scoutfs_server_seq(sb) - 1;
-	scoutfs_key_init_log_trees(&key, 0, 0);
 
 	mutex_lock(&server->logs_mutex);
 
-	for (;; scoutfs_key_inc(&key)) {
-		ret = scoutfs_btree_next(sb, &super->logs_root, &key, &iref);
-		if (ret == 0) {
-			if (iref.val_len == sizeof(*lt)) {
-				lt = iref.val;
-				if ((le64_to_cpu(lt->get_trans_seq) >
-				     le64_to_cpu(lt->commit_trans_seq)) &&
-				     le64_to_cpu(lt->get_trans_seq) <= last_seq) {
-					last_seq = le64_to_cpu(lt->get_trans_seq) - 1;
-				}
-				key = *iref.key;
-			} else {
-				ret = -EIO;
-			}
-			scoutfs_btree_put_iref(&iref);
-		}
-		if (ret < 0) {
-			if (ret == -ENOENT) {
-				ret = 0;
-				break;
-			}
+	scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
+	while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &lt)) > 0) {
+		if ((le64_to_cpu(lt.get_trans_seq) > le64_to_cpu(lt.commit_trans_seq)) &&
+		     le64_to_cpu(lt.get_trans_seq) <= last_seq) {
+			last_seq = le64_to_cpu(lt.get_trans_seq) - 1;
 		}
 	}
 
@@ -2471,9 +2495,11 @@ static void server_log_merge_free_work(struct work_struct *work)
 
 	while (!server_is_stopping(server)) {
 
-		server_hold_commit(sb, &hold);
-		mutex_lock(&server->logs_mutex);
-		commit = true;
+		if (!commit) {
+			server_hold_commit(sb, &hold);
+			mutex_lock(&server->logs_mutex);
+			commit = true;
+		}
 
 		ret = next_log_merge_item(sb, &super->log_merge,
 					  SCOUTFS_LOG_MERGE_FREEING_ZONE,
@@ -2520,12 +2546,14 @@ static void server_log_merge_free_work(struct work_struct *work)
 		/* freed blocks are in allocator, we *have* to update fr */
 		BUG_ON(ret < 0);
 
-		mutex_unlock(&server->logs_mutex);
-		ret = server_apply_commit(sb, &hold, ret);
-		commit = false;
-		if (ret < 0) {
-			err_str = "looping commit del/upd freeing item";
-			break;
+		if (server_hold_alloc_used_since(sb, &hold) >= COMMIT_HOLD_ALLOC_BUDGET / 2) {
+			mutex_unlock(&server->logs_mutex);
+			ret = server_apply_commit(sb, &hold, ret);
+			commit = false;
+			if (ret < 0) {
+				err_str = "looping commit del/upd freeing item";
+				break;
+			}
 		}
 	}
 
@@ -4298,6 +4326,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
 
 	scoutfs_block_writer_init(sb, &server->wri);
+	server->finalize_sent_seq = 0;
 
 	/* first make sure no other servers are still running */
 	ret = scoutfs_quorum_fence_leaders(sb, &server->qconf, server->term);

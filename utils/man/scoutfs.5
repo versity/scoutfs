@@ -55,6 +55,19 @@ with initial sparse regions (perhaps by multiple threads writing to
 different regions) and wasted space isn't an issue (perhaps because the
 file population contains few small files).
 .TP
+.B log_merge_wait_timeout_ms=<number>
+This option sets the amount of time, in milliseconds, that log merge
+creation can wait before timing out.  This setting is per-mount, only
+changes the behavior of that mount, and only affects the server when it
+is running in that mount.
+.sp
+This determines how long it may take for mounts to synchronize
+committing their log trees to create a log merge operation.  Setting it
+too high can create long latencies in the event that a mount takes a
+long time to commit their log.  Setting it too low can result in the
+creation of excessive numbers of log trees that are never merged.  The
+default is 500 and it can not be less than 100 nor greater than 60000.
+.TP
 .B metadev_path=<device>
 The metadev_path option specifies the path to the block device that
 contains the filesystem's metadata.

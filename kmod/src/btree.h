@@ -119,7 +119,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 			struct scoutfs_key *next_ret,
 			struct scoutfs_btree_root *root,
 			struct list_head *input_list,
-			bool subtree, int dirty_limit, int alloc_low);
+			bool subtree, int dirty_limit, int alloc_low, int merge_window);
 
 int scoutfs_btree_free_blocks(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,

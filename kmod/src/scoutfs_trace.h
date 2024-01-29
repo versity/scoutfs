@@ -1747,21 +1747,41 @@ TRACE_EVENT(scoutfs_btree_merge,
 		  sk_trace_args(end))
 );
 
+TRACE_EVENT(scoutfs_btree_merge_read_range,
+	TP_PROTO(struct super_block *sb, struct scoutfs_key *start, struct scoutfs_key *end,
+		 int size),
+
+	TP_ARGS(sb, start, end, size),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		sk_trace_define(start)
+		sk_trace_define(end)
+		__field(int, size)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		sk_trace_assign(start, start);
+		sk_trace_assign(end, end);
+		__entry->size = size;
+	),
+
+	TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" size %d",
+		  SCSB_TRACE_ARGS, sk_trace_args(start), sk_trace_args(end), __entry->size)
+);
+
 TRACE_EVENT(scoutfs_btree_merge_items,
 	TP_PROTO(struct super_block *sb,
-		 struct scoutfs_btree_root *m_root,
 		 struct scoutfs_key *m_key, int m_val_len,
 		 struct scoutfs_btree_root *f_root,
 		 struct scoutfs_key *f_key, int f_val_len,
 		 int is_del),
 
-	TP_ARGS(sb, m_root, m_key, m_val_len, f_root, f_key, f_val_len, is_del),
+	TP_ARGS(sb, m_key, m_val_len, f_root, f_key, f_val_len, is_del),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
-		__field(__u64, m_root_blkno)
-		__field(__u64, m_root_seq)
-		__field(__u8, m_root_height)
 		sk_trace_define(m_key)
 		__field(int, m_val_len)
 		__field(__u64, f_root_blkno)
@@ -1774,10 +1794,6 @@ TRACE_EVENT(scoutfs_btree_merge_items,
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
-		__entry->m_root_blkno = m_root ?
-					le64_to_cpu(m_root->ref.blkno) : 0;
-		__entry->m_root_seq = m_root ? le64_to_cpu(m_root->ref.seq) : 0;
-		__entry->m_root_height = m_root ? m_root->height : 0;
 		sk_trace_assign(m_key, m_key);
 		__entry->m_val_len = m_val_len;
 		__entry->f_root_blkno = f_root ?
@@ -1789,11 +1805,9 @@ TRACE_EVENT(scoutfs_btree_merge_items,
 		__entry->is_del = !!is_del;
 	),
 
-	TP_printk(SCSBF" merge item root blkno %llu seq %llu height %u key "SK_FMT" val_len %d, fs item root blkno %llu seq %llu height %u key "SK_FMT" val_len %d, is_del %d",
-		  SCSB_TRACE_ARGS, __entry->m_root_blkno, __entry->m_root_seq,
-		  __entry->m_root_height, sk_trace_args(m_key),
-		  __entry->m_val_len, __entry->f_root_blkno,
-		  __entry->f_root_seq, __entry->f_root_height,
+	TP_printk(SCSBF" merge item key "SK_FMT" val_len %d, fs item root blkno %llu seq %llu height %u key "SK_FMT" val_len %d, is_del %d",
+		  SCSB_TRACE_ARGS, sk_trace_args(m_key), __entry->m_val_len,
+		  __entry->f_root_blkno, __entry->f_root_seq, __entry->f_root_height,
 		  sk_trace_args(f_key), __entry->f_val_len, __entry->is_del)
 );
 
@@ -2074,6 +2088,71 @@ TRACE_EVENT(scoutfs_trans_seq_last,
 
 	TP_printk(SCSBF" rid %016llx trans_seq %llu",
 		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
+);
+
+TRACE_EVENT(scoutfs_server_finalize_items,
+	TP_PROTO(struct super_block *sb, u64 rid, u64 item_rid, u64 item_nr, u64 item_flags,
+		 u64 item_get_trans_seq),
+
+	TP_ARGS(sb, rid, item_rid, item_nr, item_flags, item_get_trans_seq),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(__u64, item_rid)
+		__field(__u64, item_nr)
+		__field(__u64, item_flags)
+		__field(__u64, item_get_trans_seq)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->item_rid = item_rid;
+		__entry->item_nr = item_nr;
+		__entry->item_flags = item_flags;
+		__entry->item_get_trans_seq = item_get_trans_seq;
+	),
+
+	TP_printk(SCSBF" rid %016llx item_rid %016llx item_nr %llu item_flags 0x%llx item_get_trans_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->item_rid, __entry->item_nr,
+		  __entry->item_flags, __entry->item_get_trans_seq)
+);
+
+TRACE_EVENT(scoutfs_server_finalize_decision,
+	TP_PROTO(struct super_block *sb, u64 rid, bool saw_finalized, bool others_active,
+		 bool ours_visible, bool finalize_ours, unsigned int delay_ms,
+		 u64 finalize_sent_seq),
+
+	TP_ARGS(sb, rid, saw_finalized, others_active, ours_visible, finalize_ours, delay_ms,
+		finalize_sent_seq),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(bool, saw_finalized)
+		__field(bool, others_active)
+		__field(bool, ours_visible)
+		__field(bool, finalize_ours)
+		__field(unsigned int, delay_ms)
+		__field(__u64, finalize_sent_seq)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->saw_finalized = saw_finalized;
+		__entry->others_active = others_active;
+		__entry->ours_visible = ours_visible;
+		__entry->finalize_ours = finalize_ours;
+		__entry->delay_ms = delay_ms;
+		__entry->finalize_sent_seq = finalize_sent_seq;
+	),
+
+	TP_printk(SCSBF" rid %016llx saw_finalized %u others_active %u ours_visible %u finalize_ours %u delay_ms %u finalize_sent_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->saw_finalized, __entry->others_active,
+		  __entry->ours_visible, __entry->finalize_ours, __entry->delay_ms,
+		  __entry->finalize_sent_seq)
 );
 
 TRACE_EVENT(scoutfs_get_log_merge_status,
