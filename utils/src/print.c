@@ -108,6 +108,17 @@ static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(tval->count));
 }
 
+static void print_xattr_indx(struct scoutfs_key *key, void *val, int val_len)
+{
+	u64 minor;
+	u64 ino;
+	u64 xid;
+	u8 major;
+
+	scoutfs_xattr_get_indx_key(key, &major, &minor, &ino, &xid);
+	printf("    xattr indx: major %u minor %llu ino %llu xid %llu", major, minor, ino, xid);
+}
+
 static u8 *global_printable_name(u8 *name, int name_len)
 {
 	static u8 name_buf[SCOUTFS_NAME_LEN + 1];
@@ -201,6 +212,9 @@ static print_func_t find_printer(u8 zone, u8 type)
 
 	if (zone == SCOUTFS_XATTR_TOTL_ZONE)
 		return print_xattr_totl;
+
+	if (zone == SCOUTFS_XATTR_INDX_ZONE)
+		return print_xattr_indx;
 
 	if (zone == SCOUTFS_FS_ZONE) {
 		switch(type) {

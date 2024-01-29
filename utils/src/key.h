@@ -141,4 +141,13 @@ static inline void scoutfs_key_dec(struct scoutfs_key *key)
 	key->sk_zone--;
 }
 
+static inline void scoutfs_xattr_get_indx_key(struct scoutfs_key *key, u8 *major, u64 *minor,
+					      u64 *ino, u64 *xid)
+{
+	*major = le64_to_cpu(key->_sk_first) >> 56;
+	*minor = (le64_to_cpu(key->_sk_first) << 8) | (le64_to_cpu(key->_sk_second) >> 56);
+	*ino = (le64_to_cpu(key->_sk_second) << 8) | (le64_to_cpu(key->_sk_third) >> 56);
+	*xid = (le64_to_cpu(key->_sk_third) << 8) | key->_sk_fourth;
+}
+
 #endif
