@@ -223,7 +223,7 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 			ret = verify_log_merge_wait_timeout_ms(sb, ret, nr);
 			if (ret < 0)
 				return ret;
-			opts->log_merge_wait_timeout_ms = nr64;
+			opts->log_merge_wait_timeout_ms = nr;
 			break;
 
 		case Opt_metadev_path:
