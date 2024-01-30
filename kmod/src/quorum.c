@@ -397,7 +397,7 @@ static int read_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_q
 		return -EINVAL;
 
 	ret = scoutfs_block_read_sm(sb, sbi->meta_bdev, blkno,
-				     &blk->hdr, sizeof(*blk), &crc);
+				     &blk->hdr, sizeof(*blk), &crc, true);
 	if (ret < 0) {
 		scoutfs_err(sb, "quorum block read error %d", ret);
 		goto out;

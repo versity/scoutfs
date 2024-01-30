@@ -49,7 +49,7 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
 int scoutfs_block_read_sm(struct super_block *sb,
 			  struct block_device *bdev, u64 blkno,
 			  struct scoutfs_block_header *hdr, size_t len,
-			  __le32 *blk_crc);
+			  __le32 *blk_crc, bool check_crc);
 int scoutfs_block_write_sm(struct super_block *sb,
 			   struct block_device *bdev, u64 blkno,
 			   struct scoutfs_block_header *hdr, size_t len);
