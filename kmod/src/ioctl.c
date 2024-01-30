@@ -293,11 +293,11 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 	if (args.length == 0)
 		return 0;
-	if (((args.offset + args.length) < args.offset) ||
+	if ((args.length < 0) ||
+	    ((args.offset + (args.length - 1)) < args.offset) ||
 	    (args.offset & SCOUTFS_BLOCK_SM_MASK) ||
 	    (args.length & SCOUTFS_BLOCK_SM_MASK))
 		return -EINVAL;
-
 
 	ret = mnt_want_write_file(file);
 	if (ret)
