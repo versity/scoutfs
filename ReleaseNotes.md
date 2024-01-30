@@ -2,6 +2,20 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.19
+\
+*Jan 30, 2024*
+
+Added the log\_merge\_wait\_timeout\_ms mount option to set the timeout
+for creating log merge operations.  The previous timeout, now the
+default, was too short for some systems and was resulting in consistent
+timeouts which created an excessive number of log trees waiting to be
+merged.
+
+Improved performance of many in-mount server operations when there are a
+large number of log trees waiting to be merged.
+
+---
 v1.18
 \
 *Nov 7, 2023*
