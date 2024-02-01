@@ -76,10 +76,10 @@ static struct recov_pending *lookup_pending(struct recov_info *recinf, u64 rid, 
  * We keep the pending list sorted by rid so that we can iterate over
  * them.  The list should be small and shouldn't be used often.
  */
-static int cmp_pending_rid(void *priv, struct list_head *A, struct list_head *B)
+static int cmp_pending_rid(void *priv, KC_LIST_CMP_CONST struct list_head *A, KC_LIST_CMP_CONST struct list_head *B)
 {
-	struct recov_pending *a = list_entry(A, struct recov_pending, head);
-	struct recov_pending *b = list_entry(B, struct recov_pending, head);
+	KC_LIST_CMP_CONST struct recov_pending *a = list_entry(A, KC_LIST_CMP_CONST struct recov_pending, head);
+	KC_LIST_CMP_CONST struct recov_pending *b = list_entry(B, KC_LIST_CMP_CONST struct recov_pending, head);
 
 	return scoutfs_cmp_u64s(a->rid, b->rid);
 }

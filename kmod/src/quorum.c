@@ -303,7 +303,6 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	DECLARE_QUORUM_INFO(sb, qinf);
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_quorum_message qmes;
-	struct timeval tv;
 	ktime_t rel_to;
 	ktime_t now;
 	int ret;
@@ -328,14 +327,10 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	else
 		rel_to = ns_to_ktime(0);
 
-	tv = ktime_to_timeval(rel_to);
-	if (tv.tv_sec == 0 && tv.tv_usec == 0) {
+	if (ktime_compare(rel_to, ns_to_ktime(NSEC_PER_USEC)) <= 0) {
 		mh.msg_flags |= MSG_DONTWAIT;
 	} else {
-		ret = kernel_setsockopt(qinf->sock, SOL_SOCKET, SO_RCVTIMEO,
-					(char *)&tv, sizeof(tv));
-		if (ret < 0)
-			return ret;
+		ret = kc_tcp_sock_set_rcvtimeo(qinf->sock, rel_to);
 	}
 
 #ifdef KC_MSGHDR_STRUCT_IOV_ITER
@@ -486,7 +481,7 @@ static void set_quorum_block_event(struct super_block *sb, struct scoutfs_quorum
 	if (WARN_ON_ONCE(event < 0 || event >= SCOUTFS_QUORUM_EVENT_NR))
 		return;
 
-	getnstimeofday64(&ts);
+	ktime_get_ts64(&ts);
 	le64_add_cpu(&blk->write_nr, 1);
 
 	ev = &blk->events[event];
@@ -1325,8 +1320,8 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	qinf = kzalloc(sizeof(struct quorum_info), GFP_KERNEL);
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_KERNEL);
 	if (qinf)
-		qinf->hb_delay = __vmalloc(HB_DELAY_NR * sizeof(struct count_recent),
-					   GFP_KERNEL | __GFP_ZERO, PAGE_KERNEL);
+		qinf->hb_delay = kc__vmalloc(HB_DELAY_NR * sizeof(struct count_recent),
+					   GFP_KERNEL | __GFP_ZERO);
 	if (!qinf || !super || !qinf->hb_delay) {
 		if (qinf)
 			vfree(qinf->hb_delay);

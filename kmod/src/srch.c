@@ -18,6 +18,7 @@
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
 #include <linux/sort.h>
+#include <asm/unaligned.h>
 
 #include "super.h"
 #include "format.h"
@@ -1588,8 +1589,7 @@ static int kway_merge(struct super_block *sb,
 	nr_parents = max_t(unsigned long, 1, roundup_pow_of_two(nr) - 1);
 	/* root at [1] for easy sib/parent index calc, final pad for odd sib */
 	nr_nodes = 1 + nr_parents + nr + 1;
-	tnodes = __vmalloc(nr_nodes * sizeof(struct tourn_node),
-			   GFP_NOFS, PAGE_KERNEL);
+	tnodes = kc__vmalloc(nr_nodes * sizeof(struct tourn_node), GFP_NOFS);
 	if (!tnodes)
 		return -ENOMEM;
 
