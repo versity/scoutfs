@@ -5,11 +5,16 @@
  * The format version defines the format of structures on devices,
  * structures that are communicated over the wire, and the protocol
  * behind the structures.
+ *
+ * Builds can have unique pre-release formats that are incompatible with
+ * every other build.  This lets people experiment with formats without
+ * accidentally corrupting data with release builds.
  */
-#define SCOUTFS_FORMAT_VERSION_MIN		1
+#define SCOUTFS_FORMAT_VERSION_MIN		0x8cf3b46619eb9975ULL
 #define SCOUTFS_FORMAT_VERSION_MIN_STR	__stringify(SCOUTFS_FORMAT_VERSION_MIN)
-#define SCOUTFS_FORMAT_VERSION_MAX		1
+#define SCOUTFS_FORMAT_VERSION_MAX		0x8cf3b46619eb9975ULL
 #define SCOUTFS_FORMAT_VERSION_MAX_STR	__stringify(SCOUTFS_FORMAT_VERSION_MAX)
+#define SCOUTFS_FORMAT_VER_PREREL		0x8000000000000000ULL
 
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */

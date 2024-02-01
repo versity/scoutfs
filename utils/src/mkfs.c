@@ -386,6 +386,10 @@ static int do_mkfs(struct mkfs_args *args)
 	print_quorum_slots(super->qconf.slots, array_size(super->qconf.slots),
 			   "                          ");
 
+	if (SCOUTFS_FORMAT_VERSION_MIN & SCOUTFS_FORMAT_VER_PREREL)
+		printf("This volume was created with the incompatible pre-release format version 0x%016llx.  This volume will only be mountable by pre-release builds with this specific matching format version.\n",
+				SCOUTFS_FORMAT_VERSION_MIN);
+
 	ret = 0;
 out:
 	if (super)
@@ -456,7 +460,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 			return ret;
 		if (args->fmt_vers < SCOUTFS_FORMAT_VERSION_MIN ||
 		    args->fmt_vers > SCOUTFS_FORMAT_VERSION_MAX)
-			argp_error(state, "format-version %llu is outside supported range of %u-%u",
+			argp_error(state, "format-version %llu is outside supported range of %llu-%llu",
 				   args->fmt_vers, SCOUTFS_FORMAT_VERSION_MIN,
 				   SCOUTFS_FORMAT_VERSION_MAX);
 		break;
