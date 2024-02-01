@@ -210,8 +210,7 @@ ssize_t scoutfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct scoutfs_lock *scoutfs_inode_lock = NULL;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	DECLARE_DATA_WAIT(dw);
-	int ret;
-	int written;
+	ssize_t ret;
 
 retry:
 	inode_lock(inode);
@@ -244,7 +243,7 @@ retry:
 
 	/* XXX: remove SUID bit */
 
-	written = __generic_file_write_iter(iocb, from);
+	ret = __generic_file_write_iter(iocb, from);
 
 out:
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
@@ -257,10 +256,10 @@ out:
 			goto retry;
 	}
 
-	if (ret > 0 || ret == -EIOCBQUEUED)
-		ret = generic_write_sync(iocb, written);
+	if (ret > 0)
+		ret = generic_write_sync(iocb, ret);
 
-	return written ? written : ret;
+	return ret;
 }
 #endif
 
