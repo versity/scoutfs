@@ -96,7 +96,7 @@ static int do_change_fmt_vers(struct change_fmt_vers_args *args)
 
 	if (le64_to_cpu(meta_super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN ||
 	    le64_to_cpu(meta_super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX) {
-		fprintf(stderr, "meta super block has format version %llu outside of supported version range %u-%u",
+		fprintf(stderr, "meta super block has format version %llu outside of supported version range %llu-%llu",
 			    le64_to_cpu(meta_super->fmt_vers), SCOUTFS_FORMAT_VERSION_MIN,
 			    SCOUTFS_FORMAT_VERSION_MAX);
 		ret = -EINVAL;
@@ -105,7 +105,7 @@ static int do_change_fmt_vers(struct change_fmt_vers_args *args)
 
 	if (le64_to_cpu(data_super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN ||
 	    le64_to_cpu(data_super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX) {
-		fprintf(stderr, "data super block has format version %llu outside of supported version range %u-%u",
+		fprintf(stderr, "data super block has format version %llu outside of supported version range %llu-%llu",
 			    le64_to_cpu(data_super->fmt_vers), SCOUTFS_FORMAT_VERSION_MIN,
 			    SCOUTFS_FORMAT_VERSION_MAX);
 		ret = -EINVAL;
@@ -186,7 +186,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 			return ret;
 		if (args->fmt_vers < SCOUTFS_FORMAT_VERSION_MIN ||
 		    args->fmt_vers > SCOUTFS_FORMAT_VERSION_MAX)
-			argp_error(state, "format-version %llu is outside supported range of %u-%u",
+			argp_error(state, "format-version %llu is outside supported range of %llu-%llu",
 				   args->fmt_vers, SCOUTFS_FORMAT_VERSION_MIN,
 				   SCOUTFS_FORMAT_VERSION_MAX);
 		break;

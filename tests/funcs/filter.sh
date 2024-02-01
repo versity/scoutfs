@@ -147,6 +147,8 @@ t_filter_dmesg()
 	# ignore systemd-journal rotating
 	re="$re|systemd-journald.*"
 
+	re="$re|incompatible pre-release format version"
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob
 }
