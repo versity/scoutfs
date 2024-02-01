@@ -223,10 +223,8 @@ retry:
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, scoutfs_inode_lock)) {
 		/* data_version is per inode, whole file must be online */
-		ret = scoutfs_data_wait_check_iter(inode, iocb->ki_pos, from,
-						   SEF_OFFLINE,
-						   SCOUTFS_IOC_DWO_WRITE,
-						   &dw, scoutfs_inode_lock);
+		ret = scoutfs_data_wait_check(inode, 0, i_size_read(inode), SEF_OFFLINE,
+					      SCOUTFS_IOC_DWO_WRITE, &dw, scoutfs_inode_lock);
 		if (ret != 0)
 			goto out;
 	}
