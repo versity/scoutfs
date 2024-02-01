@@ -171,10 +171,8 @@ retry:
 		goto out;
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, scoutfs_inode_lock)) {
-		ret = scoutfs_data_wait_check_iter(inode, iocb->ki_pos, to,
-						   SEF_OFFLINE,
-						   SCOUTFS_IOC_DWO_READ,
-						   &dw, scoutfs_inode_lock);
+		ret = scoutfs_data_wait_check(inode, iocb->ki_pos, iov_iter_count(to), SEF_OFFLINE,
+					      SCOUTFS_IOC_DWO_READ, &dw, scoutfs_inode_lock);
 		if (ret != 0)
 			goto out;
 	} else {
