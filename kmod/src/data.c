@@ -1811,37 +1811,6 @@ int scoutfs_data_wait_check_iov(struct inode *inode, const struct iovec *iov,
 	return ret;
 }
 
-int scoutfs_data_wait_check_iter(struct inode *inode, loff_t pos, struct iov_iter *iter,
-				 u8 sef, u8 op, struct scoutfs_data_wait *dw,
-				 struct scoutfs_lock *lock)
-{
-	size_t count = iov_iter_count(iter);
-	size_t off = iter->iov_offset;
-	const struct iovec *iov;
-	size_t len;
-	int ret = 0;
-
-	for (iov = iter->iov; count > 0; iov++) {
-		len = iov->iov_len - off;
-		if (len == 0)
-			continue;
-
-		/* aren't we waiting on too much data here ? */
-		ret = scoutfs_data_wait_check(inode, pos, len,
-					      sef, op, dw, lock);
-
-		if (ret != 0)
-			break;
-
-
-		pos += len;
-		count -= len;
-		off = 0;
-	}
-
-	return ret;
-}
-
 int scoutfs_data_wait(struct inode *inode, struct scoutfs_data_wait *dw)
 {
 	DECLARE_DATA_WAIT_ROOT(inode->i_sb, rt);
