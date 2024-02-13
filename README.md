@@ -22,3 +22,18 @@ Highlights of the design and implementation include:
 
 Please join us on the open scoutfs-devel@scoutfs.org [mailing list
 hosted on Google Groups](https://groups.google.com/a/scoutfs.org/forum/#!forum/scoutfs-devel)
+
+# Building Quick start
+
+To get started with building all the components of the software and
+run the included self-tests, you will need to install the following
+packages listed below. For convenience, the below text can be copy
+and pasted into a (root) terminal and should work on el7, 8 and 9.
+
+```
+	yum -y group install "Development Tools"
+	yum -y install kernel-devel
+	yum -y install git attr psmisc bc
+	yum -y install openssl-devel libblkid-devel libuuid-devel zlib-devel
+	yum -y install xfsprogs-devel libacl-devel libattr-devel
+```
