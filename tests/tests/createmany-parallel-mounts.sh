@@ -21,6 +21,9 @@ START=$SECONDS
 createmany -o "$T_D0/file_" $COUNT >> $T_TMP.full
 sync
 SINGLE=$((SECONDS - START))
+# It's possible on fast devices that a single createmany takes
+# under 1 second. That messes up the test math further on.
+if (( SINGLE==0 )); then (( SINGLE=1 )) ; fi
 echo single $SINGLE >> $T_TMP.full
 
 echo "== measure two concurrent createmany runs"
