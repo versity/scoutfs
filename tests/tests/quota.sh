@@ -22,7 +22,7 @@ reset_all()
 	getfattr --absolute-names -d -m - "$T_D0" | \
 		grep "^scoutfs.totl." | \
 		cut -d '=' -f 1 | \
-		xargs -n 1 -I'{}'  setfattr -x '{}' "$T_D0"
+		xargs -I'{}'  setfattr -x '{}' "$T_D0"
 }
 
 echo "== prepare dir with write perm for test ids"
