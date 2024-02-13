@@ -385,7 +385,8 @@ static int parse_stdin_in_fn(int fd, struct scoutfs_ioctl_quota_rule *irules, si
 
 	ret = getline(&line, &size, stdin);
 	if (ret < 0) {
-		if (errno == ENOENT)
+		free(line);
+		if ((errno == ENOENT) || (errno == 0))
 			return 0;
 
 		ret = -errno;
