@@ -2,10 +2,10 @@
 # Test correctness of the staging operation
 #
 
-t_require_commands filefrag dd scoutfs cp cmp rm
+t_require_commands filefrag-gc57857a5 dd scoutfs cp cmp rm
 
 fiemap_file() {
-	filefrag -v -b4096 "$1"
+	filefrag-gc57857a5 -v -b4096 "$1"
 }
 
 create_file() {

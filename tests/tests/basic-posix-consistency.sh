@@ -3,13 +3,13 @@
 # operations in one mount and verify the results in another.
 #
 
-t_require_commands getfattr setfattr dd filefrag diff touch stat scoutfs
+t_require_commands getfattr setfattr dd filefrag-gc57857a5 diff touch stat scoutfs
 t_require_mounts 2
 
 GETFATTR="getfattr --absolute-names"
 SETFATTR="setfattr"
 DD="dd status=none"
-FILEFRAG="filefrag -v -b4096"
+FILEFRAG="filefrag-gc57857a5 -v -b4096"
 
 echo "== root inode updates flow back and forth"
 sleep 1
