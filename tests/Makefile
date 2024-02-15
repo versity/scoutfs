@@ -13,7 +13,8 @@ BIN := src/createmany			\
 	src/create_xattr_loop		\
 	src/fragmented_data_extents	\
 	src/o_tmpfile_umask		\
-	src/o_tmpfile_linkat
+	src/o_tmpfile_linkat		\
+	src/filefrag-gc57857a5
 
 DEPS := $(wildcard src/*.d)
 

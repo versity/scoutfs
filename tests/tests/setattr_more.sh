@@ -2,7 +2,7 @@
 # Test correctness of the setattr_more ioctl.
 #
 
-t_require_commands filefrag scoutfs touch mkdir rm stat mknod
+t_require_commands filefrag-gc57857a5 scoutfs touch mkdir rm stat mknod
 
 FILE="$T_D0/file"
 
@@ -65,7 +65,7 @@ rm "$FILE"
 echo "== large offline extents are created"
 touch "$FILE"
 scoutfs setattr -V 1 -o -s $((10007 * 4096)) "$FILE" 2>&1 | t_filter_fs
-filefrag -v -b4096 "$FILE" 2>&1 | sed 's/last,unknown_loc,eof$/unknown,eof/' | t_filter_fs
+filefrag-gc57857a5 -v -b4096 "$FILE" 2>&1 | t_filter_fs
 rm "$FILE"
 
 # had a bug where we were creating extents that were too long

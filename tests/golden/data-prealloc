@@ -46,7 +46,7 @@ before:
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 0 at pos 0
 wrote blk 0
 0.. 1: 
@@ -59,7 +59,7 @@ wrote blk 0
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 0 at pos 1
 wrote blk 15
 0.. 1: 
@@ -73,7 +73,7 @@ wrote blk 15
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 0 at pos 2
 wrote blk 19
 0.. 1: 
@@ -90,7 +90,7 @@ wrote blk 19
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 1 at pos 0
 wrote blk 25
 0.. 1: 
@@ -109,7 +109,7 @@ wrote blk 25
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 1 at pos 1
 wrote blk 39
 0.. 1: 
@@ -129,7 +129,7 @@ wrote blk 39
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 1 at pos 2
 wrote blk 44
 0.. 1: 
@@ -151,7 +151,7 @@ wrote blk 44
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 2 at pos 0
 wrote blk 48
 0.. 1: 
@@ -175,7 +175,7 @@ wrote blk 48
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 2 at pos 1
 wrote blk 62
 0.. 1: 
@@ -201,7 +201,7 @@ wrote blk 62
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 2 at pos 2
 wrote blk 67
 0.. 1: 
@@ -230,7 +230,7 @@ wrote blk 67
 71.. 2: 
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 3 at pos 0
 wrote blk 73
 0.. 1: 
@@ -261,7 +261,7 @@ wrote blk 73
 74.. 5: unwritten
 79.. 2: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 3 at pos 1
 wrote blk 86
 0.. 1: 
@@ -293,7 +293,7 @@ wrote blk 86
 79.. 2: 
 86.. 1: 
 87.. 2: 
-95.. 1: eof
+95.. 1: last,eof
 writing into existing 3 at pos 2
 wrote blk 92
 0.. 1: 
@@ -327,4 +327,4 @@ wrote blk 92
 87.. 2: 
 92.. 1: 
 93.. 2: unwritten
-95.. 1: eof
+95.. 1: last,eof

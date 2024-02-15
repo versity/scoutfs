@@ -2,11 +2,11 @@
 # Test that releasing extents creates offline extents.
 #
 
-t_require_commands xfs_io filefrag scoutfs mknod
+t_require_commands xfs_io filefrag-gc57857a5 scoutfs mknod
 
 # this test wants to ignore unwritten extents
 fiemap_file() {
-	filefrag -v -b4096 "$1" | grep -v "unwritten"
+	filefrag-gc57857a5 -v -b4096 "$1" | grep -v "unwritten"
 }
 
 create_file() {
