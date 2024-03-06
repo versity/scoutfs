@@ -75,7 +75,7 @@ static int do_check(struct check_args *args)
 		goto out;
 
 	ret = check_supers() ?:
-	      check_meta_refs();
+	      check_meta_alloc();
 out:
 	/* and tear it all down */
 	block_shutdown();
