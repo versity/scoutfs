@@ -13,6 +13,7 @@ typedef enum {
 	PB_SB_HDR_MAGIC_INVALID,
 	PB_FS_IN_USE,
 	PB_MOUNTED_CLIENTS_REF_BLKNO,
+	PB_SB_BAD_FLAG,
 	PB__NR,
 } prob_t;
 

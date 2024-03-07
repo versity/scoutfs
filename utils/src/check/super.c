@@ -146,6 +146,10 @@ int check_supers(void)
 
 	memcpy(global_super, super, sizeof(struct scoutfs_super_block));
 
+	debug("Superblock flag: %llu", global_super->flags);
+	if (global_super->flags != SCOUTFS_FLAG_IS_META_BDEV)
+		problem(PB_SB_BAD_FLAG, "Bad flag: %llu expecting: 1 or 0", global_super->flags);
+
 	debug("super magic 0x%04x", global_super->hdr.magic);
 	if (global_super->hdr.magic != SCOUTFS_BLOCK_MAGIC_SUPER)
 		problem(PB_SB_HDR_MAGIC_INVALID, "superblock magic invalid: 0x%04x is not 0x%04x",
