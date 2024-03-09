@@ -14,6 +14,7 @@ typedef enum {
 	PB_FS_IN_USE,
 	PB_MOUNTED_CLIENTS_REF_BLKNO,
 	PB_SB_BAD_FLAG,
+	PB_QCONF_WRONG_VERSION,
 	PB__NR,
 } prob_t;
 
