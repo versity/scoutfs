@@ -150,6 +150,10 @@ int check_supers(void)
 	if (global_super->flags != SCOUTFS_FLAG_IS_META_BDEV)
 		problem(PB_SB_BAD_FLAG, "Bad flag: %llu expecting: 1 or 0", global_super->flags);
 
+	debug("Quorum Config Version: %llu", global_super->qconf.version);
+	if (global_super->qconf.version != 1)
+		problem(PB_QCONF_WRONG_VERSION, "Wrong Version: %llu (expected 1)", global_super->qconf.version);
+
 	debug("super magic 0x%04x", global_super->hdr.magic);
 	if (global_super->hdr.magic != SCOUTFS_BLOCK_MAGIC_SUPER)
 		problem(PB_SB_HDR_MAGIC_INVALID, "superblock magic invalid: 0x%04x is not 0x%04x",
