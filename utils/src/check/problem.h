@@ -9,8 +9,22 @@ typedef enum {
 	PB_META_REF_OVERLAPS_EXISTING,
 	PB_META_FREE_OVERLAPS_EXISTING,
 	PB_BTREE_BLOCK_BAD_LEVEL,
+	PB_SB_HDR_CRC_INVALID,
+	PB_SB_HDR_MAGIC_INVALID,
+	PB_FS_IN_USE,
+	PB_MOUNTED_CLIENTS_REF_BLKNO,
+	PB_SB_BAD_FLAG,
+	PB_SB_BAD_FMT_VERS,
+	PB_QCONF_WRONG_VERSION,
+	PB_QSLOT_BAD_FAM,
+	PB_QSLOT_BAD_PORT,
+	PB_QSLOT_NO_ADDR,
+	PB_QSLOT_BAD_ADDR,
+	PB_DATA_DEV_SB_INVALID,
 	PB__NR,
 } prob_t;
+
+extern char *prob_strs[];
 
 #define problem(pb, fmt, ...)							\
 do {										\
@@ -19,5 +33,6 @@ do {										\
 } while (0)
 
 void problem_record(prob_t pb);
+uint64_t problems_count(void);
 
 #endif
