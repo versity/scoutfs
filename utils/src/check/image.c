@@ -434,7 +434,7 @@ static int do_image(struct image_args *args)
 		}
 
 		ret = block_setup(meta_fd, 128 * 1024 * 1024, 32 * 1024 * 1024) ?:
-		      check_supers() ?:
+		      check_supers(-1) ?:
 		      get_ref_bits(&bm) ?:
 		      read_image(args, meta_fd, &bm);
 		block_shutdown();
