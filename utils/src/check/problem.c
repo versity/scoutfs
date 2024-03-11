@@ -3,13 +3,13 @@
 
 #include "problem.h"
 
-#if 0
 #define PROB_STR(pb) [pb] = #pb
-static char *prob_strs[] = {
+char *prob_strs[] = {
 	PROB_STR(PB_META_EXTENT_INVALID),
-	PROB_STR(PB_META_EXTENT_OVERLAPS_EXISTING),
+	PROB_STR(PB_META_REF_OVERLAPS_EXISTING),
+	PROB_STR(PB_META_FREE_OVERLAPS_EXISTING),
+	PROB_STR(PB_BTREE_BLOCK_BAD_LEVEL),
 };
-#endif
 
 static struct problem_data {
 	uint64_t counts[PB__NR];

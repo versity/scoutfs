@@ -12,6 +12,8 @@ typedef enum {
 	PB__NR,
 } prob_t;
 
+extern char *prob_strs[];
+
 #define problem(pb, fmt, ...)							\
 do {										\
 	debug("problem found: "#pb": %s: "fmt, sns_str(), __VA_ARGS__);	\
