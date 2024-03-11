@@ -1,0 +1,22 @@
+== cannot check mounted
+failed to open meta device 'T_EXT_META_DEV': Device or resource busy (16)
+== clobber to appear mounted
+meta superblock mounted clients btree is not empty.
+Refusing to repair PB_MOUNTED_CLIENTS_REF_BLKNO.
+Assure the filesystem is truly unmounted by disabling auto mount
+and rebooting the system before retrying with `--force`.
+meta superblock mounted clients btree is not empty.
+Refusing to repair PB_MOUNTED_CLIENTS_REF_BLKNO.
+Assure the filesystem is truly unmounted by disabling auto mount
+and rebooting the system before retrying with `--force`.
+meta superblock mounted clients btree is not empty.
+Problems detected.
+== mkfs a clean scratch fs
+== clobber [0] PB_SB_HDR_CRC_INVALID 
+do_clobber_pb_sb_hdr_crc_invalid()
+== detect [0] PB_SB_HDR_CRC_INVALID  damage
+Problems detected.
+Run the command again with the "-r|--repair" flag to try and repair issues detected.
+== repair [0] PB_SB_HDR_CRC_INVALID  damage
+Problems detected.
+== detect [0] PB_SB_HDR_CRC_INVALID  damage is repaired
