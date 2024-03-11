@@ -25,6 +25,7 @@
 #include "debug.h"
 #include "meta.h"
 #include "super.h"
+#include "problem.h"
 
 struct check_args {
 	char *meta_device;
@@ -74,8 +75,26 @@ static int do_check(struct check_args *args)
 	if (ret < 0)
 		goto out;
 
-	ret = check_supers() ?:
-	      check_meta_alloc();
+	/*
+	 * At some point we may convert this to a multi-pass system where we may
+	 * try and repair items, and, as long as repairs are made, we will rerun
+	 * the checks more times. We may need to start counting how many problems we
+	 * fix in the process of these loops, so that we don't stall on unrepairable
+	 * problems and are making actual repair progress. IOW - when we do a full
+	 * check loop without any problems fixed, we stop trying.
+	 */
+	ret = check_supers(data_fd) ?:
+	      check_super_in_use(meta_fd) ?:
+	      check_meta_alloc() ?:
+	      check_super_crc();
+
+	if (ret < 0)
+		goto out;
+
+	debug("problem count %lu", problems_count());
+	if (problems_count() > 0)
+		printf("Problems detected.\n");
+
 out:
 	/* and tear it all down */
 	block_shutdown();
@@ -134,6 +153,12 @@ static struct argp argp = {
 	"Check filesystem consistency"
 };
 
+/* Exit codes used by fsck-type programs */
+#define FSCK_EX_NONDESTRUCT	1	/* File system errors corrected */
+#define FSCK_EX_UNCORRECTED	4	/* File system errors left uncorrected */
+#define FSCK_EX_ERROR		8	/* Operational error */
+#define FSCK_EX_USAGE		16	/* Usage or syntax error */
+
 static int check_cmd(int argc, char **argv)
 {
 	struct check_args check_args = {NULL};
@@ -141,9 +166,16 @@ static int check_cmd(int argc, char **argv)
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &check_args);
 	if (ret)
-		return ret;
+		exit(FSCK_EX_USAGE);
 
-	return do_check(&check_args);
+	ret = do_check(&check_args);
+	if (ret < 0)
+		ret = FSCK_EX_ERROR;
+
+	if (problems_count() > 0)
+		ret |= FSCK_EX_UNCORRECTED;
+
+	exit(ret);
 }
 
 static void __attribute__((constructor)) check_ctor(void)
