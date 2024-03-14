@@ -13,6 +13,7 @@ char *prob_strs[] = {
 
 static struct problem_data {
 	uint64_t counts[PB__NR];
+	uint64_t count;
 } global_pdat;
 
 void problem_record(prob_t pb)
@@ -20,4 +21,12 @@ void problem_record(prob_t pb)
 	struct problem_data *pdat = &global_pdat;
 
 	pdat->counts[pb]++;
+	pdat->count++;
+}
+
+uint64_t problems_count(void)
+{
+	struct problem_data *pdat = &global_pdat;
+
+	return pdat->count;
 }

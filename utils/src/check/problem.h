@@ -21,5 +21,6 @@ do {										\
 } while (0)
 
 void problem_record(prob_t pb);
+uint64_t problems_count(void);
 
 #endif

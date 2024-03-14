@@ -25,11 +25,13 @@
 #include "debug.h"
 #include "meta.h"
 #include "super.h"
+#include "problem.h"
 
 struct check_args {
 	char *meta_device;
 	char *data_device;
 	char *debug_path;
+	bool repair;
 };
 
 static int do_check(struct check_args *args)
@@ -71,8 +73,26 @@ static int do_check(struct check_args *args)
 	if (ret < 0)
 		goto out;
 
+	/*
+	 * At some point we may convert this to a multi-pass system where we may
+	 * try and repair items, and, as long as repairs are made, we will rerun
+	 * the checks more times. We may need to start counting how many problems we
+	 * fix in the process of these loops, so that we don't stall on unrepairable
+	 * problems and are making actual repair progress. IOW - when we do a full
+	 * check loop without any problems fixed, we stop trying.
+	 */
 	ret = check_supers() ?:
 	      check_meta_alloc();
+
+	if (ret < 0)
+		goto out;
+
+	debug("problem count %lu", problems_count());
+	if ((!args->repair) && (problems_count() > 0)) {
+		printf("Problems detected.\n");
+		printf("Run the command again wit the \"-r|--repair\" flag to try and repair issues detected.\n");
+	}
+
 out:
 	/* and tear it all down */
 	block_shutdown();
@@ -96,6 +116,9 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	switch (key) {
 	case 'd':
 		args->debug_path = strdup_or_error(state, arg);
+		break;
+	case 'r':
+		args->repair = true;
 		break;
 	case 'e':
 	case ARGP_KEY_ARG:
@@ -121,6 +144,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 
 static struct argp_option options[] = {
 	{ "debug", 'd', "FILE_PATH", 0, "Path to debug output file, will be created or truncated"},
+	{ "repair", 'r', NULL, 0, "Repair detected issues"},
 	{ NULL }
 };
 
@@ -135,6 +159,11 @@ static int check_cmd(int argc, char **argv)
 {
 	struct check_args check_args = {NULL};
 	int ret;
+
+	/*
+	 * repair is off by default
+	 */
+	check_args.repair = false;
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &check_args);
 	if (ret)
