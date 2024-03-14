@@ -82,7 +82,8 @@ static int do_check(struct check_args *args)
 	 * check loop without any problems fixed, we stop trying.
 	 */
 	ret = check_supers() ?:
-	      check_meta_alloc();
+	      check_meta_alloc() ?:
+	      check_super_crc(args->repair);
 
 	if (ret < 0)
 		goto out;
