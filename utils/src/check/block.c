@@ -225,7 +225,7 @@ static int submit_and_wait(struct block_data *bdat, struct list_head *list)
 			if (ret >= 0)
 				errno = EIO;
 			ret = -errno;
-			printf("fatal system error submitting async IO: "ENO_FMT"\n",
+			fprintf(stderr, "fatal system error submitting async IO: "ENO_FMT"\n",
 				ENO_ARG(-ret));
 			goto out;
 		}
@@ -235,7 +235,7 @@ static int submit_and_wait(struct block_data *bdat, struct list_head *list)
 			if (ret >= 0)
 				errno = EIO;
 			ret = -errno;
-			printf("fatal system error getting IO events: "ENO_FMT"\n",
+			fprintf(stderr, "fatal system error getting IO events: "ENO_FMT"\n",
 				ENO_ARG(-ret));
 			goto out;
 		}
@@ -489,7 +489,7 @@ int block_try_commit(bool force)
 	}
 
 	if (ret < 0) {
-		printf("error writing dirty transaction blocks\n");
+		fprintf(stderr, "error writing dirty transaction blocks\n");
 		goto out;
 	}
 
@@ -503,7 +503,7 @@ int block_try_commit(bool force)
 		ret = -ENOMEM;
 	}
 	if (ret < 0)
-		printf("error writing super block to commit transaction\n");
+		fprintf(stderr, "error writing super block to commit transaction\n");
 
 out:
 	rebalance_cache(bdat);

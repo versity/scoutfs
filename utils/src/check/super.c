@@ -35,7 +35,7 @@ int check_super_crc(bool repair)
 
 	ret = block_get(&blk, SCOUTFS_SUPER_BLKNO, BF_SM | BF_DIRTY);
 	if (ret < 0) {
-		printf("error reading super block\n");
+		fprintf(stderr, "error reading super block\n");
 		return ret;
 	}
 
@@ -68,14 +68,14 @@ int check_supers(void)
 
 	global_super = malloc(sizeof(struct scoutfs_super_block));
 	if (!global_super) {
-		printf("error allocating super block buffer\n");
+		fprintf(stderr, "error allocating super block buffer\n");
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	ret = block_get(&blk, SCOUTFS_SUPER_BLKNO, BF_SM);
 	if (ret < 0) {
-		printf("error reading super block\n");
+		fprintf(stderr, "error reading super block\n");
 		goto out;
 	}
 

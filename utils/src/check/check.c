@@ -42,7 +42,10 @@ static int do_check(struct check_args *args)
 	int ret;
 
 	if (args->debug_path) {
-		debug_fd = open(args->debug_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (strcmp(args->debug_path, "-") == 0)
+			debug_fd = dup(STDERR_FILENO);
+		else
+			debug_fd = open(args->debug_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 		if (debug_fd < 0) {
 			ret = -errno;
 			fprintf(stderr, "error opening debug output file '%s': %s (%d)\n",

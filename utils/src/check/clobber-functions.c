@@ -59,7 +59,7 @@ static int do_clobber_pb_sb_hdr_crc_invalid(char *data)
 
 	ret = block_get(&blk, SCOUTFS_SUPER_BLKNO, BF_SM | BF_DIRTY);
 	if (ret < 0) {
-		printf("error reading super block\n");
+		fprintf(stderr, "error reading super block\n");
 		return ret;
 	}
 
@@ -71,7 +71,7 @@ static int do_clobber_pb_sb_hdr_crc_invalid(char *data)
 	u32 flip = random() & 0x1f;
 
 	/* flip one bit with xor at the random position chosen */
-	debug("clobber superblock crc from 0x%08x to 0x%08x\n", crc, crc ^ (1 << flip));
+	debug("clobber superblock crc from 0x%08x to 0x%08x", crc, crc ^ (1 << flip));
 	super->hdr.crc = crc ^ (1 << flip);
 
 	block_try_commit(true);

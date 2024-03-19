@@ -208,7 +208,7 @@ static int get_meta_refs(void)
 	if (ret < 0)
 		goto out;
 
-	printf("found %llu referenced metadata blocks\n", mdat->stats.ref_blocks);
+	debug("found %llu referenced metadata blocks", mdat->stats.ref_blocks);
 	ret = 0;
 out:
 	return ret;
@@ -262,7 +262,7 @@ static int get_meta_free(void)
 	if (ret < 0)
 		goto out;
 
-	printf("found %llu free metadata blocks in %llu extents\n",
+	debug("found %llu free metadata blocks in %llu extents",
 	       mdat->stats.free_blocks, mdat->stats.free_extents);
 	ret = 0;
 out:
@@ -292,13 +292,13 @@ static int compare_refs_and_free(void)
 	free = extent_first(&mdat->meta_free);
 	while (ref || free) {
 
-		printf("exp %llu ref %llu.%llu free %llu.%llu\n",
+		debug("exp %llu ref %llu.%llu free %llu.%llu",
 			expect, ref ? ref->start : 0, ref ? ref->len : 0,
 			free ? free->start : 0, free ? free->len : 0);
 
 		/* referenced marked free, remove ref from free and continue from same point */
 		if (ref && free && extents_overlap(ref->start, ref->len, free->start, free->len)) {
-			printf("ref extent %llu.%llu overlaps free %llu %llu\n",
+			debug("ref extent %llu.%llu overlaps free %llu %llu",
 				ref->start, ref->len, free->start, free->len);
 
 			start = max(ref->start, free->start);
@@ -323,7 +323,7 @@ static int compare_refs_and_free(void)
 
 		/* untracked region before next extent */
 		if (expect < next->start) {
-			printf("missing free extent %llu.%llu\n", expect, next->start - expect);
+			debug("missing free extent %llu.%llu", expect, next->start - expect);
 			expect = next->start;
 			continue;
 		}
