@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 #include "sparse.h"
 #include "util.h"
@@ -127,6 +129,10 @@ int check_supers(void)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct block *blk = NULL;
+	struct scoutfs_quorum_slot* slot = NULL;
+	struct in_addr in;
+	uint16_t family;
+	uint16_t port;
 	int ret;
 
 	global_super = malloc(sizeof(struct scoutfs_super_block));
@@ -153,6 +159,33 @@ int check_supers(void)
 	debug("Quorum Config Version: %llu", global_super->qconf.version);
 	if (global_super->qconf.version != 1)
 		problem(PB_QCONF_WRONG_VERSION, "Wrong Version: %llu (expected 1)", global_super->qconf.version);
+
+	for (int i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		slot = &global_super->qconf.slots[i];
+		family = le16_to_cpu(slot->addr.v4.family);
+		port = le16_to_cpu(slot->addr.v4.port);
+		in.s_addr = htonl(slot->addr.v4.addr);
+
+		if (family == SCOUTFS_AF_NONE) {
+			debug("Quorum slot %u is empty", i);
+			continue;
+		}
+
+		debug("Quorum slot %u family: %u, port: %u, address: %s", i, family, port, inet_ntoa(in));
+		if (family != SCOUTFS_AF_IPV4)
+			problem(PB_QSLOT_BAD_FAM, "Quorum Slot %u doesn't have valid address", i);
+
+		if (port == 0)
+			problem(PB_QSLOT_BAD_PORT, "Quorum Slot %u has bad port", i);
+
+		if (!in.s_addr) {
+			problem(PB_QSLOT_NO_ADDR, "Quorum Slot %u has not been assigned ipv4 address", i);
+		} else if (!(in.s_addr & 0xff000000)) {
+			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address", i);
+		} else if ((in.s_addr & 0xff) == 0xff) {
+			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address", i);
+		}
+	}
 
 	debug("super magic 0x%04x", global_super->hdr.magic);
 	if (global_super->hdr.magic != SCOUTFS_BLOCK_MAGIC_SUPER)
