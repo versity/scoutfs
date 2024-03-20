@@ -88,9 +88,11 @@ static int do_check(struct check_args *args)
 		goto out;
 
 	debug("problem count %lu", problems_count());
-	if ((!args->repair) && (problems_count() > 0)) {
+	if (problems_count() > 0) {
 		printf("Problems detected.\n");
-		printf("Run the command again wit the \"-r|--repair\" flag to try and repair issues detected.\n");
+
+		if (!args->repair)
+			printf("Run the command again with the \"-r|--repair\" flag to try and repair issues detected.\n");
 	}
 
 out:
@@ -155,6 +157,40 @@ static struct argp argp = {
 	"Check filesystem consistency"
 };
 
+/*
+ * Called by main() essentially, this function has custom exit() values
+ * to help automation and user interpretation of what needs to be done after
+ * `check` has completed. The normal main() function just exits with 0 or 1
+ * and a cryptic strerror(errno) which doesn't really translate well. For instance,
+ * if we'd want to return EAGAIN, it would print "resource temporary unavailable"
+ * which isn't the same as "run this thing again".
+ *
+ * To facilitate some sort of cross operability, we take the exit codes for `fsck`
+ * here and mirror them exactly. That way we can conceivably implement `fsck.scoutfs`
+ * at some point as a wrapper to `scoutfs check ...` and have the same exit value
+ * mapping.
+ *
+ * The exit codes is a bitmap of the following values, with 0 being none of the
+ * bits are set:
+ *
+ * 0 - no filesystem issues detected
+ *
+ * 1 - file system issues were corrected
+ * 2 - retry needed (unused)
+ * 4 - file system issues were not corrected
+ * 8 - operational error
+ * 16 - usage error
+ * 32 - cancelled by user (SIGINT)
+ *
+ * See: util-linux/include/exitcodes.h
+ */
+
+/* Exit codes used by fsck-type programs */
+#define FSCK_EX_NONDESTRUCT	1	/* File system errors corrected */
+#define FSCK_EX_UNCORRECTED	4	/* File system errors left uncorrected */
+#define FSCK_EX_ERROR		8	/* Operational error */
+#define FSCK_EX_USAGE		16	/* Usage or syntax error */
+
 static int check_cmd(int argc, char **argv)
 {
 	struct check_args check_args = {NULL};
@@ -167,9 +203,18 @@ static int check_cmd(int argc, char **argv)
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &check_args);
 	if (ret)
-		return ret;
+		exit(FSCK_EX_USAGE);
 
-	return do_check(&check_args);
+	ret = do_check(&check_args);
+	if (ret < 0)
+		ret = FSCK_EX_ERROR;
+
+	//FIXME: we should determine whether we can return FSCK_EX_NONDESTRUCT somehow
+
+	if (problems_count() > 0)
+		ret |= FSCK_EX_UNCORRECTED;
+
+	exit(ret);
 }
 
 static void __attribute__((constructor)) check_ctor(void)
