@@ -77,6 +77,94 @@ run when the file system will not be mounted.
 .PD
 
 .TP
+.BI "check META-DEVICE DATA-DEVICE [-r|--repair] [-d|--debug FILE]"
+.sp
+Performs an offline file system check. The program iterates through all the
+data structures on disk directly - the filesystem must not be mounted while
+this operation is running.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "-r, --repair"
+Attempt to resolve inconsistencies that are encountered during checking of
+the filesystem. The filesystem is attempted to made coherent by correcting
+issues that would prevent the filesystem from being used.
+.TP
+.B "-f, --force"
+Certain repair functions will refuse to attempt to repair problems that indicate
+the filesystem is still mounted, or the repair function is unsafe to proceed.
+This flag allows the user to override this protection. The user should assure
+that using this option is warranted - in other words, always attempt to repair
+without the force option, first.
+.TP
+.B "-d, --debug FILE"
+An output file where the program can output debug information about the
+state of the filesystem as it performs the check. If
+.B FILE
+is "-", the debug output is written to the Standard Error output.
+.TP
+.RE
+.sp
+.B RETURN VALUE
+The check function can return the following exit codes:
+.RS
+.TP
+\fB 0 \fR - no filesystem issues detected
+.TP
+\fB 1 \fR - file system issues were corrected
+.TP
+\fB 2 \fR - retry needed (unused)
+.TP
+\fB 4 \fR - file system issues were not corrected
+.TP
+\fB 8 \fR - operational error
+.TP
+\fB 16 \fR - usage error
+.TP
+\fB 32 \fR - cancelled by user (SIGINT)
+.TP
+.RE
+.PD
+
+.TP
+.BI "clobber META-DEVICE DATA-DEVICE CLOBBER-FUNCTION [-D|--data DATA] [-d|--debug FILE] [-l|--list-clobbers] [-S|--describe CLOBBER-FUNCTION]"
+.sp
+Perform a specific error injection into an unmounted filesystem. This is a
+.B *DESTRUCTIVE*
+operation and will result in an invalid file system, and loss of data. This
+function should only be used as a test/validation tool and not be used on
+production filesystems.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B CLOBBER-FUNCTION
+The name of a specific clobber (fault injection) function.
+.TP
+.B "-D, --data DATA"
+Clobber functions can accept custom data for use in the fault injection. The
+use of each function of this data is documented and the instructions can be
+viewed using the "--describe CLOBBER-FUNCTION" option.
+The data must be a single string. For safety, the string should be "" quoted.
+.TP
+.B "-l, --list-clobbers"
+Outputs a list of implemented clobber functions.
+.TP
+.B "-S, --describe CLOBBER-FUNCTION"
+Outputs descriptive information on CLOBBER-FUNCTION to the standard output.
+The program outputs a description of the function as well as whether optional
+data is used, required and what the format of the data used should be.
+.TP
+.B "-d, --debug FILE"
+An output file where the program can output debug information about the
+state of the filesystem as it performs the clobber. If
+.B FILE
+is "-", the debug output is written to the Standard Error output.
+.RE
+.PD
+
+.TP
 .BI "counters [-t|--table] SYSFS-DIR"
 .sp
 Display the counters and their values for a mounted ScoutFS filesystem.
