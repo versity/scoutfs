@@ -57,6 +57,69 @@ int check_super_crc(bool repair)
 }
 
 /*
+ * Crude checks and fix for some unlikely cases where the fs appears
+ * to still be mounted. Fixing requires --force, to avoid modifying
+ * a possibly still mounted filesystem.
+ */
+int check_super_in_use(int meta_fd, bool repair, bool force)
+{
+	int ret = meta_super_in_use(meta_fd, global_super);
+	debug("meta_super_in_use ret %d", ret);
+
+	if (ret < 0) {
+		problem(PB_FS_IN_USE, "File system appears in use. ret %d", ret);
+		if (force)
+			ret = 0;
+	}
+
+	debug("global_super->mounted_clients.ref.blkno 0x%08llx", global_super->mounted_clients.ref.blkno);
+	if (global_super->mounted_clients.ref.blkno != 0) {
+		problem(PB_MOUNTED_CLIENTS_REF_BLKNO, "Mounted clients ref blkno 0x%08llx",
+			 global_super->mounted_clients.ref.blkno);
+		if (repair && force) {
+			global_super->mounted_clients.ref.blkno = 0;
+			ret = super_commit();
+		} else {
+			fprintf(stderr, "Refusing to repair PB_MOUNTED_CLIENTS_REF_BLKNO.\n"
+				"Assure the filesystem is truly unmounted by disabling auto mount\n"
+				"and rebooting the system before retrying with `--force`.\n");
+		}
+	}
+
+	return ret;
+}
+
+/*
+ * Writes back any change to global_super. Caller must have called check_supers()
+ * Only writes back the super to the metadata device.
+ */
+int super_commit(void)
+{
+	struct scoutfs_super_block *super = NULL;
+	struct block *blk = NULL;
+	int ret;
+
+	ret = block_get(&blk, SCOUTFS_SUPER_BLKNO, BF_SM | BF_DIRTY);
+	if (ret < 0) {
+		fprintf(stderr, "error reading super block\n");
+		return ret;
+	}
+
+	super = block_buf(blk);
+
+	memcpy(super, global_super, sizeof(struct scoutfs_super_block));
+
+	/* recalculate the CRC */
+	super->hdr.crc = crc_block((struct scoutfs_block_header *)super, block_size(blk));
+
+	block_try_commit(true);
+
+	block_put(&blk);
+
+	return 0;
+}
+
+/*
  * After checking the supers we save a copy of it in a global buffer that's used by
  * other modules to track the current super.  It can be modified and written during commits.
  */

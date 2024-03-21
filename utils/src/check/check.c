@@ -31,6 +31,7 @@ struct check_args {
 	char *meta_device;
 	char *data_device;
 	char *debug_path;
+	bool force;
 	bool repair;
 };
 
@@ -85,6 +86,7 @@ static int do_check(struct check_args *args)
 	 * check loop without any problems fixed, we stop trying.
 	 */
 	ret = check_supers() ?:
+	      check_super_in_use(meta_fd, args->repair, args->force) ?:
 	      check_meta_alloc() ?:
 	      check_super_crc(args->repair);
 
@@ -123,6 +125,9 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	case 'd':
 		args->debug_path = strdup_or_error(state, arg);
 		break;
+	case 'f':
+		args->force = true;
+		break;
 	case 'r':
 		args->repair = true;
 		break;
@@ -150,6 +155,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 
 static struct argp_option options[] = {
 	{ "debug", 'd', "FILE_PATH", 0, "Path to debug output file, will be created or truncated"},
+	{ "force", 'f', NULL, 0, "Force check or repair to continue through certain conditions"},
 	{ "repair", 'r', NULL, 0, "Repair detected issues"},
 	{ NULL }
 };
@@ -204,6 +210,7 @@ static int check_cmd(int argc, char **argv)
 	 * repair is off by default
 	 */
 	check_args.repair = false;
+	check_args.force = false;
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &check_args);
 	if (ret)

@@ -14,6 +14,33 @@ CLOBBERS=(
 "PB_SB_HDR_CRC_INVALID,"
 )
 
+# test that we can't check/repair mounted filesystems
+echo "== cannot check mounted"
+scoutfs mkfs -A -f -Q 0,127.0.0.1,53000 "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
+	t_fail "mkfs failed"
+SCR="$T_TMPDIR/mnt.scratch"
+mkdir -p "$SCR"
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$SCR"
+scoutfs check "$T_EX_META_DEV" "$T_EX_DATA_DEV" 2>&1 | sed "s|${T_EX_META_DEV}|T_EXT_META_DEV|g"
+umount "$SCR"
+rmdir "$SCR"
+scoutfs check "$T_EX_META_DEV" "$T_EX_DATA_DEV" || \
+	t_fail "must check when not mounted"
+
+echo "== clobber to appear mounted"
+scoutfs clobber "$T_EX_META_DEV" "$T_EX_DATA_DEV" PB_MOUNTED_CLIENTS_REF_BLKNO
+scoutfs check "$T_EX_META_DEV" "$T_EX_DATA_DEV" && \
+	t_fail "must fail when appears to be mounted"
+scoutfs check --repair "$T_EX_META_DEV" "$T_EX_DATA_DEV" && \
+	t_fail "must fail when repairing without force flag"
+scoutfs check --repair --force "$T_EX_META_DEV" "$T_EX_DATA_DEV"
+test $? -eq 4 || t_fail "a problem should have been found"
+scoutfs check "$T_EX_META_DEV" "$T_EX_DATA_DEV"
+test $? -eq 0 || t_fail "the problem should have been fixed"
+
+#
+# automated clobber testing
+#
 for n in $(seq 0 $(( ${#CLOBBERS[@]} - 1 )) ) ; do
 	CLOBBER_FN="$(echo ${CLOBBERS[$n]} | cut -d, -f1)"
 	CLOBBER_DATA="$(echo ${CLOBBERS[$n]} | cut -d, -s -f2-)"

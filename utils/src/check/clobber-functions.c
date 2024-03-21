@@ -32,6 +32,28 @@
 #include "clobber.h"
 
 /*
+ * Clobber mounted_clients to make the fs appear to be mounted
+ */
+
+static int do_clobber_mounted_clients_ref_blkno(char *data)
+{
+	/*
+	 * Put a completely unreachable large value in here, but
+	 * one that we can recognize and "repair"
+	 */
+	global_super->mounted_clients.ref.blkno = SCOUTFS_SUPER_MAGIC;
+
+	return super_commit();
+}
+
+static struct clobber_function clobber_mounted_clients_ref_blkno = {
+	PB_MOUNTED_CLIENTS_REF_BLKNO,
+	"Makes the device appear to have mounted clients.\n" \
+	"DATA: no data used by this function\n",
+	&do_clobber_mounted_clients_ref_blkno,
+};
+
+/*
  * Clobber a meta extent
  */
 static int do_clobber_pb_meta_extent_invalid(char *data)
@@ -95,5 +117,6 @@ static struct clobber_function clobber_pb_sb_hdr_crc_invalid = {
 struct clobber_function *clobber_functions[] = {
 	&clobber_pb_meta_extent_invalid,
 	&clobber_pb_sb_hdr_crc_invalid,
+	&clobber_mounted_clients_ref_blkno,
 	NULL,
 };
