@@ -82,6 +82,12 @@ int check_supers(void)
 	super = block_buf(blk);
 
 	memcpy(global_super, super, sizeof(struct scoutfs_super_block));
+
+	debug("super magic 0x%04x", global_super->hdr.magic);
+	if (global_super->hdr.magic != SCOUTFS_BLOCK_MAGIC_SUPER)
+		problem(PB_SB_HDR_MAGIC_INVALID, "superblock magic invalid: 0x%04x is not 0x%04x",
+			global_super->hdr.magic, SCOUTFS_BLOCK_MAGIC_SUPER);
+
 	ret = 0;
 out:
 	block_put(&blk);
