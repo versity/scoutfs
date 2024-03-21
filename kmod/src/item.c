@@ -1963,7 +1963,7 @@ int scoutfs_item_create(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock)
 {
 	return item_create(sb, key, val, val_len, lock, NULL,
-			   SCOUTFS_LOCK_READ, false);
+			   SCOUTFS_LOCK_WRITE, false);
 }
 
 int scoutfs_item_create_force(struct super_block *sb, struct scoutfs_key *key,
