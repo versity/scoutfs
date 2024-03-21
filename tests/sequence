@@ -12,12 +12,14 @@ data-prealloc.sh
 setattr_more.sh
 offline-extent-waiting.sh
 move-blocks.sh
+projects.sh
 large-fragmented-free.sh
 enospc.sh
 srch-safe-merge-pos.sh
 srch-basic-functionality.sh
 simple-xattr-unit.sh
 totl-xattr-tag.sh
+quota.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
 lock-pr-cw-conflict.sh

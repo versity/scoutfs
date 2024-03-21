@@ -30,6 +30,8 @@ struct recov_info;
 struct omap_info;
 struct volopt_info;
 struct fence_info;
+struct wkic_info;
+struct squota_info;
 
 struct scoutfs_sb_info {
 	struct super_block *sb;
@@ -55,6 +57,8 @@ struct scoutfs_sb_info {
 	struct omap_info *omap_info;
 	struct volopt_info *volopt_info;
 	struct item_cache_info *item_cache_info;
+	struct wkic_info *wkic_info;
+	struct squota_info *squota_info;
 	struct fence_info *fence_info;
 
 	/* tracks tasks waiting for data extents */

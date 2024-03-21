@@ -199,10 +199,7 @@
 	EXPAND_COUNTER(srch_read_stale)				\
 	EXPAND_COUNTER(statfs)					\
 	EXPAND_COUNTER(totl_read_copied)			\
-	EXPAND_COUNTER(totl_read_finalized)			\
-	EXPAND_COUNTER(totl_read_fs)				\
 	EXPAND_COUNTER(totl_read_item)				\
-	EXPAND_COUNTER(totl_read_logged)			\
 	EXPAND_COUNTER(trans_commit_data_alloc_low)		\
 	EXPAND_COUNTER(trans_commit_dirty_meta_full)		\
 	EXPAND_COUNTER(trans_commit_fsync)			\

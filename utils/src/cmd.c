@@ -70,7 +70,7 @@ static void usage(void)
 	fprintf(stderr, "Selected fs defaults to current working directory.\n");
 	fprintf(stderr, "See <command> --help for more details.\n");
 
-	fprintf(stderr, "\nSupported format version: %u-%u\n",
+	fprintf(stderr, "\nSupported format version: %llu-%llu\n",
 			SCOUTFS_FORMAT_VERSION_MIN, SCOUTFS_FORMAT_VERSION_MAX);
 
 	fprintf(stderr, "\nCore admin:\n");

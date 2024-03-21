@@ -49,6 +49,8 @@
 #include "volopt.h"
 #include "fence.h"
 #include "xattr.h"
+#include "wkic.h"
+#include "quota.h"
 #include "scoutfs_trace.h"
 
 static struct dentry *scoutfs_debugfs_root;
@@ -194,7 +196,9 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_shutdown_trans(sb);
 	scoutfs_volopt_destroy(sb);
 	scoutfs_client_destroy(sb);
+	scoutfs_quota_destroy(sb);
 	scoutfs_inode_destroy(sb);
+	scoutfs_wkic_destroy(sb);
 	scoutfs_item_destroy(sb);
 	scoutfs_forest_destroy(sb);
 	scoutfs_data_destroy(sb);
@@ -326,7 +330,7 @@ static int scoutfs_read_super_from_bdev(struct super_block *sb,
 
 	if (le64_to_cpu(super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN ||
 	    le64_to_cpu(super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX) {
-		scoutfs_err(sb, "super block has format version %llu outside of supported version range %u-%u",
+		scoutfs_err(sb, "super block has format version %llu outside of supported version range %llu-%llu",
 			    le64_to_cpu(super->fmt_vers), SCOUTFS_FORMAT_VERSION_MIN,
 			    SCOUTFS_FORMAT_VERSION_MAX);
 		ret = -EINVAL;
@@ -544,7 +548,9 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_block_setup(sb) ?:
 	      scoutfs_forest_setup(sb) ?:
 	      scoutfs_item_setup(sb) ?:
+	      scoutfs_wkic_setup(sb) ?:
 	      scoutfs_inode_setup(sb) ?:
+	      scoutfs_quota_setup(sb) ?:
 	      scoutfs_data_setup(sb) ?:
 	      scoutfs_setup_trans(sb) ?:
 	      scoutfs_omap_setup(sb) ?:
@@ -662,6 +668,10 @@ static int __init scoutfs_module_init(void)
 	ret = scoutfs_sysfs_init();
 	if (ret)
 		return ret;
+
+	if (SCOUTFS_FORMAT_VERSION_MIN & SCOUTFS_FORMAT_VER_PREREL) {
+		printk(KERN_INFO "scoutfs module using incompatible pre-release format version 0x%016llx.  This module can only mount volumes with this version, and volumes with this version will be incompatible with all other release builds.", SCOUTFS_FORMAT_VERSION_MIN);
+	}
 
 	scoutfs_debugfs_root = debugfs_create_dir("scoutfs", NULL);
 	if (!scoutfs_debugfs_root) {

@@ -28,6 +28,7 @@
 #include "inode.h"
 #include "per_task.h"
 #include "omap.h"
+#include "quota.h"
 
 #ifdef KC_LINUX_HAVE_FOP_AIO_READ
 /*
@@ -122,6 +123,10 @@ retry:
 			goto out;
 	}
 
+	ret = scoutfs_quota_check_data(sb, inode);
+	if (ret)
+		goto out;
+
 	/* XXX: remove SUID bit */
 
 	ret = __generic_file_aio_write(iocb, iov, nr_segs, &iocb->ki_pos);
@@ -171,10 +176,8 @@ retry:
 		goto out;
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, scoutfs_inode_lock)) {
-		ret = scoutfs_data_wait_check_iter(inode, iocb->ki_pos, to,
-						   SEF_OFFLINE,
-						   SCOUTFS_IOC_DWO_READ,
-						   &dw, scoutfs_inode_lock);
+		ret = scoutfs_data_wait_check(inode, iocb->ki_pos, iov_iter_count(to), SEF_OFFLINE,
+					      SCOUTFS_IOC_DWO_READ, &dw, scoutfs_inode_lock);
 		if (ret != 0)
 			goto out;
 	} else {
@@ -205,8 +208,7 @@ ssize_t scoutfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct scoutfs_lock *scoutfs_inode_lock = NULL;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	DECLARE_DATA_WAIT(dw);
-	int ret;
-	int written;
+	ssize_t ret;
 
 retry:
 	inode_lock(inode);
@@ -223,19 +225,21 @@ retry:
 	if (ret)
 		goto out;
 
+	ret = scoutfs_quota_check_data(sb, inode);
+	if (ret)
+		goto out;
+
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, scoutfs_inode_lock)) {
 		/* data_version is per inode, whole file must be online */
-		ret = scoutfs_data_wait_check_iter(inode, iocb->ki_pos, from,
-						   SEF_OFFLINE,
-						   SCOUTFS_IOC_DWO_WRITE,
-						   &dw, scoutfs_inode_lock);
+		ret = scoutfs_data_wait_check(inode, 0, i_size_read(inode), SEF_OFFLINE,
+					      SCOUTFS_IOC_DWO_WRITE, &dw, scoutfs_inode_lock);
 		if (ret != 0)
 			goto out;
 	}
 
 	/* XXX: remove SUID bit */
 
-	written = __generic_file_write_iter(iocb, from);
+	ret = __generic_file_write_iter(iocb, from);
 
 out:
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
@@ -248,10 +252,10 @@ out:
 			goto retry;
 	}
 
-	if (ret > 0 || ret == -EIOCBQUEUED)
-		ret = generic_write_sync(iocb, written);
+	if (ret > 0)
+		ret = generic_write_sync(iocb, ret);
 
-	return written ? written : ret;
+	return ret;
 }
 #endif
 
