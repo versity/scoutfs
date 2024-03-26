@@ -88,6 +88,10 @@ static int btree_ref_meta_iter(struct scoutfs_block_ref *ref, unsigned level, ex
 	if (ret < 0)
 		return ret;
 
+	ret = block_hdr_valid(blk, blkno, 0, SCOUTFS_BLOCK_MAGIC_BTREE);
+	if (ret < 0)
+		return ret;
+
 	sns_push("btree_parent", blkno, 0);
 
 	bt = block_buf(blk);
@@ -156,6 +160,10 @@ static int btree_ref_item_iter(struct scoutfs_block_ref *ref, unsigned level,
 		sns_push("btree_parent", blkno, 0);
 	else
 		sns_push("btree_leaf", blkno, 0);
+
+	ret = block_hdr_valid(blk, blkno, 0, SCOUTFS_BLOCK_MAGIC_BTREE);
+	if (ret < 0)
+		return ret;
 
 	bt = block_buf(blk);
 
