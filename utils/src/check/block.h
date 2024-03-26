@@ -29,4 +29,6 @@ int block_try_commit(bool force);
 int block_setup(int meta_fd, size_t max_cached_bytes, size_t max_dirty_bytes);
 void block_shutdown(void);
 
+int block_hdr_valid(struct block *blk, u64 blkno, int bf, u32 magic);
+
 #endif
