@@ -17,7 +17,10 @@
 
 #include "block.h"
 #include "debug.h"
+#include "super.h"
 #include "eno.h"
+#include "crc.h"
+#include "sns.h"
 
 static struct block_data {
 	struct list_head *hash_lists;
@@ -295,6 +298,45 @@ static struct list_head *hash_bucket(struct block_data *bdat, u64 blkno)
 	u32 hash = scoutfs_hash32(&blkno, sizeof(blkno));
 
 	return &bdat->hash_lists[hash % bdat->hash_nr];
+}
+
+int block_hdr_valid(struct block *blk, u64 blkno, int bf, u32 magic)
+{
+	struct scoutfs_block_header *hdr;
+	size_t size = (bf & BF_SM) ? SCOUTFS_BLOCK_SM_SIZE : SCOUTFS_BLOCK_LG_SIZE;
+	int ret;
+	u32 crc;
+
+	ret = block_get(&blk, blkno, bf);
+	if (ret < 0) {
+		fprintf(stderr, "error reading block %llu\n", blkno);
+		goto out;
+	}
+
+	hdr = block_buf(blk);
+
+	crc = crc_block(hdr, size);
+
+	if ((le32_to_cpu(hdr->crc) != crc) ||
+	    (le32_to_cpu(hdr->magic) != magic))
+		ret = -EINVAL;
+
+	/*
+	 * Our first caller fills in global_super. Until this completes,
+	 * we can't do this check.
+	 */
+	if ((blkno != SCOUTFS_SUPER_BLKNO) &&
+	    (hdr->fsid != global_super->hdr.fsid))
+		ret = -EINVAL;
+
+	block_put(&blk);
+
+	debug("%s blk_hdr_valid blkno %llu size %lu crc 0x%08x magic 0x%08x ret %d",
+	      sns_str(), blkno, size, le32_to_cpu(hdr->crc), le32_to_cpu(hdr->magic),
+	      ret);
+
+out:
+	return ret;
 }
 
 static struct block *get_or_alloc(struct block_data *bdat, u64 blkno, int bf)

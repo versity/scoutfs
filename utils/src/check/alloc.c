@@ -50,6 +50,10 @@ int alloc_list_meta_iter(struct scoutfs_alloc_list_head *lhead, extent_cb_t cb, 
 
 		lblk = block_buf(blk);
 		/* XXX verify block */
+		ret = block_hdr_valid(blk, blkno, 0, SCOUTFS_BLOCK_MAGIC_ALLOC_LIST);
+		if (ret < 0)
+			goto out;
+
 		/* XXX sort?   maybe */
 
 		ref = lblk->next;
@@ -89,6 +93,9 @@ int alloc_list_extent_iter(struct scoutfs_alloc_list_head *lhead, extent_cb_t cb
 
 		lblk = block_buf(blk);
 		/* XXX verify block */
+		ret = block_hdr_valid(blk, blkno, 0, SCOUTFS_BLOCK_MAGIC_ALLOC_LIST);
+		if (ret < 0)
+			goto out;
 		/* XXX sort?   maybe */
 
 		ret = 0;
