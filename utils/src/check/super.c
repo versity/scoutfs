@@ -28,6 +28,8 @@ int check_supers(void)
 	struct block *blk = NULL;
 	int ret;
 
+	sns_push("supers", 0, 0);
+
 	global_super = malloc(sizeof(struct scoutfs_super_block));
 	if (!global_super) {
 		fprintf(stderr, "error allocating super block buffer\n");
@@ -41,12 +43,18 @@ int check_supers(void)
 		goto out;
 	}
 
+	ret = block_hdr_valid(blk, SCOUTFS_SUPER_BLKNO, BF_SM, SCOUTFS_BLOCK_MAGIC_SUPER);
+	if (ret < 0)
+		return ret;
+
 	super = block_buf(blk);
 
 	memcpy(global_super, super, sizeof(struct scoutfs_super_block));
 	ret = 0;
 out:
 	block_put(&blk);
+
+	sns_pop();
 
 	return ret;
 }
