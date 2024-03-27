@@ -127,6 +127,19 @@ static struct clobber_function clobber_pb_sb_bad_flag = {
 	&do_clobber_pb_sb_bad_flag,
 };
 
+static int do_clobber_pb_qconf_wrong_version(char *data)
+{
+	global_super->qconf.version = 0;
+	return super_commit();
+}
+
+static struct clobber_function clobber_pb_qconf_wrong_version = {
+	PB_QCONF_WRONG_VERSION,
+	"Sets quorum config version to 0.\n" \
+	"DATA: no data used by this function\n",
+	&do_clobber_pb_qconf_wrong_version,
+};
+
 /*
  * list all clobber functions
  */
@@ -135,5 +148,6 @@ struct clobber_function *clobber_functions[] = {
 	&clobber_pb_sb_hdr_crc_invalid,
 	&clobber_mounted_clients_ref_blkno,
 	&clobber_pb_sb_bad_flag,
+	&clobber_pb_qconf_wrong_version,
 	NULL,
 };

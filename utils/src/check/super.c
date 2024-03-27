@@ -263,8 +263,19 @@ int check_supers(int data_fd, bool repair)
 			SCOUTFS_FORMAT_VERSION_MAX);
 
 	debug("Quorum Config Version: %llu", global_super->qconf.version);
-	if (global_super->qconf.version != 1)
+	if (global_super->qconf.version != 1) {
 		problem(PB_QCONF_WRONG_VERSION, "Wrong Version: %llu (expected 1)", global_super->qconf.version);
+		if (repair) {
+			global_super->qconf.version = 1;
+			ret = super_commit();
+
+			if (ret < 0) {
+				fprintf(stderr, "error writing superblock\n");
+				goto out;
+			} else
+				correct(PB_QCONF_WRONG_VERSION);
+		}
+	}
 
 	for (int i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		slot = &global_super->qconf.slots[i];
