@@ -85,7 +85,7 @@ static int do_check(struct check_args *args)
 	 * problems and are making actual repair progress. IOW - when we do a full
 	 * check loop without any problems fixed, we stop trying.
 	 */
-	ret = check_supers(data_fd) ?:
+	ret = check_supers(data_fd, args->repair) ?:
 	      check_super_in_use(meta_fd, args->repair, args->force) ?:
 	      check_meta_alloc() ?:
 	      check_super_crc(args->repair);

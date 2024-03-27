@@ -112,11 +112,28 @@ static struct clobber_function clobber_pb_sb_hdr_crc_invalid = {
 };
 
 /*
+ * Clobber the superblock flag by setting to bogus value;
+ */
+static int do_clobber_pb_sb_bad_flag(char *data)
+{
+	global_super->flags |= 0xfc;
+	return super_commit();
+}
+
+static struct clobber_function clobber_pb_sb_bad_flag = {
+	PB_SB_BAD_FLAG,
+	"Sets an invalid value for the flags field in the superblock.\n" \
+	"DATA: no data used by this function\n",
+	&do_clobber_pb_sb_bad_flag,
+};
+
+/*
  * list all clobber functions
  */
 struct clobber_function *clobber_functions[] = {
 	&clobber_pb_meta_extent_invalid,
 	&clobber_pb_sb_hdr_crc_invalid,
 	&clobber_mounted_clients_ref_blkno,
+	&clobber_pb_sb_bad_flag,
 	NULL,
 };

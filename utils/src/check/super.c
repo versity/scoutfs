@@ -194,7 +194,7 @@ out:
  * After checking the supers we save a copy of it in a global buffer that's used by
  * other modules to track the current super.  It can be modified and written during commits.
  */
-int check_supers(int data_fd)
+int check_supers(int data_fd, bool repair)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct block *blk = NULL;
@@ -241,8 +241,19 @@ int check_supers(int data_fd)
 	debug("super magic 0x%04x", global_super->hdr.magic);
 
 	debug("Superblock flag: %llu", global_super->flags);
-	if (global_super->flags != SCOUTFS_FLAG_IS_META_BDEV)
+	if (global_super->flags != SCOUTFS_FLAG_IS_META_BDEV) {
 		problem(PB_SB_BAD_FLAG, "Bad flag: %llu expecting: 1 or 0", global_super->flags);
+		if (repair) {
+			global_super->flags = SCOUTFS_FLAG_IS_META_BDEV;
+			ret = super_commit();
+
+			if (ret < 0) {
+				fprintf(stderr, "error writing superblock\n");
+				goto out;
+			} else
+				correct(PB_SB_BAD_FLAG);
+		}
+	}
 
 	debug("Superblock fmt_vers: %llu", le64_to_cpu(global_super->fmt_vers));
 	if ((le64_to_cpu(global_super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN) ||

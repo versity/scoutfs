@@ -12,6 +12,7 @@ t_require_commands scoutfs
 #
 CLOBBERS=(
 "PB_SB_HDR_CRC_INVALID,"
+"PB_SB_BAD_FLAG,"
 )
 
 # test that we can't check/repair mounted filesystems

@@ -82,7 +82,7 @@ static int do_clobber(struct clobber_args *args)
 	if (ret < 0)
 		goto out;
 
-	ret = check_supers(data_fd);
+	ret = check_supers(data_fd, false);
 	if (ret < 0)
 		goto out;
 
