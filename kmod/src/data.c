@@ -1992,7 +1992,7 @@ retry:
 			scoutfs_inode_index_prepare(sb, &wbd.ind_locks, inode,
 						    true) ?:
 			scoutfs_inode_index_try_lock_hold(sb, &wbd.ind_locks,
-							  ind_seq);
+							  ind_seq, false);
 	} while (err > 0);
 	if (err < 0) {
 		ret = VM_FAULT_ERROR;

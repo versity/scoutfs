@@ -60,26 +60,20 @@ EOF
 
 cat << EOF > local.exclude
 generic/003	# missing atime update in buffered read
-generic/029	# mmap missing
-generic/030	# mmap missing
+generic/023	# renameat2 not implemented
+generic/024	# renameat2 not implemented
+generic/025	# renameat2 not implemented
 generic/075	# file content mismatch failures (fds, etc)
-generic/080	# mmap missing
+generic/078	# renameat2 not implemented
 generic/103	# enospc causes trans commit failures
 generic/108	# mount fails on failing device?
 generic/112	# file content mismatch failures (fds, etc)
-generic/120	# (can't exec 'cause no mmap)
-generic/126	# (can't exec 'cause no mmap)
-generic/141	# mmap missing
 generic/213	# enospc causes trans commit failures
-generic/215	# mmap missing
-generic/246	# mmap missing
-generic/247	# mmap missing
-generic/248	# mmap missing
 generic/318	# can't support user namespaces until v5.11
+generic/237	# wrong error return from failing setfacl?
+generic/319	# utils output change?  update branch?
 generic/321	# requires selinux enabled for '+' in ls?
-generic/325	# mmap missing
 generic/338	# BUG_ON update inode error handling
-generic/346	# mmap missing
 generic/347	# _dmthin_mount doesn't work?
 EOF
 
