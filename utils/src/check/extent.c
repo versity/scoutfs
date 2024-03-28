@@ -208,7 +208,8 @@ static int walk_insert(struct extent_root *root, u64 start, u64 len, int found_e
 
 	ret = 0;
 out:
-	debug("start %llu len %llu ret %d", start, len, ret);
+	if (ret < 0)
+		debug("start %llu len %llu ret %d", start, len, ret);
 	return ret;
 }
 
