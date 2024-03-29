@@ -51,6 +51,7 @@ int check_super_crc(bool repair)
 		if (repair) {
 			super->hdr.crc = crc;
 			block_try_commit(true);
+			correct(PB_SB_HDR_CRC_INVALID);
 		}
 	}
 	block_put(&blk);
@@ -81,6 +82,7 @@ int check_super_in_use(int meta_fd, bool repair, bool force)
 		if (repair && force) {
 			global_super->mounted_clients.ref.blkno = 0;
 			ret = super_commit();
+			correct(PB_MOUNTED_CLIENTS_REF_BLKNO);
 		} else {
 			fprintf(stderr, "Refusing to repair PB_MOUNTED_CLIENTS_REF_BLKNO.\n"
 				"Assure the filesystem is truly unmounted by disabling auto mount\n"

@@ -30,7 +30,15 @@ do {										\
 	problem_record(pb);							\
 } while (0)
 
+#define correct(pb)								\
+do {										\
+	debug("corrected one count of problem: "#pb); \
+	problem_corrected_record(pb);						\
+} while (0)
+
 void problem_record(prob_t pb);
+void problem_corrected_record(prob_t pb);
 uint64_t problems_count(void);
+uint64_t problems_corrected_count(void);
 
 #endif

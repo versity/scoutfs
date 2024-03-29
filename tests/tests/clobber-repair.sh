@@ -34,7 +34,7 @@ scoutfs check "$T_EX_META_DEV" "$T_EX_DATA_DEV" && \
 scoutfs check --repair "$T_EX_META_DEV" "$T_EX_DATA_DEV" && \
 	t_fail "must fail when repairing without force flag"
 scoutfs check --repair --force "$T_EX_META_DEV" "$T_EX_DATA_DEV"
-test $? -eq 4 || t_fail "a problem should have been found"
+test $? -eq 5 || t_fail "a problem should have been found"
 scoutfs check "$T_EX_META_DEV" "$T_EX_DATA_DEV"
 test $? -eq 0 || t_fail "the problem should have been fixed"
 
@@ -78,7 +78,7 @@ for n in $(seq 0 $(( ${#CLOBBERS[@]} - 1 )) ) ; do
 
 	echo "== repair [${n}] ${CLOBBER_FN} ${CLOBBER_DATA} damage"
 	scoutfs check --repair "$T_EX_META_DEV" "$T_EX_DATA_DEV"
-	test $? -eq 4 || t_fail "a problem should have been found, and repaired"
+	test $? -eq 5 || t_fail "a problem should have been found, and repaired"
 
 	echo "== detect [${n}] ${CLOBBER_FN} ${CLOBBER_DATA} damage is repaired"
 	scoutfs check "$T_EX_META_DEV" "$T_EX_DATA_DEV"

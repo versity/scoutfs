@@ -220,10 +220,11 @@ static int check_cmd(int argc, char **argv)
 	if (ret < 0)
 		ret = FSCK_EX_ERROR;
 
-	//FIXME: we should determine whether we can return FSCK_EX_NONDESTRUCT somehow
-
 	if (problems_count() > 0)
 		ret |= FSCK_EX_UNCORRECTED;
+
+	if (problems_corrected_count() > 0)
+		ret |= FSCK_EX_NONDESTRUCT;
 
 	exit(ret);
 }
