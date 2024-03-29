@@ -244,6 +244,13 @@ int check_supers(int data_fd)
 	if (global_super->flags != SCOUTFS_FLAG_IS_META_BDEV)
 		problem(PB_SB_BAD_FLAG, "Bad flag: %llu expecting: 1 or 0", global_super->flags);
 
+	debug("Superblock fmt_vers: %llu", le64_to_cpu(global_super->fmt_vers));
+	if ((le64_to_cpu(global_super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN) ||
+	    (le64_to_cpu(global_super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX))
+		problem(PB_SB_BAD_FMT_VERS, "Bad fmt_vers: %llu outside supported range (%d-%d)",
+			le64_to_cpu(global_super->fmt_vers), SCOUTFS_FORMAT_VERSION_MIN,
+			SCOUTFS_FORMAT_VERSION_MAX);
+
 	debug("Quorum Config Version: %llu", global_super->qconf.version);
 	if (global_super->qconf.version != 1)
 		problem(PB_QCONF_WRONG_VERSION, "Wrong Version: %llu (expected 1)", global_super->qconf.version);
