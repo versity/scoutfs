@@ -1,6 +1,7 @@
 %define kmod_name scoutfs
 %define kmod_version @@VERSION@@
 %define kmod_git_hash @@GITHASH@@
+%define kmod_git_describe @@GITDESCRIBE@@
 %define pkg_date %(date +%%Y%%m%%d)
 
 # Disable the building of the debug package(s).
@@ -75,7 +76,7 @@ echo "Building for kernel: %{kernel_version} flavors: '%{flavors_to_build}'"
 for flavor in %flavors_to_build; do
     rm -rf obj/$flavor
     cp -r source obj/$flavor
-    make SK_KSRC=%{kernel_source $flavor} -C obj/$flavor module
+    make RPM_GITHASH=%{kmod_git_hash} SCOUTFS_GIT_DESCRIBE=%{kmod_git_describe} SK_KSRC=%{kernel_source $flavor} -C obj/$flavor module
 done
 
 %install
