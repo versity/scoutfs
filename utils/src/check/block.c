@@ -317,8 +317,15 @@ int block_hdr_valid(struct block *blk, u64 blkno, int bf, u32 magic)
 
 	crc = crc_block(hdr, size);
 
-	if ((le32_to_cpu(hdr->crc) != crc) ||
-	    (le32_to_cpu(hdr->magic) != magic))
+	/*
+	 * a bad CRC is easy to repair, so we pass a different error code
+	 * back. Unless the other data is also wrong - then it's EINVAL
+	 * to signal that this isn't a valid block hdr at all.
+	 */
+	if (le32_to_cpu(hdr->crc) != crc)
+		ret = -EIO; /* keep checking other fields */
+
+	if (le32_to_cpu(hdr->magic) != magic)
 		ret = -EINVAL;
 
 	/*

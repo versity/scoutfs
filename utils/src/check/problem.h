@@ -19,6 +19,7 @@ typedef enum {
 	PB_QSLOT_BAD_PORT,
 	PB_QSLOT_NO_ADDR,
 	PB_QSLOT_BAD_ADDR,
+	PB_DATA_DEV_SB_INVALID,
 	PB__NR,
 } prob_t;
 

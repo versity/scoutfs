@@ -124,10 +124,77 @@ int super_commit(void)
 }
 
 /*
+ * quick glance data device superblock checks.
+ *
+ * -EIO for crc failures, all others -EINVAL
+ *
+ * caller must have run check_supers() first so that global_super is
+ * setup, so that we can cross-ref to it.
+ */
+static int check_data_super(int data_fd)
+{
+	struct scoutfs_super_block *super = NULL;
+	char *buf;
+	int ret = 0;
+	u32 crc;
+	ssize_t size = SCOUTFS_BLOCK_SM_SIZE;
+	off_t off = SCOUTFS_SUPER_BLKNO << SCOUTFS_BLOCK_SM_SHIFT;
+
+	buf = aligned_alloc(4096, size); /* XXX static alignment :/ */
+	if (!buf)
+		return -ENOMEM;
+
+	memset(buf, 0, size);
+
+	if (lseek(data_fd, off, SEEK_SET) != off)
+		return -errno;
+
+	if (read(data_fd, buf, size) < 0) {
+		ret = -errno;
+		goto out;
+	}
+
+	super = (struct scoutfs_super_block *)buf;
+
+	crc = crc_block((struct scoutfs_block_header *)buf, size);
+
+	debug("data fsid 0x%016llx", le64_to_cpu(super->hdr.fsid));
+	debug("data super magic 0x%04x", super->hdr.magic);
+	debug("data crc calc 0x%08x exp 0x%08x %s", crc, le32_to_cpu(super->hdr.crc),
+	      crc == le32_to_cpu(super->hdr.crc) ? "(match)" : "(mismatch)");
+	debug("data flags %llu fmt_vers %llu", le64_to_cpu(super->flags), le64_to_cpu(super->fmt_vers));
+
+	if (crc != le32_to_cpu(super->hdr.crc))
+		/* tis but a scratch */
+		ret = -EIO;
+
+	if (le64_to_cpu(super->hdr.fsid) != le64_to_cpu(global_super->hdr.fsid))
+		/* mismatched data bdev? not good */
+		ret = -EINVAL;
+
+	if (super->hdr.magic != SCOUTFS_BLOCK_MAGIC_SUPER)
+		/* fsid matched but not a superblock? yikes */
+		ret = -EINVAL;
+
+	if (le64_to_cpu(super->flags) != 0) /* !SCOUTFS_FLAG_IS_META_BDEV */
+		ret = -EINVAL;
+
+	if ((le64_to_cpu(super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN) ||
+	    (le64_to_cpu(super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX))
+		ret = -EINVAL;
+
+	if (ret != 0)
+		problem(PB_DATA_DEV_SB_INVALID, "data device is invalid or corrupt (%d)", ret);
+out:
+	free(buf);
+	return ret;
+}
+
+/*
  * After checking the supers we save a copy of it in a global buffer that's used by
  * other modules to track the current super.  It can be modified and written during commits.
  */
-int check_supers(void)
+int check_supers(int data_fd)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct block *blk = NULL;
@@ -153,10 +220,20 @@ int check_supers(void)
 	}
 
 	ret = block_hdr_valid(blk, SCOUTFS_SUPER_BLKNO, BF_SM, SCOUTFS_BLOCK_MAGIC_SUPER);
-	if (ret < 0)
-		return ret;
 
 	super = block_buf(blk);
+
+	if (ret < 0) {
+		/* */
+		if (ret == -EINVAL) {
+			/* that's really bad */
+			fprintf(stderr, "superblock invalid magic\n");
+			goto out;
+		} else if (ret == -EIO)
+			/* just report/count a CRC error */
+			problem(PB_SB_HDR_MAGIC_INVALID, "superblock magic invalid: 0x%04x is not 0x%04x",
+				super->hdr.magic, SCOUTFS_BLOCK_MAGIC_SUPER);
+	}
 
 	memcpy(global_super, super, sizeof(struct scoutfs_super_block));
 
@@ -202,7 +279,11 @@ int check_supers(void)
 		problem(PB_SB_HDR_MAGIC_INVALID, "superblock magic invalid: 0x%04x is not 0x%04x",
 			global_super->hdr.magic, SCOUTFS_BLOCK_MAGIC_SUPER);
 
-	ret = 0;
+	/* `scoutfs image` command doesn't open data_fd */
+	if (data_fd < 0)
+		ret = 0;
+	else
+		ret = check_data_super(data_fd);
 out:
 	block_put(&blk);
 
