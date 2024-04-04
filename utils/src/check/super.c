@@ -199,7 +199,7 @@ int check_supers(int data_fd, bool repair)
 	struct scoutfs_super_block *super = NULL;
 	struct block *blk = NULL;
 	struct scoutfs_quorum_slot* slot = NULL;
-	struct in_addr in;
+	uint32_t addr;
 	uint16_t family;
 	uint16_t port;
 	int ret;
@@ -281,25 +281,26 @@ int check_supers(int data_fd, bool repair)
 		slot = &global_super->qconf.slots[i];
 		family = le16_to_cpu(slot->addr.v4.family);
 		port = le16_to_cpu(slot->addr.v4.port);
-		in.s_addr = htonl(slot->addr.v4.addr);
+		addr = le64_to_cpu(slot->addr.v4.addr);
 
 		if (family == SCOUTFS_AF_NONE) {
 			debug("Quorum slot %u is empty", i);
 			continue;
 		}
 
-		debug("Quorum slot %u family: %u, port: %u, address: %s", i, family, port, inet_ntoa(in));
+		debug("Quorum slot %u family: %u, port: %u, address: %u.%u.%u.%u", i, family, port, (addr >> 24) & 0xff, (addr >> 16) & 0xff,
+																							(addr >> 8) & 0xff, addr & 0xff);
 		if (family != SCOUTFS_AF_IPV4)
-			problem(PB_QSLOT_BAD_FAM, "Quorum Slot %u doesn't have valid address", i);
+			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u doesn't have valid address family", i);
 
 		if (port == 0)
-			problem(PB_QSLOT_BAD_PORT, "Quorum Slot %u has bad port", i);
+			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has bad port", i);
 
-		if (!in.s_addr) {
-			problem(PB_QSLOT_NO_ADDR, "Quorum Slot %u has not been assigned ipv4 address", i);
-		} else if (!(in.s_addr & 0xff000000)) {
+		if (!addr) {
+			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has not been assigned ipv4 address", i);
+		} else if (!(addr & 0x000000ff)) {
 			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address", i);
-		} else if ((in.s_addr & 0xff) == 0xff) {
+		} else if ((addr & 0xff) == 0xff) {
 			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address", i);
 		}
 	}
