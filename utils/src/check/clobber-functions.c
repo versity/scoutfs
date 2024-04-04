@@ -141,6 +141,57 @@ static struct clobber_function clobber_pb_qconf_wrong_version = {
 };
 
 /*
+ * Pick a random non-empty quorum slot then returns a pointer to that slot
+ */
+static struct scoutfs_quorum_slot *pick_random_qslot(void)
+{
+	int j = 0;
+	int filled_slots[SCOUTFS_QUORUM_MAX_SLOTS];
+	int rand_slot;
+	uint16_t family;
+	srandom(time(NULL));
+
+	for (int i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		family = le16_to_cpu(global_super->qconf.slots[i].addr.v4.family);
+		if (family == SCOUTFS_AF_NONE)
+			continue;
+
+		filled_slots[j] = i;
+		j++;
+	}
+	rand_slot = filled_slots[(random() % (j-1))];
+	return &global_super->qconf.slots[rand_slot];
+}
+
+/*
+ * Clobber a random quorum slot
+ */
+static int do_clobber_pb_qslot_bad_addr(char *data)
+{
+	struct scoutfs_quorum_slot *slot = pick_random_qslot();
+
+	if (strcmp(data, "family") == 0)
+		slot->addr.v4.family = 0xfd;
+	else if (strcmp(data, "port") == 0)
+		slot->addr.v4.port = 0;
+	else if (strcmp(data, "zero-address") == 0)
+		slot->addr.v4.addr = 0;
+	else if (strcmp(data, "wildcard") == 0)
+		slot->addr.v4.addr &= 0x00ffffff;
+	else if (strcmp(data, "broadcast") == 0)
+		slot->addr.v4.addr |= 0x000000ff;
+
+	return super_commit();
+}
+
+static struct clobber_function clobber_pb_qslot_bad_addr = {
+	PB_QSLOT_BAD_ADDR,
+	"Various clobbers for the quorum slots\n" \
+	"DATA: family, port, zero-address, wildcard, broadcast\n",
+	&do_clobber_pb_qslot_bad_addr,
+};
+
+/*
  * list all clobber functions
  */
 struct clobber_function *clobber_functions[] = {
@@ -149,5 +200,6 @@ struct clobber_function *clobber_functions[] = {
 	&clobber_mounted_clients_ref_blkno,
 	&clobber_pb_sb_bad_flag,
 	&clobber_pb_qconf_wrong_version,
+	&clobber_pb_qslot_bad_addr,
 	NULL,
 };

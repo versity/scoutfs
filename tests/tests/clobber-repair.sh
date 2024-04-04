@@ -14,6 +14,7 @@ CLOBBERS=(
 "PB_SB_HDR_CRC_INVALID,"
 "PB_SB_BAD_FLAG,"
 "PB_QCONF_WRONG_VERSION"
+"PB_QSLOT_BAD_ADDR -D family",
 )
 
 # test that we can't check/repair mounted filesystems

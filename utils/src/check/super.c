@@ -290,18 +290,40 @@ int check_supers(int data_fd, bool repair)
 
 		debug("Quorum slot %u family: %u, port: %u, address: %u.%u.%u.%u", i, family, port, (addr >> 24) & 0xff, (addr >> 16) & 0xff,
 																							(addr >> 8) & 0xff, addr & 0xff);
-		if (family != SCOUTFS_AF_IPV4)
+		if (family != SCOUTFS_AF_IPV4) {
 			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u doesn't have valid address family", i);
+			if (repair) {
+				slot->addr.v4.family = SCOUTFS_AF_IPV4;
+				ret = super_commit();
 
-		if (port == 0)
+				if (ret < 0) {
+					fprintf(stderr, "error writing superblock\n");
+					goto out;
+				} else
+					correct(PB_QSLOT_BAD_ADDR);
+			}
+		}
+
+		if (port == 0) {
 			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has bad port", i);
+			fprintf(stderr, "Quorum slot %u is listening on a restricted port %u\n"
+					"and needs to be reconfigured\n"
+					"use \'scoutfs change-quorum-config -F -Q NR,ADDR,PORT\' to"
+					"reconfigure the port\n", i, port);
+		}
 
 		if (!addr) {
 			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has not been assigned ipv4 address", i);
-		} else if (!(addr & 0x000000ff)) {
-			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address", i);
+			fprintf(stderr, "Quorum slot %u has not been assigned an ip address\n"
+					"to assign an address use \'scoutfs change-quorum-config -F -Q NR,ADDR,PORT\'\n", i);
+		} else if (!(addr & 0xff000000)) {
+			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address: Wildcard", i);
+			fprintf(stderr, "Quorum slot %u has a wildcard address ex: 0.x.x.x\n"
+					"to reassign an address use \'scoutfs change-quorum-config -F -Q NR,ADDR,PORT\'\n", i);
 		} else if ((addr & 0xff) == 0xff) {
-			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address", i);
+			problem(PB_QSLOT_BAD_ADDR, "Quorum Slot %u has invalid ipv4 address: Broadcast", i);
+			fprintf(stderr, "Quorum slot %u has a broadcast address ex: x.x.x.255\n"
+					"to reassign an address use \'scoutfs change-quorum-config -F -Q NR,ADDR,PORT\'\n", i);
 		}
 	}
 
