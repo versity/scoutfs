@@ -1091,7 +1091,6 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	inode_dio_wait(inode);
 
 	down_write(&si->extent_sem);
-	mutex_lock(&si->s_i_mutex); /* XXX */
 
 	if (!(mode & FALLOC_FL_KEEP_SIZE) &&
 	    (offset + len > i_size_read(inode))) {
@@ -1144,7 +1143,6 @@ out_extent:
 out_mutex:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 	inode_unlock(inode);
-	up_write(&si->extent_sem);
 
 out:
 	trace_scoutfs_data_fallocate(sb, ino, mode, offset, len, ret);
@@ -1608,7 +1606,6 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		ret = fill_extent(fieinfo, &cur, last_flags);
 unlock:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
-	mutex_unlock(&si->s_i_mutex);
 	up_read(&si->extent_sem);
 	inode_unlock(inode);
 
