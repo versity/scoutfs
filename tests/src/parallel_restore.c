@@ -170,6 +170,8 @@ static struct gen_inode *generate_inode(struct opts *opts, u64 ino, mode_t mode)
 
 	gino->inode = (struct scoutfs_parallel_restore_inode) {
 		.ino = ino,
+		.meta_seq = ino,
+		.data_seq = 0,
 		.mode = mode,
 		.atime = now,
 		.ctime = now,
