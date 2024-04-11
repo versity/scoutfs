@@ -98,10 +98,21 @@ find %{buildroot} -type f -name \*.ko -exec %{__chmod} u+x \{\} \;
 /lib/modules
 
 %post
-weak-modules --add-kernel --no-initramfs
+echo /lib/modules/%{kversion}/%{install_mod_dir}/scoutfs.ko | weak-modules --add-modules --no-initramfs
 depmod -a
 %endif
 
 %clean
 rm -rf %{buildroot}
 
+%preun
+# stash our modules for postun cleanup
+SCOUTFS_RPM_NAME=$(rpm -q %{name} | grep "%{version}-%{release}")
+rpm -ql $SCOUTFS_RPM_NAME | grep '\.ko$' > /var/run/%{name}-modules-%{version}-%{release} || true
+
+%postun
+if [ -x /sbin/weak-modules ]; then
+    cat /var/run/%{name}-modules-%{version}-%{release} | /sbin/weak-modules --remove-modules --no-initramfs
+fi
+
+rm /var/run/%{name}-modules-%{version}-%{release} || true
