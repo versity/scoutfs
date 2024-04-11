@@ -804,8 +804,8 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	si = bti->val;
 
 	si->size = 0;
-	si->meta_seq = cpu_to_le64(inode->ino);
-	si->data_seq = 0;
+	si->meta_seq = cpu_to_le64(inode->meta_seq);
+	si->data_seq = cpu_to_le64(inode->data_seq);
 	si->data_version = 0;
 	si->online_blocks = 0;
 	si->offline_blocks = 0;
@@ -835,7 +835,6 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	if (S_ISREG(inode->mode)) {
 		si->size = cpu_to_le64(inode->size);
 		si->data_version = cpu_to_le64(inode->data_version);
-		si->data_seq = cpu_to_le64(inode->ino);
 
 		err = insert_inode_index_item(wri, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE,
 					      le64_to_cpu(si->data_seq), inode->ino);
