@@ -39,6 +39,8 @@ struct scoutfs_parallel_restore_xattr {
 struct scoutfs_parallel_restore_inode {
 	/* all inodes */
 	u64 ino;
+	u64 meta_seq;
+	u64 data_seq;
 	u64 nr_xattrs;
 	u32 uid;
 	u32 gid;
