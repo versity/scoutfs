@@ -1,0 +1,12 @@
+== make small meta fs
+== parallel_restore
+== mount restored filesystem
+== compare filesystem contents
+committed_seq     1120
+total_meta_blocks 163840
+total_data_blocks 67108864
+   1440    1440   57120
+     80      80     400
+== unmount small meta fs
+== ENOSPC
+== cleanup
