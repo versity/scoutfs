@@ -54,4 +54,5 @@ archive-light-cycle.sh
 block-stale-reads.sh
 inode-deletion.sh
 renameat2-noreplace.sh
+parallel_restore.sh
 xfstests.sh
