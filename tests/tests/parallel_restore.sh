@@ -2,7 +2,7 @@
 # validate parallel restore library
 #
 
-t_require_commands scoutfs parallel_restore
+t_require_commands scoutfs parallel_restore filefrag-gc57857a5 find xargs
 
 SCR="$T_TMPDIR/mnt.scratch"
 mkdir -p "$SCR"
@@ -30,6 +30,7 @@ echo "== compare filesystem contents"
 scoutfs statfs -p "$SCR" | grep -v -e 'fsid' -e 'rid'
 find "$SCR" -exec scoutfs list-hidden-xattrs {} \; | wc
 scoutfs search-xattrs -p "$SCR" scoutfs.hide.srch.sam_vol_F01030L6 -p "$SCR" | wc
+find "$SCR" -type f -name "file-*" | head -n 4 | xargs -n 1 filefrag-gc57857a5 -b4096 -v | grep -e ext: -e eof
 
 echo "== unmount small meta fs"
 umount "$SCR"
