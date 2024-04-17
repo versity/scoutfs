@@ -522,6 +522,7 @@ static spr_err_t insert_extent_item(struct scoutfs_parallel_restore_writer *wri,
 
 	err = bti_alloc(sizeof(struct scoutfs_data_extent_val), &bti);
 	if (!err) {
+		bti->key = key;
 		dv = bti->val;
 		dv->blkno = 0;
 		dv->flags = SEF_OFFLINE;
