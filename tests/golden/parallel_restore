@@ -7,6 +7,14 @@ total_meta_blocks 163840
 total_data_blocks 67108864
    1440    1440   57120
      80      80     400
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..       0:          0..         0:      1:             last,unknown_loc,eof
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..       0:          0..         0:      1:             last,unknown_loc,eof
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..       0:          0..         0:      1:             last,unknown_loc,eof
+ ext:     logical_offset:        physical_offset: length:   expected: flags:
+   0:        0..       0:          0..         0:      1:             last,unknown_loc,eof
 == unmount small meta fs
 == ENOSPC
 == cleanup
