@@ -220,6 +220,9 @@ static struct gen_inode *generate_inode(struct opts *opts, u64 ino, mode_t mode)
 
 		gino->nr_xattrs = nr;
 		gino->inode.nr_xattrs = nr;
+
+		gino->inode.size = 4096;
+		gino->inode.offline = true;
 	}
 
 	return gino;
