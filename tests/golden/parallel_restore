@@ -4,7 +4,7 @@
 == compare filesystem contents
 committed_seq     1120
 total_meta_blocks 163840
-total_data_blocks 67108864
+total_data_blocks 15728640
    1440    1440   57120
      80      80     400
  ext:     logical_offset:        physical_offset: length:   expected: flags:
@@ -15,6 +15,9 @@ total_data_blocks 67108864
    0:        0..       0:          0..         0:      1:             last,unknown_loc,eof
  ext:     logical_offset:        physical_offset: length:   expected: flags:
    0:        0..       0:          0..         0:      1:             last,unknown_loc,eof
+    Type  Size     Total   Used      Free  Use%  
+MetaData  64KB    163840  34721    129119    21  
+    Data   4KB  15728640     64  15728576     0  
 == unmount small meta fs
 == ENOSPC
 == cleanup
