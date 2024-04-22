@@ -1122,6 +1122,12 @@ static void btb_init(struct btree_builder *btb)
 }
 
 /*
+ * We have to reserve some space (5%) so there are enough free blocks after
+ * mounting for log_merge to complete
+ */
+#define EXTRA_BLOCK_SLICE 20;
+
+/*
  * This is how we get around the recursion of allocating blocks to write blocks that
  * store the allocators.  After we've written all other metadata blocks we know precisely
  * how many allocation blocks we'll need.  We modify the writer to only have that many
@@ -1137,6 +1143,7 @@ static spr_err_t prepare_alloc_builders(struct scoutfs_parallel_restore_writer *
 	u64 start;
 	u64 skip;
 	u64 len;
+	u64 extra;
 	int ind;
 
 	dprintf("starting prepare with start %llu len %llu\n", wri->meta_start, wri->meta_len);
@@ -1152,6 +1159,12 @@ static spr_err_t prepare_alloc_builders(struct scoutfs_parallel_restore_writer *
 	if (err)
 		goto out;
 	wri->meta_len -= len;
+	/* store reserved extra space a free extent*/
+	extra = le64_to_cpu(wri->super.total_meta_blocks) / EXTRA_BLOCK_SLICE;
+	err = insert_free_items(&wri->meta_btb[0], start + len, extra);
+	if (err)
+		goto out;
+	wri->meta_len -= extra;
 
 	/* the rest of the meta extents are items in the two meta trees */
 	ind = 1;
@@ -1627,6 +1640,8 @@ spr_err_t scoutfs_parallel_restore_init_slices(struct scoutfs_parallel_restore_w
 					       int nr)
 {
 	u64 total = le64_to_cpu(wri->super.total_meta_blocks);
+	total -= total / EXTRA_BLOCK_SLICE;
+
 	u64 start = SCOUTFS_META_DEV_START_BLKNO;
 	u64 each = (total - start) / nr;
 	int i;
