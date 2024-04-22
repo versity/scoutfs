@@ -2,6 +2,15 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.20
+\
+*Apr 22, 2024*
+
+Minor changes to packaging to better support "weak" module linking of
+the kernel module, and to including git hashes in the built package.  No
+changes in runtime behaviour.
+
+---
 v1.19
 \
 *Jan 30, 2024*
