@@ -13,7 +13,8 @@ BIN := src/createmany			\
 	src/create_xattr_loop		\
 	src/fragmented_data_extents	\
 	src/o_tmpfile_umask		\
-	src/parallel_restore
+	src/parallel_restore		\
+	src/restore_copy
 
 DEPS := $(wildcard src/*.d)
 
@@ -24,6 +25,7 @@ ifneq ($(DEPS),)
 endif
 
 src/parallel_restore_cflags := ../utils/src/scoutfs_parallel_restore.a -lm
+src/restore_copy_cflags := ../utils/src/scoutfs_parallel_restore.a -lm
 
 $(BIN): %: %.c Makefile
 	gcc $(CFLAGS) -MD -MP -MF $*.d $< -o $@ $($(@)_cflags)
