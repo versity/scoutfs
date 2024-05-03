@@ -1,0 +1,64 @@
+== restore_copy content verification
+d /mnt/test/data/d
+f /mnt/test/data/f
+l /mnt/test/data/l -> broken
+f /mnt/test/data/h
+l /mnt/test/data/F -> f
+b /mnt/test/data/b
+c /mnt/test/data/c
+c /mnt/test/data/u
+p /mnt/test/data/p
+f /mnt/test/data/f4096
+f /mnt/test/data/falloc
+f /mnt/test/data/truncate
+s /mnt/test/data/s
+f /mnt/test/data/mode_t
+f /mnt/test/data/uidgid
+f /mnt/test/data/retention
+f /mnt/test/data/proj
+d /mnt/test/data
+Quota rule:   7 13,L,- 0,L,- 0,L,- I 33 -
+Quota rule:   7 11,L,- 0,L,- 0,L,- I 33 -
+Quota rule:   7 12,L,- 0,L,- 0,L,- I 33 -
+Quota rule:   7 10,L,- 0,L,- 0,L,- I 33 -
+Quota rule:   7 15,L,- 0,L,- 0,L,- I 33 -
+Quota rule:   7 14,L,- 0,L,- 0,L,- I 33 -
+Wrote 1 directories, 0 files, 458752 bytes total
+== verify metadata bits on restored fs
+total 16516
+-rw-r--r--. 1 33333 33333        0  uidgid
+crw-r--r--. 1     0     0     2, 2  u
+-rw-r--r--. 1     0     0 16777216  truncate
+srwxr-xr-x. 1     0     0        0  s
+-rw-r--r--. 1     0     0        0  retention
+-rw-r--r--. 1     0     0        0  proj
+prw-r--r--. 1     0     0        0  p
+-rwsrwsrwx. 1     0     0        0  mode_t
+lrwxrwxrwx. 1     0     0        7  l -> broken
+-rw-r--r--. 1     0     0        0  h
+-rw-r--r--. 1     0     0   131072  falloc
+-rw-r--r--. 1     0     0     4096  f4096
+-rw-r--r--. 1     0     0        0  f
+drwxr-xr-x. 2     0     0        0  d
+crw-r--r--. 1     0     0     0, 0  c
+brw-r--r--. 1     0     0     1, 1  b
+lrwxrwxrwx. 1     0     0        2  F -> f
+1
+12345
+0: offset: 0 length: 1 flags: O.L
+extents: 1
+0: offset: 0 length: 32 flags: O.L
+extents: 1
+0: offset: 0 length: 4096 flags: O.L
+extents: 1
+  7 15,L,- 0,L,- 0,L,- I 33 -
+  7 14,L,- 0,L,- 0,L,- I 33 -
+  7 13,L,- 0,L,- 0,L,- I 33 -
+  7 12,L,- 0,L,- 0,L,- I 33 -
+  7 11,L,- 0,L,- 0,L,- I 33 -
+  7 10,L,- 0,L,- 0,L,- I 33 -
+    Type  Size     Total   Used      Free  Use%  
+MetaData  64KB   4194304  34698   4159606     0  
+    Data   4KB  67108864     64  67108800     0  
+== umount restored fs and check
+== cleanup
