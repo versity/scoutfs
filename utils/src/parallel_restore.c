@@ -664,8 +664,14 @@ static spr_err_t insert_symlink_items(struct scoutfs_parallel_restore_writer *wr
 		bti->key = key;
 		memcpy(bti->val, target + off, bytes);
 
+		err = insert_fs_item(wri, bti);
+		if (err) {
+			free(bti);
+			goto out;
+		}
+
 		off += bytes;
-		key._sk_second++;
+		le64_add_cpu(&key._sk_second, 1);
 	}
 
 	err = 0;
