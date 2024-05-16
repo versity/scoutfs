@@ -386,3 +386,13 @@ endif
 ifneq (,$(shell grep -C1 'int block_write_begin' include/linux/buffer_head.h | tail -n 2 | grep 'unsigned flags'))
 ccflags-y += -DKC_BLOCK_WRITE_BEGIN_AOP_FLAGS
 endif
+
+#
+# v6.0-rc6-9-g863f144f12ad
+#
+# the .tmpfile() vfs method calling convention changed and now a struct
+# file* is passed to this metiond instead of a dentry. The function also
+# should open the created file and call finish_open_simple() before returning.
+ifneq (,$(shell grep 'extern void d_tmpfile.struct dentry' include/linux/dcache.h))
+ccflags-y += -DKC_D_TMPFILE_DENTRY
+endif
