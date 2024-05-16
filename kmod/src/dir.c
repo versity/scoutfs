@@ -1860,8 +1860,17 @@ static int scoutfs_dir_open(struct inode *inode, struct file *file)
 #endif
 
 static int scoutfs_tmpfile(KC_VFS_NS_DEF
-			   struct inode *dir, struct dentry *dentry, umode_t mode)
+			   struct inode *dir,
+#ifdef KC_D_TMPFILE_DENTRY
+			   struct dentry *dentry,
+#else
+			   struct file *file,
+#endif
+			   umode_t mode)
 {
+#ifndef KC_D_TMPFILE_DENTRY
+	struct dentry *dentry = file->f_path.dentry;
+#endif
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
@@ -1888,13 +1897,21 @@ static int scoutfs_tmpfile(KC_VFS_NS_DEF
 	si->crtime = inode->i_mtime;
 	insert_inode_hash(inode);
 	ihold(inode); /* need to update inode modifications in d_tmpfile */
+#ifdef KC_D_TMPFILE_DENTRY
 	d_tmpfile(dentry, inode);
+#else
+	d_tmpfile(file, inode);
+#endif
 	inode_inc_iversion(inode);
 	scoutfs_forest_inc_inode_count(sb);
 
 	scoutfs_update_inode_item(inode, inode_lock, &ind_locks);
 	scoutfs_update_inode_item(dir, dir_lock, &ind_locks);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
+
+#ifndef KC_D_TMPFILE_DENTRY
+	ret = finish_open_simple(file, 0);
+#endif
 
 out:
 	scoutfs_release_trans(sb);
