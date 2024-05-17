@@ -396,3 +396,11 @@ endif
 ifneq (,$(shell grep 'extern void d_tmpfile.struct dentry' include/linux/dcache.h))
 ccflags-y += -DKC_D_TMPFILE_DENTRY
 endif
+
+#
+# v6.4-rc2-201-g0733ad800291
+#
+# New blk_mode_t replaces abuse of fmode_t
+ifneq (,$(shell grep 'typedef unsigned int __bitwise blk_mode_t' include/linux/blkdev.h))
+ccflags-y += -DKC_HAVE_BLK_MODE_T
+endif
