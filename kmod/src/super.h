@@ -97,7 +97,11 @@ static inline bool SCOUTFS_IS_META_BDEV(struct scoutfs_super_block *super_block)
 	return !!(le64_to_cpu(super_block->flags) & SCOUTFS_FLAG_IS_META_BDEV);
 }
 
+#ifdef KC_HAVE_BLK_MODE_T
+#define SCOUTFS_META_BDEV_MODE (BLK_OPEN_READ | BLK_OPEN_WRITE | BLK_OPEN_EXCL)
+#else
 #define SCOUTFS_META_BDEV_MODE (FMODE_READ | FMODE_WRITE | FMODE_EXCL)
+#endif
 
 static inline bool scoutfs_forcing_unmount(struct super_block *sb)
 {
