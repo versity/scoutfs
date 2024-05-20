@@ -412,3 +412,12 @@ endif
 ifneq (,$(shell grep 'typedef unsigned int __bitwise blk_mode_t' include/linux/blkdev.h))
 ccflags-y += -DKC_HAVE_BLK_MODE_T
 endif
+
+#
+# v6.4-rc2-186-g2736e8eeb0cc
+#
+# Reworks FMODE_EXCL kludge and instead modifies the blkdev_put() call to pass in
+# the (exclusive) holder to implement FMODE_EXCL handling.
+ifneq (,$(shell grep 'blkdev_put.struct block_device .bdev, void .holder' include/linux/blkdev.h))
+ccflags-y += -DKC_BLKDEV_PUT_HOLDER_ARG
+endif
