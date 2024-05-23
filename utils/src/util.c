@@ -145,7 +145,7 @@ int read_block_verify(int fd, u32 magic, u64 fsid, u64 blkno, int shift, void **
 		else if (fsid != 0 && le64_to_cpu(hdr->fsid) != fsid)
 			fprintf(stderr, "read blkno %llu has bad fsid %016llx != expected %016llx\n",
 				blkno, le64_to_cpu(hdr->fsid), fsid);
-		else if (le32_to_cpu(hdr->blkno) != blkno)
+		else if (le64_to_cpu(hdr->blkno) != blkno)
 			fprintf(stderr, "read blkno %llu has bad blkno %llu != expected %llu\n",
 				blkno, le64_to_cpu(hdr->blkno), blkno);
 		else
