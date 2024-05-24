@@ -2061,9 +2061,7 @@ retry:
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
 		/* protect checked extents from stage/release */
-		mutex_lock(&si->s_i_mutex);
 		atomic_inc(&inode->i_dio_count);
-		mutex_unlock(&si->s_i_mutex);
 
 		ret = scoutfs_data_wait_check(inode, pos, PAGE_SIZE,
 					      SEF_OFFLINE, SCOUTFS_IOC_DWO_READ,
