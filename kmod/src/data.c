@@ -2016,7 +2016,9 @@ retry:
 		scoutfs_inode_inc_data_version(inode);
 	}
 
+	// holetest hangs in this call:
 	scoutfs_update_inode_item(inode, wbd.lock, &wbd.ind_locks);
+	//
 	scoutfs_inode_queue_writeback(inode);
 out_release_trans:
 	scoutfs_release_trans(sb);

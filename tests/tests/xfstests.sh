@@ -68,7 +68,6 @@ generic/213	# enospc causes trans commit failures
 generic/318	# can't support user namespaces until v5.11
 generic/321	# requires selinux enabled for '+' in ls?
 generic/338	# BUG_ON update inode error handling
-generic/346	# mmap deadlock
 generic/347	# _dmthin_mount doesn't work?
 EOF
 
