@@ -442,4 +442,10 @@ static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
 #define iter_is_iovec(iter) true
 #endif
 
+#ifdef KC_INODE_DIO_END
+#define kc_inode_dio_end inode_dio_end
+#else
+#define kc_inode_dio_end inode_dio_done
+#endif
+
 #endif

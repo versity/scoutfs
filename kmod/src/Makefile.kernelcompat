@@ -421,3 +421,11 @@ endif
 ifneq (,$(shell grep 'blkdev_put.struct block_device .bdev, void .holder' include/linux/blkdev.h))
 ccflags-y += -DKC_BLKDEV_PUT_HOLDER_ARG
 endif
+
+#
+# v4.0-rc7-1796-gfe0f07d08ee3
+#
+# direct-io changes modify inode_dio_done to now be called inode_dio_end
+ifneq (,$(shell grep 'void inode_dio_end.struct inode' include/linux/fs.h))
+ccflags-y += -DKC_INODE_DIO_END
+endif
