@@ -279,4 +279,9 @@ ssize_t kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *i
 #define kc_inode_dio_end inode_dio_done
 #endif
 
+#ifndef KC_MM_VM_FAULT_T
+typedef unsigned int vm_fault_t;
+#define vmf_error(err) err
+#endif
+
 #endif

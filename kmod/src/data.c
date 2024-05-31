@@ -1889,9 +1889,15 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 	return ret;
 }
 
+#ifdef KC_MM_VM_FAULT_T
+static vm_fault_t scoutfs_data_page_mkwrite(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+#else
 static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 				     struct vm_fault *vmf)
 {
+#endif
 	struct page *page = vmf->page;
 	struct file *file = vma->vm_file;
 	struct inode *inode = file_inode(file);
@@ -2019,8 +2025,14 @@ out:
 	return ret;
 }
 
+#ifdef KC_MM_VM_FAULT_T
+static vm_fault_t scoutfs_data_filemap_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+#else
 static int scoutfs_data_filemap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
+#endif
 	struct file *file = vma->vm_file;
 	struct inode *inode = file_inode(file);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -2049,11 +2061,17 @@ retry:
 		err = scoutfs_data_wait_check(inode, pos, PAGE_SIZE,
 					      SEF_OFFLINE, SCOUTFS_IOC_DWO_READ,
 					      &dw, inode_lock);
-		if (err != 0)
+		if (err != 0) {
+			ret = vmf_error(err);
 			goto out;
+		}
 	}
 
+#ifdef KC_MM_VM_FAULT_T
+	ret = filemap_fault(vmf);
+#else
 	ret = filemap_fault(vma, vmf);
+#endif
 	have_ret = true;
 
 out:
