@@ -447,3 +447,10 @@ endif
 ifneq (,$(shell grep 'typedef.*__bitwise unsigned.*int vm_fault_t' include/linux/mm_types.h))
 ccflags-y += -DKC_MM_VM_FAULT_T
 endif
+
+# v3.19-499-gd83a08db5ba6
+#
+# .remap pages becomes obsolete
+ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
+ccflags-y += -DKC_MM_REMAP_PAGES
+endif
