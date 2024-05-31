@@ -2132,7 +2132,9 @@ out:
 static const struct vm_operations_struct scoutfs_data_file_vm_ops = {
 	.fault		= scoutfs_data_filemap_fault,
 	.page_mkwrite	= scoutfs_data_page_mkwrite,
+#ifdef KC_MM_REMAP_PAGES
 	.remap_pages	= generic_file_remap_pages,
+#endif
 };
 
 static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
