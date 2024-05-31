@@ -2053,7 +2053,7 @@ static int scoutfs_data_filemap_fault(struct vm_area_struct *vma, struct vm_faul
 	int ret;
 
 	pos = vmf->pgoff;
-	pos <<= PAGE_CACHE_SHIFT;
+	pos <<= PAGE_SHIFT;
 
 retry:
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
