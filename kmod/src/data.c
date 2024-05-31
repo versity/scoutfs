@@ -2073,12 +2073,14 @@ retry:
 		}
 	}
 
-	ret = filemap_fault(vma, vmf);
+//
+	ret = filemap_fault(vmf);
+//
 	have_ret = true;
 
 out:
 	if (scoutfs_per_task_del(&si->pt_data_lock, &pt_ent))
-		inode_dio_done(inode);
+		kc_inode_dio_end(inode);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	if (scoutfs_data_wait_found(&dw)) {
 		int err = scoutfs_data_wait(inode, &dw);

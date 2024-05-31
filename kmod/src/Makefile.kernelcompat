@@ -258,3 +258,10 @@ endif
 ifneq (,$(shell grep 'static inline const char .xattr_prefix' include/linux/xattr.h))
 ccflags-y += -DKC_XATTR_HANDLER_NAME=1
 endif
+
+#
+#
+#
+ifneq (,$(shell grep 'void inode_dio_end.struct inode' include/linux/fs.h))
+ccflags-y += -DKC_INODE_DIO_END
+endif
