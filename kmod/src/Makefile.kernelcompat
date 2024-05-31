@@ -437,3 +437,12 @@ endif
 ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
 ccflags-y += -DKC_MM_REMAP_PAGES
 endif
+
+#
+# v5.0-6476-g3d3539018d2c
+#
+# page fault handlers return a bitmask vm_fault_t instead
+# Note: el8's header has a slightly modified prefix here
+ifneq (,$(shell grep 'typedef.*__bitwise unsigned.*int vm_fault_t' include/linux/mm_types.h))
+ccflags-y += -DKC_MM_VM_FAULT_T
+endif

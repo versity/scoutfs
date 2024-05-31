@@ -448,4 +448,14 @@ static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
 #define kc_inode_dio_end inode_dio_done
 #endif
 
+#ifndef KC_MM_VM_FAULT_T
+typedef unsigned int vm_fault_t;
+static inline vm_fault_t vmf_error(int err)
+{
+	if (err == -ENOMEM)
+		return VM_FAULT_OOM;
+	return VM_FAULT_SIGBUS;
+}
+#endif
+
 #endif
