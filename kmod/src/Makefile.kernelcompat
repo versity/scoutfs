@@ -429,3 +429,11 @@ endif
 ifneq (,$(shell grep 'void inode_dio_end.struct inode' include/linux/fs.h))
 ccflags-y += -DKC_INODE_DIO_END
 endif
+
+#
+# v3.19-499-gd83a08db5ba6
+#
+# .remap pages becomes obsolete
+ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
+ccflags-y += -DKC_MM_REMAP_PAGES
+endif
