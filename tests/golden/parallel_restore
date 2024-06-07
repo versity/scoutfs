@@ -19,5 +19,10 @@ total_data_blocks 15728640
 MetaData  64KB    163840  34721    129119    21  
     Data   4KB  15728640     64  15728576     0  
 == unmount small meta fs
+== just under ENOSPC
+    Type  Size     Total    Used      Free  Use%
+MetaData  64KB    163840  163840         0   100
+    Data   4KB  15728640      64  15728576     0
+== just over ENOSPC
 == ENOSPC
 == cleanup
