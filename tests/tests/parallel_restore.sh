@@ -36,6 +36,26 @@ scoutfs df -p "$SCR"
 echo "== unmount small meta fs"
 umount "$SCR"
 
+echo "== just under ENOSPC"
+scoutfs mkfs -A -f -Q 0,127.0.0.1,53000 -m 10G -d 60G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
+	t_fail "mkfs failed"
+
+parallel_restore -m "$T_EX_META_DEV" -n 3300000 > /dev/null || t_fail "parallel_restore"
+
+sleep 1
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 \
+	"$T_EX_DATA_DEV" "$SCR"
+
+scoutfs df -p "$SCR"
+
+umount "$SCR"
+
+echo "== just over ENOSPC"
+scoutfs mkfs -A -f -Q 0,127.0.0.1,53000 -m 10G -d 60G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
+	t_fail "mkfs failed"
+
+parallel_restore -m "$T_EX_META_DEV" -n 3333333 | grep died 2>&1 && t_fail "parallel_restore"
+
 echo "== ENOSPC"
 scoutfs mkfs -A -f -Q 0,127.0.0.1,53000 -m 10G -d 60G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
 	t_fail "mkfs failed"
