@@ -1,0 +1,27 @@
+== mmap_stress
+thread 0 complete
+thread 1 complete
+thread 2 complete
+thread 3 complete
+thread 4 complete
+== basic mmap/read/write consistency checks
+== mmap read from offline extent
+0: offset: 0 length: 2 flags: O.L
+extents: 1
+1
+00000200:  ea ea ea ea ea ea ea ea ea ea ea ea ea ea ea ea  ................
+0
+0: offset: 0 length: 2 flags: ..L
+extents: 1
+== mmap write to an offline extent
+0: offset: 0 length: 2 flags: O.L
+extents: 1
+1
+0
+0: offset: 0 length: 2 flags: ..L
+extents: 1
+00000000  ea ea ea ea ea ea ea ea  ea ea ea ea ea ea ea ea  |................|
+00000010  11 11 11 11 11 11 11 11  11 11 11 11 11 11 11 11  |................|
+00000020  ea ea ea ea ea ea ea ea  ea ea ea ea ea ea ea ea  |................|
+00000030
+== done
