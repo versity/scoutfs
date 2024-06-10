@@ -1973,7 +1973,11 @@ retry:
 	}
 
 	file_update_time(vma->vm_file);
-	lock_page(page);
+//	lock_page(page);
+	if (!trylock_page(page)) {
+		ret = VM_FAULT_RETRY;
+		goto out;
+	}
 	size = i_size_read(inode);
 	pos = page_offset(page);
 	ret = VM_FAULT_LOCKED;
