@@ -1,0 +1,39 @@
+== mmap_stress
+thread 0 complete
+thread 1 complete
+thread 2 complete
+thread 3 complete
+thread 4 complete
+== basic mmap/read/write consistency checks
+== mmap read from offline extent
+Filesystem type is 554f4353
+File size of /mnt/test/test/mmap/mmap-offline is 8192 (2 blocks of 4096 bytes)
+ ext     logical_offset length   expected flags
+   0        0..       1      2             unknown,eof
+/mnt/test/test/mmap/mmap-offline 1 extent found
+1
+00000200:  ea ea ea ea ea ea ea ea ea ea ea ea ea ea ea ea  ................
+0
+Filesystem type is 554f4353
+File size of /mnt/test/test/mmap/mmap-offline is 8192 (2 blocks of 4096 bytes)
+ ext     logical_offset length   expected flags
+   0        0..       1      2             eof
+/mnt/test/test/mmap/mmap-offline 1 extent found
+== mmap write to an offline extent
+Filesystem type is 554f4353
+File size of /mnt/test/test/mmap/mmap-offline is 8192 (2 blocks of 4096 bytes)
+ ext     logical_offset length   expected flags
+   0        0..       1      2             unknown,eof
+/mnt/test/test/mmap/mmap-offline 1 extent found
+1
+0
+Filesystem type is 554f4353
+File size of /mnt/test/test/mmap/mmap-offline is 8192 (2 blocks of 4096 bytes)
+ ext     logical_offset length   expected flags
+   0        0..       1      2             eof
+/mnt/test/test/mmap/mmap-offline 1 extent found
+00000000  ea ea ea ea ea ea ea ea  ea ea ea ea ea ea ea ea  |................|
+00000010  11 11 11 11 11 11 11 11  11 11 11 11 11 11 11 11  |................|
+00000020  ea ea ea ea ea ea ea ea  ea ea ea ea ea ea ea ea  |................|
+00000030
+== done

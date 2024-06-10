@@ -10,3 +10,5 @@ src/stage_tmpfile
 src/create_xattr_loop
 src/o_tmpfile_umask
 src/o_tmpfile_linkat
+src/mmap_stress
+src/mmap_validate
