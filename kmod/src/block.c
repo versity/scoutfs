@@ -683,6 +683,7 @@ int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref
 	struct scoutfs_block_header *hdr;
 	struct block_private *bp = NULL;
 	bool retried = false;
+	__le32 crc = 0;
 	int ret;
 
 retry:
@@ -695,7 +696,9 @@ retry:
 
 	/* corrupted writes might be a sign of a stale reference */
 	if (!test_bit(BLOCK_BIT_CRC_VALID, &bp->bits)) {
-		if (hdr->crc != block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE)) {
+		crc = block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE);
+		if (hdr->crc != crc) {
+			trace_scoutfs_block_stale(sb, ref, hdr, magic, le32_to_cpu(crc));
 			ret = -ESTALE;
 			goto out;
 		}
@@ -705,6 +708,7 @@ retry:
 
 	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != cpu_to_le64(sbi->fsid) ||
 	    hdr->seq != ref->seq || hdr->blkno != ref->blkno) {
+		trace_scoutfs_block_stale(sb, ref, hdr, magic, 0);
 		ret = -ESTALE;
 		goto out;
 	}
