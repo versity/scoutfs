@@ -91,7 +91,7 @@ static void scoutfs_inode_ctor(void *obj)
 
 	init_rwsem(&si->extent_sem);
 	mutex_init(&si->item_mutex);
-	seqcount_init(&si->seqcount);
+	seqlock_init(&si->seqlock);
 	si->staging = false;
 	scoutfs_per_task_init(&si->pt_data_lock);
 	atomic64_set(&si->data_waitq.changed, 0);
@@ -566,11 +566,9 @@ static void set_trans_seq(struct inode *inode, u64 *seq)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
 	if (*seq != sbi->trans_seq) {
-		preempt_disable();
-		write_seqcount_begin(&si->seqcount);
+		write_seqlock(&si->seqlock);
 		*seq = sbi->trans_seq;
-		write_seqcount_end(&si->seqcount);
-		preempt_enable();
+		write_sequnlock(&si->seqlock);
 	}
 }
 
@@ -592,22 +590,18 @@ void scoutfs_inode_inc_data_version(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	preempt_disable();
-	write_seqcount_begin(&si->seqcount);
+	write_seqlock(&si->seqlock);
 	si->data_version++;
-	write_seqcount_end(&si->seqcount);
-	preempt_enable();
+	write_sequnlock(&si->seqlock);
 }
 
 void scoutfs_inode_set_data_version(struct inode *inode, u64 data_version)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	preempt_disable();
-	write_seqcount_begin(&si->seqcount);
+	write_seqlock(&si->seqlock);
 	si->data_version = data_version;
-	write_seqcount_end(&si->seqcount);
-	preempt_enable();
+	write_sequnlock(&si->seqlock);
 }
 
 void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
@@ -616,8 +610,7 @@ void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
 
 	if (inode && (on || off)) {
 		si = SCOUTFS_I(inode);
-		preempt_disable();
-		write_seqcount_begin(&si->seqcount);
+		write_seqlock(&si->seqlock);
 
 		/* inode and extents out of sync, bad callers */
 		if (((s64)si->online_blocks + on < 0) ||
@@ -638,8 +631,7 @@ void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
 						    si->online_blocks,
 						    si->offline_blocks);
 
-		write_seqcount_end(&si->seqcount);
-		preempt_enable();
+		write_sequnlock(&si->seqlock);
 	}
 
 	/* any time offline extents decreased we try and wake waiters */
@@ -647,16 +639,16 @@ void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
 		scoutfs_data_wait_changed(inode);
 }
 
-static u64 read_seqcount_u64(struct inode *inode, u64 *val)
+static u64 read_seqlock_u64(struct inode *inode, u64 *val)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	unsigned int seq;
+	unsigned seq;
 	u64 v;
 
 	do {
-		seq = read_seqcount_begin(&si->seqcount);
+		seq = read_seqbegin(&si->seqlock);
 		v = *val;
-	} while (read_seqcount_retry(&si->seqcount, seq));
+	} while (read_seqretry(&si->seqlock, seq));
 
 	return v;
 }
@@ -665,33 +657,33 @@ u64 scoutfs_inode_meta_seq(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	return read_seqcount_u64(inode, &si->meta_seq);
+	return read_seqlock_u64(inode, &si->meta_seq);
 }
 
 u64 scoutfs_inode_data_seq(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	return read_seqcount_u64(inode, &si->data_seq);
+	return read_seqlock_u64(inode, &si->data_seq);
 }
 
 u64 scoutfs_inode_data_version(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	return read_seqcount_u64(inode, &si->data_version);
+	return read_seqlock_u64(inode, &si->data_version);
 }
 
 void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	unsigned int seq;
+	unsigned seq;
 
 	do {
-		seq = read_seqcount_begin(&si->seqcount);
+		seq = read_seqbegin(&si->seqlock);
 		*on = SCOUTFS_I(inode)->online_blocks;
 		*off = SCOUTFS_I(inode)->offline_blocks;
-	} while (read_seqcount_retry(&si->seqcount, seq));
+	} while (read_seqretry(&si->seqlock, seq));
 }
 
 static int scoutfs_iget_test(struct inode *inode, void *arg)
