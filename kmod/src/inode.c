@@ -686,6 +686,32 @@ void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off)
 	} while (read_seqretry(&si->seqlock, seq));
 }
 
+/*
+ * Get our private scoutfs inode flags, not the vfs i_flags.
+ */
+u32 scoutfs_inode_get_flags(struct inode *inode)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned seq;
+	u32 flags;
+
+	do {
+		seq = read_seqbegin(&si->seqlock);
+		flags = si->flags;
+	} while (read_seqretry(&si->seqlock, seq));
+
+	return flags;
+}
+
+void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	write_seqlock(&si->seqlock);
+	si->flags = (si->flags & and) | or;
+	write_sequnlock(&si->seqlock);
+}
+
 static int scoutfs_iget_test(struct inode *inode, void *arg)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);

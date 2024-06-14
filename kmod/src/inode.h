@@ -120,6 +120,8 @@ u64 scoutfs_inode_meta_seq(struct inode *inode);
 u64 scoutfs_inode_data_seq(struct inode *inode);
 u64 scoutfs_inode_data_version(struct inode *inode);
 void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off);
+u32 scoutfs_inode_get_flags(struct inode *inode);
+void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or);
 int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock);
 
 int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock);
