@@ -81,6 +81,7 @@ static int do_attr_x(struct attr_x_args *args)
 		pr(iax, CTIME, "ctime", "%llu.%u", iax->ctime_sec, iax->ctime_nsec);
 		pr(iax, CRTIME, "crtime", "%llu.%u", iax->crtime_sec, iax->crtime_nsec);
 		pr(iax, SIZE, "size", "%llu", iax->size);
+		prb(iax, RETENTION, "retention");
 	}
 
 	ret = 0;
@@ -107,6 +108,7 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	struct attr_x_args *args = state->input;
 	struct timespec ts;
 	int ret;
+	u64 x;
 
 	switch (key) {
 	case 'm':
@@ -179,6 +181,16 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 				return ret;
 		}
 		break;
+	case 't':
+		args->iax.x_mask |= SCOUTFS_IOC_IAX_RETENTION;
+		if (arg) {
+			ret = parse_u64(arg, &x);
+			if (ret)
+				return ret;
+			if (x)
+				args->iax.bits |= SCOUTFS_IOC_IAX_B_RETENTION;
+		}
+		break;
 	case ARGP_KEY_ARG:
 		if (!args->filename)
 			args->filename = strdup_or_error(state, arg);
@@ -209,6 +221,7 @@ static struct argp_option set_options[] = {
 	{ "ctime", 'c', "SECS.NSECS", 0, "Inode change time (posix ctime)"},
 	{ "crtime", 'r', "SECS.NSECS", 0, "ScoutFS creation time"},
 	{ "size", 's', "SIZE", 0, "Inode i_size field"},
+	{ "retention", 't', "0|1", 0, "Retention flag"},
 	{ NULL }
 };
 

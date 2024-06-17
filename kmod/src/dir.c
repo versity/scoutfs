@@ -926,6 +926,10 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 		goto unlock;
 	}
 
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0)
+		goto unlock;
+
 	hash = dirent_name_hash(dentry->d_name.name, dentry->d_name.len);
 
 	ret = lookup_dirent(sb, scoutfs_ino(dir), dentry->d_name.name, dentry->d_name.len, hash,
@@ -1631,6 +1635,10 @@ static int scoutfs_rename_common(struct inode *old_dir,
 		ret = -EEXIST;
 		goto out_unlock;
 	}
+
+	if ((old_inode && (ret = scoutfs_inode_check_retention(old_inode))) ||
+	    (new_inode && (ret = scoutfs_inode_check_retention(new_inode))))
+		goto out_unlock;
 
 	if (should_orphan(new_inode)) {
 		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(new_inode),

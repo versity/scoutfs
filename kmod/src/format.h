@@ -11,6 +11,8 @@
 #define SCOUTFS_FORMAT_VERSION_MAX		2
 #define SCOUTFS_FORMAT_VERSION_MAX_STR	__stringify(SCOUTFS_FORMAT_VERSION_MAX)
 
+#define SCOUTFS_FORMAT_VERSION_FEAT_RETENTION	2
+
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */
 
@@ -882,7 +884,8 @@ static inline int scoutfs_inode_valid_vers_bytes(__u64 fmt_vers, int bytes)
 	return bytes == sizeof(struct scoutfs_inode);
 }
 
-#define SCOUTFS_INO_FLAG_TRUNCATE 0x1
+#define SCOUTFS_INO_FLAG_TRUNCATE	0x1
+#define SCOUTFS_INO_FLAG_RETENTION	0x2
 
 #define SCOUTFS_ROOT_INO 1
 

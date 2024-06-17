@@ -81,6 +81,18 @@ static void init_xattr_key(struct scoutfs_key *key, u64 ino, u32 name_hash,
 #define SCOUTFS_XATTR_PREFIX		"scoutfs."
 #define SCOUTFS_XATTR_PREFIX_LEN	(sizeof(SCOUTFS_XATTR_PREFIX) - 1)
 
+/*
+ * We could have hidden the logic that needs this in a user-prefix
+ * specific .set handler, but I wanted to make sure that we always
+ * applied that logic from any call chains to _xattr_set.  The
+ * additional strcmp isn't so expensive given all the rest of the work
+ * we're doing in here.
+ */
+static inline bool is_user(const char *name)
+{
+	return !strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN);
+}
+
 #define HIDE_TAG	"hide."
 #define SRCH_TAG	"srch."
 #define TOTL_TAG	"totl."
@@ -668,6 +680,11 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 		return -EPERM;
 
 	if (tgs->totl && ((ret = parse_totl_key(&totl_key, name, name_len)) != 0))
+		return ret;
+
+	/* retention blocks user. xattr modification, all else allowed */
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0 && is_user(name))
 		return ret;
 
 	/* allocate enough to always read an existing xattr's totl */

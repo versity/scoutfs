@@ -108,6 +108,10 @@ retry:
 	if (ret)
 		goto out;
 
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0)
+		goto out;
+
 	ret = scoutfs_complete_truncate(inode, scoutfs_inode_lock);
 	if (ret)
 		goto out;
@@ -214,6 +218,10 @@ retry:
 
 	ret = generic_write_checks(iocb, from);
 	if (ret <= 0)
+		goto out;
+
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0)
 		goto out;
 
 	ret = scoutfs_complete_truncate(inode, scoutfs_inode_lock);

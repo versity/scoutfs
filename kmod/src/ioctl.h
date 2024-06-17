@@ -686,6 +686,7 @@ struct scoutfs_ioctl_inode_attr_x {
 	__u32 crtime_nsec;
 	__u64 crtime_sec;
 	__u64 size;
+	__u64 bits;
 };
 
 /*
@@ -702,6 +703,13 @@ struct scoutfs_ioctl_inode_attr_x {
 #define SCOUTFS_IOC_IAX_F__UNKNOWN	(U64_MAX << 1)
 
 /*
+ * Single-bit values stored in the @bits field.  These indicate whether
+ * the bit is set, or not.  The main _IAX_ bits set in the mask indicate
+ * whether this value bit is populated by _get or stored by _set. 
+ */
+#define SCOUTFS_IOC_IAX_B_RETENTION	(1ULL << 0)
+
+/*
  * x_mask bits which indicate which attributes of the inode to populate
  * on return for _get or to set on the inode for _set.  Each mask bit
  * corresponds to the matching named field in the attr_x struct passed
@@ -710,6 +718,14 @@ struct scoutfs_ioctl_inode_attr_x {
  * Each field can have different permissions or other attribute
  * requirements which can cause calls to fail.  If _set_ fails then no
  * other attribute changes will have been made by the same call.
+ *
+ * @SCOUTFS_IOC_IAX_RETENTION: Mark a file for retention.  When marked,
+ * no modification can be made to the file other than changing extended
+ * attributes outside the "user." prefix and clearing the retention
+ * mark.  This can only be set on regular files and requires root (the
+ * CAP_SYS_ADMIN capability).  Other attributes can be set with a
+ * set_attr_x call on a retention inode as long as that call also
+ * successfully clears the retention mark.
  */
 #define SCOUTFS_IOC_IAX_META_SEQ	(1ULL << 0)
 #define SCOUTFS_IOC_IAX_DATA_SEQ	(1ULL << 1)
@@ -719,7 +735,12 @@ struct scoutfs_ioctl_inode_attr_x {
 #define SCOUTFS_IOC_IAX_CTIME		(1ULL << 5)
 #define SCOUTFS_IOC_IAX_CRTIME		(1ULL << 6)
 #define SCOUTFS_IOC_IAX_SIZE		(1ULL << 7)
-#define SCOUTFS_IOC_IAX__UNKNOWN	(U64_MAX << 8)
+#define SCOUTFS_IOC_IAX_RETENTION	(1ULL << 8)
+
+/* single bit attributes that are packed in the bits field as _B_ */
+#define SCOUTFS_IOC_IAX__BITS		(SCOUTFS_IOC_IAX_RETENTION)
+/* inverse of all the bits we understand */
+#define SCOUTFS_IOC_IAX__UNKNOWN	(U64_MAX << 9)
 
 #define SCOUTFS_IOC_GET_ATTR_X \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 18, struct scoutfs_ioctl_inode_attr_x)

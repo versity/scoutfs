@@ -586,6 +586,12 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 		goto out;
 	}
 
+	if (create && !si->staging) {
+		ret = scoutfs_inode_check_retention(inode);
+		if (ret < 0)
+			goto out;
+	}
+
 	/* convert unwritten to written, could be staging */
 	if (create && ext.map && (ext.flags & SEF_UNWRITTEN)) {
 		un.start = iblock;
@@ -1252,6 +1258,9 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 				  SCOUTFS_LKF_REFRESH_INODE, from, &from_lock,
 				  to, &to_lock, NULL, NULL, NULL, NULL);
 	if (ret)
+		goto out;
+
+	if (!is_stage && (ret = scoutfs_inode_check_retention(to)))
 		goto out;
 
 	if ((from_off & SCOUTFS_BLOCK_SM_MASK) ||

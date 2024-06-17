@@ -124,6 +124,8 @@ u32 scoutfs_inode_get_flags(struct inode *inode);
 void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or);
 int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock);
 
+int scoutfs_inode_check_retention(struct inode *inode);
+
 int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock);
 #ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,

@@ -295,6 +295,23 @@ with the
 ioctl.
 .RE
 
+.SH FILE RETENTION MODE
+A file can be set to retention mode by setting the
+.IB RETENTION
+attribute with the
+.IB SET_ATTR_X
+ioctl.  This flag can only be set on regular files and requires root
+permission (the
+.IB CAP_SYS_ADMIN
+capability).
+.sp
+Once in retention mode all modifications of the file will fail.  The
+only exceptions are that system extended attributes (all those without
+the "user." prefix) may be modified.  The retention bit may be cleared
+with sufficient priveledges to remove the retention restrictions on
+other modifications.
+.RE
+
 .SH FORMAT VERSION
 The format version defines the layout and use of structures stored on
 devices and passed over the network.  The version is incremented for
@@ -382,6 +399,7 @@ The defined format versions are:
 Initial format version.
 .TP
 .B 2
+Added retention mode by setting the retention attribute.
 .RE
 
 .SH CORRUPTION DETECTION

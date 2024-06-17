@@ -504,6 +504,10 @@ retry:
 	if (ret)
 		goto out;
 
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0)
+		goto out;
+
 	attr_size = (attr->ia_valid & ATTR_SIZE) ? attr->ia_size :
 		i_size_read(inode);
 
@@ -2188,6 +2192,17 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 out:
 
 	return ret;
+}
+
+/*
+ * Return an error if the inode has the retention flag set and can not
+ * be modified.  This mimics the errno returned by the vfs whan an
+ * inode's immutable flag is set.  The flag won't be set on older format
+ * versions so we don't check the mounted format version here.
+ */
+int scoutfs_inode_check_retention(struct inode *inode)
+{
+	return (scoutfs_inode_get_flags(inode) & SCOUTFS_INO_FLAG_RETENTION) ? -EPERM : 0;
 }
 
 int scoutfs_inode_setup(struct super_block *sb)

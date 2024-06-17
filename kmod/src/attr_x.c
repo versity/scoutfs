@@ -29,6 +29,10 @@ static int validate_attr_x_input(struct super_block *sb, struct scoutfs_ioctl_in
 	    (iax->x_flags & SCOUTFS_IOC_IAX_F__UNKNOWN))
 		return -EINVAL;
 
+	if ((iax->x_mask & SCOUTFS_IOC_IAX_RETENTION) &&
+	    (ret = scoutfs_fmt_vers_unsupported(sb, SCOUTFS_FORMAT_VERSION_FEAT_RETENTION)))
+		    return ret;
+
 	return 0;
 }
 
@@ -100,6 +104,13 @@ int scoutfs_get_attr_x(struct inode *inode, struct scoutfs_ioctl_inode_attr_x *i
 	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CRTIME, crtime_sec, si->crtime.tv_sec);
 	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CRTIME, crtime_nsec, si->crtime.tv_nsec);
 	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_SIZE, size, i_size_read(inode));
+	if (iax->x_mask & SCOUTFS_IOC_IAX__BITS) {
+		bits = 0;
+		if ((iax->x_mask & SCOUTFS_IOC_IAX_RETENTION) &&
+		    (scoutfs_inode_get_flags(inode) & SCOUTFS_INO_FLAG_RETENTION))
+			bits |= SCOUTFS_IOC_IAX_B_RETENTION;
+		size = fill_attr(size, iax, SCOUTFS_IOC_IAX__BITS, bits, bits);
+	}
 
 	ret = size;
 unlock:
@@ -129,6 +140,10 @@ static bool valid_attr_changes(struct inode *inode, struct scoutfs_ioctl_inode_a
 	/* must provide non-zero size when setting offline extents to that size */
 	if ((iax->x_flags & SCOUTFS_IOC_IAX_F_SIZE_OFFLINE) &&
 	    (!(iax->x_mask & SCOUTFS_IOC_IAX_SIZE) || (iax->size == 0)))
+		return false;
+
+	/* the retention bit only applies to regular files */
+	if ((iax->x_mask & SCOUTFS_IOC_IAX_RETENTION) && !S_ISREG(inode->i_mode))
 		return false;
 
 	return true;
@@ -170,6 +185,12 @@ int scoutfs_set_attr_x(struct inode *inode, struct scoutfs_ioctl_inode_attr_x *i
 		goto unlock;
 	}
 
+	/* retention prevents modification unless also clearing retention */
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0 && !((iax->x_mask & SCOUTFS_IOC_IAX_RETENTION) &&
+			 !(iax->bits & SCOUTFS_IOC_IAX_B_RETENTION)))
+		goto unlock;
+
 	/* setting only so we don't see 0 data seq with nonzero data_version */
 	if ((iax->x_mask & SCOUTFS_IOC_IAX_DATA_VERSION) && (iax->data_version > 0))
 		set_data_seq = true;
@@ -203,6 +224,11 @@ int scoutfs_set_attr_x(struct inode *inode, struct scoutfs_ioctl_inode_attr_x *i
 	if (iax->x_mask & SCOUTFS_IOC_IAX_CRTIME) {
 		si->crtime.tv_sec = iax->crtime_sec;
 		si->crtime.tv_nsec = iax->crtime_nsec;
+	}
+	if (iax->x_mask & SCOUTFS_IOC_IAX_RETENTION) {
+		scoutfs_inode_set_flags(inode, ~SCOUTFS_INO_FLAG_RETENTION,
+					(iax->bits & SCOUTFS_IOC_IAX_B_RETENTION) ?
+					SCOUTFS_INO_FLAG_RETENTION : 0);
 	}
 
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
