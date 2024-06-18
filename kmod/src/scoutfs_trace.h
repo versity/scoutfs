@@ -2395,6 +2395,44 @@ TRACE_EVENT(scoutfs_block_dirty_ref,
 		  __entry->block_blkno, __entry->block_seq)
 );
 
+TRACE_EVENT(scoutfs_block_stale,
+	TP_PROTO(struct super_block *sb, struct scoutfs_block_ref *ref,
+		 struct scoutfs_block_header *hdr, u32 magic, u32 crc),
+
+	TP_ARGS(sb, ref, hdr, magic, crc),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ref_blkno)
+		__field(__u64, ref_seq)
+		__field(__u32, hdr_crc)
+		__field(__u32, hdr_magic)
+		__field(__u64, hdr_fsid)
+		__field(__u64, hdr_seq)
+		__field(__u64, hdr_blkno)
+		__field(__u32, magic)
+		__field(__u32, crc)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ref_blkno = le64_to_cpu(ref->blkno);
+		__entry->ref_seq = le64_to_cpu(ref->seq);
+		__entry->hdr_crc = le32_to_cpu(hdr->crc);
+		__entry->hdr_magic = le32_to_cpu(hdr->magic);
+		__entry->hdr_fsid = le64_to_cpu(hdr->fsid);
+		__entry->hdr_seq = le64_to_cpu(hdr->seq);
+		__entry->hdr_blkno = le64_to_cpu(hdr->blkno);
+		__entry->magic = magic;
+		__entry->crc = crc;
+	),
+
+	TP_printk(SCSBF" ref_blkno %llu ref_seq %016llx hdr_crc %08x hdr_magic %08x hdr_fsid %016llx hdr_seq %016llx hdr_blkno %llu magic %08x crc %08x",
+		  SCSB_TRACE_ARGS, __entry->ref_blkno, __entry->ref_seq, __entry->hdr_crc,
+		  __entry->hdr_magic, __entry->hdr_fsid, __entry->hdr_seq, __entry->hdr_blkno,
+		  __entry->magic, __entry->crc)
+);
+
 DECLARE_EVENT_CLASS(scoutfs_block_class,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno, int refcount, int io_count,
 		 unsigned long bits, __u64 accessed),

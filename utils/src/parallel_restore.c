@@ -522,6 +522,7 @@ static spr_err_t insert_extent_item(struct scoutfs_parallel_restore_writer *wri,
 
 	err = bti_alloc(sizeof(struct scoutfs_data_extent_val), &bti);
 	if (!err) {
+		bti->key = key;
 		dv = bti->val;
 		dv->blkno = 0;
 		dv->flags = SEF_OFFLINE;
@@ -664,8 +665,14 @@ static spr_err_t insert_symlink_items(struct scoutfs_parallel_restore_writer *wr
 		bti->key = key;
 		memcpy(bti->val, target + off, bytes);
 
+		err = insert_fs_item(wri, bti);
+		if (err) {
+			free(bti);
+			goto out;
+		}
+
 		off += bytes;
-		key._sk_second++;
+		le64_add_cpu(&key._sk_second, 1);
 	}
 
 	err = 0;
@@ -797,8 +804,8 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	si = bti->val;
 
 	si->size = 0;
-	si->meta_seq = cpu_to_le64(inode->ino);
-	si->data_seq = 0;
+	si->meta_seq = cpu_to_le64(inode->meta_seq);
+	si->data_seq = cpu_to_le64(inode->data_seq);
 	si->data_version = 0;
 	si->online_blocks = 0;
 	si->offline_blocks = 0;
@@ -829,7 +836,7 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	if (S_ISREG(inode->mode)) {
 		si->size = cpu_to_le64(inode->size);
 		si->data_version = le64_to_cpu(inode->data_version);
-		si->data_seq = cpu_to_le64(inode->ino);
+		si->data_seq = cpu_to_le64(inode->data_seq);
 
 		err = insert_inode_index_item(wri, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE,
 					      le64_to_cpu(si->data_seq), inode->ino);
@@ -1115,6 +1122,12 @@ static void btb_init(struct btree_builder *btb)
 }
 
 /*
+ * We have to reserve some space (5%) so there are enough free blocks after
+ * mounting for log_merge to complete
+ */
+#define EXTRA_BLOCK_SLICE 20;
+
+/*
  * This is how we get around the recursion of allocating blocks to write blocks that
  * store the allocators.  After we've written all other metadata blocks we know precisely
  * how many allocation blocks we'll need.  We modify the writer to only have that many
@@ -1130,6 +1143,7 @@ static spr_err_t prepare_alloc_builders(struct scoutfs_parallel_restore_writer *
 	u64 start;
 	u64 skip;
 	u64 len;
+	u64 extra;
 	int ind;
 
 	dprintf("starting prepare with start %llu len %llu\n", wri->meta_start, wri->meta_len);
@@ -1145,6 +1159,12 @@ static spr_err_t prepare_alloc_builders(struct scoutfs_parallel_restore_writer *
 	if (err)
 		goto out;
 	wri->meta_len -= len;
+	/* store reserved extra space a free extent*/
+	extra = le64_to_cpu(wri->super.total_meta_blocks) / EXTRA_BLOCK_SLICE;
+	err = insert_free_items(&wri->meta_btb[0], start + len, extra);
+	if (err)
+		goto out;
+	wri->meta_len -= extra;
 
 	/* the rest of the meta extents are items in the two meta trees */
 	ind = 1;
@@ -1620,6 +1640,8 @@ spr_err_t scoutfs_parallel_restore_init_slices(struct scoutfs_parallel_restore_w
 					       int nr)
 {
 	u64 total = le64_to_cpu(wri->super.total_meta_blocks);
+	total -= total / EXTRA_BLOCK_SLICE;
+
 	u64 start = SCOUTFS_META_DEV_START_BLKNO;
 	u64 each = (total - start) / nr;
 	int i;

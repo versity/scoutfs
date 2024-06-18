@@ -170,6 +170,8 @@ static struct gen_inode *generate_inode(struct opts *opts, u64 ino, mode_t mode)
 
 	gino->inode = (struct scoutfs_parallel_restore_inode) {
 		.ino = ino,
+		.meta_seq = ino,
+		.data_seq = 0,
 		.mode = mode,
 		.atime = now,
 		.ctime = now,
@@ -218,6 +220,9 @@ static struct gen_inode *generate_inode(struct opts *opts, u64 ino, mode_t mode)
 
 		gino->nr_xattrs = nr;
 		gino->inode.nr_xattrs = nr;
+
+		gino->inode.size = 4096;
+		gino->inode.offline = true;
 	}
 
 	return gino;
@@ -520,6 +525,18 @@ static void writer_proc(struct opts *opts, struct writer_args *args)
 	free(buf);
 }
 
+/*
+ * If any of our children exited with an error code, we hard exit.
+ * The child processes should themselves report out any errors
+ * encountered. Any remaining children will receive SIGHUP and
+ * terminate.
+ */
+static void sigchld_handler(int signo, siginfo_t *info, void *context)
+{
+	if (info->si_status)
+		exit(EXIT_FAILURE);
+}
+
 static void fork_writer(struct opts *opts, struct writer_args *args)
 {
 	pid_t parent = getpid();
@@ -637,7 +654,7 @@ static int do_restore(struct opts *opts)
 	i = 0;
 	while (i < opts->nr_writers) {
 		ret = read(pair[0], &res, sizeof(struct write_result));
-		error_exit(ret != sizeof(struct write_result), "result read error");
+		error_exit(ret != sizeof(struct write_result), "result read error %d", ret);
 
 		ret = scoutfs_parallel_restore_add_progress(wri, &res.prog);
 		error_exit(ret, "add thr prog %d", ret);
@@ -718,6 +735,7 @@ int main(int argc, char **argv)
 		.high_files = 20,
 		.total_files = 100,
 	};
+	struct sigaction act = { 0 };
 	int ret;
 	int c;
 
@@ -773,6 +791,11 @@ int main(int argc, char **argv)
 	printf("recreate with: -d %llu:%llu -f %llu:%llu -n %llu -s %llu -w %llu\n",
 		opts.low_dirs, opts.high_dirs, opts.low_files, opts.high_files,
 		opts.total_files, opts.seed, opts.nr_writers);
+
+	act.sa_flags = SA_SIGINFO | SA_RESTART;
+	act.sa_sigaction = &sigchld_handler;
+	if (sigaction(SIGCHLD, &act, NULL) == -1)
+		error_exit(ret, "error setting up signal handler\n");
 
 	ret = do_restore(&opts);
 
