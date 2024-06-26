@@ -4,7 +4,7 @@
 # merge adjacent consecutive allocations.  (we don't have multiple
 # allocation cursors)
 #
-t_require_commands scoutfs stat filefrag dd touch truncate
+t_require_commands scoutfs stat filefrag-gc57857a5 dd touch truncate
 
 write_block()
 {
@@ -76,7 +76,7 @@ print_extents_found()
 {
 	local prefix="$1"
 
-	filefrag "$prefix"* 2>&1 | grep "extent.*found" | t_filter_fs
+	filefrag-gc57857a5 "$prefix"* 2>&1 | grep "extent.*found" | t_filter_fs
 }
 
 #
@@ -86,7 +86,7 @@ print_logical_extents()
 {
 	local file="$1"
 
-	filefrag -v -b4096 "$file" 2>&1 | t_filter_fs | awk '
+	filefrag-gc57857a5 -v -b4096 "$file" 2>&1 | t_filter_fs | awk '
 		($1 ~ /[0-9]+:/) {
 			if ($NF !~  /[0-9]+:/) {
 				flags=$NF
@@ -95,7 +95,7 @@ print_logical_extents()
 			}
 			print $2, $6, flags
 		}
-	' | sed 's/last,eof/eof/'
+	'
 }
 
 t_save_all_sysfs_mount_options data_prealloc_blocks

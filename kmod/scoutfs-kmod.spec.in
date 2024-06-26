@@ -13,8 +13,7 @@
 
 %if 0%{?el7}
 %global kernel_source() /usr/src/kernels/%{kernel_version}.$(arch)
-%endif
-%if 0%{?el8}
+%else
 %global kernel_source() /usr/src/kernels/%{kernel_version}
 %endif
 
@@ -22,8 +21,7 @@
 
 %if 0%{?el7}
 Name:           %{kmod_name}
-%endif
-%if 0%{?el8}
+%else
 Name:           kmod-%{kmod_name}
 %endif
 Summary:        %{kmod_name} kernel module
@@ -35,8 +33,7 @@ URL:            http://scoutfs.org/
 
 %if 0%{?el7}
 BuildRequires:  %{kernel_module_package_buildreqs}
-%endif
-%if 0%{?el8}
+%else
 BuildRequires:  elfutils-libelf-devel
 %endif
 BuildRequires:  kernel-devel-uname-r = %{kernel_version}
@@ -54,7 +51,8 @@ Source:		%{kmod_name}-kmod-%{kmod_version}.tar
 %endif
 
 %global install_mod_dir extra/%{kmod_name}
-%if 0%{?el8}
+
+%if ! 0%{?el7}
 %global flavors_to_build x86_64
 %endif
 
@@ -93,7 +91,7 @@ done
 # mark modules executable so that strip-to-file can strip them
 find %{buildroot} -type f -name \*.ko -exec %{__chmod} u+x \{\} \;
 
-%if 0%{?el8}
+%if ! 0%{?el7}
 %files
 /lib/modules
 

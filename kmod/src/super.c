@@ -158,7 +158,11 @@ static void scoutfs_metadev_close(struct super_block *sb)
 		 * from kill_sb->put_super.
 		 */
 		lockdep_off();
+#ifdef KC_BLKDEV_PUT_HOLDER_ARG
+		blkdev_put(sbi->meta_bdev, sb);
+#else
 		blkdev_put(sbi->meta_bdev, SCOUTFS_META_BDEV_MODE);
+#endif
 		lockdep_on();
 		sbi->meta_bdev = NULL;
 	}
@@ -519,7 +523,11 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 
+#ifdef KC_BLKDEV_PUT_HOLDER_ARG
+	meta_bdev = blkdev_get_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sb, NULL);
+#else
 	meta_bdev = blkdev_get_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sb);
+#endif
 	if (IS_ERR(meta_bdev)) {
 		scoutfs_err(sb, "could not open metadev: error %ld",
 			    PTR_ERR(meta_bdev));
