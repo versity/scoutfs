@@ -273,4 +273,10 @@ ssize_t kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *i
 #define generic_file_buffered_write kc_generic_file_buffered_write
 #endif
 
+#ifdef KC_INODE_DIO_END
+#define kc_inode_dio_end inode_dio_end
+#else
+#define kc_inode_dio_end inode_dio_done
+#endif
+
 #endif

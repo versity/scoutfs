@@ -90,6 +90,7 @@ static void scoutfs_inode_ctor(void *obj)
 	struct scoutfs_inode_info *si = obj;
 
 	init_rwsem(&si->extent_sem);
+	mutex_init(&si->s_i_mutex);
 	mutex_init(&si->item_mutex);
 	seqlock_init(&si->seqlock);
 	si->staging = false;
@@ -467,6 +468,7 @@ int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock)
 int scoutfs_setattr(struct dentry *dentry, struct iattr *attr)
 {
 	struct inode *inode = dentry->d_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
 	DECLARE_DATA_WAIT(dw);
@@ -477,6 +479,7 @@ int scoutfs_setattr(struct dentry *dentry, struct iattr *attr)
 
 	trace_scoutfs_setattr(dentry, attr);
 
+	mutex_lock(&si->s_i_mutex);
 retry:
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -510,9 +513,11 @@ retry:
 				scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 
 				/* XXX callee locks instead? */
+				mutex_unlock(&si->s_i_mutex);
 				inode_unlock(inode);
 				ret = scoutfs_data_wait(inode, &dw);
 				inode_lock(inode);
+				mutex_lock(&si->s_i_mutex);
 
 				if (ret == 0)
 					goto retry;
@@ -551,6 +556,7 @@ release:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	mutex_unlock(&si->s_i_mutex);
 	return ret;
 }
 
