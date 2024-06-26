@@ -931,7 +931,7 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 	ret = lookup_dirent(sb, scoutfs_ino(dir), dentry->d_name.name, dentry->d_name.len, hash,
 			    &dent, dir_lock);
 	if (ret < 0)
-		goto out;
+		goto unlock;
 
 	if (should_orphan(inode)) {
 		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(inode),

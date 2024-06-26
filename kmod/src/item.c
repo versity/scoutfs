@@ -24,6 +24,7 @@
 #include "item.h"
 #include "forest.h"
 #include "block.h"
+#include "msg.h"
 #include "trans.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
@@ -1670,13 +1671,24 @@ out:
 	return ret;
 }
 
-static int lock_safe(struct scoutfs_lock *lock, struct scoutfs_key *key,
+static int lock_safe(struct super_block *sb, struct scoutfs_lock *lock, struct scoutfs_key *key,
 		     int mode)
 {
-	if (WARN_ON_ONCE(!scoutfs_lock_protected(lock, key, mode)))
+	bool prot = scoutfs_lock_protected(lock, key, mode);
+
+	if (!prot) {
+		static bool once = false;
+		if (!once) {
+			scoutfs_err(sb, "lock (start "SK_FMT" end "SK_FMT" mode 0x%x) does not protect operation (key "SK_FMT" mode 0x%x)",
+				    SK_ARG(&lock->start), SK_ARG(&lock->end), lock->mode,
+				    SK_ARG(key), mode);
+			dump_stack();
+			once = true;
+		}
 		return -EINVAL;
-	else
-		return 0;
+	}
+
+	return 0;
 }
 
 static int optional_lock_mode_match(struct scoutfs_lock *lock, int mode)
@@ -1718,7 +1730,7 @@ int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_lookup);
 
-	if ((ret = lock_safe(lock, key, SCOUTFS_LOCK_READ)))
+	if ((ret = lock_safe(sb, lock, key, SCOUTFS_LOCK_READ)))
 		goto out;
 
 	ret = get_cached_page(sb, cinf, lock, key, false, false, 0, &pg);
@@ -1793,7 +1805,7 @@ int scoutfs_item_next(struct super_block *sb, struct scoutfs_key *key,
 		goto out;
 	}
 
-	if ((ret = lock_safe(lock, key, SCOUTFS_LOCK_READ)))
+	if ((ret = lock_safe(sb, lock, key, SCOUTFS_LOCK_READ)))
 		goto out;
 
 	pos = *key;
@@ -1874,7 +1886,7 @@ int scoutfs_item_dirty(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_dirty);
 
-	if ((ret = lock_safe(lock, key, SCOUTFS_LOCK_WRITE)))
+	if ((ret = lock_safe(sb, lock, key, SCOUTFS_LOCK_WRITE)))
 		goto out;
 
 	ret = scoutfs_forest_set_bloom_bits(sb, lock);
@@ -1920,7 +1932,7 @@ static int item_create(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_create);
 
-	if ((ret = lock_safe(lock, key, mode)) ||
+	if ((ret = lock_safe(sb, lock, key, mode)) ||
 	    (ret = optional_lock_mode_match(primary, SCOUTFS_LOCK_WRITE)))
 		goto out;
 
@@ -1963,7 +1975,7 @@ int scoutfs_item_create(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock)
 {
 	return item_create(sb, key, val, val_len, lock, NULL,
-			   SCOUTFS_LOCK_READ, false);
+			   SCOUTFS_LOCK_WRITE, false);
 }
 
 int scoutfs_item_create_force(struct super_block *sb, struct scoutfs_key *key,
@@ -1994,7 +2006,7 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_update);
 
-	if ((ret = lock_safe(lock, key, SCOUTFS_LOCK_WRITE)))
+	if ((ret = lock_safe(sb, lock, key, SCOUTFS_LOCK_WRITE)))
 		goto out;
 
 	ret = scoutfs_forest_set_bloom_bits(sb, lock);
@@ -2062,7 +2074,7 @@ int scoutfs_item_delta(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_delta);
 
-	if ((ret = lock_safe(lock, key, SCOUTFS_LOCK_WRITE_ONLY)))
+	if ((ret = lock_safe(sb, lock, key, SCOUTFS_LOCK_WRITE_ONLY)))
 		goto out;
 
 	ret = scoutfs_forest_set_bloom_bits(sb, lock);
@@ -2135,7 +2147,7 @@ static int item_delete(struct super_block *sb, struct scoutfs_key *key,
 
 	scoutfs_inc_counter(sb, item_delete);
 
-	if ((ret = lock_safe(lock, key, mode)) ||
+	if ((ret = lock_safe(sb, lock, key, mode)) ||
 	    (ret = optional_lock_mode_match(primary, SCOUTFS_LOCK_WRITE)))
 		goto out;
 

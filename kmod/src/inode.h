@@ -47,7 +47,7 @@ struct scoutfs_inode_info {
 	atomic64_t last_refreshed;
 
 	/* initialized once for slab object */
-	seqcount_t seqcount;
+	seqlock_t seqlock;
 	bool staging;			/* holder of i_mutex is staging */
 	struct scoutfs_per_task pt_data_lock;
 	struct scoutfs_data_waitq data_waitq;
