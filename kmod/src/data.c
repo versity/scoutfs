@@ -1155,9 +1155,9 @@ out:
  * on regular files with no data extents.  It's used to restore a file
  * with an offline extent which can then trigger staging.
  *
- * The caller has taken care of locking the inode.  We're updating the
- * inode offline count as we create the offline extent so we take care
- * of the index locking, updating, and transaction.
+ * The caller must take care of cluster locking, transactions, inode
+ * updates, and index updates (so that they can atomically make this
+ * change along with other metadata changes).
  */
 int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 				     struct scoutfs_lock *lock)
@@ -1171,7 +1171,6 @@ int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 		.lock = lock,
 	};
 	const u64 count = DIV_ROUND_UP(size, SCOUTFS_BLOCK_SM_SIZE);
-	LIST_HEAD(ind_locks);
 	u64 on;
 	u64 off;
 	int ret;
@@ -1184,28 +1183,10 @@ int scoutfs_data_init_offline_extent(struct inode *inode, u64 size,
 		goto out;
 	}
 
-	/* we're updating meta_seq with offline block count */
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, true);
-	if (ret < 0)
-		goto out;
-
-	ret = scoutfs_dirty_inode_item(inode, lock);
-	if (ret < 0)
-		goto unlock;
-
 	down_write(&si->extent_sem);
 	ret = scoutfs_ext_insert(sb, &data_ext_ops, &args,
 				 0, count, 0, SEF_OFFLINE);
 	up_write(&si->extent_sem);
-	if (ret < 0)
-		goto unlock;
-
-	scoutfs_update_inode_item(inode, lock, &ind_locks);
-
-unlock:
-	scoutfs_release_trans(sb);
-	scoutfs_inode_index_unlock(sb, &ind_locks);
-	ret = 0;
 out:
 	return ret;
 }
