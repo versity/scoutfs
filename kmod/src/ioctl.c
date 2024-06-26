@@ -546,20 +546,41 @@ out:
 static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
-	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	struct scoutfs_ioctl_stat_more stm;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
+	struct scoutfs_ioctl_stat_more *stm = NULL;
+	int ret;
 
-	stm.meta_seq = scoutfs_inode_meta_seq(inode);
-	stm.data_seq = scoutfs_inode_data_seq(inode);
-	stm.data_version = scoutfs_inode_data_version(inode);
-	scoutfs_inode_get_onoff(inode, &stm.online_blocks, &stm.offline_blocks);
-	stm.crtime_sec = si->crtime.tv_sec;
-	stm.crtime_nsec = si->crtime.tv_nsec;
+	iax = kmalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	stm = kmalloc(sizeof(struct scoutfs_ioctl_stat_more), GFP_KERNEL);
+	if (!iax || !stm) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
-	if (copy_to_user((void __user *)arg, &stm, sizeof(stm)))
-		return -EFAULT;
+	iax->x_mask = SCOUTFS_IOC_IAX_META_SEQ | SCOUTFS_IOC_IAX_DATA_SEQ |
+		      SCOUTFS_IOC_IAX_DATA_VERSION | SCOUTFS_IOC_IAX_ONLINE_BLOCKS |
+		      SCOUTFS_IOC_IAX_OFFLINE_BLOCKS | SCOUTFS_IOC_IAX_CRTIME;
+	iax->x_flags = 0;
+	ret = scoutfs_get_attr_x(inode, iax);
+	if (ret < 0)
+		goto out;
 
-	return 0;
+	stm->meta_seq = iax->meta_seq;
+	stm->data_seq = iax->data_seq;
+	stm->data_version = iax->data_version;
+	stm->online_blocks = iax->online_blocks;
+	stm->offline_blocks = iax->offline_blocks;
+	stm->crtime_sec = iax->crtime_sec;
+	stm->crtime_nsec = iax->crtime_nsec;
+
+	if (copy_to_user((void __user *)arg, stm, sizeof(struct scoutfs_ioctl_stat_more)))
+		ret = -EFAULT;
+	else
+		ret = 0;
+out:
+	kfree(iax);
+	kfree(stm);
+	return ret;
 }
 
 static bool inc_wrapped(u64 *ino, u64 *iblock)
@@ -616,23 +637,18 @@ static long scoutfs_ioc_data_waiting(struct file *file, unsigned long arg)
  * This is used when restoring files, it lets the caller set all the
  * inode attributes which are otherwise unreachable.  Changing the file
  * size can only be done for regular files with a data_version of 0.
+ *
+ * We unconditionally fill the iax attributes from the sm set and let
+ * set_attr_x check them.
  */
 static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 {
-	struct inode *inode = file->f_inode;
-	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	struct super_block *sb = inode->i_sb;
+	struct inode *inode = file_inode(file);
 	struct scoutfs_ioctl_setattr_more __user *usm = (void __user *)arg;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
 	struct scoutfs_ioctl_setattr_more sm;
-	struct scoutfs_lock *lock = NULL;
 	LIST_HEAD(ind_locks);
-	bool set_data_seq;
 	int ret;
-
-	if (!capable(CAP_SYS_ADMIN)) {
-		ret = -EPERM;
-		goto out;
-	}
 
 	if (!(file->f_mode & FMODE_WRITE)) {
 		ret = -EBADF;
@@ -644,65 +660,38 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 		goto out;
 	}
 
-	if ((sm.i_size > 0 && sm.data_version == 0) ||
-	    ((sm.flags & SCOUTFS_IOC_SETATTR_MORE_OFFLINE) && !sm.i_size) ||
-	    (sm.flags & SCOUTFS_IOC_SETATTR_MORE_UNKNOWN)) {
+	if (sm.flags & SCOUTFS_IOC_SETATTR_MORE_UNKNOWN) {
 		ret = -EINVAL;
 		goto out;
 	}
+
+	iax = kzalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	if (!iax) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	iax->x_mask = SCOUTFS_IOC_IAX_DATA_VERSION | SCOUTFS_IOC_IAX_CTIME |
+		      SCOUTFS_IOC_IAX_CRTIME | SCOUTFS_IOC_IAX_SIZE;
+	iax->data_version = sm.data_version;
+	iax->ctime_sec = sm.ctime_sec;
+	iax->ctime_nsec = sm.ctime_nsec;
+	iax->crtime_sec = sm.crtime_sec;
+	iax->crtime_nsec = sm.crtime_nsec;
+	iax->size = sm.i_size;
+
+	if (sm.flags & SCOUTFS_IOC_SETATTR_MORE_OFFLINE)
+		iax->x_flags |= SCOUTFS_IOC_IAX_F_SIZE_OFFLINE;
 
 	ret = mnt_want_write_file(file);
-	if (ret)
+	if (ret < 0)
 		goto out;
 
-	inode_lock(inode);
+	ret = scoutfs_set_attr_x(inode, iax);
 
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
-	if (ret)
-		goto unlock;
-
-	/* can only change size/dv on untouched regular files */
-	if ((sm.i_size != 0 || sm.data_version != 0) &&
-	    ((!S_ISREG(inode->i_mode) ||
-	      scoutfs_inode_data_version(inode) != 0))) {
-		ret = -EINVAL;
-		goto unlock;
-	}
-
-	/* setting only so we don't see 0 data seq with nonzero data_version */
-	set_data_seq = sm.data_version != 0 ? true : false;
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, set_data_seq, true);
-	if (ret)
-		goto unlock;
-
-	if (sm.flags & SCOUTFS_IOC_SETATTR_MORE_OFFLINE) {
-		ret = scoutfs_data_init_offline_extent(inode, sm.i_size, lock);
-		if (ret)
-			goto release;
-	}
-
-	if (sm.data_version)
-		scoutfs_inode_set_data_version(inode, sm.data_version);
-	if (sm.i_size)
-		i_size_write(inode, sm.i_size);
-	inode->i_ctime.tv_sec = sm.ctime_sec;
-	inode->i_ctime.tv_nsec = sm.ctime_nsec;
-	si->crtime.tv_sec = sm.crtime_sec;
-	si->crtime.tv_nsec = sm.crtime_nsec;
-
-	scoutfs_update_inode_item(inode, lock, &ind_locks);
-	ret = 0;
-
-release:
-	scoutfs_release_trans(sb);
-unlock:
-	scoutfs_inode_index_unlock(sb, &ind_locks);
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	inode_unlock(inode);
 	mnt_drop_write_file(file);
 out:
-
+	kfree(iax);
 	return ret;
 }
 
