@@ -673,4 +673,58 @@ struct scoutfs_ioctl_dirent {
 #define SCOUTFS_IOC_GET_REFERRING_ENTRIES \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 17, struct scoutfs_ioctl_get_referring_entries)
 
+struct scoutfs_ioctl_inode_attr_x {
+	__u64 x_mask;
+	__u64 x_flags;
+	__u64 meta_seq;
+	__u64 data_seq;
+	__u64 data_version;
+	__u64 online_blocks;
+	__u64 offline_blocks;
+	__u64 ctime_sec;
+	__u32 ctime_nsec;
+	__u32 crtime_nsec;
+	__u64 crtime_sec;
+	__u64 size;
+};
+
+/*
+ * Behavioral flags set in the x_flags field.  These flags don't
+ * necessarily correspond to specific attributes, but instead change the
+ * behaviour of a _get_ or _set_ operation.
+ *
+ * @SCOUTFS_IOC_IAX_F_SIZE_OFFLINE: When setting i_size, also create
+ * extents which are marked offline for the region of the file from
+ * offset 0 to the new set size.  This can only be set when setting the
+ * size and has no effect if setting the size fails.
+ */
+#define SCOUTFS_IOC_IAX_F_SIZE_OFFLINE	(1ULL << 0)
+#define SCOUTFS_IOC_IAX_F__UNKNOWN	(U64_MAX << 1)
+
+/*
+ * x_mask bits which indicate which attributes of the inode to populate
+ * on return for _get or to set on the inode for _set.  Each mask bit
+ * corresponds to the matching named field in the attr_x struct passed
+ * to the _get_ and _set_ calls.
+ *
+ * Each field can have different permissions or other attribute
+ * requirements which can cause calls to fail.  If _set_ fails then no
+ * other attribute changes will have been made by the same call.
+ */
+#define SCOUTFS_IOC_IAX_META_SEQ	(1ULL << 0)
+#define SCOUTFS_IOC_IAX_DATA_SEQ	(1ULL << 1)
+#define SCOUTFS_IOC_IAX_DATA_VERSION	(1ULL << 2)
+#define SCOUTFS_IOC_IAX_ONLINE_BLOCKS	(1ULL << 3)
+#define SCOUTFS_IOC_IAX_OFFLINE_BLOCKS	(1ULL << 4)
+#define SCOUTFS_IOC_IAX_CTIME		(1ULL << 5)
+#define SCOUTFS_IOC_IAX_CRTIME		(1ULL << 6)
+#define SCOUTFS_IOC_IAX_SIZE		(1ULL << 7)
+#define SCOUTFS_IOC_IAX__UNKNOWN	(U64_MAX << 8)
+
+#define SCOUTFS_IOC_GET_ATTR_X \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 18, struct scoutfs_ioctl_inode_attr_x)
+
+#define SCOUTFS_IOC_SET_ATTR_X \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 19, struct scoutfs_ioctl_inode_attr_x)
+
 #endif

@@ -9,6 +9,7 @@ CFLAGS_scoutfs_trace.o = -I$(src) # define_trace.h double include
  
 scoutfs-y +=			\
 	acl.o			\
+	attr_x.o		\
 	avl.o			\
 	alloc.o			\
 	block.o			\

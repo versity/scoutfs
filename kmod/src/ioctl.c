@@ -42,6 +42,7 @@
 #include "alloc.h"
 #include "server.h"
 #include "counters.h"
+#include "attr_x.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -1504,6 +1505,68 @@ out:
 	return nr ?: ret;
 }
 
+static long scoutfs_ioc_get_attr_x(struct file *file, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+	struct scoutfs_ioctl_inode_attr_x __user *uiax = (void __user *)arg;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
+	int ret;
+
+	iax = kmalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	if (!iax) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = get_user(iax->x_mask, &uiax->x_mask) ?:
+	      get_user(iax->x_flags, &uiax->x_flags);
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_get_attr_x(inode, iax);
+	if (ret < 0)
+		goto out;
+
+	/* only copy results after dropping cluster locks (could fault) */
+	if (ret > 0 && copy_to_user(uiax, iax, ret) != 0)
+		ret = -EFAULT;
+	else
+		ret = 0;
+out:
+	kfree(iax);
+	return ret;
+}
+
+static long scoutfs_ioc_set_attr_x(struct file *file, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+	struct scoutfs_ioctl_inode_attr_x __user *uiax = (void __user *)arg;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
+	int ret;
+
+	iax = kmalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	if (!iax) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	if (copy_from_user(iax, uiax, sizeof(struct scoutfs_ioctl_inode_attr_x))) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	ret = mnt_want_write_file(file);
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_set_attr_x(inode, iax);
+
+	mnt_drop_write_file(file);
+out:
+	kfree(iax);
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1541,6 +1604,10 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_get_allocated_inos(file, arg);
 	case SCOUTFS_IOC_GET_REFERRING_ENTRIES:
 		return scoutfs_ioc_get_referring_entries(file, arg);
+	case SCOUTFS_IOC_GET_ATTR_X:
+		return scoutfs_ioc_get_attr_x(file, arg);
+	case SCOUTFS_IOC_SET_ATTR_X:
+		return scoutfs_ioc_set_attr_x(file, arg);
 	}
 
 	return -ENOTTY;
