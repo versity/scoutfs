@@ -156,4 +156,17 @@ int scoutfs_write_super(struct super_block *sb,
 /* to keep this out of the ioctl.h public interface definition */
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
+/*
+ * Returns 0 when supported, non-zero -errno when unsupported.
+ */
+static inline int scoutfs_fmt_vers_unsupported(struct super_block *sb, u64 vers)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	if (sbi && (sbi->fmt_vers < vers))
+		return -EOPNOTSUPP;
+	else
+		return 0;
+}
+
 #endif
