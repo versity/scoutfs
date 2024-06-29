@@ -1720,8 +1720,8 @@ static int copy_val(void *dst, int dst_len, void *src, int src_len)
  * The amount of bytes copied is returned which can be 0 or truncated if
  * the caller's buffer isn't big enough.
  */
-int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
-			void *val, int val_len, struct scoutfs_lock *lock)
+static int item_lookup(struct super_block *sb, struct scoutfs_key *key,
+		       void *val, int val_len, int len_limit, struct scoutfs_lock *lock)
 {
 	DECLARE_ITEM_CACHE_INFO(sb, cinf);
 	struct cached_item *item;
@@ -1741,11 +1741,38 @@ int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
 	item = item_rbtree_walk(&pg->item_root, key, NULL, NULL, NULL);
 	if (!item || item->deletion)
 		ret = -ENOENT;
+	else if (len_limit > 0 && item->val_len > len_limit)
+		ret = -EIO;
 	else
 		ret = copy_val(val, val_len, item->val, item->val_len);
 
 	read_unlock(&pg->rwlock);
 out:
+	return ret;
+}
+
+int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
+			void *val, int val_len, struct scoutfs_lock *lock)
+{
+	return item_lookup(sb, key, val, val_len, 0, lock);
+}
+
+/*
+ * Copy an item's value into the caller's buffer.  If the item's value
+ * is larger than the caller's buffer then -EIO is returned.  If the
+ * item is smaller then the bytes from the end of the copied value to
+ * the end of the buffer are zeroed.  The number of value bytes copied
+ * is returned, and 0 can be returned for an item with no value.
+ */
+int scoutfs_item_lookup_smaller_zero(struct super_block *sb, struct scoutfs_key *key,
+				     void *val, int val_len, struct scoutfs_lock *lock)
+{
+	int ret;
+
+	ret = item_lookup(sb, key, val, val_len, val_len, lock);
+	if (ret >= 0 && ret < val_len)
+		memset(val + ret, 0, val_len - ret);
+
 	return ret;
 }
 
@@ -1755,7 +1782,7 @@ int scoutfs_item_lookup_exact(struct super_block *sb, struct scoutfs_key *key,
 {
 	int ret;
 
-	ret = scoutfs_item_lookup(sb, key, val, val_len, lock);
+	ret = item_lookup(sb, key, val, val_len, 0, lock);
 	if (ret == val_len)
 		ret = 0;
 	else if (ret >= 0)

@@ -49,7 +49,7 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_inode *inode = val;
 
-	printf("    inode: ino %llu size %llu version %llu nlink %u\n"
+	printf("    inode: ino %llu size %llu version %llu proj %llu nlink %u\n"
 	       "      uid %u gid %u mode 0%o rdev 0x%x flags 0x%x\n"
 	       "      next_readdir_pos %llu meta_seq %llu data_seq %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
@@ -57,6 +57,7 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->ski_ino),
 	       le64_to_cpu(inode->size),
 	       le64_to_cpu(inode->version),
+	       le64_to_cpu(inode->proj),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev),
@@ -79,6 +80,24 @@ static void print_orphan(struct scoutfs_key *key, void *val, int val_len)
 }
 
 
+#define SQR_FMT "[%u %llu,%u,%x %llu,%u,%x %llu,%u,%x %u %llu %x]"
+
+#define SQR_ARGS(r)								\
+	(r)->prio,								\
+	le64_to_cpu((r)->name_val[0]), (r)->name_source[0], (r)->name_flags[0],	\
+	le64_to_cpu((r)->name_val[1]), (r)->name_source[1], (r)->name_flags[1],	\
+	le64_to_cpu((r)->name_val[2]), (r)->name_source[2], (r)->name_flags[2],	\
+	(r)->op, le64_to_cpu((r)->limit), (r)->rule_flags
+
+static void print_quota(struct scoutfs_key *key, void *val, int val_len)
+{
+	struct scoutfs_quota_rule_val *rv = val;
+
+	printf("    quota rule: hash 0x%016llx coll_nr %llu\n"
+	       "      "SQR_FMT"\n",
+	       le64_to_cpu(key->skqr_hash), le64_to_cpu(key->skqr_coll_nr), SQR_ARGS(rv));
+}
+
 static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_xattr_totl_val *tval = val;
@@ -87,6 +106,17 @@ static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->skxt_a), le64_to_cpu(key->skxt_b),
 	       le64_to_cpu(key->skxt_c), le64_to_cpu(tval->total),
 	       le64_to_cpu(tval->count));
+}
+
+static void print_xattr_indx(struct scoutfs_key *key, void *val, int val_len)
+{
+	u64 minor;
+	u64 ino;
+	u64 xid;
+	u8 major;
+
+	scoutfs_xattr_get_indx_key(key, &major, &minor, &ino, &xid);
+	printf("    xattr indx: major %u minor %llu ino %llu xid %llu", major, minor, ino, xid);
 }
 
 static u8 *global_printable_name(u8 *name, int name_len)
@@ -177,8 +207,14 @@ static print_func_t find_printer(u8 zone, u8 type)
 			return print_orphan;
 	}
 
+	if (zone == SCOUTFS_QUOTA_ZONE)
+		return print_quota;
+
 	if (zone == SCOUTFS_XATTR_TOTL_ZONE)
 		return print_xattr_totl;
+
+	if (zone == SCOUTFS_XATTR_INDX_ZONE)
+		return print_xattr_indx;
 
 	if (zone == SCOUTFS_FS_ZONE) {
 		switch(type) {

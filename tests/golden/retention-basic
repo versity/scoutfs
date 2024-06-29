@@ -1,0 +1,28 @@
+== setting retention on dir fails
+attr_x ioctl failed on '/mnt/test/test/retention-basic': Invalid argument (22)
+scoutfs: set-attr-x failed: Invalid argument (22)
+== set retention
+== get-attr-x shows retention
+1
+== unpriv can't clear retention
+attr_x ioctl failed on '/mnt/test/test/retention-basic/file-1': Operation not permitted (1)
+scoutfs: set-attr-x failed: Operation not permitted (1)
+== can set hidden scoutfs xattr in retention
+== setting user. xattr fails in retention
+setfattr: /mnt/test/test/retention-basic/file-1: Operation not permitted
+== file deletion fails in retention
+rm: cannot remove '/mnt/test/test/retention-basic/file-1': Operation not permitted
+== file rename fails in retention
+mv: cannot move '/mnt/test/test/retention-basic/file-1' to '/mnt/test/test/retention-basic/file-2': Operation not permitted
+== file write fails in retention
+date: write error: Operation not permitted
+== file truncate fails in retention
+truncate: failed to truncate '/mnt/test/test/retention-basic/file-1' at 0 bytes: Operation not permitted
+== setattr fails in retention
+touch: setting times of '/mnt/test/test/retention-basic/file-1': Operation not permitted
+== clear retention
+== file write
+== file rename
+== setattr
+== xattr deletion
+== cleanup

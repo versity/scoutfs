@@ -210,6 +210,16 @@ A path within a ScoutFS filesystem.
 .PD
 
 .TP
+.BI "get-attr-x FILE"
+.sp
+Display ScoutFS-specific attributes from a file.  If no options are
+given than all the attributes that the command supports will be
+displayed.  If attributes are specified with options then only those
+attributes are displayed.  If only one attribute is specified then it
+will not have a label prefix in the display output.  The --help option
+will list the attributes that the command supports.  The file system may
+support a different set of attributes.
+.TP
 .BI "get-referring-entries [-p|--path PATH] INO"
 .sp
 Find directory entries that reference an inode number.
@@ -504,6 +514,15 @@ manual page.
 .B "-p|--path PATH"
 A path within a ScoutFS filesystem.
 .RE
+.PD
+
+.TP
+.BI "set-attr-x FILE"
+.sp
+Set ScoutFS-specific attributes on a file.  Only the attributes that are
+spcified by options will be set.  The --help option will list the
+attributes that the command understands.  The file system may support a
+different set of attributes.
 .PD
 
 .TP

@@ -81,7 +81,20 @@ static void init_xattr_key(struct scoutfs_key *key, u64 ino, u32 name_hash,
 #define SCOUTFS_XATTR_PREFIX		"scoutfs."
 #define SCOUTFS_XATTR_PREFIX_LEN	(sizeof(SCOUTFS_XATTR_PREFIX) - 1)
 
+/*
+ * We could have hidden the logic that needs this in a user-prefix
+ * specific .set handler, but I wanted to make sure that we always
+ * applied that logic from any call chains to _xattr_set.  The
+ * additional strcmp isn't so expensive given all the rest of the work
+ * we're doing in here.
+ */
+static inline bool is_user(const char *name)
+{
+	return !strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN);
+}
+
 #define HIDE_TAG	"hide."
+#define INDX_TAG	"indx."
 #define SRCH_TAG	"srch."
 #define TOTL_TAG	"totl."
 #define TAG_LEN		(sizeof(HIDE_TAG) - 1)
@@ -102,6 +115,9 @@ int scoutfs_xattr_parse_tags(const char *name, unsigned int name_len,
 	for (;;) {
 		if (!strncmp(name, HIDE_TAG, TAG_LEN)) {
 			if (++tgs->hide == 0)
+				return -EINVAL;
+		} else if (!strncmp(name, INDX_TAG, TAG_LEN)) {
+			if (++tgs->indx == 0)
 				return -EINVAL;
 		} else if (!strncmp(name, SRCH_TAG, TAG_LEN)) {
 			if (++tgs->srch == 0)
@@ -540,44 +556,54 @@ static int parse_totl_u64(const char *s, int len, u64 *res)
 }
 
 /*
- * non-destructive relatively quick parse of the last 3 dotted u64s that
- * make up the name of the xattr total.  -EINVAL is returned if there
- * are anything but 3 valid u64 encodings between single dots at the end
- * of the name.
+ * non-destructive relatively quick parse of final dotted u64s in an
+ * xattr name.  If the required number of values are found then we
+ * return the number of bytes in the name that are not the final dotted
+ * u64s with their dots.  -EINVAL is returned if we didn't find the
+ * required number of values.
  */
-static int parse_totl_key(struct scoutfs_key *key, const char *name, int name_len)
+static int parse_dotted_u64s(u64 *u64s, int nr, const char *name, int name_len)
 {
-	u64 tot_name[3];
 	int end = name_len;
-	int nr = 0;
 	int len;
 	int ret;
 	int i;
+	int u;
 
 	/* parse name elements in reserve order from end of xattr name string */
-	for (i = name_len - 1; i >= 0 && nr < ARRAY_SIZE(tot_name); i--) {
+	for (u = nr - 1, i = name_len - 1; u >= 0 && i >= 0; i--) {
 		if (name[i] != '.')
 			continue;
 
 		len = end - (i + 1);
-		ret = parse_totl_u64(&name[i + 1], len, &tot_name[nr]);
+		ret = parse_totl_u64(&name[i + 1], len, &u64s[u]);
 		if (ret < 0)
 			goto out;
 
 		end = i;
-		nr++;
+		u--;
 	}
 
-	if (nr == ARRAY_SIZE(tot_name)) {
-		/* swap to account for parsing in reverse */
-		swap(tot_name[0], tot_name[2]);
-		scoutfs_xattr_init_totl_key(key, tot_name);
-		ret = 0;
-	} else {
+	if (u == -1)
+		ret = end;
+	else
 		ret = -EINVAL;
-	}
 
 out:
+	return ret;
+}
+
+static int parse_totl_key(struct scoutfs_key *key, const char *name, int name_len)
+{
+	u64 u64s[3];
+	int ret;
+
+	ret = parse_dotted_u64s(u64s, ARRAY_SIZE(u64s), name, name_len);
+	if (ret >= 0) {
+		scoutfs_xattr_init_totl_key(key, u64s);
+		ret = 0;
+	}
+
 	return ret;
 }
 
@@ -607,6 +633,72 @@ int scoutfs_xattr_combine_totl(void *dst, int dst_len, void *src, int src_len)
 	return SCOUTFS_DELTA_COMBINED;
 }
 
+void scoutfs_xattr_indx_get_range(struct scoutfs_key *start, struct scoutfs_key *end)
+{
+	scoutfs_key_set_zeros(start);
+	start->sk_zone = SCOUTFS_XATTR_INDX_ZONE;
+	scoutfs_key_set_ones(end);
+	end->sk_zone = SCOUTFS_XATTR_INDX_ZONE;
+}
+
+/*
+ * .indx. keys are a bit funny because we're iterating over index keys
+ * by major:minor:inode:xattr_id.  That doesn't map nicely to the
+ * comparison precedence of the key fields.  We have to mess around a
+ * little bit to get the major into the most significant key bits and
+ * the low bits of xattr id into the least significant key bits.
+ */
+void scoutfs_xattr_init_indx_key(struct scoutfs_key *key, u8 major, u64 minor, u64 ino, u64 xid)
+{
+	scoutfs_key_set_zeros(key);
+	key->sk_zone = SCOUTFS_XATTR_INDX_ZONE;
+
+	key->_sk_first = cpu_to_le64(((u64)major << 56) | (minor >> 8));
+	key->_sk_second = cpu_to_le64((minor << 56) | (ino >> 8));
+	key->_sk_third = cpu_to_le64((ino << 56) | (xid >> 8));
+	key->_sk_fourth = xid & 0xff;
+}
+
+void scoutfs_xattr_get_indx_key(struct scoutfs_key *key, u8 *major, u64 *minor, u64 *ino, u64 *xid)
+{
+	*major = le64_to_cpu(key->_sk_first) >> 56;
+	*minor = (le64_to_cpu(key->_sk_first) << 8) | (le64_to_cpu(key->_sk_second) >> 56);
+	*ino = (le64_to_cpu(key->_sk_second) << 8) | (le64_to_cpu(key->_sk_third) >> 56);
+	*xid = (le64_to_cpu(key->_sk_third) << 8) | key->_sk_fourth;
+}
+
+void scoutfs_xattr_set_indx_key_xid(struct scoutfs_key *key, u64 xid)
+{
+	u8 major;
+	u64 minor;
+	u64 ino;
+	u64 dummy;
+
+	scoutfs_xattr_get_indx_key(key, &major, &minor, &ino, &dummy);
+	scoutfs_xattr_init_indx_key(key, major, minor, ino, xid);
+}
+
+/*
+ * This initial parsing of the name doesn't yet have access to an xattr
+ * id to put in the key.  That's added later as the existing xattr is
+ * found or a new xattr's id is allocated.
+ */
+static int parse_indx_key(struct scoutfs_key *key, const char *name, int name_len, u64 ino)
+{
+	u64 u64s[2];
+	int ret;
+
+	ret = parse_dotted_u64s(u64s, ARRAY_SIZE(u64s), name, name_len);
+	if (ret < 0)
+		return ret;
+
+	if (u64s[0] > U8_MAX)
+		return -EINVAL;
+
+	scoutfs_xattr_init_indx_key(key, u64s[0], u64s[1], ino, 0);
+	return 0;
+}
+
 /*
  * The confusing swiss army knife of creating, modifying, and deleting
  * xattrs.
@@ -627,7 +719,7 @@ int scoutfs_xattr_combine_totl(void *dst, int dst_len, void *src, int src_len)
 int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_len,
 			     const void *value, size_t size, int flags,
 			     const struct scoutfs_xattr_prefix_tags *tgs,
-			     struct scoutfs_lock *lck, struct scoutfs_lock *totl_lock,
+			     struct scoutfs_lock *lck, struct scoutfs_lock *tag_lock,
 			     struct list_head *ind_locks)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -635,10 +727,11 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_xattr_totl_val tval = {0,};
 	struct scoutfs_xattr *xat = NULL;
-	struct scoutfs_key totl_key;
+	struct scoutfs_key tag_key;
 	struct scoutfs_key key;
 	bool undo_srch = false;
 	bool undo_totl = false;
+	bool undo_indx = false;
 	u8 found_parts;
 	unsigned int xat_bytes_totl;
 	unsigned int xat_bytes;
@@ -651,7 +744,8 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 
 	trace_scoutfs_xattr_set(sb, name_len, value, size, flags);
 
-	if (WARN_ON_ONCE(tgs->totl && !totl_lock))
+	if (WARN_ON_ONCE(tgs->totl && tgs->indx) ||
+	    WARN_ON_ONCE((tgs->totl | tgs->indx) && !tag_lock))
 		return -EINVAL;
 
 	/* mirror the syscall's errors for large names and values */
@@ -664,10 +758,22 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 	    (flags & ~(XATTR_CREATE | XATTR_REPLACE)))
 		return -EINVAL;
 
-	if ((tgs->hide | tgs->srch | tgs->totl) && !capable(CAP_SYS_ADMIN))
+	if ((tgs->hide | tgs->indx | tgs->srch | tgs->totl) && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (tgs->totl && ((ret = parse_totl_key(&totl_key, name, name_len)) != 0))
+	if (tgs->totl && ((ret = parse_totl_key(&tag_key, name, name_len)) != 0))
+		return ret;
+
+	if (tgs->indx &&
+	    (ret = scoutfs_fmt_vers_unsupported(sb, SCOUTFS_FORMAT_VERSION_FEAT_INDX_TAG)))
+		return ret;
+
+	if (tgs->indx && ((ret = parse_indx_key(&tag_key, name, name_len, ino)) != 0))
+		return ret;
+
+	/* retention blocks user. xattr modification, all else allowed */
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0 && is_user(name))
 		return ret;
 
 	/* allocate enough to always read an existing xattr's totl */
@@ -708,6 +814,12 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 	/* found fields in key will also be used */
 	found_parts = ret >= 0 ? xattr_nr_parts(xat) : 0;
 
+	/* use existing xattr's id or allocate new when creating */
+	if (found_parts)
+		id = le64_to_cpu(key.skx_id);
+	else if (value)
+		id = si->next_xattr_id++;
+
 	if (found_parts && tgs->totl) {
 		/* parse old totl value before we clobber xat buf */
 		val_len = ret - offsetof(struct scoutfs_xattr, name[xat->name_len]);
@@ -718,12 +830,25 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 		le64_add_cpu(&tval.total, -total);
 	}
 
+	/*
+	 * indx xattrs don't have a value.  After returning an error for
+	 * non-zero val length or short circuiting modifying with the
+	 * same 0 length, all we're left with is creating or deleting
+	 * the xattr.
+	 */
+	if (tgs->indx) {
+		if (size != 0) {
+			ret = -EINVAL;
+			goto out;
+		}
+		if (found_parts && value) {
+			ret = 0;
+			goto out;
+		}
+	}
+
 	/* prepare the xattr header, name, and start of value in first item */
 	if (value) {
-		if (found_parts)
-			id = le64_to_cpu(key.skx_id);
-		else
-			id = si->next_xattr_id++;
 		xat->name_len = name_len;
 		xat->val_len = cpu_to_le16(size);
 		memset(xat->__pad, 0, sizeof(xat->__pad));
@@ -741,9 +866,18 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 		le64_add_cpu(&tval.total, total);
 	}
 
+	if (tgs->indx) {
+		scoutfs_xattr_set_indx_key_xid(&tag_key, id);
+		if (value)
+			ret = scoutfs_item_create_force(sb, &tag_key, NULL, 0, tag_lock, NULL);
+		else
+			ret = scoutfs_item_delete_force(sb, &tag_key, tag_lock, NULL);
+		if (ret < 0)
+			goto out;
+		undo_indx = true;
+	}
+
 	if (tgs->srch && !(found_parts && value)) {
-		if (found_parts)
-			id = le64_to_cpu(key.skx_id);
 		hash = scoutfs_hash64(name, name_len);
 		ret = scoutfs_forest_srch_add(sb, hash, ino, id);
 		if (ret < 0)
@@ -752,7 +886,7 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 	}
 
 	if (tgs->totl) {
-		ret = apply_totl_delta(sb, &totl_key, &tval, totl_lock);
+		ret = apply_totl_delta(sb, &tag_key, &tval, tag_lock);
 		if (ret < 0)
 			goto out;
 		undo_totl = true;
@@ -777,6 +911,13 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 	ret = 0;
 
 out:
+	if (ret < 0 && undo_indx) {
+		if (value)
+			err = scoutfs_item_delete_force(sb, &tag_key, tag_lock, NULL);
+		else
+			err = scoutfs_item_create_force(sb, &tag_key, NULL, 0, tag_lock, NULL);
+		BUG_ON(err); /* inconsistent */
+	}
 	if (ret < 0 && undo_srch) {
 		err = scoutfs_forest_srch_add(sb, hash, ino, id);
 		BUG_ON(err);
@@ -785,7 +926,7 @@ out:
 		/* _delta() on dirty items shouldn't fail */
 		tval.total = cpu_to_le64(-le64_to_cpu(tval.total));
 		tval.count = cpu_to_le64(-le64_to_cpu(tval.count));
-		err = apply_totl_delta(sb, &totl_key, &tval, totl_lock);
+		err = apply_totl_delta(sb, &tag_key, &tval, tag_lock);
 		BUG_ON(err);
 	}
 
@@ -801,7 +942,7 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name, const void
 	struct inode *inode = dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_xattr_prefix_tags tgs;
-	struct scoutfs_lock *totl_lock = NULL;
+	struct scoutfs_lock *tag_lock = NULL;
 	struct scoutfs_lock *lck = NULL;
 	size_t name_len = strlen(name);
 	LIST_HEAD(ind_locks);
@@ -816,8 +957,11 @@ static int scoutfs_xattr_set(struct dentry *dentry, const char *name, const void
 	if (ret)
 		goto unlock;
 
-	if (tgs.totl) {
-		ret = scoutfs_lock_xattr_totl(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, &totl_lock);
+	if (tgs.totl || tgs.indx) {
+		if (tgs.totl)
+			ret = scoutfs_lock_xattr_totl(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, &tag_lock);
+		else
+			ret = scoutfs_lock_xattr_indx(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, &tag_lock);
 		if (ret)
 			goto unlock;
 	}
@@ -836,7 +980,7 @@ retry:
 		goto release;
 
 	ret = scoutfs_xattr_set_locked(dentry->d_inode, name, name_len, value, size, flags, &tgs,
-				       lck, totl_lock, &ind_locks);
+				       lck, tag_lock, &ind_locks);
 	if (ret == 0)
 		scoutfs_update_inode_item(inode, lck, &ind_locks);
 
@@ -845,7 +989,7 @@ release:
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 unlock:
 	scoutfs_unlock(sb, lck, SCOUTFS_LOCK_WRITE);
-	scoutfs_unlock(sb, totl_lock, SCOUTFS_LOCK_WRITE_ONLY);
+	scoutfs_unlock(sb, tag_lock, SCOUTFS_LOCK_WRITE_ONLY);
 
 	return ret;
 }
@@ -1055,14 +1199,15 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 {
 	struct scoutfs_xattr_prefix_tags tgs;
 	struct scoutfs_xattr *xat = NULL;
-	struct scoutfs_lock *totl_lock = NULL;
+	struct scoutfs_lock *tag_lock = NULL;
 	struct scoutfs_xattr_totl_val tval;
-	struct scoutfs_key totl_key;
+	struct scoutfs_key tag_key;
 	struct scoutfs_key last;
 	struct scoutfs_key key;
 	bool release = false;
 	unsigned int bytes;
 	unsigned int val_len;
+	u8 locked_zone = 0;
 	void *value;
 	u64 total;
 	u64 hash;
@@ -1108,16 +1253,32 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 				goto out;
 			}
 
-			ret = parse_totl_key(&totl_key, xat->name, xat->name_len) ?:
+			ret = parse_totl_key(&tag_key, xat->name, xat->name_len) ?:
 			      parse_totl_u64(value, val_len, &total);
 			if (ret < 0)
 				break;
 		}
 
-		if (tgs.totl && totl_lock == NULL) {
-			ret = scoutfs_lock_xattr_totl(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, &totl_lock);
+		if (tgs.indx) {
+			ret = parse_indx_key(&tag_key, xat->name, xat->name_len, ino);
+			if (ret < 0)
+				goto out;
+		}
+
+		if ((tgs.totl || tgs.indx) && locked_zone != tag_key.sk_zone) {
+			if (tag_lock) {
+				scoutfs_unlock(sb, tag_lock, SCOUTFS_LOCK_WRITE_ONLY);
+				tag_lock = NULL;
+			}
+			if (tgs.totl)
+				ret = scoutfs_lock_xattr_totl(sb, SCOUTFS_LOCK_WRITE_ONLY, 0,
+							      &tag_lock);
+			else
+				ret = scoutfs_lock_xattr_indx(sb, SCOUTFS_LOCK_WRITE_ONLY, 0,
+							      &tag_lock);
 			if (ret < 0)
 				break;
+			locked_zone = tag_key.sk_zone;
 		}
 
 		ret = scoutfs_hold_trans(sb, false);
@@ -1140,7 +1301,13 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 		if (tgs.totl) {
 			tval.total = cpu_to_le64(-total);
 			tval.count = cpu_to_le64(-1LL);
-			ret = apply_totl_delta(sb, &totl_key, &tval, totl_lock);
+			ret = apply_totl_delta(sb, &tag_key, &tval, tag_lock);
+			if (ret < 0)
+				break;
+		}
+
+		if (tgs.indx) {
+			ret = scoutfs_item_delete_force(sb, &tag_key, tag_lock, NULL);
 			if (ret < 0)
 				break;
 		}
@@ -1153,7 +1320,7 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 
 	if (release)
 		scoutfs_release_trans(sb);
-	scoutfs_unlock(sb, totl_lock, SCOUTFS_LOCK_WRITE_ONLY);
+	scoutfs_unlock(sb, tag_lock, SCOUTFS_LOCK_WRITE_ONLY);
 	kfree(xat);
 out:
 	return ret;

@@ -73,6 +73,7 @@ $(basename $0) options:
     -t        | Enabled trace events that match the given glob argument.
               | Multiple options enable multiple globbed events.
     -T <nr>   | Multiply the original trace buffer size by nr during the run.
+    -V <nr>   | Set mkfs device format version.
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
     -y        | xfstests ./check additional args
@@ -174,6 +175,11 @@ while true; do
 	-T)
 		test -n "$2" || die "-T must have trace buffer size multiplier argument"
 		T_TRACE_MULT="$2"
+		shift
+		;;
+	-V)
+		test -n "$2" || die "-V must have a format version argument"
+		T_MKFS_FORMAT_VERSION="-V $2"
 		shift
 		;;
 	-X)
@@ -344,7 +350,7 @@ if [ -n "$T_MKFS" ]; then
 	done
 
 	msg "making new filesystem with $T_QUORUM quorum members"
-	cmd scoutfs mkfs -f $quo $T_DATA_ALLOC_ZONE_BLOCKS \
+	cmd scoutfs mkfs -f $quo $T_DATA_ALLOC_ZONE_BLOCKS $T_MKFS_FORMAT_VERSION \
 		"$T_META_DEVICE" "$T_DATA_DEVICE"
 fi
 
@@ -352,7 +358,8 @@ if [ -n "$T_INSMOD" ]; then
 	msg "removing and reinserting scoutfs module"
 	test -e /sys/module/scoutfs && cmd rmmod scoutfs
 	cmd modprobe libcrc32c
-	cmd insmod "$T_KMOD/src/scoutfs.ko"
+	T_MODULE="$T_KMOD/src/scoutfs.ko"
+	cmd insmod "$T_MODULE"
 fi
 
 if [ -n "$T_TRACE_MULT" ]; then

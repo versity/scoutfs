@@ -270,6 +270,21 @@ metadata that is bound to a specific volume and should not be
 transferred with the file by tools that read extended attributes, like
 .BR tar(1) .
 .TP
+.B .indx.
+Attributes with the .indx. tag dd the inode containing the attribute to
+a filesystem-wide index.  The name of the extended attribute must end
+with strings representing two values separated by dots.  The first value
+is an unsigned 8bit value and the second is an unsigned 64bit value.
+These attributes can only be modified with root privileges and the
+attributes can not have a value.
+.sp
+The inodes in the index are stored in increasing sort order of the
+values, with the first u8 value being most significant.  Inodes can be
+at many positions as tracked by many extended attributes, and their
+position follows the creation, renaming, or deletion of the attributes.
+The index can be read with the read-xattr-index command which uses the
+underlying READ_XATTR_INDEX ioctl.
+.TP
 .B .srch.
 Attributes with the .srch. tag are indexed so that they can be
 found by the
@@ -293,6 +308,36 @@ name, total value, and a count of contributing attributes can be read
 with the
 .IB READ_XATTR_TOTALS
 ioctl.
+.RE
+
+.SH FILE RETENTION MODE
+A file can be set to retention mode by setting the
+.IB RETENTION
+attribute with the
+.IB SET_ATTR_X
+ioctl.  This flag can only be set on regular files and requires root
+permission (the
+.IB CAP_SYS_ADMIN
+capability).
+.sp
+Once in retention mode all modifications of the file will fail.  The
+only exceptions are that system extended attributes (all those without
+the "user." prefix) may be modified.  The retention bit may be cleared
+with sufficient priveledges to remove the retention restrictions on
+other modifications.
+.RE
+
+.SH PROJECT IDs
+All inodes have a project ID attribute that can be set via the
+SET_ATTR_X ioctl and displayed with the GET_ATTR_X ioctl.  Project IDs
+are an unsigned 64bit value and the value of 0 is reserved to indicate
+that no project ID is assigned.   If a project ID is set on a directory
+then all inodes created with it as the initial parent inheret that ID,
+for all file types.  This includes files initially unlinked from the
+namespace when created with O_TMPFILE.  Project IDs are only
+automatically inherited from the parent dir on initial creation.
+They're not changed as directory entry linkes to the inode are created
+or renamed.
 .RE
 
 .SH FORMAT VERSION
@@ -372,6 +417,19 @@ The version that a mount is using is shown in the
 .I format_version
 file in the mount's sysfs directory, typically
 .I /sys/fs/scoutfs/f.FSID.r.RID/
+.RE
+.sp
+The defined format versions are:
+.RS
+.TP
+.sp
+.B 1
+Initial format version.
+.TP
+.B 2
+Added retention mode by setting the retention attribute.  Added the
+project ID inode attribute.  Added quota rules and enforcement.  Added
+the .indx. extended attribute tag.
 .RE
 
 .SH CORRUPTION DETECTION

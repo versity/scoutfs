@@ -34,6 +34,7 @@
 #include "forest.h"
 #include "acl.h"
 #include "counters.h"
+#include "quota.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -651,6 +652,10 @@ static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 	if (ret)
 		goto out_unlock;
 
+	ret = scoutfs_quota_check_inode(sb, dir);
+	if (ret)
+		goto out_unlock;
+
 	if (orph_lock) {
 		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, ino, orph_lock);
 		if (ret < 0)
@@ -671,6 +676,8 @@ retry:
 	      scoutfs_init_acl_locked(inode, dir, *inode_lock, *dir_lock, ind_locks);
 	if (ret < 0)
 		goto out;
+
+	scoutfs_inode_set_proj(inode, scoutfs_inode_get_proj(dir));
 
 	ret = scoutfs_dirty_inode_item(dir, *dir_lock);
 out:
@@ -925,6 +932,10 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 		ret = -ENOTEMPTY;
 		goto unlock;
 	}
+
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0)
+		goto unlock;
 
 	hash = dirent_name_hash(dentry->d_name.name, dentry->d_name.len);
 
@@ -1631,6 +1642,10 @@ static int scoutfs_rename_common(struct inode *old_dir,
 		ret = -EEXIST;
 		goto out_unlock;
 	}
+
+	if ((old_inode && (ret = scoutfs_inode_check_retention(old_inode))) ||
+	    (new_inode && (ret = scoutfs_inode_check_retention(new_inode))))
+		goto out_unlock;
 
 	if (should_orphan(new_inode)) {
 		ret = scoutfs_lock_orphan(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, scoutfs_ino(new_inode),

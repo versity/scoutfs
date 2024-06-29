@@ -8,8 +8,13 @@
  */
 #define SCOUTFS_FORMAT_VERSION_MIN		1
 #define SCOUTFS_FORMAT_VERSION_MIN_STR	__stringify(SCOUTFS_FORMAT_VERSION_MIN)
-#define SCOUTFS_FORMAT_VERSION_MAX		1
+#define SCOUTFS_FORMAT_VERSION_MAX		2
 #define SCOUTFS_FORMAT_VERSION_MAX_STR	__stringify(SCOUTFS_FORMAT_VERSION_MAX)
+
+#define SCOUTFS_FORMAT_VERSION_FEAT_RETENTION	2
+#define SCOUTFS_FORMAT_VERSION_FEAT_PROJECT_ID	2
+#define SCOUTFS_FORMAT_VERSION_FEAT_QUOTA	2
+#define SCOUTFS_FORMAT_VERSION_FEAT_INDX_TAG	2
 
 /* statfs(2) f_type */
 #define SCOUTFS_SUPER_MAGIC	0x554f4353		/* "SCOU" */
@@ -174,6 +179,10 @@ struct scoutfs_key {
 /* node orphan inode */
 #define sko_rid		_sk_first
 #define sko_ino		_sk_second
+
+/* quota rules */
+#define skqr_hash	_sk_second
+#define skqr_coll_nr	_sk_third
 
 /* xattr totl */
 #define skxt_a		_sk_first
@@ -585,7 +594,9 @@ struct scoutfs_log_merge_freeing {
  */
 #define SCOUTFS_INODE_INDEX_ZONE		4
 #define SCOUTFS_ORPHAN_ZONE			8
+#define SCOUTFS_QUOTA_ZONE			10
 #define SCOUTFS_XATTR_TOTL_ZONE			12
+#define SCOUTFS_XATTR_INDX_ZONE			14
 #define SCOUTFS_FS_ZONE				16
 #define SCOUTFS_LOCK_ZONE			20
 /* Items only stored in server btrees */
@@ -607,6 +618,9 @@ struct scoutfs_log_merge_freeing {
 
 /* orphan zone, redundant type used for clarity */
 #define SCOUTFS_ORPHAN_TYPE			4
+
+/* quota zone */
+#define SCOUTFS_QUOTA_RULE_TYPE			4
 
 /* fs zone */
 #define SCOUTFS_INODE_TYPE			4
@@ -659,6 +673,34 @@ struct scoutfs_xattr {
 struct scoutfs_xattr_totl_val {
 	__le64 total;
 	__le64 count;
+};
+
+#define SQ_RF_TOTL_COUNT	(1 << 0)
+#define SQ_RF__UNKNOWN	(~((1 << 1) - 1))
+
+#define SQ_NS_LITERAL		0
+#define SQ_NS_PROJ		1
+#define SQ_NS_UID		2
+#define SQ_NS_GID		3
+#define SQ_NS__NR		4
+#define SQ_NS__NR_SELECT	(SQ_NS__NR - 1) /* !literal */
+
+#define SQ_NF_SELECT	(1 << 0)
+#define SQ_NF__UNKNOWN	(~((1 << 1) - 1))
+
+#define SQ_OP_INODE	0
+#define SQ_OP_DATA	1
+#define SQ_OP__NR	2
+
+struct scoutfs_quota_rule_val {
+	__le64 name_val[3];
+	__le64 limit;
+	__u8 prio;
+	__u8 op;
+	__u8 rule_flags;
+	__u8 name_source[3];
+	__u8 name_flags[3];
+	__u8 _pad[7];
 };
 
 /* XXX does this exist upstream somewhere? */
@@ -859,9 +901,38 @@ struct scoutfs_inode {
 	struct scoutfs_timespec ctime;
 	struct scoutfs_timespec mtime;
 	struct scoutfs_timespec crtime;
+	__le64 proj;
 };
 
-#define SCOUTFS_INO_FLAG_TRUNCATE 0x1
+#define SCOUTFS_INODE_FMT_V1_BYTES offsetof(struct scoutfs_inode, proj)
+
+/*
+ * There are so few versions that we don't mind doing this work inline
+ * so that both utils and kernel can share these.  Mounting has already
+ * checked that the format version is within the supported min and max,
+ * so these functions only deal with size variance within that band.
+ */
+/* Returns the native written inode size for the given format version, 0 for bad version */
+static inline int scoutfs_inode_vers_bytes(__u64 fmt_vers)
+{
+	if (fmt_vers == 1)
+		return SCOUTFS_INODE_FMT_V1_BYTES;
+	else
+		return sizeof(struct scoutfs_inode);
+}
+/*
+ * Returns true if bytes is a valid inode size to read from the given
+ * version.  The given version must be greater than the version that
+ * introduced the size.
+ */
+static inline int scoutfs_inode_valid_vers_bytes(__u64 fmt_vers, int bytes)
+{
+	return (bytes == sizeof(struct scoutfs_inode) && fmt_vers == SCOUTFS_FORMAT_VERSION_MAX) ||
+	       (bytes == SCOUTFS_INODE_FMT_V1_BYTES);
+}
+
+#define SCOUTFS_INO_FLAG_TRUNCATE	0x1
+#define SCOUTFS_INO_FLAG_RETENTION	0x2
 
 #define SCOUTFS_ROOT_INO 1
 

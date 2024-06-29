@@ -30,6 +30,8 @@ struct recov_info;
 struct omap_info;
 struct volopt_info;
 struct fence_info;
+struct wkic_info;
+struct squota_info;
 
 struct scoutfs_sb_info {
 	struct super_block *sb;
@@ -55,6 +57,8 @@ struct scoutfs_sb_info {
 	struct omap_info *omap_info;
 	struct volopt_info *volopt_info;
 	struct item_cache_info *item_cache_info;
+	struct wkic_info *wkic_info;
+	struct squota_info *squota_info;
 	struct fence_info *fence_info;
 
 	/* tracks tasks waiting for data extents */
@@ -155,5 +159,18 @@ int scoutfs_write_super(struct super_block *sb,
 
 /* to keep this out of the ioctl.h public interface definition */
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+
+/*
+ * Returns 0 when supported, non-zero -errno when unsupported.
+ */
+static inline int scoutfs_fmt_vers_unsupported(struct super_block *sb, u64 vers)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	if (sbi && (sbi->fmt_vers < vers))
+		return -EOPNOTSUPP;
+	else
+		return 0;
+}
 
 #endif

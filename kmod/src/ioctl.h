@@ -673,4 +673,174 @@ struct scoutfs_ioctl_dirent {
 #define SCOUTFS_IOC_GET_REFERRING_ENTRIES \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 17, struct scoutfs_ioctl_get_referring_entries)
 
+struct scoutfs_ioctl_inode_attr_x {
+	__u64 x_mask;
+	__u64 x_flags;
+	__u64 meta_seq;
+	__u64 data_seq;
+	__u64 data_version;
+	__u64 online_blocks;
+	__u64 offline_blocks;
+	__u64 ctime_sec;
+	__u32 ctime_nsec;
+	__u32 crtime_nsec;
+	__u64 crtime_sec;
+	__u64 size;
+	__u64 bits;
+	__u64 project_id;
+};
+
+/*
+ * Behavioral flags set in the x_flags field.  These flags don't
+ * necessarily correspond to specific attributes, but instead change the
+ * behaviour of a _get_ or _set_ operation.
+ *
+ * @SCOUTFS_IOC_IAX_F_SIZE_OFFLINE: When setting i_size, also create
+ * extents which are marked offline for the region of the file from
+ * offset 0 to the new set size.  This can only be set when setting the
+ * size and has no effect if setting the size fails.
+ */
+#define SCOUTFS_IOC_IAX_F_SIZE_OFFLINE	(1ULL << 0)
+#define SCOUTFS_IOC_IAX_F__UNKNOWN	(U64_MAX << 1)
+
+/*
+ * Single-bit values stored in the @bits field.  These indicate whether
+ * the bit is set, or not.  The main _IAX_ bits set in the mask indicate
+ * whether this value bit is populated by _get or stored by _set. 
+ */
+#define SCOUTFS_IOC_IAX_B_RETENTION	(1ULL << 0)
+
+/*
+ * x_mask bits which indicate which attributes of the inode to populate
+ * on return for _get or to set on the inode for _set.  Each mask bit
+ * corresponds to the matching named field in the attr_x struct passed
+ * to the _get_ and _set_ calls.
+ *
+ * Each field can have different permissions or other attribute
+ * requirements which can cause calls to fail.  If _set_ fails then no
+ * other attribute changes will have been made by the same call.
+ *
+ * @SCOUTFS_IOC_IAX_RETENTION: Mark a file for retention.  When marked,
+ * no modification can be made to the file other than changing extended
+ * attributes outside the "user." prefix and clearing the retention
+ * mark.  This can only be set on regular files and requires root (the
+ * CAP_SYS_ADMIN capability).  Other attributes can be set with a
+ * set_attr_x call on a retention inode as long as that call also
+ * successfully clears the retention mark.
+ */
+#define SCOUTFS_IOC_IAX_META_SEQ	(1ULL << 0)
+#define SCOUTFS_IOC_IAX_DATA_SEQ	(1ULL << 1)
+#define SCOUTFS_IOC_IAX_DATA_VERSION	(1ULL << 2)
+#define SCOUTFS_IOC_IAX_ONLINE_BLOCKS	(1ULL << 3)
+#define SCOUTFS_IOC_IAX_OFFLINE_BLOCKS	(1ULL << 4)
+#define SCOUTFS_IOC_IAX_CTIME		(1ULL << 5)
+#define SCOUTFS_IOC_IAX_CRTIME		(1ULL << 6)
+#define SCOUTFS_IOC_IAX_SIZE		(1ULL << 7)
+#define SCOUTFS_IOC_IAX_RETENTION	(1ULL << 8)
+#define SCOUTFS_IOC_IAX_PROJECT_ID	(1ULL << 9)
+
+/* single bit attributes that are packed in the bits field as _B_ */
+#define SCOUTFS_IOC_IAX__BITS		(SCOUTFS_IOC_IAX_RETENTION)
+/* inverse of all the bits we understand */
+#define SCOUTFS_IOC_IAX__UNKNOWN	(U64_MAX << 10)
+
+#define SCOUTFS_IOC_GET_ATTR_X \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 18, struct scoutfs_ioctl_inode_attr_x)
+
+#define SCOUTFS_IOC_SET_ATTR_X \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 19, struct scoutfs_ioctl_inode_attr_x)
+
+/*
+ * (These fields are documented in the order that they're displayed by
+ * the scoutfs cli utility which matches the sort order of the rules.)
+ *
+ * @prio: The priority of the rule.  Rules are sorted by their fields
+ * with prio at the highest magnitude.  When multiple rules match the
+ * rule with the highest sort order is enforced.  The priority field
+ * lets rules override the default field sort order.
+ *
+ * @name_val[3]: The three 64bit values that make up the name of the
+ * totl xattr whose total will be checked against the rule's limit to
+ * see if the quota rule has been exceeded.  The behavior of the values
+ * can be changed by their corresponding name_source and name_flags.
+ *
+ * @name_source[3]: The SQ_NS_ enums that control where the value comes
+ * from.  _LITERAL uses the value from name_val.  Inode attribute
+ * sources (_PROJ, _UID, _GID) are taken from the inode of the operation
+ * that is being checked against the rule.
+ *
+ * @name_flags[3]: The SQ_NF_ enums that alter the name values.  _SELECT
+ * makes the rule only match if the inode attribute of the operation
+ * matches the attribute value stored in name_val.  This lets rules
+ * match a specific value of an attribute rather than mapping all
+ * attribute values of to totl names.
+ *
+ * @op: The SQ_OP_ enums which specify the operation that can't exceed
+ * the rule's limit.  _INODE checks inode creation and the inode
+ * attributes are taken from the inode that would be created.  _DATA
+ * checks file data block allocation and the inode fields come from the
+ * inode that is allocating the blocks.
+ *
+ * @limit: The 64bit value that is checked against the totl value
+ * described by the rule.  If the totl value is greater than or equal to
+ * this value of the matching rule then the operation will return
+ * -EDQUOT.
+ *
+ * @rule_flags: SQ_RF_TOTL_COUNT indicates that the rule's limit should
+ * be checked against the number of xattrs contributing to a totl value
+ * instead of the sum of the xattrs.
+ */
+struct scoutfs_ioctl_quota_rule {
+	__u64 name_val[3];
+	__u64 limit;
+	__u8 prio;
+	__u8 op;
+	__u8 rule_flags;
+	__u8 name_source[3];
+	__u8 name_flags[3];
+	__u8 _pad[7];
+};
+
+struct scoutfs_ioctl_get_quota_rules {
+	__u64 iterator[2];
+	__u64 rules_ptr;
+	__u64 rules_nr;
+};
+
+/*
+ * Rules are uniquely identified by their non-padded fields.  Addition will fail
+ * with -EEXIST if the specified rule already exists and deletion must find a rule
+ * with all matching fields to delete.
+ */
+#define SCOUTFS_IOC_GET_QUOTA_RULES \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 20, struct scoutfs_ioctl_get_quota_rules)
+#define SCOUTFS_IOC_ADD_QUOTA_RULE \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 21, struct scoutfs_ioctl_quota_rule)
+#define SCOUTFS_IOC_DEL_QUOTA_RULE \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 22, struct scoutfs_ioctl_quota_rule)
+
+/*
+ * Inodes can be indexed in a global key space at a position determined
+ * by a .indx. tagged xattr.  The xattr name specifies the two index
+ * position values, with major having the more significant comparison
+ * order.
+ */
+struct scoutfs_ioctl_xattr_index_entry {
+	__u64 minor;
+	__u64 ino;
+	__u8 major;
+	__u8 _pad[7];
+};
+
+struct scoutfs_ioctl_read_xattr_index {
+	__u64 flags;
+	struct scoutfs_ioctl_xattr_index_entry first;
+	struct scoutfs_ioctl_xattr_index_entry last;
+	__u64 entries_ptr;
+	__u64 entries_nr;
+};
+
+#define SCOUTFS_IOC_READ_XATTR_INDEX \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 23, struct scoutfs_ioctl_read_xattr_index)
+
 #endif

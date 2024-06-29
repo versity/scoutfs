@@ -36,6 +36,8 @@
 #include "item.h"
 #include "omap.h"
 #include "util.h"
+#include "totl.h"
+#include "quota.h"
 
 /*
  * scoutfs uses a lock service to manage item cache consistency between
@@ -184,6 +186,9 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 		if (ret < 0)
 			return ret;
 	}
+
+	if (lock->start.sk_zone == SCOUTFS_QUOTA_ZONE && !lock_mode_can_read(mode))
+		scoutfs_quota_invalidate(sb);
 
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
@@ -1244,10 +1249,29 @@ int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode,
 	struct scoutfs_key start;
 	struct scoutfs_key end;
 
-	scoutfs_key_set_zeros(&start);
-	start.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
-	scoutfs_key_set_ones(&end);
-	end.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
+	scoutfs_totl_set_range(&start, &end);
+
+	return lock_key_range(sb, mode, flags, &start, &end, lock);
+}
+
+int scoutfs_lock_xattr_indx(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+			    struct scoutfs_lock **lock)
+{
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+
+	scoutfs_xattr_indx_get_range(&start, &end);
+
+	return lock_key_range(sb, mode, flags, &start, &end, lock);
+}
+
+int scoutfs_lock_quota(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+		       struct scoutfs_lock **lock)
+{
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+
+	scoutfs_quota_get_lock_range(&start, &end);
 
 	return lock_key_range(sb, mode, flags, &start, &end, lock);
 }

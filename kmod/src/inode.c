@@ -250,7 +250,7 @@ static void set_item_info(struct scoutfs_inode_info *si,
 	set_item_major(si, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE, sinode->data_seq);
 }
 
-static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
+static void load_inode(struct inode *inode, struct scoutfs_inode *cinode, int inode_bytes)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
@@ -278,6 +278,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	si->flags = le32_to_cpu(cinode->flags);
 	si->crtime.tv_sec = le64_to_cpu(cinode->crtime.sec);
 	si->crtime.tv_nsec = le32_to_cpu(cinode->crtime.nsec);
+	si->proj = le64_to_cpu(cinode->proj);
 
 	/*
 	 * i_blocks is initialized from online and offline and is then
@@ -296,6 +297,24 @@ void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 		.ski_ino = cpu_to_le64(ino),
 		.sk_type = SCOUTFS_INODE_TYPE,
 	};
+}
+
+/*
+ * Read an inode item into the caller's buffer and return the size that
+ * we read.   Returns errors if the inode size is unsupported or doesn't
+ * make sense for the format version.
+ */
+static int lookup_inode_item(struct super_block *sb, struct scoutfs_key *key,
+			     struct scoutfs_inode *sinode, struct scoutfs_lock *lock)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	int ret;
+
+	ret = scoutfs_item_lookup_smaller_zero(sb, key, sinode, sizeof(struct scoutfs_inode), lock);
+	if (ret >= 0 && !scoutfs_inode_valid_vers_bytes(sbi->fmt_vers, ret))
+		return -EIO;
+
+	return ret;
 }
 
 /*
@@ -333,12 +352,12 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 
 	mutex_lock(&si->item_mutex);
 	if (atomic64_read(&si->last_refreshed) < refresh_gen) {
-		ret = scoutfs_item_lookup_exact(sb, &key, &sinode,
-						sizeof(sinode), lock);
-		if (ret == 0) {
-			load_inode(inode, &sinode);
+		ret = lookup_inode_item(sb, &key, &sinode, lock);
+		if (ret > 0) {
+			load_inode(inode, &sinode, ret);
 			atomic64_set(&si->last_refreshed, refresh_gen);
 			scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
+			ret = 0;
 		}
 	} else {
 		ret = 0;
@@ -484,6 +503,10 @@ retry:
 		return ret;
 	ret = setattr_prepare(dentry, attr);
 	if (ret)
+		goto out;
+
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0)
 		goto out;
 
 	attr_size = (attr->ia_valid & ATTR_SIZE) ? attr->ia_size :
@@ -686,6 +709,55 @@ void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off)
 	} while (read_seqretry(&si->seqlock, seq));
 }
 
+/*
+ * Get our private scoutfs inode flags, not the vfs i_flags.
+ */
+u32 scoutfs_inode_get_flags(struct inode *inode)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned seq;
+	u32 flags;
+
+	do {
+		seq = read_seqbegin(&si->seqlock);
+		flags = si->flags;
+	} while (read_seqretry(&si->seqlock, seq));
+
+	return flags;
+}
+
+void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	write_seqlock(&si->seqlock);
+	si->flags = (si->flags & and) | or;
+	write_sequnlock(&si->seqlock);
+}
+
+u64 scoutfs_inode_get_proj(struct inode *inode)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned seq;
+	u64 proj;
+
+	do {
+		seq = read_seqbegin(&si->seqlock);
+		proj = si->proj;
+	} while (read_seqretry(&si->seqlock, seq));
+
+	return proj;
+}
+
+void scoutfs_inode_set_proj(struct inode *inode, u64 proj)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	write_seqlock(&si->seqlock);
+	si->proj = proj;
+	write_sequnlock(&si->seqlock);
+}
+
 static int scoutfs_iget_test(struct inode *inode, void *arg)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -795,7 +867,7 @@ out:
 	return inode;
 }
 
-static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
+static void store_inode(struct scoutfs_inode *cinode, struct inode *inode, int inode_bytes)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	u64 online_blocks;
@@ -831,6 +903,7 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	cinode->crtime.sec = cpu_to_le64(si->crtime.tv_sec);
 	cinode->crtime.nsec = cpu_to_le32(si->crtime.tv_nsec);
 	memset(cinode->crtime.__pad, 0, sizeof(cinode->crtime.__pad));
+	cinode->proj = cpu_to_le64(si->proj);
 }
 
 /*
@@ -854,15 +927,18 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 int scoutfs_dirty_inode_item(struct inode *inode, struct scoutfs_lock *lock)
 {
 	struct super_block *sb = inode->i_sb;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
+	int inode_bytes;
 	int ret;
 
-	store_inode(&sinode, inode);
+	inode_bytes = scoutfs_inode_vers_bytes(sbi->fmt_vers);
+	store_inode(&sinode, inode, inode_bytes);
 
 	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
-	ret = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = scoutfs_item_update(sb, &key, &sinode, inode_bytes, lock);
 	if (!ret)
 		trace_scoutfs_dirty_inode(inode);
 	return ret;
@@ -1064,9 +1140,11 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	const u64 ino = scoutfs_ino(inode);
-	struct scoutfs_key key;
 	struct scoutfs_inode sinode;
+	struct scoutfs_key key;
+	int inode_bytes;
 	int ret;
 	int err;
 
@@ -1075,15 +1153,17 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 	/* set the meta version once per trans for any inode updates */
 	scoutfs_inode_set_meta_seq(inode);
 
+	inode_bytes = scoutfs_inode_vers_bytes(sbi->fmt_vers);
+
 	/* only race with other inode field stores once */
-	store_inode(&sinode, inode);
+	store_inode(&sinode, inode, inode_bytes);
 
 	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list, lock);
 	BUG_ON(ret);
 
 	scoutfs_inode_init_key(&key, ino);
 
-	err = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
+	err = scoutfs_item_update(sb, &key, &sinode, inode_bytes, lock);
 	if (err) {
 		scoutfs_err(sb, "inode %llu update err %d", ino, err);
 		BUG_ON(err);
@@ -1451,10 +1531,12 @@ out:
 int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, dev_t rdev,
 		      u64 ino, struct scoutfs_lock *lock, struct inode **inode_ret)
 {
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_inode_info *si;
-	struct scoutfs_key key;
 	struct scoutfs_inode sinode;
+	struct scoutfs_key key;
 	struct inode *inode;
+	int inode_bytes;
 	int ret;
 
 	inode = new_inode(sb);
@@ -1470,6 +1552,7 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	si->offline_blocks = 0;
 	si->next_readdir_pos = SCOUTFS_DIRENT_FIRST_POS;
 	si->next_xattr_id = 0;
+	si->proj = 0;
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
 	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
@@ -1485,14 +1568,16 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	inode->i_rdev = rdev;
 	set_inode_ops(inode);
 
-	store_inode(&sinode, inode);
+	inode_bytes = scoutfs_inode_vers_bytes(sbi->fmt_vers);
+
+	store_inode(&sinode, inode, inode_bytes);
 	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	ret = scoutfs_omap_set(sb, ino);
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_item_create(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = scoutfs_item_create(sb, &key, &sinode, inode_bytes, lock);
 	if (ret < 0)
 		scoutfs_omap_clear(sb, ino);
 out:
@@ -1746,7 +1831,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	}
 
 	scoutfs_inode_init_key(&key, ino);
-	ret = scoutfs_item_lookup_exact(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = lookup_inode_item(sb, &key, &sinode, lock);
 	if (ret < 0) {
 		if (ret == -ENOENT)
 			ret = 0;
@@ -2133,6 +2218,17 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 out:
 
 	return ret;
+}
+
+/*
+ * Return an error if the inode has the retention flag set and can not
+ * be modified.  This mimics the errno returned by the vfs whan an
+ * inode's immutable flag is set.  The flag won't be set on older format
+ * versions so we don't check the mounted format version here.
+ */
+int scoutfs_inode_check_retention(struct inode *inode)
+{
+	return (scoutfs_inode_get_flags(inode) & SCOUTFS_INO_FLAG_RETENTION) ? -EPERM : 0;
 }
 
 int scoutfs_inode_setup(struct super_block *sb)
