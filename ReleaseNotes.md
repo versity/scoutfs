@@ -2,6 +2,27 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.21
+\
+*Jul 1, 2024*
+
+This release adds features that rely on incompatible changes to
+structure the file system.  The process of advancing the format version
+to enable these features is described in scoutfs(5).
+
+Added the ".indx." extended attribute tag which can be used to determine
+the sorting of files in a global index.
+
+Added ScoutFS quotas which let rules define file size and count limits
+in terms of ".totl." extended attribute totals.
+
+Added the project ID file attribute which is inherited from parent
+directories on creation.  ScoutFS quota rules can reference project IDs.
+
+Add a retention attribute for files which prevents modification once
+enabled.
+
+---
 v1.20
 \
 *Apr 22, 2024*
