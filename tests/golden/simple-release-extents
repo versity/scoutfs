@@ -4,6 +4,7 @@
 == releasing offline extents is fine
 == 0 count is fine
 == release past i_size is fine
+== max blocks succeeds
 == wrapped blocks fails
 release ioctl failed: Invalid argument (22)
 scoutfs: release failed: Invalid argument (22)
