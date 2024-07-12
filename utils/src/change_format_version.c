@@ -94,6 +94,18 @@ static int do_change_fmt_vers(struct change_fmt_vers_args *args)
 		goto out;
 	}
 
+	if ((le64_to_cpu(meta_super->flags) & SCOUTFS_FLAG_IS_META_BDEV) == 0) {
+		printf("device argument #1 is not a meta device (swap arguments?)\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if ((le64_to_cpu(data_super->flags) & SCOUTFS_FLAG_IS_META_BDEV) != 0) {
+		printf("device argument #2 is not a data device (swap arguments?)\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
 	if (le64_to_cpu(meta_super->fmt_vers) < SCOUTFS_FORMAT_VERSION_MIN ||
 	    le64_to_cpu(meta_super->fmt_vers) > SCOUTFS_FORMAT_VERSION_MAX) {
 		fprintf(stderr, "meta super block has format version %llu outside of supported version range %u-%u",
