@@ -7,26 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v3.10-rc6-21-gbb6f619b3a49
-#
-# _readdir changes from fop->readdir() to fop->iterate() and from
-# filldir(dirent) to dir_emit(ctx).
-#
-ifneq (,$(shell grep 'iterate.*dir_context' include/linux/fs.h))
-ccflags-y += -DKC_ITERATE_DIR_CONTEXT
-endif
-
-#
-# v3.10-rc6-23-g5f99f4e79abc
-#
-# Helpers including dir_emit_dots() are added in the process of
-# switching dcache_readdir() from fop->readdir() to fop->iterate()
-#
-ifneq (,$(shell grep 'dir_emit_dots' include/linux/fs.h))
-ccflags-y += -DKC_DIR_EMIT_DOTS
-endif
-
-#
 # v3.18-rc2-19-gb5ae6b15bd73
 # 
 # Folds d_materialise_unique into d_splice_alias. Note reversal
