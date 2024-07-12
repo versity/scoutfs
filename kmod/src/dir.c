@@ -441,8 +441,7 @@ out:
  * It will need to be careful not to read past the region of the dirent
  * hash offset keys that it has access to.
  */
-static int KC_DECLARE_READDIR(scoutfs_readdir, struct file *file,
-			      void *dirent, kc_readdir_ctx_t ctx)
+static int scoutfs_readdir(struct file *file, struct dir_context *ctx)
 {
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
@@ -454,7 +453,7 @@ static int KC_DECLARE_READDIR(scoutfs_readdir, struct file *file,
 	u64 pos;
 	int ret;
 
-	if (!kc_dir_emit_dots(file, dirent, ctx))
+	if (!dir_emit_dots(file, ctx))
 		return 0;
 
 	dent = alloc_dirent(SCOUTFS_NAME_LEN);
@@ -471,7 +470,7 @@ static int KC_DECLARE_READDIR(scoutfs_readdir, struct file *file,
 
 	for (;;) {
 		init_dirent_key(&key, SCOUTFS_READDIR_TYPE, scoutfs_ino(inode),
-				kc_readdir_pos(file, ctx), 0);
+				ctx->pos, 0);
 
 		ret = scoutfs_item_next(sb, &key, &last_key, dent,
 					dirent_bytes(SCOUTFS_NAME_LEN),
@@ -488,23 +487,23 @@ static int KC_DECLARE_READDIR(scoutfs_readdir, struct file *file,
 					   corrupt_dirent_readdir_name_len,
 					   "dir_ino %llu pos %llu key "SK_FMT" len %d",
 					   scoutfs_ino(inode),
-					   kc_readdir_pos(file, ctx),
+					   ctx->pos,
 					   SK_ARG(&key), name_len);
 			ret = -EIO;
 			goto out;
 		}
 
 		pos = le64_to_cpu(key.skd_major);
-		kc_readdir_pos(file, ctx) = pos;
+		ctx->pos = pos;
 
-		if (!kc_dir_emit(ctx, dirent, dent->name, name_len, pos,
+		if (!dir_emit(ctx, dent->name, name_len,
 				le64_to_cpu(dent->ino),
 				dentry_type(dent->type))) {
 			ret = 0;
 			break;
 		}
 
-		kc_readdir_pos(file, ctx) = pos + 1;
+		ctx->pos = pos + 1;
 	}
 
 out:
@@ -1973,7 +1972,7 @@ const struct inode_operations scoutfs_symlink_iops = {
 };
 
 const struct file_operations scoutfs_dir_fops = {
-	.KC_FOP_READDIR	= scoutfs_readdir,
+	.iterate	= scoutfs_readdir,
 #ifdef KC_FMODE_KABI_ITERATE
 	.open		= scoutfs_dir_open,
 #endif
