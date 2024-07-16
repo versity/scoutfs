@@ -11,11 +11,13 @@
  * General Public License for more details.
  */
 #include <linux/kernel.h>
+#include <linux/stddef.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/uio.h>
 #include <linux/xattr.h>
 #include <linux/namei.h>
+#include <linux/mm.h>
 
 #include "format.h"
 #include "file.h"
@@ -435,6 +437,15 @@ out:
 }
 
 /*
+ * Helper to make iterating through dirent ptrs aligned
+ */
+static inline struct scoutfs_dirent *next_aligned_dirent(struct scoutfs_dirent *dent, u8 len)
+{
+	return (void *)dent +
+		ALIGN(offsetof(struct scoutfs_dirent, name[len]), __alignof__(struct scoutfs_dirent));
+}
+
+/*
  * readdir simply iterates over the dirent items for the dir inode and
  * uses their offset as the readdir position.
  *
@@ -447,69 +458,103 @@ static int scoutfs_readdir(struct file *file, struct dir_context *ctx)
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *dir_lock = NULL;
 	struct scoutfs_dirent *dent = NULL;
+/* we'll store name_len in dent->__pad[0] */
+#define hacky_name_len __pad[0]
 	struct scoutfs_key last_key;
 	struct scoutfs_key key;
+	struct page *page = NULL;
 	int name_len;
 	u64 pos;
+	int entries = 0;
 	int ret;
+	int complete = 0;
+	struct scoutfs_dirent *end;
 
 	if (!dir_emit_dots(file, ctx))
 		return 0;
 
-	dent = alloc_dirent(SCOUTFS_NAME_LEN);
-	if (!dent) {
+	page = alloc_page(GFP_KERNEL);
+	if (!page)
 		return -ENOMEM;
-	}
+
+	end = page_address(page) + PAGE_SIZE;
 
 	init_dirent_key(&last_key, SCOUTFS_READDIR_TYPE, scoutfs_ino(inode),
 			SCOUTFS_DIRENT_LAST_POS, 0);
 
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &dir_lock);
-	if (ret)
-		goto out;
-
+	/*
+	 * lock and fetch dirent items, until the page no longer fits
+	 * a max size dirent (288b). Then unlock and dir_emit the ones
+	 * we stored in the page.
+	 */
 	for (;;) {
-		init_dirent_key(&key, SCOUTFS_READDIR_TYPE, scoutfs_ino(inode),
-				ctx->pos, 0);
+		/* lock */
+		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &dir_lock);
+		if (ret)
+			break;
 
-		ret = scoutfs_item_next(sb, &key, &last_key, dent,
-					dirent_bytes(SCOUTFS_NAME_LEN),
-					dir_lock);
-		if (ret < 0) {
-			if (ret == -ENOENT)
+		dent = page_address(page);
+		pos = ctx->pos;
+		while (next_aligned_dirent(dent, SCOUTFS_NAME_LEN) < end) {
+			init_dirent_key(&key, SCOUTFS_READDIR_TYPE, scoutfs_ino(inode),
+					pos, 0);
+
+			ret = scoutfs_item_next(sb, &key, &last_key, dent,
+						dirent_bytes(SCOUTFS_NAME_LEN),
+						dir_lock);
+			if (ret < 0) {
+				if (ret == -ENOENT) {
+					ret = 0;
+					complete = 1;
+				}
+				break;
+			}
+
+			name_len = ret - sizeof(struct scoutfs_dirent);
+			dent->hacky_name_len = name_len;
+			if (name_len < 1 || name_len > SCOUTFS_NAME_LEN) {
+				scoutfs_corruption(sb, SC_DIRENT_READDIR_NAME_LEN,
+						   corrupt_dirent_readdir_name_len,
+						   "dir_ino %llu pos %llu key "SK_FMT" len %d",
+						   scoutfs_ino(inode),
+						   pos,
+						   SK_ARG(&key), name_len);
+				ret = -EIO;
+				break;
+			}
+
+			pos = le64_to_cpu(dent->pos) + 1;
+
+			dent = next_aligned_dirent(dent, name_len);
+			entries++;
+		}
+
+		/* unlock */
+		scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_READ);
+
+		if (ret < 0)
+			break;
+
+		dent = page_address(page);
+		for (; entries > 0; entries--) {
+			if (!dir_emit(ctx, dent->name, dent->hacky_name_len,
+					le64_to_cpu(dent->ino),
+					dentry_type(dent->type))) {
 				ret = 0;
+				goto out;
+			}
+			ctx->pos = le64_to_cpu(dent->pos) + 1;
+
+			dent = next_aligned_dirent(dent, dent->hacky_name_len);
+		}
+
+		if (complete)
 			break;
-		}
-
-		name_len = ret - sizeof(struct scoutfs_dirent);
-		if (name_len < 1 || name_len > SCOUTFS_NAME_LEN) {
-			scoutfs_corruption(sb, SC_DIRENT_READDIR_NAME_LEN,
-					   corrupt_dirent_readdir_name_len,
-					   "dir_ino %llu pos %llu key "SK_FMT" len %d",
-					   scoutfs_ino(inode),
-					   ctx->pos,
-					   SK_ARG(&key), name_len);
-			ret = -EIO;
-			goto out;
-		}
-
-		pos = le64_to_cpu(key.skd_major);
-		ctx->pos = pos;
-
-		if (!dir_emit(ctx, dent->name, name_len,
-				le64_to_cpu(dent->ino),
-				dentry_type(dent->type))) {
-			ret = 0;
-			break;
-		}
-
-		ctx->pos = pos + 1;
 	}
 
 out:
-	scoutfs_unlock(sb, dir_lock, SCOUTFS_LOCK_READ);
-
-	kfree(dent);
+	if (page)
+		__free_page(page);
 	return ret;
 }
 
