@@ -38,3 +38,4 @@ dd: error writing '/mnt/test/test/quota/dir/file': Disk quota exceeded
 fallocate: fallocate failed: Disk quota exceeded
 == added rules work after bulk restore
 touch: cannot touch '/mnt/test/test/quota/dir/file': Disk quota exceeded
+== cleanup

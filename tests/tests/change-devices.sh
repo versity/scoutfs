@@ -73,4 +73,7 @@ test "$large_tot" -gt "$equal_tot" ; echo "resized larger test rc: $?"
 umount "$SCR"
 losetup -d "$scr_loop"
 
+echo "== cleanup"
+rm -f "$T_TMP.small" "$T_TMP.equal" "$T_TMP.large"
+
 t_pass

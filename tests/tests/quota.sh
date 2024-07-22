@@ -147,4 +147,7 @@ sync_and_drop
 setpriv $SET_UID touch "$FILE" 2>&1 | t_filter_fs
 reset_all
 
+echo "== cleanup"
+rm -f "$T_TMP.lots" "$T_TMP.list"
+
 t_pass
