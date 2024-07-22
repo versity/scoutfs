@@ -2,7 +2,7 @@
 # Test clustered parallel createmany
 #
 
-t_require_commands mkdir createmany
+t_require_commands mkdir createmany bc
 t_require_mounts 2
 
 COUNT=50000
@@ -17,14 +17,14 @@ mkdir -p $T_D0/dir/0
 mkdir $T_D1/dir/1
 
 echo "== measure initial createmany"
-START=$SECONDS
+START=$(date +%s.%N)
 createmany -o "$T_D0/file_" $COUNT >> $T_TMP.full
 sync
-SINGLE=$((SECONDS - START))
-echo single $SINGLE >> $T_TMP.full
+END=$(date +%s.%N)
+SINGLE=$(echo "$END - $START" | bc)
 
 echo "== measure two concurrent createmany runs"
-START=$SECONDS
+START=$(date +%s.%N)
 (cd $T_D0/dir/0; createmany -o ./file_ $COUNT > /dev/null) &
 pids="$!"
 (cd $T_D1/dir/1; createmany -o ./file_ $COUNT > /dev/null) &
@@ -33,7 +33,9 @@ for p in $pids; do
         wait $p
 done
 sync
-BOTH=$((SECONDS - START))
+END=$(date +%s.%N)
+BOTH=$(echo "$END - $START" | bc)
+
 echo both $BOTH >> $T_TMP.full
 
 # Multi node still adds significant overhead, even with our CW locks
@@ -44,7 +46,7 @@ echo both $BOTH >> $T_TMP.full
 # exceed this factor should the CW locked items go back to fully
 # synchronized operation.
 FACTOR=200
-if [ "$BOTH" -gt $(($SINGLE*$FACTOR)) ]; then
+if [ $(echo "$BOTH > ( $SINGLE * $FACTOR )" | bc) == "1" ]; then
 	t_fail "both createmany took $BOTH sec, more than $FACTOR x single $SINGLE sec"
 fi
 
