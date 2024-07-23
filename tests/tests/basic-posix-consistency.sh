@@ -210,4 +210,7 @@ done
 wait
 ls "$T_D0/concurrent"
 
+echo "== cleanup"
+rm -f "$T_TMP.0" "$T_TMP.1"
+
 t_pass
