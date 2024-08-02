@@ -1531,9 +1531,11 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_extent ext;
-	struct scoutfs_extent cur;
+#define SCOUTFS_DATA_FIEMAP_MAX 32 /* 1k */
+	struct scoutfs_extent cur[SCOUTFS_DATA_FIEMAP_MAX];
 	struct data_ext_args args;
-	u32 last_flags;
+	long long last_pos = LLONG_MIN;
+	int pos;
 	u64 iblock;
 	u64 last;
 	int ret;
@@ -1547,6 +1549,12 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (ret)
 		goto out;
 
+	iblock = start >> SCOUTFS_BLOCK_SM_SHIFT;
+	last = (start + len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
+
+cont:
+	pos = 0;
+
 	inode_lock(inode);
 	down_read(&si->extent_sem);
 
@@ -1559,11 +1567,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	args.lock = lock;
 
 	/* use a dummy extent to track */
-	memset(&cur, 0, sizeof(cur));
-	last_flags = 0;
-
-	iblock = start >> SCOUTFS_BLOCK_SM_SHIFT;
-	last = (start + len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
+	memset(cur, 0, sizeof(cur));
 
 	while (iblock <= last) {
 		ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
@@ -1571,7 +1575,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		if (ret < 0) {
 			if (ret == -ENOENT)
 				ret = 0;
-			last_flags = FIEMAP_EXTENT_LAST;
+			last_pos = pos;
 			break;
 		}
 
@@ -1583,30 +1587,40 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 			break;
 		}
 
-		if (scoutfs_ext_can_merge(&cur, &ext)) {
+		if (scoutfs_ext_can_merge(&cur[pos], &ext)) {
 			/* merged extents could be greater than input len */
-			cur.len += ext.len;
+			cur[pos].len += ext.len;
 		} else {
-			ret = fill_extent(fieinfo, &cur, 0);
-			if (ret != 0)
-				goto unlock;
-			cur = ext;
+			cur[pos] = ext;
 		}
 
 		iblock = ext.start + ext.len;
+
+		/* max 16 items at a time */
+		if (++pos >= SCOUTFS_DATA_FIEMAP_MAX)
+			break;
 	}
 
-	if (cur.len)
-		ret = fill_extent(fieinfo, &cur, last_flags);
 unlock:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	up_read(&si->extent_sem);
 	inode_unlock(inode);
 
-out:
 	if (ret == 1)
 		ret = 0;
 
+	for (pos = 0; pos < SCOUTFS_DATA_FIEMAP_MAX; pos++) {
+		if (cur[pos].len) {
+			ret = fill_extent(fieinfo, &cur[pos], pos == (last_pos - 1) ? FIEMAP_EXTENT_LAST : 0);
+			if (ret != 0)
+				goto out;
+		}
+	}
+
+	if ((last_pos < 0) && (ret == 0))
+		goto cont;
+
+out:
 	trace_scoutfs_data_fiemap(sb, start, len, ret);
 
 	return ret;
