@@ -1560,13 +1560,17 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	struct super_block *sb = inode->i_sb;
 	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_lock *lock = NULL;
+	struct scoutfs_extent *info = NULL;
+	struct page *page = NULL;
 	struct scoutfs_extent ext;
 	struct scoutfs_extent cur;
 	struct data_ext_args args;
 	u32 last_flags;
 	u64 iblock;
 	u64 last;
+	int entries = 0;
 	int ret;
+	int complete = 0;
 
 	if (len == 0) {
 		ret = 0;
@@ -1577,16 +1581,11 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (ret)
 		goto out;
 
-	inode_lock(inode);
-	down_read(&si->extent_sem);
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
-	if (ret)
-		goto unlock;
-
-	args.ino = ino;
-	args.inode = inode;
-	args.lock = lock;
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	/* use a dummy extent to track */
 	memset(&cur, 0, sizeof(cur));
@@ -1595,48 +1594,93 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	iblock = start >> SCOUTFS_BLOCK_SM_SHIFT;
 	last = (start + len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
 
+	args.ino = ino;
+	args.inode = inode;
+
+	/* outer loop */
 	while (iblock <= last) {
-		ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
-				       iblock, 1, &ext);
-		if (ret < 0) {
-			if (ret == -ENOENT)
+		/* lock */
+		inode_lock(inode);
+		down_read(&si->extent_sem);
+
+		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
+		if (ret) {
+			up_read(&si->extent_sem);
+			inode_unlock(inode);
+			break;
+		}
+
+		args.lock = lock;
+
+		/* collect entries */
+		info = page_address(page);
+		memset(info, 0, PAGE_SIZE);
+		while (entries < (PAGE_SIZE / sizeof(struct fiemap_extent)) - 1) {
+			ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
+					       iblock, 1, &ext);
+			if (ret < 0) {
+				if (ret == -ENOENT)
+					ret = 0;
+				complete = 1;
+				last_flags = FIEMAP_EXTENT_LAST;
+				break;
+			}
+
+			trace_scoutfs_data_fiemap_extent(sb, ino, &ext);
+
+			if (ext.start > last) {
+				/* not setting _LAST, it's for end of file */
 				ret = 0;
-			last_flags = FIEMAP_EXTENT_LAST;
-			break;
+				complete = 1;
+				break;
+			}
+
+			if (scoutfs_ext_can_merge(&cur, &ext)) {
+				/* merged extents could be greater than input len */
+				cur.len += ext.len;
+			} else {
+				/* fill it */
+				memcpy(info, &cur, sizeof(cur));
+
+				entries++;
+				info++;
+
+				cur = ext;
+			}
+
+			iblock = ext.start + ext.len;
 		}
 
-		trace_scoutfs_data_fiemap_extent(sb, ino, &ext);
+		/* unlock */
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+		up_read(&si->extent_sem);
+		inode_unlock(inode);
 
-		if (ext.start > last) {
-			/* not setting _LAST, it's for end of file */
-			ret = 0;
+		if (ret)
 			break;
-		}
 
-		if (scoutfs_ext_can_merge(&cur, &ext)) {
-			/* merged extents could be greater than input len */
-			cur.len += ext.len;
-		} else {
-			ret = fill_extent(fieinfo, &cur, 0);
+		/* emit entries */
+		info = page_address(page);
+		for (; entries > 0; entries--) {
+			ret = fill_extent(fieinfo, info, 0);
 			if (ret != 0)
-				goto unlock;
-			cur = ext;
+				goto out;
+			info++;
 		}
 
-		iblock = ext.start + ext.len;
+		if (complete)
+			break;
 	}
 
+	/* still one left, it's in cur */
 	if (cur.len)
 		ret = fill_extent(fieinfo, &cur, last_flags);
-unlock:
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
-	up_read(&si->extent_sem);
-	inode_unlock(inode);
 
 out:
 	if (ret == 1)
 		ret = 0;
-
+	if (page)
+		__free_page(page);
 	trace_scoutfs_data_fiemap(sb, start, len, ret);
 
 	return ret;
