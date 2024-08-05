@@ -1931,6 +1931,8 @@ static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 	sb_start_pagefault(sb);
 	down_write(&si->extent_sem);
 
+	pos = vmf->pgoff << PAGE_SHIFT;
+
 	err = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (err) {
@@ -1967,8 +1969,6 @@ static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 		ret = VM_FAULT_NOPAGE;
 		goto out;
 	}
-
-	pos = vmf->pgoff << PAGE_SHIFT;
 
 	if (page->index == (size - 1) >> PAGE_SHIFT)
 		len = ((size - 1) & ~PAGE_MASK) + 1;
@@ -2035,6 +2035,8 @@ out:
 		if (err == 0)
 			ret |= VM_FAULT_RETRY;
 	}
+
+	trace_scoutfs_data_page_mkwrite(sb, scoutfs_ino(inode), pos, (__force u32)ret);
 
 	return ret;
 }
@@ -2104,6 +2106,8 @@ out:
 	}
 	if (!have_ret)
 		ret = VM_FAULT_SIGBUS;
+
+	trace_scoutfs_data_filemap_fault(sb, scoutfs_ino(inode), pos, (__force u32)ret);
 
 	return ret;
 }
