@@ -286,6 +286,52 @@ TRACE_EVENT(scoutfs_data_alloc_block_enter,
 		  STE_ENTRY_ARGS(ext))
 );
 
+TRACE_EVENT(scoutfs_data_page_mkwrite,
+	TP_PROTO(struct super_block *sb, __u64 ino, __u64 pos, __u32 ret),
+
+	TP_ARGS(sb, ino, pos, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(__u64, pos)
+		__field(__u32, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->pos = pos;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu pos %llu ret %u ",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->pos, __entry->ret)
+);
+
+TRACE_EVENT(scoutfs_data_filemap_fault,
+	TP_PROTO(struct super_block *sb, __u64 ino, __u64 pos, __u32 ret),
+
+	TP_ARGS(sb, ino, pos, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(__u64, pos)
+		__field(__u32, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->pos = pos;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu pos %llu ret %u ",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->pos, __entry->ret)
+);
+
 DECLARE_EVENT_CLASS(scoutfs_data_file_extent_class,
 	TP_PROTO(struct super_block *sb, __u64 ino, struct scoutfs_extent *ext),
 
