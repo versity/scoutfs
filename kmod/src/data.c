@@ -2053,6 +2053,8 @@ out:
 			ret = vmf_error(err);
 	}
 
+	trace_scoutfs_data_page_mkwrite(sb, scoutfs_ino(inode), pos, (__force u32)ret);
+
 	return ret;
 }
 
@@ -2115,6 +2117,8 @@ out:
 
 		ret = VM_FAULT_RETRY;
 	}
+
+	trace_scoutfs_data_filemap_fault(sb, scoutfs_ino(inode), pos, (__force u32)ret);
 
 	return ret;
 }
