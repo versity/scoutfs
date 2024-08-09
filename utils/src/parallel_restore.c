@@ -818,7 +818,6 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	si->mode = cpu_to_le32(inode->mode);
 	si->rdev = cpu_to_le32(inode->rdev);
 	si->flags = 0;
-	si->version = cpu_to_le64(1);
 	si->atime.sec = cpu_to_le64(inode->atime.tv_sec);
 	si->atime.nsec = cpu_to_le32(inode->atime.tv_nsec);
 	si->ctime.sec = cpu_to_le64(inode->ctime.tv_sec);
