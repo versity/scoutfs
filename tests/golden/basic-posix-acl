@@ -1,0 +1,157 @@
+== setup test directory
+== getfacl
+directory drwxr-xr-x 0 0 0 '.'
+# file: .
+# owner: root
+# group: root
+user::rwx
+group::r-x
+other::r-x
+
+== basic non-acl access through permissions
+directory drwxr-xr-x 0 44444 0 'dir-testuid'
+touch: cannot touch 'dir-testuid/file-group-write': Permission denied
+touch: cannot touch 'symlinkdir-testuid/symlink-file-group-write': Permission denied
+regular empty file -rw-r--r-- 22222 44444 0 'dir-testuid/file-group-write'
+regular empty file -rw-r--r-- 22222 44444 0 'symlinkdir-testuid/symlink-file-group-write'
+== basic acl access
+directory drwxr-xr-x 0 0 0 'dir-root'
+touch: cannot touch 'dir-root/file-group-write': Permission denied
+touch: cannot touch 'symlinkdir-root/file-group-write': Permission denied
+# file: dir-root
+# owner: root
+# group: root
+user::rwx
+user:22222:rwx
+group::r-x
+mask::rwx
+other::r-x
+
+regular empty file -rw-r--r-- 22222 0 0 'dir-root/file-group-write'
+regular empty file -rw-r--r-- 22222 0 0 'symlinkdir-root/file-group-write'
+== directory exec
+Success
+Success
+# file: dir-root
+# owner: root
+# group: root
+user::rwx
+user:22222:rw-
+group::r-x
+mask::rwx
+other::r-x
+
+bash: line 0: cd: dir-root: Permission denied
+Failed
+bash: line 0: cd: symlinkdir-root: Permission denied
+Failed
+# file: dir-root
+# owner: root
+# group: root
+user::rwx
+user:22222:rw-
+group::r-x
+group:44444:rwx
+mask::rwx
+other::r-x
+
+Success
+Success
+== get/set attr
+regular empty file -rw-r--r-- 0 0 0 'file-root'
+setfattr: file-root: Permission denied
+# file: file-root
+# owner: root
+# group: root
+user::rw-
+user:22222:rw-
+group::r--
+mask::rw-
+other::r--
+
+# file: file-root
+user.test2="Success"
+
+# file: file-root
+# owner: root
+# group: root
+user::rw-
+group::r--
+mask::r--
+other::r--
+
+setfattr: file-root: Permission denied
+# file: file-root
+user.test2="Success"
+
+# file: file-root
+# owner: root
+# group: root
+user::rw-
+group::r--
+group:44444:rw-
+mask::rw-
+other::r--
+
+# file: file-root
+user.test2="Success"
+user.test4="Success"
+
+== inheritance / default acl
+directory drwxr-xr-x 0 0 0 'dir-root2'
+mkdir: cannot create directory 'dir-root2/dir': Permission denied
+touch: cannot touch 'dir-root2/dir/file': No such file or directory
+# file: dir-root2
+# owner: root
+# group: root
+user::rwx
+group::r-x
+other::r-x
+default:user::rwx
+default:user:22222:rwx
+default:group::r-x
+default:mask::rwx
+default:other::r-x
+
+mkdir: cannot create directory 'dir-root2/dir': Permission denied
+touch: cannot touch 'dir-root2/dir/file': No such file or directory
+# file: dir-root2
+# owner: root
+# group: root
+user::rwx
+user:22222:rwx
+group::r-x
+mask::rwx
+other::r-x
+default:user::rwx
+default:user:22222:rwx
+default:group::r-x
+default:mask::rwx
+default:other::r-x
+
+directory drwxrwxr-x 22222 0 4 'dir-root2/dir'
+# file: dir-root2/dir
+# owner: 22222
+# group: root
+user::rwx
+user:22222:rwx
+group::r-x
+mask::rwx
+other::r-x
+default:user::rwx
+default:user:22222:rwx
+default:group::r-x
+default:mask::rwx
+default:other::r-x
+
+regular empty file -rw-rw-r-- 22222 0 0 'dir-root2/dir/file'
+# file: dir-root2/dir/file
+# owner: 22222
+# group: root
+user::rw-
+user:22222:rwx	#effective:rw-
+group::r-x	#effective:r--
+mask::rw-
+other::r--
+
+== cleanup
