@@ -97,7 +97,7 @@ spr_err_t scoutfs_parallel_restore_write_buf(struct scoutfs_parallel_restore_wri
 					     size_t *count_ret);
 
 spr_err_t scoutfs_parallel_restore_import_super(struct scoutfs_parallel_restore_writer *wri,
-						struct scoutfs_super_block *super);
+						struct scoutfs_super_block *super, int fd);
 spr_err_t scoutfs_parallel_restore_export_super(struct scoutfs_parallel_restore_writer *wri,
 						struct scoutfs_super_block *super);
 
