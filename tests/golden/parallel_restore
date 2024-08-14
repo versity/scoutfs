@@ -25,4 +25,8 @@ MetaData  64KB    163840  163840         0   100
     Data   4KB  15728640      64  15728576     0
 == just over ENOSPC
 == ENOSPC
+== attempt to restore data device
+== parallel_restore data device
+== attempt format_v1 restore
+== parallel_restore format_v1 fs
 == cleanup
