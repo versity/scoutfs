@@ -75,6 +75,18 @@ scoutfs mkfs -V 1 -A -f -Q 0,127.0.0.1,53000 -m 10G -d 60G "$T_EX_META_DEV" "$T_
 echo "== parallel_restore format_v1 fs"
 parallel_restore -m "$T_EX_META_DEV" | grep died 2>&1 && t_fail "parallel_restore"
 
+echo "== test if previously mounted"
+scoutfs mkfs -V 2 -A -f -Q 0,127.0.0.1,53000 -m 10G -d 60G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
+	t_fail "mkfs failed"
+
+echo "== mount before restore"
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 \
+	"$T_EX_DATA_DEV" "$SCR"
+umount "$SCR"
+
+echo "== parallel_restore previously mounted device"
+parallel_restore -m "$T_EX_META_DEV" | grep died 2>&1 && t_fail "parallel_restore"
+
 echo "== cleanup"
 rmdir "$SCR"
 t_pass

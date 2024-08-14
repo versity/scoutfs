@@ -1832,12 +1832,58 @@ out:
 	return count > 0 ? 0 : err;
 }
 
+/*
+ * Here we take in a dev's fd an read its quorum blocks to see if the dev has
+ * been mounted before
+ */
+static spr_err_t scoutfs_check_if_previous_mount(int fd)
+{
+	struct scoutfs_quorum_block *blk = NULL;
+	struct scoutfs_quorum_block_event *ev;
+	u64 blkno;
+	int i, j;
+	spr_err_t err;
+
+	for (i = 0; i <  SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		blkno = SCOUTFS_QUORUM_BLKNO + i;
+		err = read_block(fd, blkno, SCOUTFS_BLOCK_SM_SHIFT, (void **)&blk);
+		if (!blk) {
+			err = EINVAL;
+			goto out;
+		}
+
+		dprintf("quorum block read; quorum bklno: %llu, err_val: %d\n", blkno, err);
+		if (err)
+			goto out;
+
+		for (j = 0; j < SCOUTFS_QUORUM_EVENT_NR; j++) {
+			ev = &blk->events[j];
+			if (ev->ts.sec || ev->ts.nsec) {
+				err = EINVAL;
+				goto out;
+			}
+		}
+		free(blk);
+	}
+out:
+	if (blk)
+		free(blk);
+	return err;
+}
+
 spr_err_t scoutfs_parallel_restore_import_super(struct scoutfs_parallel_restore_writer *wri,
-						struct scoutfs_super_block *super)
+						struct scoutfs_super_block *super, int fd)
 {
 	spr_err_t err;
 	u64 start;
 	u64 len;
+
+	/*
+	 * check the device we are restoring into to make sure
+	 * that it has has never been mounted
+	 */
+	if (scoutfs_check_if_previous_mount(fd))
+		return EINVAL;
 
 	if (le64_to_cpu(super->fmt_vers) < 2)
 		return EINVAL;

@@ -601,7 +601,7 @@ static int do_restore(struct opts *opts)
 	ret = scoutfs_parallel_restore_create_writer(&wri);
 	error_exit(ret, "create writer %d", ret);
 
-	ret = scoutfs_parallel_restore_import_super(wri, super);
+	ret = scoutfs_parallel_restore_import_super(wri, super, dev_fd);
 	error_exit(ret, "import super %d", ret);
 
 	slices = calloc(1 + opts->nr_writers, sizeof(struct scoutfs_parallel_restore_slice));
