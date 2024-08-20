@@ -57,25 +57,23 @@
  * key space after we find no items in a given lock region.  This is
  * relatively cheap because reading is going to check the segments
  * anyway.
- *
- * This is copying to userspace while holding a read lock.  This is safe
- * because faulting can send a request for a write lock while the read
- * lock is being used.  The cluster locks don't block tasks in a node,
- * they match and the tasks fall back to local locking.  In this case
- * the spin locks around the item cache.
  */
 static long scoutfs_ioc_walk_inodes(struct file *file, unsigned long arg)
 {
 	struct super_block *sb = file_inode(file)->i_sb;
 	struct scoutfs_ioctl_walk_inodes __user *uwalk = (void __user *)arg;
 	struct scoutfs_ioctl_walk_inodes walk;
-	struct scoutfs_ioctl_walk_inodes_entry ent;
+	struct scoutfs_ioctl_walk_inodes_entry *ent = NULL;
+	struct scoutfs_ioctl_walk_inodes_entry *end;
 	struct scoutfs_key next_key;
 	struct scoutfs_key last_key;
 	struct scoutfs_key key;
 	struct scoutfs_lock *lock;
+	struct page *page = NULL;
 	u64 last_seq;
+	u64 entries = 0;
 	int ret = 0;
+	int complete = 0;
 	u32 nr = 0;
 	u8 type;
 
@@ -106,6 +104,10 @@ static long scoutfs_ioc_walk_inodes(struct file *file, unsigned long arg)
 		}
 	}
 
+	page = alloc_page(GFP_KERNEL);
+	if (!page)
+		return -ENOMEM;
+
 	scoutfs_inode_init_index_key(&key, type, walk.first.major,
 				     walk.first.minor, walk.first.ino);
 	scoutfs_inode_init_index_key(&last_key, type, walk.last.major,
@@ -114,77 +116,107 @@ static long scoutfs_ioc_walk_inodes(struct file *file, unsigned long arg)
 	/* cap nr to the max the ioctl can return to a compat task */
 	walk.nr_entries = min_t(u64, walk.nr_entries, INT_MAX);
 
-	ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ, type,
-				       walk.first.major, walk.first.ino,
-				       &lock);
-	if (ret < 0)
-		goto out;
+	end = page_address(page) + PAGE_SIZE;
 
-	for (nr = 0; nr < walk.nr_entries; ) {
+	/* outer loop */
+	for (nr = 0;;) {
+		ent = page_address(page);
+		/* make sure _pad and minor are zeroed */
+		memset(ent, 0, PAGE_SIZE);
 
-		ret = scoutfs_item_next(sb, &key, &last_key, NULL, 0, lock);
-		if (ret < 0 && ret != -ENOENT)
+		ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ, type,
+					       le64_to_cpu(key.skii_major),
+					       le64_to_cpu(key.skii_ino),
+					       &lock);
+		if (ret)
 			break;
 
-		if (ret == -ENOENT) {
-
-			/* done if lock covers last iteration key */
-			if (scoutfs_key_compare(&last_key, &lock->end) <= 0) {
-				ret = 0;
+		/* inner loop 1 */
+		while (ent + 1 < end) {
+			ret = scoutfs_item_next(sb, &key, &last_key, NULL, 0, lock);
+			if (ret < 0 && ret != -ENOENT)
 				break;
+
+			if (ret == -ENOENT) {
+				/* done if lock covers last iteration key */
+				if (scoutfs_key_compare(&last_key, &lock->end) <= 0) {
+					ret = 0;
+					complete = 1;
+					break;
+				}
+
+				/* continue iterating after locked empty region */
+				key = lock->end;
+				scoutfs_key_inc(&key);
+
+				scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+				/* avoid double-unlocking here after break */
+				lock = NULL;
+
+				ret = scoutfs_forest_next_hint(sb, &key, &next_key);
+				if (ret < 0 && ret != -ENOENT)
+					break;
+
+				if (ret == -ENOENT ||
+				    scoutfs_key_compare(&next_key, &last_key) > 0) {
+					ret = 0;
+					complete = 1;
+					break;
+				}
+
+				key = next_key;
+
+				ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ,
+							type,
+							le64_to_cpu(key.skii_major),
+							le64_to_cpu(key.skii_ino),
+							&lock);
+				if (ret)
+					break;
+
+				continue;
 			}
 
-			/* continue iterating after locked empty region */
-			key = lock->end;
+			ent->major = le64_to_cpu(key.skii_major);
+			ent->ino = le64_to_cpu(key.skii_ino);
+
 			scoutfs_key_inc(&key);
 
-			scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+			ent++;
+			entries++;
 
-			ret = scoutfs_forest_next_hint(sb, &key, &next_key);
-			if (ret < 0 && ret != -ENOENT)
-				goto out;
+			if (nr + entries >= walk.nr_entries) {
+				complete = 1;
+				break;
+			}
+		}
 
-			if (ret == -ENOENT ||
-			    scoutfs_key_compare(&next_key, &last_key) > 0) {
-				ret = 0;
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+		if (ret < 0)
+			break;
+
+		/* inner loop 2 */
+		ent = page_address(page);
+		for (; entries > 0; entries--) {
+			if (copy_to_user((void __user *)walk.entries_ptr, ent,
+					 sizeof(struct scoutfs_ioctl_walk_inodes_entry))) {
+				ret = -EFAULT;
 				goto out;
 			}
-
-			key = next_key;
-
-			ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ,
-						key.sk_type,
-						le64_to_cpu(key.skii_major),
-						le64_to_cpu(key.skii_ino),
-						&lock);
-			if (ret < 0)
-				goto out;
-
-			continue;
+			walk.entries_ptr += sizeof(struct scoutfs_ioctl_walk_inodes_entry);
+			ent++;
+			nr++;
 		}
 
-		ent.major = le64_to_cpu(key.skii_major);
-		ent.minor = 0;
-		ent.ino = le64_to_cpu(key.skii_ino);
-
-		if (copy_to_user((void __user *)walk.entries_ptr, &ent,
-				 sizeof(ent))) {
-			ret = -EFAULT;
+		if (complete)
 			break;
-		}
-
-		nr++;
-		walk.entries_ptr += sizeof(ent);
-
-		scoutfs_key_inc(&key);
 	}
 
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
-
 out:
+	if (page)
+		__free_page(page);
 	if (nr > 0)
 		ret = nr;
-
 	return ret;
 }
 
