@@ -1185,11 +1185,15 @@ static long scoutfs_ioc_get_allocated_inos(struct file *file, unsigned long arg)
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_key key;
 	struct scoutfs_key end;
+	struct page *page = NULL;
 	u64 __user *uinos;
 	u64 bytes;
-	u64 ino;
+	u64 *ino;
+	u64 *ino_end;
+	int entries = 0;
 	int nr;
 	int ret;
+	int complete = 0;
 
 	if (!(file->f_mode & FMODE_READ)) {
 		ret = -EBADF;
@@ -1211,47 +1215,83 @@ static long scoutfs_ioc_get_allocated_inos(struct file *file, unsigned long arg)
 		goto out;
 	}
 
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ino_end = page_address(page) + PAGE_SIZE;
+
 	scoutfs_inode_init_key(&key, gai.start_ino);
 	scoutfs_inode_init_key(&end, gai.start_ino | SCOUTFS_LOCK_INODE_GROUP_MASK);
 	uinos = (void __user *)gai.inos_ptr;
 	bytes = gai.inos_bytes;
 	nr = 0;
 
-	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, gai.start_ino, &lock);
-	if (ret < 0)
-		goto out;
+	for (;;) {
 
-	while (bytes >= sizeof(*uinos)) {
+		ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, gai.start_ino, &lock);
+		if (ret < 0)
+			goto out;
 
-		ret = scoutfs_item_next(sb, &key, &end, NULL, 0, lock);
-		if (ret < 0) {
-			if (ret == -ENOENT)
+		ino = page_address(page);
+		while (ino < ino_end) {
+
+			ret = scoutfs_item_next(sb, &key, &end, NULL, 0, lock);
+			if (ret < 0) {
+				if (ret == -ENOENT) {
+					ret = 0;
+					complete = 1;
+				}
+				break;
+			}
+
+			if (key.sk_zone != SCOUTFS_FS_ZONE) {
 				ret = 0;
-			break;
+				complete = 1;
+				break;
+			}
+
+			/* all fs items are owned by allocated inodes, and _first is always ino */
+			*ino = le64_to_cpu(key._sk_first);
+			scoutfs_inode_init_key(&key, *ino + 1);
+
+			ino++;
+			entries++;
+			nr++;
+
+			bytes -= sizeof(*uinos);
+			if (bytes < sizeof(*uinos)) {
+				complete = 1;
+				break;
+			}
+
+			if (nr == INT_MAX) {
+				complete = 1;
+				break;
+			}
 		}
 
-		if (key.sk_zone != SCOUTFS_FS_ZONE) {
-			ret = 0;
-			break;
-		}
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 
-		/* all fs items are owned by allocated inodes, and _first is always ino */
-		ino = le64_to_cpu(key._sk_first);
-		if (put_user(ino, uinos)) {
+		if (ret < 0)
+			break;
+
+		ino = page_address(page);
+		if (copy_to_user(uinos, ino, entries * sizeof(*uinos))) {
 			ret = -EFAULT;
-			break;
+			goto out;
 		}
 
-		uinos++;
-		bytes -= sizeof(*uinos);
-		if (++nr == INT_MAX)
+		uinos += entries;
+		entries = 0;
+
+		if (complete)
 			break;
-
-		scoutfs_inode_init_key(&key, ino + 1);
 	}
-
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 out:
+	if (page)
+		__free_page(page);
 	return ret ?: nr;
 }
 
