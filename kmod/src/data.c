@@ -1107,7 +1107,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	}
 
 	/* catch wrapping */
-	if (offset + len < offset) {
+	if (loff_t_region_wraps(offset, len)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1747,7 +1747,7 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 	if (WARN_ON_ONCE(sef & SEF_UNKNOWN) ||
 	    WARN_ON_ONCE(op & SCOUTFS_IOC_DWO_UNKNOWN) ||
 	    WARN_ON_ONCE(dw && !RB_EMPTY_NODE(&dw->node)) ||
-	    WARN_ON_ONCE(pos + len < pos)) {
+	    WARN_ON_ONCE(loff_t_region_wraps(pos, len))) {
 		ret = -EINVAL;
 		goto out;
 	}

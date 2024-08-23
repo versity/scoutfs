@@ -47,6 +47,7 @@
 #include "wkic.h"
 #include "quota.h"
 #include "scoutfs_trace.h"
+#include "util.h"
 
 /*
  * We make inode index items coherent by locking fixed size regions of
@@ -297,11 +298,10 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 	if (args.length == 0)
 		return 0;
-	if (((args.offset + args.length) < args.offset) ||
+	if ((u64_region_wraps(args.offset, args.length)) ||
 	    (args.offset & SCOUTFS_BLOCK_SM_MASK) ||
 	    (args.length & SCOUTFS_BLOCK_SM_MASK))
 		return -EINVAL;
-
 
 	ret = mnt_want_write_file(file);
 	if (ret)
@@ -960,8 +960,8 @@ static long scoutfs_ioc_move_blocks(struct file *file, unsigned long arg)
 	if (mb.len == 0)
 		return 0;
 
-	if (mb.from_off + mb.len < mb.from_off ||
-	    mb.to_off + mb.len < mb.to_off)
+	if ((u64_region_wraps(mb.from_off, mb.len)) ||
+	    (u64_region_wraps(mb.to_off, mb.len)))
 		return -EOVERFLOW;
 
 	from_file = fget(mb.from_fd);

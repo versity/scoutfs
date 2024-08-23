@@ -61,7 +61,10 @@ echo "== release past i_size is fine"
 release_vers "$FILE" stat 400K 4K
 
 echo "== wrapped blocks fails"
-release_vers "$FILE" stat $vers 0x8000000000000000 0x8000000000000000
+# just under!
+release_vers "$FILE" stat $vers 0xfffffffffffff000 4096
+# this goes over
+release_vers "$FILE" stat $vers 0xfffffffffffff000 8192
 
 echo "== releasing non-file fails"
 mknod "$CHAR" c 1 3

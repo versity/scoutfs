@@ -33,6 +33,7 @@
 #include "quorum.h"
 #include "omap.h"
 #include "trans.h"
+#include "util.h"
 
 /*
  * The client is responsible for maintaining a connection to the server.
@@ -80,7 +81,7 @@ int scoutfs_client_alloc_inodes(struct super_block *sb, u64 count,
 
 		if (*nr == 0)
 			ret = -ENOSPC;
-		else if (*ino + *nr < *ino)
+		else if (u64_region_wraps(*ino, *nr))
 			ret = -EINVAL;
 	}
 
