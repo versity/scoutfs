@@ -22,6 +22,7 @@
 #include <linux/falloc.h>
 #include <linux/fiemap.h>
 #include <linux/writeback.h>
+#include <linux/overflow.h>
 
 #include "format.h"
 #include "super.h"
@@ -1087,6 +1088,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	loff_t end;
 	u64 iblock;
 	u64 last;
+	loff_t tmp;
 	s64 ret;
 
 	/* XXX support more flags */
@@ -1095,14 +1097,14 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		goto out;
 	}
 
-	/* catch wrapping */
-	if (offset + len < offset) {
-		ret = -EINVAL;
+	if (len == 0) {
+		ret = 0;
 		goto out;
 	}
 
-	if (len == 0) {
-		ret = 0;
+	/* catch wrapping */
+	if (check_add_overflow(offset, len - 1, &tmp)) {
+		ret = -EINVAL;
 		goto out;
 	}
 
@@ -1728,6 +1730,7 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 	u64 last_block;
 	u64 on;
 	u64 off;
+	loff_t tmp;
 	int ret = 0;
 
 	if (len == 0)
@@ -1736,7 +1739,7 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 	if (WARN_ON_ONCE(sef & SEF_UNKNOWN) ||
 	    WARN_ON_ONCE(op & SCOUTFS_IOC_DWO_UNKNOWN) ||
 	    WARN_ON_ONCE(dw && !RB_EMPTY_NODE(&dw->node)) ||
-	    WARN_ON_ONCE(pos + len < pos)) {
+	    WARN_ON_ONCE(check_add_overflow(pos, len - 1, &tmp))) {
 		ret = -EINVAL;
 		goto out;
 	}

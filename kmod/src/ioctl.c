@@ -23,6 +23,7 @@
 #include <linux/aio.h>
 #include <linux/list_sort.h>
 #include <linux/backing-dev.h>
+#include <linux/overflow.h>
 
 #include "format.h"
 #include "key.h"
@@ -47,6 +48,7 @@
 #include "wkic.h"
 #include "quota.h"
 #include "scoutfs_trace.h"
+#include "util.h"
 
 /*
  * We make inode index items coherent by locking fixed size regions of
@@ -288,6 +290,7 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	u64 online;
 	u64 offline;
 	u64 isize;
+	__u64 tmp;
 	int ret;
 
 	if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -297,11 +300,10 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 	if (args.length == 0)
 		return 0;
-	if (((args.offset + args.length) < args.offset) ||
+	if ((check_add_overflow(args.offset, args.length - 1, &tmp)) ||
 	    (args.offset & SCOUTFS_BLOCK_SM_MASK) ||
 	    (args.length & SCOUTFS_BLOCK_SM_MASK))
 		return -EINVAL;
-
 
 	ret = mnt_want_write_file(file);
 	if (ret)
@@ -955,6 +957,7 @@ static long scoutfs_ioc_move_blocks(struct file *file, unsigned long arg)
 	struct scoutfs_ioctl_move_blocks mb;
 	struct file *from_file;
 	struct inode *from;
+	u64 tmp;
 	int ret;
 
 	if (copy_from_user(&mb, umb, sizeof(mb)))
@@ -963,8 +966,8 @@ static long scoutfs_ioc_move_blocks(struct file *file, unsigned long arg)
 	if (mb.len == 0)
 		return 0;
 
-	if (mb.from_off + mb.len < mb.from_off ||
-	    mb.to_off + mb.len < mb.to_off)
+	if ((check_add_overflow(mb.from_off, mb.len - 1, &tmp)) ||
+	    (check_add_overflow(mb.to_off, mb.len - 1, &tmp)))
 		return -EOVERFLOW;
 
 	from_file = fget(mb.from_fd);
