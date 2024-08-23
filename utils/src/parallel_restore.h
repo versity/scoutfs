@@ -68,6 +68,20 @@ struct scoutfs_parallel_restore_inode {
 	unsigned int target_len; /* not including null terminator */
 };
 
+struct scoutfs_parallel_restore_quota_rule {
+	u64 limit;
+	u8  prio;
+	u8  op;
+	u8  rule_flags;
+	struct quota_rule_name {
+		u64 val;
+		u8  source;
+		u8  flags;
+	} names [3];
+	char *value;
+	unsigned int value_len;
+};
+
 typedef __typeof__(EINVAL) spr_err_t;
 
 struct scoutfs_parallel_restore_writer;
@@ -94,6 +108,9 @@ spr_err_t scoutfs_parallel_restore_get_progress(struct scoutfs_parallel_restore_
 						struct scoutfs_parallel_restore_progress *prog);
 spr_err_t scoutfs_parallel_restore_add_progress(struct scoutfs_parallel_restore_writer *wri,
 						struct scoutfs_parallel_restore_progress *prog);
+
+spr_err_t scoutfs_parallel_restore_add_quota_rule(struct scoutfs_parallel_restore_writer *wri,
+						struct scoutfs_parallel_restore_quota_rule *rule);
 
 spr_err_t scoutfs_parallel_restore_write_buf(struct scoutfs_parallel_restore_writer *wri,
 					     void *buf, size_t len, off_t *off_ret,

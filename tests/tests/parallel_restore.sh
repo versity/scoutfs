@@ -33,6 +33,9 @@ scoutfs search-xattrs -p "$SCR" scoutfs.hide.srch.sam_vol_F01030L6 -p "$SCR" | w
 find "$SCR" -type f -name "file-*" | head -n 4 | xargs -n 1 filefrag-gc57857a5 -b4096 -v | grep -e ext: -e eof
 scoutfs df -p "$SCR"
 
+echo "== print test quota rule"
+scoutfs quota-list -p "$SCR"
+
 echo "== unmount small meta fs"
 umount "$SCR"
 
