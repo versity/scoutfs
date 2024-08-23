@@ -143,8 +143,8 @@ hexdump -C "$FILE"
 rm -f "$FILE"
 
 echo "== wrapped region fails"
-create_file "$FILE" 4096
-stage_vers "$FILE" stat 0xFFFFFFFFFFFFF000 4096 /dev/zero
+create_file "$FILE" 8192
+stage_vers "$FILE" stat 0xFFFFFFFFFFFFF000 8192 /dev/zero
 rm -f "$FILE"
 
 echo "== non-block aligned offset fails"

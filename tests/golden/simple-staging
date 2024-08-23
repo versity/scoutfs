@@ -7,7 +7,7 @@
 stage: must provide file version with --data-version
 Try `stage --help' or `stage --usage' for more information.
 == wrapped region fails
-stage returned -1, not 4096: error Invalid argument (22)
+stage returned -1, not 8192: error Invalid argument (22)
 scoutfs: stage failed: Input/output error (5)
 == non-block aligned offset fails
 stage returned -1, not 4095: error Invalid argument (22)
