@@ -1,6 +1,7 @@
 export-get-name-parent.sh
 basic-block-counts.sh
 basic-bad-mounts.sh
+basic-posix-acl.sh
 inode-items-updated.sh
 simple-inode-index.sh
 simple-staging.sh

@@ -98,11 +98,9 @@ struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct s
 		acl = ERR_PTR(ret);
 	}
 
-#ifndef KC___POSIX_ACL_CREATE
 	/* can set null negative cache */
 	if (!IS_ERR(acl))
 		set_cached_acl(inode, type, acl);
-#endif
 
 	kfree(value);
 
@@ -194,10 +192,8 @@ int scoutfs_set_acl_locked(struct inode *inode, struct posix_acl *acl, int type,
 	}
 
 out:
-#ifndef KC___POSIX_ACL_CREATE
 	if (!ret)
 		set_cached_acl(inode, type, acl);
-#endif
 
 	kfree(value);
 
