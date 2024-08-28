@@ -557,6 +557,9 @@ for t in $tests; do
 
 	printf "  %-30s $stats" "$test_name"
 
+	# mark in dmesg as to what test we are running
+	echo "run scoutfs test $test_name" > /dev/kmsg
+
 	# record dmesg before
 	dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.before"
 
