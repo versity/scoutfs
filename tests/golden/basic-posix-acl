@@ -41,9 +41,7 @@ group::r-x
 mask::rwx
 other::r-x
 
-bash: line 0: cd: dir-root: Permission denied
 Failed
-bash: line 0: cd: symlinkdir-root: Permission denied
 Failed
 # file: dir-root
 # owner: root
