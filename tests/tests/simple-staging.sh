@@ -2,11 +2,7 @@
 # Test correctness of the staging operation
 #
 
-t_require_commands filefrag dd scoutfs cp cmp rm
-
-fiemap_file() {
-	filefrag -v -b4096 "$1"
-}
+t_require_commands dd scoutfs cp cmp rm
 
 create_file() {
 	local file="$1"
@@ -62,7 +58,7 @@ create_file "$FILE" 4096
 cp "$FILE"  "$T_TMP"
 release_vers "$FILE" stat 0 4K
 # make sure there only offline extents
-fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
+scoutfs get-fiemap "$FILE"
 stage_vers "$FILE" stat 0 4096 "$T_TMP"
 cmp "$FILE" "$T_TMP"
 rm -f "$FILE"
@@ -72,7 +68,7 @@ create_file "$FILE" $((4096 * 4096))
 cp "$FILE"  "$T_TMP"
 release_vers "$FILE" stat 0 16M
 # make sure there only offline extents
-fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
+scoutfs get-fiemap "$FILE"
 stage_vers "$FILE" stat 0 $((4096 * 4096)) "$T_TMP"
 cmp "$FILE" "$T_TMP"
 rm -f "$FILE"
@@ -152,7 +148,7 @@ create_file "$FILE" 4096
 cp "$FILE"  "$T_TMP"
 release_vers "$FILE" stat 0 4K
 stage_vers "$FILE" stat 1 4095 "$T_TMP"
-fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
+scoutfs get-fiemap "$FILE"
 rm -f "$FILE"
 
 echo "== non-block aligned len within block fails"
@@ -160,7 +156,7 @@ create_file "$FILE" 4096
 cp "$FILE"  "$T_TMP"
 release_vers "$FILE" stat 0 4K
 stage_vers "$FILE" stat 0 1024 "$T_TMP"
-fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
+scoutfs get-fiemap "$FILE"
 rm -f "$FILE"
 
 echo "== partial final block that writes to i_size does work"
@@ -175,7 +171,7 @@ echo "== zero length stage doesn't bring blocks online"
 create_file "$FILE" $((4096 * 100))
 release_vers "$FILE" stat 0 400K
 stage_vers "$FILE" stat 4096 0 /dev/zero
-fiemap_file "$FILE" | grep "^[ 0-9]*:" | grep -v "unknown"
+scoutfs get-fiemap "$FILE"
 rm -f "$FILE"
 
 # XXX yup, needs to be updated for demand staging

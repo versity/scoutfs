@@ -4,7 +4,7 @@
 # merge adjacent consecutive allocations.  (we don't have multiple
 # allocation cursors)
 #
-t_require_commands scoutfs stat filefrag dd touch truncate
+t_require_commands scoutfs stat dd touch truncate
 
 write_block()
 {
@@ -76,26 +76,9 @@ print_extents_found()
 {
 	local prefix="$1"
 
-	filefrag "$prefix"* 2>&1 | grep "extent.*found" | t_filter_fs
-}
-
-#
-# print the logical start, len, and flags if they're there.
-#
-print_logical_extents()
-{
-	local file="$1"
-
-	filefrag -v -b4096 "$file" 2>&1 | t_filter_fs | awk '
-		($1 ~ /[0-9]+:/) {
-			if ($NF !~  /[0-9]+:/) {
-				flags=$NF
-			} else {
-				flags=""
-			}
-			print $2, $6, flags
-		}
-	' | sed 's/last,eof/eof/'
+	for f in "$prefix"-*; do
+		echo "$f: $(scoutfs get-fiemap "$f" | tail -n 1)" | t_filter_fs
+	done
 }
 
 t_save_all_sysfs_mount_options data_prealloc_blocks
@@ -197,7 +180,12 @@ for sides in 0 1 2 3; do
 done
 
 echo before:
-print_logical_extents "$prefix"
+scoutfs get-fiemap "$prefix" | tr -s ',' '\t' | \
+	awk '($1 != "entries:") {
+		unwritten = (substr($7, 2, 1) == "U") ? "unwritten" : "";
+		eof = (substr($7, 3, 1) == "L") ? "eof" : "";
+		print $3 ".. " $5 ": " unwritten eof;
+		};'
 
 # now write into the first, middle, and last empty block of each
 t_set_sysfs_mount_option 0 data_prealloc_contig_only 0
@@ -223,7 +211,12 @@ for sides in 0 1 2 3; do
 			# mid (both has 6 blocks internally)
 			2) write_block $prefix $((left + 3)) ;;
 		esac
-		print_logical_extents "$prefix"
+		scoutfs get-fiemap "$prefix" | tr -s ',' '\t' | \
+			awk '($1 != "entries:") {
+				unwritten = (substr($7, 2, 1) == "U") ? "unwritten" : "";
+				eof = (substr($7, 3, 1) == "L") ? "eof" : "";
+				print $3 ".. " $5 ": " unwritten eof;
+				};'
 		((base+=8))
 	done
 done

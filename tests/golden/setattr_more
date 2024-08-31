@@ -22,10 +22,7 @@ scoutfs: setattr failed: Invalid argument (22)
 == large ctime is set
 1972-02-19 00:06:25.999999999 +0000
 == large offline extents are created
-Filesystem type is: 554f4353
-File size of /mnt/test/test/setattr_more/file is 40988672 (10007 blocks of 4096 bytes)
- ext:     logical_offset:        physical_offset: length:   expected: flags:
-   0:        0..   10006:          0..     10006:  10007:             unknown,eof
-/mnt/test/test/setattr_more/file: 1 extent found
+0: offset: 0, length: 10007, flags: O.L
+entries: 1, extents: 1
 == correct offline extent length
 976563
