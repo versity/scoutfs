@@ -1,5 +1,9 @@
 == create/release/stage single block file
+0: offset: 0 0 length: 1 flags: O.L
+extents: 1
 == create/release/stage larger file
+0: offset: 0 0 length: 4096 flags: O.L
+extents: 1
 == multiple release,drop_cache,stage cycles
 == release+stage shouldn't change stat, data seq or vers
 == stage does change meta_seq
@@ -12,11 +16,17 @@ scoutfs: stage failed: Input/output error (5)
 == non-block aligned offset fails
 stage returned -1, not 4095: error Invalid argument (22)
 scoutfs: stage failed: Input/output error (5)
+0: offset: 0 0 length: 1 flags: O.L
+extents: 1
 == non-block aligned len within block fails
 stage returned -1, not 1024: error Invalid argument (22)
 scoutfs: stage failed: Input/output error (5)
+0: offset: 0 0 length: 1 flags: O.L
+extents: 1
 == partial final block that writes to i_size does work
 == zero length stage doesn't bring blocks online
+0: offset: 0 0 length: 100 flags: O.L
+extents: 1
 == stage of non-regular file fails
 ioctl failed: Inappropriate ioctl for device (25)
 stage: must provide file version with --data-version
