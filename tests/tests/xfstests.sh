@@ -30,8 +30,13 @@ t_quiet mkdir -p "$T_TMPDIR/mnt.scratch"
 t_quiet cd "$T_XFSTESTS_REPO"
 if [ -z "$T_SKIP_CHECKOUT" ]; then
 	t_quiet git fetch
+	# if we're passed a tag instead of a branch, we can't --track
+	TRACK="--track"
+	if git tag -l | grep -q "$T_XFSTESTS_BRANCH" ; then
+		TRACK=""
+	fi
 	# this remote use is bad, do better
-	t_quiet git checkout -B "$T_XFSTESTS_BRANCH" --track "origin/$T_XFSTESTS_BRANCH"
+	t_quiet git checkout -B "$T_XFSTESTS_BRANCH" ${TRACK} "origin/$T_XFSTESTS_BRANCH"
 fi
 t_quiet make
 t_quiet sync
