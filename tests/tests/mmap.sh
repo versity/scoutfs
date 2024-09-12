@@ -2,7 +2,7 @@
 # test mmap() and normal read/write consistency between different nodes
 #
 
-t_require_commands mmap_stress mmap_validate filefrag scoutfs xfs_io
+t_require_commands mmap_stress mmap_validate scoutfs xfs_io
 
 echo "== mmap_stress"
 mmap_stress 8192 2000 "$T_D0/mmap_stress" "$T_D1/mmap_stress" "$T_D2/mmap_stress" "$T_D3/mmap_stress" "$T_D4/mmap_stress" | sed 's/:.*//g' | sort
@@ -19,7 +19,7 @@ xfs_io -c "pwrite -S 0xEA 0 8192" "$F" > /dev/null
 cp "$F" "${F}-stage"
 vers=$(scoutfs stat -s data_version "$F")
 scoutfs release "$F" -V "$vers" -o 0 -l 8192
-filefrag -v -b4096 "$F" | awk -F: '{print $1 $2 $4 $5 $6}' | sed 's/last,//;s/unknown_loc/unknown/' | t_filter_fs
+scoutfs get-fiemap "$F"
 xfs_io -c "mmap -rwx 0 8192" \
 	-c "mread -v 512 16" "$F" &
 sleep 1
@@ -30,12 +30,12 @@ scoutfs stage "${F}-stage" "$F" -V "$vers" -o 0 -l 8192
 sleep 1
 # should be 0 - no more waiting jobs, xfs_io should have exited
 jobs | wc -l
-filefrag -v -b4096 "$F" | awk -F: '{print $1 $2 $4 $5 $6}' | sed 's/last,//;s/unknown_loc/unknown/' | t_filter_fs
+scoutfs get-fiemap "$F"
 
 echo "== mmap write to an offline extent"
 # reuse the same file
 scoutfs release "$F" -V "$vers" -o 0 -l 8192
-filefrag -v -b4096 "$F" | awk -F: '{print $1 $2 $4 $5 $6}' | sed 's/last,//;s/unknown_loc/unknown/' | t_filter_fs
+scoutfs get-fiemap "$F"
 xfs_io -c "mmap -rwx 0 8192" \
 	-c "mwrite -S 0x11 528 16" "$F" &
 sleep 1
@@ -46,7 +46,7 @@ scoutfs stage "${F}-stage" "$F" -V "$vers" -o 0 -l 8192
 sleep 1
 # should be 0 - no more waiting jobs, xfs_io should have exited
 jobs | wc -l
-filefrag -v -b4096 "$F" | awk -F: '{print $1 $2 $4 $5 $6}' | sed 's/last,//;s/unknown_loc/unknown/' | t_filter_fs
+scoutfs get-fiemap "$F"
 # read back contents to assure write changed the file
 dd status=none if="$F" bs=1 count=48 skip=512 | hexdump -C
 
