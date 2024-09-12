@@ -1924,6 +1924,8 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 
 const struct address_space_operations scoutfs_file_aops = {
 #ifdef KC_MPAGE_READ_FOLIO
+	.dirty_folio		= block_dirty_folio,
+	.invalidate_folio	= block_invalidate_folio,
 	.read_folio		= scoutfs_read_folio,
 #else
 	.readpage		= scoutfs_readpage,
