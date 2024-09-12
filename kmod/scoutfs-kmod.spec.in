@@ -111,8 +111,5 @@ SCOUTFS_RPM_NAME=$(rpm -q %{name} | grep "%{version}-%{release}")
 rpm -ql $SCOUTFS_RPM_NAME | grep '\.ko$' > /var/run/%{name}-modules-%{version}-%{release} || true
 
 %postun
-if [ -x /sbin/weak-modules ]; then
-    cat /var/run/%{name}-modules-%{version}-%{release} | /sbin/weak-modules --remove-modules --no-initramfs
-fi
-
+cat /var/run/%{name}-modules-%{version}-%{release} | weak-modules --remove-modules --no-initramfs
 rm /var/run/%{name}-modules-%{version}-%{release} || true
