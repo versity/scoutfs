@@ -143,6 +143,7 @@ t_filter_dmesg()
 	# change-devices causes loop device resizing
 	re="$re|loop: module loaded"
 	re="$re|loop[0-9].* detected capacity change from.*"
+	re="$re|dm-[0-9].* detected capacity change from.*"
 
 	# ignore systemd-journal rotating
 	re="$re|systemd-journald.*"
