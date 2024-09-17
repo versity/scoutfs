@@ -162,6 +162,8 @@
 	EXPAND_COUNTER(orphan_scan_error)			\
 	EXPAND_COUNTER(orphan_scan_item)			\
 	EXPAND_COUNTER(orphan_scan_omap_set)			\
+	EXPAND_COUNTER(quota_info_count_objects)		\
+	EXPAND_COUNTER(quota_info_scan_objects)			\
 	EXPAND_COUNTER(quorum_candidate_server_stopping)	\
 	EXPAND_COUNTER(quorum_elected)				\
 	EXPAND_COUNTER(quorum_fence_error)			\
@@ -206,10 +208,12 @@
 	EXPAND_COUNTER(trans_commit_meta_alloc_low)		\
 	EXPAND_COUNTER(trans_commit_sync_fs)			\
 	EXPAND_COUNTER(trans_commit_timer)			\
-	EXPAND_COUNTER(trans_commit_written)
+	EXPAND_COUNTER(trans_commit_written)			\
+	EXPAND_COUNTER(wkic_count_objects)			\
+	EXPAND_COUNTER(wkic_scan_objects)
 
 #define FIRST_COUNTER	alloc_alloc_data
-#define LAST_COUNTER	trans_commit_written
+#define LAST_COUNTER	wkic_scan_objects
 
 #undef EXPAND_COUNTER
 #define EXPAND_COUNTER(which) struct percpu_counter which;
