@@ -34,6 +34,7 @@
 #include "totl.h"
 #include "util.h"
 #include "quota.h"
+#include "counters.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -219,6 +220,8 @@ static unsigned long count_cached_checks(struct shrinker *shrink, struct shrink_
 {
 	struct squota_info *qtinf = KC_SHRINKER_CONTAINER_OF(shrink, struct squota_info);
 
+	scoutfs_inc_counter(qtinf->sb, quota_info_count_objects);
+
 	return shrinker_min_long(atomic64_read(&qtinf->nr_checks));
 }
 
@@ -236,6 +239,8 @@ static unsigned long scan_cached_checks(struct shrinker *shrink, struct shrink_c
 	unsigned long freed = 0;
 	struct squota_check *chk;
 	int err;
+
+	scoutfs_inc_counter(qtinf->sb, quota_info_scan_objects);
 
 	rcu_read_lock();
 

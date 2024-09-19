@@ -27,6 +27,7 @@
 #include "totl.h"
 #include "counters.h"
 #include "util.h"
+#include "counters.h"
 #include "scoutfs_trace.h"
 #include "wkic.h"
 
@@ -552,6 +553,8 @@ static unsigned long wkic_shrink_count(struct shrinker *shrink, struct shrink_co
 {
 	struct wkic_info *winf = KC_SHRINKER_CONTAINER_OF(shrink, struct wkic_info);
 
+	scoutfs_inc_counter(winf->sb, wkic_count_objects);
+
 	return shrinker_min_long(atomic64_read(&winf->shrink_count));
 }
 
@@ -563,6 +566,8 @@ static unsigned long wkic_shrink_scan(struct shrinker *shrink, struct shrink_con
 	unsigned long before;
 	unsigned long after;
 	LIST_HEAD(empty_list);
+
+	scoutfs_inc_counter(winf->sb, wkic_scan_objects);
 
 	if (sc->nr_to_scan > 0) {
 		before = wkic_shrink_count(shrink, sc);
