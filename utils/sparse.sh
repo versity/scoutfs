@@ -37,10 +37,23 @@ search=$(gcc -print-search-dirs | awk '($1 == "install:"){print "-I" $2}')
 #
 # We're trying to use sparse against glibc headers which go wild trying to
 # use internal compiler macros to test features.  We copy gcc's and give
-# them to sparse.  But not __SIZE_TYPE__ 'cause sparse defines that one.
+# them to sparse, but not the ones that sparse already has.
 #
-defines=".sparse.gcc-defines.h"
-gcc -dM -E -x c - < /dev/null | grep -v __SIZE_TYPE__ > $defines
+defines=".sparse.gcc-defines.$$.h"
+awk '
+	# save defines from gcc
+	( FNR == NR ) { lines[$2]=$0 }
+
+	# delete defines that sparse also has
+	( FNR < NR ) { delete lines[$2] }
+
+	# dump remaining lines unique to gcc
+	END {
+		for (a in lines) {
+			print lines[a]
+		}
+	}
+' <(gcc -dM -E -x c - < /dev/null) <(sparse -dM -E -x c - < /dev/null) > $defines
 include="-include $defines"
 
 #
@@ -54,6 +67,9 @@ else
 fi
 
 sparse $m64 $include $search/include "$@" 2>&1 | egrep -v "($RE)" | tee .sparse.output
+
+rm -f $defines
+
 if  [ -s .sparse.output ]; then
 	exit 1
 else
