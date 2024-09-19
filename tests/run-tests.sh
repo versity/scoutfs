@@ -644,16 +644,16 @@ if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
 	fi
 fi
 
-if [ "$skipped" == 0 -a "$failed" == 0 ]; then
-	msg "all tests passed"
+if [ "$skipped" != 0 ]; then
+	msg "$skipped tests skipped, check skip.log"
+fi
+
+if [ "$failed" == 0 ]; then
+	msg "no tests failed"
 	unmount_all
 	exit 0
 fi
 
-if [ "$skipped" != 0 ]; then
-	msg "$skipped tests skipped, check skip.log, still mounted"
-fi
-if [ "$failed" != 0 ]; then
-	msg "$failed tests failed, check fail.log, still mounted"
-fi
+msg "$failed tests failed, check fail.log, still mounted"
+
 exit 1
