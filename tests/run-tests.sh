@@ -515,6 +515,7 @@ msg "running tests"
 passed=0
 skipped=0
 failed=0
+skipped_permitted=0
 for t in $tests; do
 	# tests has basenames from sequence, get path and name
 	t="tests/$t"
@@ -618,6 +619,10 @@ for t in $tests; do
 		grep -s -v "^$test_name " "$last" > "$last.tmp"
 		echo "$test_name $stats" >> "$last.tmp"
 		mv -f "$last.tmp" "$last"
+	elif [ "$sts" == "$T_SKIP_PERMITTED_STATUS" ]; then
+		echo "  [ skipped (permitted): $message ]"
+		echo "$test_name skipped (permitted) $message " >> "$T_RESULTS/skip.log"
+		((skipped_permitted++))
 	elif [ "$sts" == "$T_SKIP_STATUS" ]; then
 		echo "  [ skipped: $message ]"
 		echo "$test_name $message" >> "$T_RESULTS/skip.log"
@@ -631,7 +636,7 @@ for t in $tests; do
 	fi
 done
 
-msg "all tests run: $passed passed, $skipped skipped, $failed failed"
+msg "all tests run: $passed passed, $skipped skipped, $skipped_permitted skipped (permitted), $failed failed"
 
 
 if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then

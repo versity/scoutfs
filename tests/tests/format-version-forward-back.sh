@@ -13,7 +13,7 @@
 
 # not supported on el9!
 if [ $(source /etc/os-release ; echo ${VERSION_ID:0:1}) -gt 8 ]; then
-	t_skip "Unsupported OS version"
+	t_skip_permitted "Unsupported OS version"
 fi
 
 mount_has_format_version()
