@@ -10,6 +10,7 @@
 # take kernel version or default to uname -r
 %{!?kversion: %global kversion %(uname -r)}
 %global kernel_version %{kversion}
+%global sanitized_kversion %(echo %{kernel_version} | sed -e 's/-/_/g' -e 's/\.el.*//')
 
 %if 0%{?el7}
 %global kernel_source() /usr/src/kernels/%{kernel_version}.$(arch)
@@ -28,7 +29,7 @@ Name:           kmod-%{kmod_name}
 %endif
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
-Release:        %{_release}+%{kernel_version}
+Release:        %{_release}+%{sanitized_kversion}
 License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
