@@ -28,7 +28,7 @@ Name:           kmod-%{kmod_name}
 %endif
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
-Release:        %{_release}%{?dist}
+Release:        %{_release}+%{kernel_version}
 License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
