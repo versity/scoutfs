@@ -75,4 +75,11 @@ scoutfs setattr -V 1 -o -s 4000000000 "$FILE" 2>&1 | t_filter_fs
 scoutfs stat -s offline_blocks "$FILE"
 rm "$FILE"
 
+# Do not fail if data_version is unset - the unset `0` value should not
+# be passed down to attr_x handling code which will -EINVAL on that.
+echo "== omitting data_version should not fail"
+touch "$FILE"
+scoutfs setattr -s 0 -t 1725670311.0 -r 1725670311.0 "$FILE"
+rm "$FILE"
+
 t_pass

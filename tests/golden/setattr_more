@@ -29,3 +29,4 @@ File size of /mnt/test/test/setattr_more/file is 40988672 (10007 blocks of 4096 
 /mnt/test/test/setattr_more/file: 1 extent found
 == correct offline extent length
 976563
+== omitting data_version should not fail

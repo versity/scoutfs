@@ -674,8 +674,8 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 		goto out;
 	}
 
-	iax->x_mask = SCOUTFS_IOC_IAX_DATA_VERSION | SCOUTFS_IOC_IAX_CTIME |
-		      SCOUTFS_IOC_IAX_CRTIME | SCOUTFS_IOC_IAX_SIZE;
+	iax->x_mask = SCOUTFS_IOC_IAX_CTIME | SCOUTFS_IOC_IAX_CRTIME |
+		      SCOUTFS_IOC_IAX_SIZE;
 	iax->data_version = sm.data_version;
 	iax->ctime_sec = sm.ctime_sec;
 	iax->ctime_nsec = sm.ctime_nsec;
@@ -685,6 +685,9 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 
 	if (sm.flags & SCOUTFS_IOC_SETATTR_MORE_OFFLINE)
 		iax->x_flags |= SCOUTFS_IOC_IAX_F_SIZE_OFFLINE;
+
+	if (sm.data_version != 0)
+		iax->x_mask |= SCOUTFS_IOC_IAX_DATA_VERSION;
 
 	ret = mnt_want_write_file(file);
 	if (ret < 0)
