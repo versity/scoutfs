@@ -405,7 +405,8 @@ static spr_err_t map_start_key(struct scoutfs_key *start, struct scoutfs_key *ke
 		init_key(start, SCOUTFS_INODE_INDEX_ZONE, 0, 0,
 			 le64_to_cpu(key->_sk_second) & ~(u64)SCOUTFS_LOCK_SEQ_GROUP_MASK,
 			 0, 0);
-
+	} else if (key->sk_zone == SCOUTFS_QUOTA_ZONE) {
+		init_key(start, SCOUTFS_QUOTA_ZONE, 0, 0, le64_to_cpu(key->_sk_second), 0, 0);
 	} else {
 		return EINVAL;
 	}
@@ -818,6 +819,7 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	si->mode = cpu_to_le32(inode->mode);
 	si->rdev = cpu_to_le32(inode->rdev);
 	si->flags = 0;
+	si->flags = cpu_to_le64(inode->flags);
 	si->atime.sec = cpu_to_le64(inode->atime.tv_sec);
 	si->atime.nsec = cpu_to_le32(inode->atime.tv_nsec);
 	si->ctime.sec = cpu_to_le64(inode->ctime.tv_sec);
@@ -826,6 +828,7 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	si->mtime.nsec = cpu_to_le32(inode->mtime.tv_nsec);
 	si->crtime.sec = cpu_to_le64(inode->crtime.tv_sec);
 	si->crtime.nsec = cpu_to_le32(inode->crtime.tv_nsec);
+	si->proj = cpu_to_le64(inode->proj);
 
 	err = insert_inode_index_item(wri, SCOUTFS_INODE_INDEX_META_SEQ_TYPE,
 				      le64_to_cpu(si->meta_seq), inode->ino);
@@ -915,6 +918,46 @@ static spr_err_t insert_srch_item(struct scoutfs_parallel_restore_writer *wri,
 		err = btb_insert(&wri->srch_btb, bti, 0);
 	}
 
+	return err;
+}
+
+static spr_err_t insert_quota_item(struct scoutfs_parallel_restore_writer *wri,
+				  struct scoutfs_parallel_restore_quota_rule *rule)
+{
+	struct scoutfs_quota_rule_val *rv;
+	struct btree_item *bti;
+	spr_err_t err;
+
+	err = bti_alloc(sizeof(struct scoutfs_quota_rule_val), &bti);
+	if (err)
+		goto out;
+
+	rv = bti->val;
+	memset(rv, 0, sizeof(struct scoutfs_quota_rule_val));
+	rv->limit = cpu_to_le64(rule->limit);
+	rv->prio = rule->prio;
+	rv->op = rule->op;
+	rv->rule_flags = rule->rule_flags;
+	rv->name_val[0] = cpu_to_le64(rule->names[0].val);
+	rv->name_source[0] = rule->names[0].source;
+	rv->name_flags[0] = rule->names[0].flags;
+	rv->name_val[1] = cpu_to_le64(rule->names[1].val);
+	rv->name_source[1] = rule->names[1].source;
+	rv->name_flags[1] = rule->names[1].flags;
+	rv->name_val[2] = cpu_to_le64(rule->names[2].val);
+	rv->name_source[2] = rule->names[2].source;
+	rv->name_flags[2] = rule->names[2].flags;
+	memset(&rv->_pad, 0, sizeof(rv->_pad));
+
+	init_key(&bti->key, SCOUTFS_QUOTA_ZONE, SCOUTFS_QUOTA_RULE_TYPE,
+			0, scoutfs_hash64(&rv, sizeof(rv)), 0, 0);
+
+	err = insert_fs_item(wri, bti);
+	if (err) {
+		free(bti);
+		goto out;
+	}
+out:
 	return err;
 }
 
@@ -1779,6 +1822,15 @@ spr_err_t scoutfs_parallel_restore_add_progress(struct scoutfs_parallel_restore_
 	return err;
 }
 
+spr_err_t scoutfs_parallel_restore_add_quota_rule(struct scoutfs_parallel_restore_writer *wri,
+						struct scoutfs_parallel_restore_quota_rule *rule)
+{
+	if (!wri_has_super(wri))
+		return EINVAL;
+
+	return insert_quota_item(wri, rule);
+}
+
 spr_err_t scoutfs_parallel_restore_write_buf(struct scoutfs_parallel_restore_writer *wri,
 					     void *buf, size_t len, off_t *off_ret,
 					     size_t *count_ret)
@@ -1832,12 +1884,64 @@ out:
 	return count > 0 ? 0 : err;
 }
 
+/*
+ * Here we take in a dev's fd an read its quorum blocks to see if the dev has
+ * been mounted before
+ */
+static spr_err_t scoutfs_check_if_previous_mount(int fd)
+{
+	struct scoutfs_quorum_block *blk = NULL;
+	struct scoutfs_quorum_block_event *ev;
+	u64 blkno;
+	int i, j;
+	spr_err_t err;
+
+	for (i = 0; i <  SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		blkno = SCOUTFS_QUORUM_BLKNO + i;
+		err = read_block(fd, blkno, SCOUTFS_BLOCK_SM_SHIFT, (void **)&blk);
+		if (!blk) {
+			err = EINVAL;
+			goto out;
+		}
+
+		dprintf("quorum block read; quorum bklno: %llu, err_val: %d\n", blkno, err);
+		if (err)
+			goto out;
+
+		for (j = 0; j < SCOUTFS_QUORUM_EVENT_NR; j++) {
+			ev = &blk->events[j];
+			if (ev->ts.sec || ev->ts.nsec) {
+				err = EINVAL;
+				goto out;
+			}
+		}
+		free(blk);
+	}
+out:
+	if (blk)
+		free(blk);
+	return err;
+}
+
 spr_err_t scoutfs_parallel_restore_import_super(struct scoutfs_parallel_restore_writer *wri,
-						struct scoutfs_super_block *super)
+						struct scoutfs_super_block *super, int fd)
 {
 	spr_err_t err;
 	u64 start;
 	u64 len;
+
+	/*
+	 * check the device we are restoring into to make sure
+	 * that it has has never been mounted
+	 */
+	if (scoutfs_check_if_previous_mount(fd))
+		return EINVAL;
+
+	if (le64_to_cpu(super->fmt_vers) < 2)
+		return EINVAL;
+
+	if ((super->flags & SCOUTFS_FLAG_IS_META_BDEV) == 0)
+		return EINVAL;
 
 	if (wri_has_super(wri))
 		return EINVAL;
