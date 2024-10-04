@@ -1226,7 +1226,7 @@ int scoutfs_quota_setup(struct super_block *sb)
 	init_waitqueue_head(&qtinf->waitq);
 
 	KC_INIT_SHRINKER_FUNCS(&qtinf->shrinker, count_cached_checks, scan_cached_checks);
-	KC_REGISTER_SHRINKER(&qtinf->shrinker);
+	KC_REGISTER_SHRINKER(&qtinf->shrinker, "scoutfs-quota:" SCSBF, SCSB_ARGS(sb));
 
 	sbi->squota_info = qtinf;
 

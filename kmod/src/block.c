@@ -120,8 +120,7 @@ do {												\
 
 static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 {
-	int off = offsetof(struct scoutfs_block_header, crc) +
-		  FIELD_SIZEOF(struct scoutfs_block_header, crc);
+	int off = offsetofend(struct scoutfs_block_header, crc);
 	u32 calc = crc32c(~0, (char *)hdr + off, size - off);
 
 	return cpu_to_le32(calc);
@@ -159,7 +158,7 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 		 */
 		lockdep_off();
 		nofs_flags = memalloc_nofs_save();
-		bp->virt = __vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM, PAGE_KERNEL);
+		bp->virt = kc__vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM);
 		memalloc_nofs_restore(nofs_flags);
 		lockdep_on();
 
@@ -438,7 +437,7 @@ static void block_remove_all(struct super_block *sb)
  * possible.  Final freeing, verifying checksums, and unlinking errored
  * blocks are all done by future users of the blocks.
  */
-static void block_end_io(struct super_block *sb, unsigned int opf,
+static void block_end_io(struct super_block *sb, blk_opf_t opf,
 			 struct block_private *bp, int err)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
@@ -478,7 +477,7 @@ static void KC_DECLARE_BIO_END_IO(block_bio_end_io, struct bio *bio)
  * Kick off IO for a single block.
  */
 static int block_submit_bio(struct super_block *sb, struct block_private *bp,
-			    unsigned int opf)
+			    blk_opf_t opf)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct bio *bio = NULL;
@@ -505,15 +504,13 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 
 	for (off = 0; off < SCOUTFS_BLOCK_LG_SIZE; off += PAGE_SIZE) {
 		if (!bio) {
-			bio = bio_alloc(GFP_NOFS, SCOUTFS_BLOCK_LG_PAGES_PER);
+			bio = kc_bio_alloc(sbi->meta_bdev, SCOUTFS_BLOCK_LG_PAGES_PER, opf, GFP_NOFS);
 			if (!bio) {
 				ret = -ENOMEM;
 				break;
 			}
 
-			kc_bio_set_opf(bio, opf);
 			kc_bio_set_sector(bio, sector + (off >> 9));
-			bio_set_dev(bio, sbi->meta_bdev);
 			bio->bi_end_io = block_bio_end_io;
 			bio->bi_private = bp;
 
@@ -1201,7 +1198,7 @@ static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
  * only layer that sees the full block buffer so we pass the calculated
  * crc to the caller for them to check in their context.
  */
-static int sm_block_io(struct super_block *sb, struct block_device *bdev, unsigned int opf,
+static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_opf_t opf,
 		       u64 blkno, struct scoutfs_block_header *hdr, size_t len, __le32 *blk_crc)
 {
 	struct scoutfs_block_header *pg_hdr;
@@ -1233,15 +1230,13 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, unsign
 		pg_hdr->crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
 
-	bio = bio_alloc(GFP_NOFS, 1);
+	bio = kc_bio_alloc(bdev, 1, opf, GFP_NOFS);
 	if (!bio) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	kc_bio_set_opf(bio, opf | REQ_SYNC);
 	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
-	bio_set_dev(bio, bdev);
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
 	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
@@ -1302,7 +1297,7 @@ int scoutfs_block_setup(struct super_block *sb)
 	init_waitqueue_head(&binf->waitq);
 	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
 			       block_scan_objects);
-	KC_REGISTER_SHRINKER(&binf->shrinker);
+	KC_REGISTER_SHRINKER(&binf->shrinker, "scoutfs-block:" SCSBF, SCSB_ARGS(sb));
 	INIT_WORK(&binf->free_work, block_free_work);
 	init_llist_head(&binf->free_llist);
 

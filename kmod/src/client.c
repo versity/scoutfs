@@ -20,6 +20,7 @@
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <asm/barrier.h>
+#include <linux/overflow.h>
 
 #include "format.h"
 #include "counters.h"
@@ -68,6 +69,7 @@ int scoutfs_client_alloc_inodes(struct super_block *sb, u64 count,
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 	struct scoutfs_net_inode_alloc ial;
 	__le64 lecount = cpu_to_le64(count);
+	u64 tmp;
 	int ret;
 
 	ret = scoutfs_net_sync_request(sb, client->conn,
@@ -80,7 +82,7 @@ int scoutfs_client_alloc_inodes(struct super_block *sb, u64 count,
 
 		if (*nr == 0)
 			ret = -ENOSPC;
-		else if (*ino + *nr < *ino)
+		else if (check_add_overflow(*ino, *nr - 1, &tmp))
 			ret = -EINVAL;
 	}
 

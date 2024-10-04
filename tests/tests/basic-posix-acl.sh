@@ -55,16 +55,16 @@ L dir-root/file-group-write
 L symlinkdir-root/file-group-write
 
 echo "== directory exec"
-setpriv $SET_UID bash -c "cd dir-root && echo Success"
-setpriv $SET_UID bash -c "cd symlinkdir-root && echo Success"
+setpriv $SET_UID bash -c "cd dir-root 2>&- && echo Success"
+setpriv $SET_UID bash -c "cd symlinkdir-root 2>&- && echo Success"
 setfacl -m u:22222:rw dir-root
 getfacl dir-root
-setpriv $SET_UID bash -c "cd dir-root || echo Failed"
-setpriv $SET_UID bash -c "cd symlinkdir-root || echo Failed"
+setpriv $SET_UID bash -c "cd dir-root 2>&- || echo Failed"
+setpriv $SET_UID bash -c "cd symlinkdir-root 2>&- || echo Failed"
 setfacl -m g:44444:rwx dir-root
 getfacl dir-root
-setpriv $SET_GID bash -c "cd dir-root && echo Success"
-setpriv $SET_GID bash -c "cd symlinkdir-root && echo Success"
+setpriv $SET_GID bash -c "cd dir-root 2>&- && echo Success"
+setpriv $SET_GID bash -c "cd symlinkdir-root 2>&- && echo Success"
 
 echo "== get/set attr"
 rm -rf file-root

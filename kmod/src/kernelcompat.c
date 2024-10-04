@@ -67,12 +67,11 @@ kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *iov,
 			       unsigned long nr_segs, loff_t pos, loff_t *ppos,
 			       size_t count, ssize_t written)
 {
-	struct file *file = iocb->ki_filp;
 	ssize_t status;
 	struct iov_iter i;
 
 	iov_iter_init(&i, WRITE, iov, nr_segs, count);
-	status = generic_perform_write(file, &i, pos);
+	status = kc_generic_perform_write(iocb, &i, pos);
 
 	if (likely(status >= 0)) {
 		written += status;

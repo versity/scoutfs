@@ -7,6 +7,7 @@ t_require_commands xfs_io filefrag scoutfs mknod
 # this test wants to ignore unwritten extents
 fiemap_file() {
 	filefrag -v -b4096 "$1" | grep -v "unwritten"
+	scoutfs get-fiemap "$1" | grep -v 'flags:.*U'
 }
 
 create_file() {
@@ -61,7 +62,10 @@ echo "== release past i_size is fine"
 release_vers "$FILE" stat 400K 4K
 
 echo "== wrapped blocks fails"
-release_vers "$FILE" stat $vers 0x8000000000000000 0x8000000000000000
+# just under!
+release_vers "$FILE" stat $vers 0xfffffffffffff000 4096
+# this goes over
+release_vers "$FILE" stat $vers 0xfffffffffffff000 8192
 
 echo "== releasing non-file fails"
 mknod "$CHAR" c 1 3
@@ -105,25 +109,20 @@ for c in $(seq 0 4); do
 		fi
 	done
 
-	start=$(fiemap_file "$FILE" | \
-		awk '($1 == "0:"){print substr($4, 0, length($4)- 2)}')
-
 	release_vers "$FILE" stat $(($a * 4))K 4K
 	release_vers "$FILE" stat $(($b * 4))K 4K
 	release_vers "$FILE" stat $(($c * 4))K 4K
 
 	echo -n "$a $b $c:"
 
-	fiemap_file "$FILE" | \
-		awk 'BEGIN{ORS=""}($1 == (NR - 4)":") {
-			off=substr($2, 0, length($2)- 2);
-			phys=substr($4, 0, length($4)- 2);
-			if (phys > 100) {
-				phys = phys - phys + 100 + off;
-			}
-			len=substr($6, 0, length($6)- 1);
-			print "  (" off, phys, len ")";
-		}'
+	scoutfs get-fiemap "$FILE" | \
+		awk 'BEGIN{ORS=""}($1 != "extents:") {
+			off=$3;
+			len=$6;
+			phys=substr($8, 0, 1);
+			phys = (phys == ".") ? off + 100 : 0;
+			print "  (" off, phys, len ")"
+		};'
 	echo
 
 	rm "$FILE"

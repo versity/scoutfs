@@ -20,7 +20,9 @@
 #include <linux/hash.h>
 #include <linux/log2.h>
 #include <linux/falloc.h>
+#include <linux/fiemap.h>
 #include <linux/writeback.h>
+#include <linux/overflow.h>
 
 #include "format.h"
 #include "super.h"
@@ -679,8 +681,14 @@ int scoutfs_get_block_write(struct inode *inode, sector_t iblock, struct buffer_
  * We can return errors from locking and checking offline extents.  The
  * page is unlocked if we return an error.
  */
+#ifdef KC_MPAGE_READ_FOLIO
+static int scoutfs_read_folio(struct file *file, struct folio *folio)
+{
+	struct page *page = &folio->page;
+#else
 static int scoutfs_readpage(struct file *file, struct page *page)
 {
+#endif
 	struct inode *inode = file->f_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
@@ -727,7 +735,11 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 			return ret;
 	}
 
+#ifdef KC_MPAGE_READ_FOLIO
+	ret = mpage_read_folio(folio, scoutfs_get_block_read);
+#else
 	ret = mpage_readpage(page, scoutfs_get_block_read);
+#endif
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
@@ -825,7 +837,10 @@ struct write_begin_data {
 
 static int scoutfs_write_begin(struct file *file,
 			       struct address_space *mapping, loff_t pos,
-			       unsigned len, unsigned flags,
+			       unsigned len,
+#ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
+			       unsigned flags,
+#endif
 			       struct page **pagep, void **fsdata)
 {
 	struct inode *inode = mapping->host;
@@ -860,13 +875,18 @@ retry:
 	if (ret < 0)
 		goto out;
 
+#ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
 	/* can't re-enter fs, have trans */
 	flags |= AOP_FLAG_NOFS;
+#endif
 
 	/* generic write_end updates i_size and calls dirty_inode */
 	ret = scoutfs_dirty_inode_item(inode, wbd->lock) ?:
-	      block_write_begin(mapping, pos, len, flags, pagep,
-				scoutfs_get_block_write);
+	      block_write_begin(mapping, pos, len,
+#ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
+				flags,
+#endif
+				pagep, scoutfs_get_block_write);
 	if (ret < 0) {
 		scoutfs_release_trans(sb);
 		scoutfs_inode_index_unlock(sb, &wbd->ind_locks);
@@ -1068,6 +1088,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	loff_t end;
 	u64 iblock;
 	u64 last;
+	loff_t tmp;
 	s64 ret;
 
 	/* XXX support more flags */
@@ -1076,14 +1097,14 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		goto out;
 	}
 
-	/* catch wrapping */
-	if (offset + len < offset) {
-		ret = -EINVAL;
+	if (len == 0) {
+		ret = 0;
 		goto out;
 	}
 
-	if (len == 0) {
-		ret = 0;
+	/* catch wrapping */
+	if (check_add_overflow(offset, len - 1, &tmp)) {
+		ret = -EINVAL;
 		goto out;
 	}
 
@@ -1304,8 +1325,8 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 		goto out;
 	}
 
-	ret = inode_permission(from, MAY_WRITE) ?:
-	      inode_permission(to, MAY_WRITE);
+	ret = inode_permission(KC_VFS_INIT_NS from, MAY_WRITE) ?:
+	      inode_permission(KC_VFS_INIT_NS to, MAY_WRITE);
 	if (ret < 0)
 		goto out;
 
@@ -1543,7 +1564,7 @@ int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		goto out;
 	}
 
-	ret = fiemap_check_flags(fieinfo, FIEMAP_FLAG_SYNC);
+	ret = fiemap_prep(inode, fieinfo, start, &len, FIEMAP_FLAG_SYNC);
 	if (ret)
 		goto out;
 
@@ -1709,12 +1730,16 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 	u64 last_block;
 	u64 on;
 	u64 off;
+	loff_t tmp;
 	int ret = 0;
+
+	if (len == 0)
+		goto out;
 
 	if (WARN_ON_ONCE(sef & SEF_UNKNOWN) ||
 	    WARN_ON_ONCE(op & SCOUTFS_IOC_DWO_UNKNOWN) ||
 	    WARN_ON_ONCE(dw && !RB_EMPTY_NODE(&dw->node)) ||
-	    WARN_ON_ONCE(pos + len < pos)) {
+	    WARN_ON_ONCE(check_add_overflow(pos, len - 1, &tmp))) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1890,7 +1915,13 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 }
 
 const struct address_space_operations scoutfs_file_aops = {
+#ifdef KC_MPAGE_READ_FOLIO
+	.dirty_folio		= block_dirty_folio,
+	.invalidate_folio	= block_invalidate_folio,
+	.read_folio		= scoutfs_read_folio,
+#else
 	.readpage		= scoutfs_readpage,
+#endif
 #ifndef KC_FILE_AOPS_READAHEAD
 	.readpages		= scoutfs_readpages,
 #else
@@ -1911,6 +1942,8 @@ const struct file_operations scoutfs_file_fops = {
 #else
 	.read_iter	= scoutfs_file_read_iter,
 	.write_iter	= scoutfs_file_write_iter,
+	.splice_read	= generic_file_splice_read,
+	.splice_write	= iter_file_splice_write,
 #endif
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,

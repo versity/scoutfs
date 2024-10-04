@@ -197,7 +197,11 @@ struct timespec64 kc_current_time(struct inode *inode);
 } while (0)
 
 #define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(ptr, type, shrinker)
-#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(ptr))
+#ifdef KC_SHRINKER_NAME
+#define KC_REGISTER_SHRINKER register_shrinker
+#else
+#define KC_REGISTER_SHRINKER(ptr, fmt, ...) (register_shrinker(ptr))
+#endif /* KC_SHRINKER_NAME */
 #define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr))
 #define KC_SHRINKER_FN(ptr) (ptr)
 #else
@@ -224,7 +228,7 @@ struct kc_shrinker_wrapper {
 	_wrap->shrink.seeks = DEFAULT_SEEKS;			\
 } while (0)
 #define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(container_of(ptr, struct kc_shrinker_wrapper, shrink), type, shrinker)
-#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(ptr.shrink))
+#define KC_REGISTER_SHRINKER(ptr, fmt, ...) (register_shrinker(ptr.shrink))
 #define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr.shrink))
 #define KC_SHRINKER_FN(ptr) (ptr.shrink)
 
@@ -271,6 +275,167 @@ ssize_t kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *i
                unsigned long nr_segs, loff_t pos, loff_t *ppos,
                size_t count, ssize_t written);
 #define generic_file_buffered_write kc_generic_file_buffered_write
+#ifdef KC_GENERIC_PERFORM_WRITE_KIOCB_IOV_ITER
+static inline int kc_generic_perform_write(struct kiocb *iocb, struct iov_iter *iter, loff_t pos)
+{
+	iocb->ki_pos = pos;
+	return generic_perform_write(iocb, iter);
+}
+#else
+static inline int kc_generic_perform_write(struct kiocb *iocb, struct iov_iter *iter, loff_t pos)
+{
+	struct file *file = iocb->ki_filp;
+	return generic_perform_write(file, iter, pos);
+}
+#endif
+#endif // KC_GENERIC_FILE_BUFFERED_WRITE
+
+#ifndef KC_HAVE_BLK_OPF_T
+/* typedef __u32 __bitwise blk_opf_t; */
+typedef unsigned int blk_opf_t;
+#endif
+
+#ifdef KC_LIST_CMP_CONST_ARG_LIST_HEAD
+#define KC_LIST_CMP_CONST const
+#else
+#define KC_LIST_CMP_CONST
+#endif
+
+#ifdef KC_VMALLOC_PGPROT_T
+#define kc__vmalloc(size, gfp_mask) __vmalloc(size, gfp_mask, PAGE_KERNEL)
+#else
+#define kc__vmalloc __vmalloc
+#endif
+
+#ifdef KC_VFS_METHOD_USER_NAMESPACE_ARG
+#define KC_VFS_NS_DEF struct user_namespace *mnt_user_ns,
+#define KC_VFS_NS mnt_user_ns,
+#define KC_VFS_INIT_NS &init_user_ns,
+#else
+#define KC_VFS_NS_DEF
+#define KC_VFS_NS
+#define KC_VFS_INIT_NS
+#endif
+
+#ifdef KC_BIO_ALLOC_DEV_OPF_ARGS
+#define kc_bio_alloc bio_alloc
+#else
+#include <linux/bio.h>
+static inline struct bio *kc_bio_alloc(struct block_device *bdev, unsigned short nr_vecs,
+				       blk_opf_t opf, gfp_t gfp_mask)
+{
+	struct bio *b = bio_alloc(gfp_mask, nr_vecs);
+	if (b) {
+		kc_bio_set_opf(b, opf);
+		bio_set_dev(b, bdev);
+	}
+	return b;
+}
+#endif
+
+#ifndef KC_FIEMAP_PREP
+#define fiemap_prep(inode, fieinfo, start, len, flags) fiemap_check_flags(fieinfo, flags)
+#endif
+
+#ifndef KC_KERNEL_OLD_TIMEVAL_STRUCT
+#define __kernel_old_timeval timeval
+#define ns_to_kernel_old_timeval(ktime) ns_to_timeval(ktime.tv64)
+#endif
+
+#ifdef KC_SOCK_SET_SNDTIMEO
+#include <net/sock.h>
+static inline int kc_sock_set_sndtimeo(struct socket *sock, s64 secs)
+{
+	sock_set_sndtimeo(sock->sk, secs);
+	return 0;
+}
+static inline int kc_tcp_sock_set_rcvtimeo(struct socket *sock, ktime_t to)
+{
+	struct __kernel_old_timeval tv;
+	sockptr_t kopt;
+
+	tv = ns_to_kernel_old_timeval(to);
+
+	kopt = KERNEL_SOCKPTR(&tv);
+
+	return sock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO_NEW,
+			       kopt, sizeof(tv));
+}
+#else
+#include <net/sock.h>
+static inline int kc_sock_set_sndtimeo(struct socket *sock, s64 secs)
+{
+	struct timeval tv = { .tv_sec = secs, .tv_usec = 0 };
+	return kernel_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+				 (char *)&tv, sizeof(tv));
+}
+static inline int kc_tcp_sock_set_rcvtimeo(struct socket *sock, ktime_t to)
+{
+	struct __kernel_old_timeval tv;
+
+	tv = ns_to_kernel_old_timeval(to);
+	return kernel_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+				 (char *)&tv, sizeof(tv));
+}
+#endif
+
+#ifdef KC_SETSOCKOPT_SOCKPTR_T
+static inline int kc_sock_setsockopt(struct socket *sock, int level, int op, int *optval, unsigned int optlen)
+{
+	sockptr_t kopt = KERNEL_SOCKPTR(optval);
+	return sock_setsockopt(sock, level, op, kopt, sizeof(optval));
+}
+#else
+static inline int kc_sock_setsockopt(struct socket *sock, int level, int op, int *optval, unsigned int optlen)
+{
+	return kernel_setsockopt(sock, level, op, (char *)optval, sizeof(optval));
+}
+#endif
+
+#ifdef KC_HAVE_TCP_SET_SOCKFN
+#include <linux/net.h>
+#include <net/tcp.h>
+static inline int kc_tcp_sock_set_keepintvl(struct socket *sock, int val)
+{
+	return tcp_sock_set_keepintvl(sock->sk, val);
+}
+static inline int kc_tcp_sock_set_keepidle(struct socket *sock, int val)
+{
+	return tcp_sock_set_keepidle(sock->sk, val);
+}
+static inline int kc_tcp_sock_set_user_timeout(struct socket *sock, int val)
+{
+	tcp_sock_set_user_timeout(sock->sk, val);
+	return 0;
+}
+static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
+{
+	tcp_sock_set_nodelay(sock->sk);
+	return 0;
+}
+#else
+#include <linux/net.h>
+#include <net/tcp.h>
+static inline int kc_tcp_sock_set_keepintvl(struct socket *sock, int val)
+{
+	int optval = val;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_KEEPINTVL, (char *)&optval, sizeof(optval));
+}
+static inline int kc_tcp_sock_set_keepidle(struct socket *sock, int val)
+{
+	int optval = val;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_KEEPIDLE, (char *)&optval, sizeof(optval));
+}
+static inline int kc_tcp_sock_set_user_timeout(struct socket *sock, int val)
+{
+	int optval = val;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_USER_TIMEOUT, (char *)&optval, sizeof(optval));
+}
+static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
+{
+	int optval = 1;
+	return kernel_setsockopt(sock, SOL_TCP, TCP_NODELAY, (char *)&optval, sizeof(optval));
+}
 #endif
 
 #endif

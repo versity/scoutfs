@@ -143,13 +143,22 @@ t_filter_dmesg()
 	# change-devices causes loop device resizing
 	re="$re|loop: module loaded"
 	re="$re|loop[0-9].* detected capacity change from.*"
+	re="$re|dm-[0-9].* detected capacity change from.*"
 
 	# ignore systemd-journal rotating
 	re="$re|systemd-journald.*"
 
+	# process accounting can be noisy
+	re="$re|Process accounting resumed.*"
+
 	# format vers back/compat tries bad mounts
 	re="$re|scoutfs .* error.*outside of supported version.*"
 	re="$re|scoutfs .* error.*could not get .*super.*"
+
+	# ignore "unsafe core pattern" when xfstests tries to disable cores"
+	re="$re|Unsafe core_pattern used with fs.suid_dumpable=2.*"
+	re="$re|Pipe handler or fully qualified core dump path required.*"
+	re="$re|Set kernel.core_pattern before fs.suid_dumpable.*"
 
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob

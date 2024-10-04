@@ -373,7 +373,8 @@ int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 {
 	struct inode *inode = dentry->d_inode;
 #else
-int scoutfs_getattr(const struct path *path, struct kstat *stat,
+int scoutfs_getattr(KC_VFS_NS_DEF
+		    const struct path *path, struct kstat *stat,
 		    u32 request_mask, unsigned int query_flags)
 {
 	struct inode *inode = d_inode(path->dentry);
@@ -385,7 +386,8 @@ int scoutfs_getattr(const struct path *path, struct kstat *stat,
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret == 0) {
-		generic_fillattr(inode, stat);
+		generic_fillattr(KC_VFS_INIT_NS
+				 inode, stat);
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	}
 	return ret;
@@ -483,7 +485,8 @@ int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock)
  * re-acquire it.  Ideally we'd fix this so that we can acquire the lock
  * instead of the caller.
  */
-int scoutfs_setattr(struct dentry *dentry, struct iattr *attr)
+int scoutfs_setattr(KC_VFS_NS_DEF
+		    struct dentry *dentry, struct iattr *attr)
 {
 	struct inode *inode = dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
@@ -501,7 +504,8 @@ retry:
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret)
 		return ret;
-	ret = setattr_prepare(dentry, attr);
+	ret = setattr_prepare(KC_VFS_INIT_NS
+			      dentry, attr);
 	if (ret)
 		goto out;
 
@@ -565,7 +569,8 @@ retry:
 	if (ret < 0)
 		goto release;
 
-	setattr_copy(inode, attr);
+	setattr_copy(KC_VFS_INIT_NS
+		     inode, attr);
 	inode_inc_iversion(inode);
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 
@@ -979,10 +984,10 @@ static bool inode_has_index(umode_t mode, u8 type)
 	}
 }
 
-static int cmp_index_lock(void *priv, struct list_head *A, struct list_head *B)
+static int cmp_index_lock(void *priv, KC_LIST_CMP_CONST struct list_head *A, KC_LIST_CMP_CONST struct list_head *B)
 {
-	struct index_lock *a = list_entry(A, struct index_lock, head);
-	struct index_lock *b = list_entry(B, struct index_lock, head);
+	KC_LIST_CMP_CONST struct index_lock *a = list_entry(A, KC_LIST_CMP_CONST struct index_lock, head);
+	KC_LIST_CMP_CONST struct index_lock *b = list_entry(B, KC_LIST_CMP_CONST struct index_lock, head);
 
 	return ((int)a->type - (int)b->type) ?:
 	       scoutfs_cmp_u64s(a->major, b->major) ?:
@@ -1562,7 +1567,8 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	scoutfs_inode_set_data_seq(inode);
 
 	inode->i_ino = ino; /* XXX overflow */
-	inode_init_owner(inode, dir, mode);
+	inode_init_owner(KC_VFS_INIT_NS
+			 inode, dir, mode);
 	inode_set_bytes(inode, 0);
 	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	inode->i_rdev = rdev;
