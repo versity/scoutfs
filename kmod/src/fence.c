@@ -238,6 +238,11 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 	struct pending_fence *fence;
 	int ret;
 
+	if (!rid) {
+		ret = 0;
+		goto out;
+	}
+
 	fence = kzalloc(sizeof(struct pending_fence), GFP_NOFS);
 	if (!fence) {
 		ret = -ENOMEM;
