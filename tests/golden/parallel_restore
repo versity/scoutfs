@@ -1,0 +1,28 @@
+== simple mkfs/restore/mount
+committed_seq     1120
+total_meta_blocks 163840
+total_data_blocks 15728640
+   1440    1440   57120
+     80      80     400
+0: offset: 0 length: 1 flags: O.L
+extents: 1
+0: offset: 0 length: 1 flags: O.L
+extents: 1
+0: offset: 0 length: 1 flags: O.L
+extents: 1
+0: offset: 0 length: 1 flags: O.L
+extents: 1
+    Type  Size     Total   Used      Free  Use%  
+MetaData  64KB    163840  34722    129118    21  
+    Data   4KB  15728640     64  15728576     0  
+  7 13,L,- 15,L,- 17,L,- I 33 -
+== just under ENOSPC
+    Type  Size     Total    Used      Free  Use%  
+MetaData  64KB    163840  155666      8174    95  
+    Data   4KB  15728640      64  15728576     0  
+== just over ENOSPC
+== ENOSPC
+== attempt to restore data device
+== attempt format_v1 restore
+== test if previously mounted
+== cleanup
