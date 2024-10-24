@@ -4,9 +4,6 @@
 %define kmod_git_describe @@GITDESCRIBE@@
 %define pkg_date %(date +%%Y%%m%%d)
 
-# Disable the building of the debug package(s).
-%define debug_package %{nil}
-
 # take kernel version or default to uname -r
 %{!?kversion: %global kversion %(uname -r)}
 %global kernel_version %{kversion}
