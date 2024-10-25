@@ -1,4 +1,4 @@
-CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing -I ../kmod/src
+CFLAGS := -Wall -O2 -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing -I ../kmod/src
 SHELL := /usr/bin/bash
 
 # each binary command is built from a single .c file
@@ -19,7 +19,7 @@ BIN := src/createmany			\
 
 DEPS := $(wildcard src/*.d)
 
-all: $(BIN)
+ll: $(BIN)
 
 ifneq ($(DEPS),)
 -include $(DEPS)
