@@ -461,6 +461,8 @@ func (w *WorkerWriter) CreateXAttr(ino uint64, pos uint64, xattr XAttr) error {
 	if xattrC.name == nil {
 		return fmt.Errorf("failed to allocate xattr name")
 	}
+	defer C.free(unsafe.Pointer(xattrC.name))
+
 	copy((*[1 << 30]byte)(unsafe.Pointer(xattrC.name))[:len(xattr.Name)], []byte(xattr.Name))
 
 	xattrC.value = unsafe.Pointer(&xattr.Value[0])
