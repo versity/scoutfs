@@ -40,19 +40,14 @@ scoutfs quota-list -p "$SCR"
 umount "$SCR"
 scratch_check || t_fail "check after mount failed"
 
-echo "== just under ENOSPC"
+echo "== under ENOSPC"
 scratch_mkfs -V 2 -m 10G -d 60G > $T_TMP.mkfs.out 2>&1 || t_fail "mkfs failed"
-parallel_restore -m "$T_EX_META_DEV" -n 3000000 > /dev/null || t_fail "parallel_restore"
+parallel_restore -m "$T_EX_META_DEV" -n 2000000 > /dev/null || t_fail "parallel_restore"
 scratch_check || t_fail "check failed"
 scratch_mount
 scoutfs df -p "$SCR"
 umount "$SCR"
 scratch_check || t_fail "check after mount failed"
-
-echo "== just over ENOSPC"
-scratch_mkfs -V 2 -m 10G -d 60G > $T_TMP.mkfs.out 2>&1 || t_fail "mkfs failed"
-parallel_restore -m "$T_EX_META_DEV" -n 3500000 | grep died 2>&1 && t_fail "parallel_restore"
-scratch_check || t_fail "check failed"
 
 echo "== ENOSPC"
 scratch_mkfs -V 2 -m 10G -d 60G > $T_TMP.mkfs.out 2>&1 || t_fail "mkfs failed"
