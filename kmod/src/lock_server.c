@@ -317,15 +317,17 @@ static void put_server_lock(struct lock_server_info *inf,
 
 	BUG_ON(!mutex_is_locked(&snode->mutex));
 
+	spin_lock(&inf->lock);
+
 	if (atomic_dec_and_test(&snode->refcount) &&
 	    list_empty(&snode->granted) &&
 	    list_empty(&snode->requested) &&
 	    list_empty(&snode->invalidated)) {
-		spin_lock(&inf->lock);
 		rb_erase(&snode->node, &inf->locks_root);
-		spin_unlock(&inf->lock);
 		should_free = true;
 	}
+
+	spin_unlock(&inf->lock);
 
 	mutex_unlock(&snode->mutex);
 
