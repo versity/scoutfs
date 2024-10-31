@@ -25,6 +25,7 @@ totl-xattr-tag.sh
 quota.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
+lock-shrink-read-race.sh
 lock-pr-cw-conflict.sh
 lock-revoke-getcwd.sh
 lock-recover-invalidate.sh

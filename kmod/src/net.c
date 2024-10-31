@@ -502,12 +502,12 @@ static void scoutfs_net_proc_worker(struct work_struct *work)
  * Free live responses up to and including the seq by marking them dead
  * and moving them to the send queue to be freed.
  */
-static int move_acked_responses(struct scoutfs_net_connection *conn,
-				struct list_head *list, u64 seq)
+static bool move_acked_responses(struct scoutfs_net_connection *conn,
+				 struct list_head *list, u64 seq)
 {
 	struct message_send *msend;
 	struct message_send *tmp;
-	int ret = 0;
+	bool moved = false;
 
 	assert_spin_locked(&conn->lock);
 
@@ -519,20 +519,20 @@ static int move_acked_responses(struct scoutfs_net_connection *conn,
 
 		msend->dead = 1;
 		list_move(&msend->head, &conn->send_queue);
-		ret = 1;
+		moved = true;
 	}
 
-	return ret;
+	return moved;
 }
 
 /* acks are processed inline in the recv worker */
 static void free_acked_responses(struct scoutfs_net_connection *conn, u64 seq)
 {
-	int moved;
+	bool moved;
 
 	spin_lock(&conn->lock);
 
-	moved = move_acked_responses(conn, &conn->send_queue, seq) +
+	moved = move_acked_responses(conn, &conn->send_queue, seq) |
 		move_acked_responses(conn, &conn->resend_queue, seq);
 
 	spin_unlock(&conn->lock);

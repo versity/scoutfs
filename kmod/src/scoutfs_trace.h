@@ -1046,9 +1046,12 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		sk_trace_define(start)
 		sk_trace_define(end)
 		__field(u64, refresh_gen)
+		__field(u64, write_seq)
+		__field(u64, dirty_trans_seq)
 		__field(unsigned char, request_pending)
 		__field(unsigned char, invalidate_pending)
 		__field(int, mode)
+		__field(int, invalidating_mode)
 		__field(unsigned int, waiters_cw)
 		__field(unsigned int, waiters_pr)
 		__field(unsigned int, waiters_ex)
@@ -1061,9 +1064,12 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		sk_trace_assign(start, &lck->start);
 		sk_trace_assign(end, &lck->end);
 		__entry->refresh_gen = lck->refresh_gen;
+		__entry->write_seq = lck->write_seq;
+		__entry->dirty_trans_seq = lck->dirty_trans_seq;
 		__entry->request_pending = lck->request_pending;
 		__entry->invalidate_pending = lck->invalidate_pending;
 		__entry->mode = lck->mode;
+		__entry->invalidating_mode = lck->invalidating_mode;
 		__entry->waiters_pr = lck->waiters[SCOUTFS_LOCK_READ];
 		__entry->waiters_ex = lck->waiters[SCOUTFS_LOCK_WRITE];
 		__entry->waiters_cw = lck->waiters[SCOUTFS_LOCK_WRITE_ONLY];
@@ -1071,10 +1077,11 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		__entry->users_ex = lck->users[SCOUTFS_LOCK_WRITE];
 		__entry->users_cw = lck->users[SCOUTFS_LOCK_WRITE_ONLY];
         ),
-        TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" mode %u reqpnd %u invpnd %u rfrgen %llu waiters: pr %u ex %u cw %u users: pr %u ex %u cw %u",
+        TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" mode %u invmd %u reqp %u invp %u refg %llu wris %llu dts %llu waiters: pr %u ex %u cw %u users: pr %u ex %u cw %u",
 		  SCSB_TRACE_ARGS, sk_trace_args(start), sk_trace_args(end),
-		  __entry->mode, __entry->request_pending,
-		  __entry->invalidate_pending, __entry->refresh_gen,
+		  __entry->mode, __entry->invalidating_mode, __entry->request_pending,
+		  __entry->invalidate_pending, __entry->refresh_gen, __entry->write_seq,
+		  __entry->dirty_trans_seq,
 		  __entry->waiters_pr, __entry->waiters_ex, __entry->waiters_cw,
 		  __entry->users_pr, __entry->users_ex, __entry->users_cw)
 );
