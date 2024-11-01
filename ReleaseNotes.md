@@ -2,6 +2,21 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.22
+\
+*Nov 1, 2024*
+
+Add support for building against the RHEL9 family of kernels.
+
+Fix failure of the setattr\_more ioctl() to set the attributes of a
+zero-length file when restoring.
+
+Fix support for POSIX ACLs in the RHEL8 and later family of kernels.
+
+Fix a race condition in the lock server that could drop lock requests
+under heavy load and cause cluster lock attempts to hang.
+
+---
 v1.21
 \
 *Jul 1, 2024*
