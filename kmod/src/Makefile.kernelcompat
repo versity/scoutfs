@@ -413,3 +413,12 @@ endif
 ifneq (,$(shell grep 'blkdev_put.struct block_device .bdev, void .holder' include/linux/blkdev.h))
 ccflags-y += -DKC_BLKDEV_PUT_HOLDER_ARG
 endif
+
+#
+# v6.4-rc4-163-g0d625446d0a4
+#
+# Entirely removes current->backing_dev_info to ultimately remove buffer_head
+# completely at some point.
+ifneq (,$(shell grep 'struct backing_dev_info.*backing_dev_info;' include/linux/sched.h))
+ccflags-y += -DKC_CURRENT_BACKING_DEV_INFO
+endif

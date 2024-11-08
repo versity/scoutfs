@@ -524,7 +524,9 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	}
 
 	si->staging = true;
+#ifdef KC_CURRENT_BACKING_DEV_INFO
 	current->backing_dev_info = inode_to_bdi(inode);
+#endif
 
 	pos = args.offset;
 	written = 0;
@@ -537,7 +539,9 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	} while (ret > 0 && written < args.length);
 
 	si->staging = false;
+#ifdef KC_CURRENT_BACKING_DEV_INFO
 	current->backing_dev_info = NULL;
+#endif
 out:
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
