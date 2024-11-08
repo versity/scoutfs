@@ -160,11 +160,17 @@ static void scoutfs_metadev_close(struct super_block *sb)
 		 * from kill_sb->put_super.
 		 */
 		lockdep_off();
+
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+		bdev_fput(sbi->meta_bdev_file);
+#else
 #ifdef KC_BLKDEV_PUT_HOLDER_ARG
 		blkdev_put(sbi->meta_bdev, sb);
 #else
 		blkdev_put(sbi->meta_bdev, SCOUTFS_META_BDEV_MODE);
 #endif
+#endif
+
 		lockdep_on();
 		sbi->meta_bdev = NULL;
 	}
@@ -481,7 +487,11 @@ out:
 static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct scoutfs_mount_options opts;
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+	struct file *meta_bdev_file;
+#else
 	struct block_device *meta_bdev;
+#endif
 	struct scoutfs_sb_info *sbi;
 	struct inode *inode;
 	int ret;
@@ -527,6 +537,22 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+	/*
+	 * pass sbi as holder, since dev_mount already passes sb, which triggers a
+	 * WARN_ON because dev_mount also passes non-NULL hops. By passing sbi
+	 * here we just get a simple error in our test cases.
+	 */
+	meta_bdev_file = bdev_file_open_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sbi, NULL);
+	if (IS_ERR(meta_bdev_file)) {
+		scoutfs_err(sb, "could not open metadev: error %ld",
+			    PTR_ERR(meta_bdev_file));
+		ret = PTR_ERR(meta_bdev_file);
+		goto out;
+	}
+	sbi->meta_bdev_file = meta_bdev_file;
+	sbi->meta_bdev = file_bdev(meta_bdev_file);
+#else
 #ifdef KC_BLKDEV_PUT_HOLDER_ARG
 	meta_bdev = blkdev_get_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sb, NULL);
 #else
@@ -539,6 +565,8 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 	sbi->meta_bdev = meta_bdev;
+#endif
+
 	ret = set_blocksize(sbi->meta_bdev, SCOUTFS_BLOCK_SM_SIZE);
 	if (ret != 0) {
 		scoutfs_err(sb, "failed to set metadev blocksize, returned %d",

@@ -422,3 +422,12 @@ endif
 ifneq (,$(shell grep 'struct backing_dev_info.*backing_dev_info;' include/linux/sched.h))
 ccflags-y += -DKC_CURRENT_BACKING_DEV_INFO
 endif
+
+#
+# v6.8-rc1-4-gf3a608827d1f
+#
+# adds bdev_file_open_by_path() and later in v6.8-rc1-30-ge97d06a46526 removes bdev_open_by_path()
+# which requires us to use the file method from now on.
+ifneq (,$(shell grep 'struct file.*bdev_file_open_by_path.const char.*path' include/linux/blkdev.h))
+ccflags-y += -DKC_BDEV_FILE_OPEN_BY_PATH
+endif

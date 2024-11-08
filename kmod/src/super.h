@@ -42,6 +42,9 @@ struct scoutfs_sb_info {
 	u64 fmt_vers;
 
 	struct block_device *meta_bdev;
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+	struct file *meta_bdev_file;
+#endif
 
 	spinlock_t next_ino_lock;
 
