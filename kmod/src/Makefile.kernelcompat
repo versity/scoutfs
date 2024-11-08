@@ -192,7 +192,7 @@ endif
 #
 # Kernel has current_time(inode) to uniformly retreive timespec in the right unit
 #
-ifneq (,$(shell grep 'extern struct timespec64 current_time' include/linux/fs.h))
+ifneq (,$(shell grep 'struct timespec64 current_time' include/linux/fs.h))
 ccflags-y += -DKC_CURRENT_TIME_INODE=1
 endif
 
