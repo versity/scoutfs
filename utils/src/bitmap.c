@@ -10,6 +10,11 @@
  * Just a quick simple native bitmap.
  */
 
+int test_bit(unsigned long *bits, u64 nr)
+{
+	return !!(bits[nr / BITS_PER_LONG] & (1UL << (nr & (BITS_PER_LONG - 1))));
+}
+
 void set_bit(unsigned long *bits, u64 nr)
 {
 	bits[nr / BITS_PER_LONG] |= 1UL << (nr & (BITS_PER_LONG - 1));
