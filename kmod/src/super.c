@@ -102,12 +102,10 @@ static int scoutfs_statfs(struct dentry *dentry, struct kstatfs *kst)
 	if (ret)
 		goto out;
 
-	kst->f_bfree = (le64_to_cpu(nst.free_meta_blocks) << SCOUTFS_BLOCK_SM_LG_SHIFT) +
-		       le64_to_cpu(nst.free_data_blocks);
+	kst->f_bfree = le64_to_cpu(nst.free_data_blocks);
 	kst->f_type = SCOUTFS_SUPER_MAGIC;
 	kst->f_bsize = SCOUTFS_BLOCK_SM_SIZE;
-	kst->f_blocks = (le64_to_cpu(nst.total_meta_blocks) << SCOUTFS_BLOCK_SM_LG_SHIFT) +
-			le64_to_cpu(nst.total_data_blocks);
+	kst->f_blocks = le64_to_cpu(nst.total_data_blocks);
 	kst->f_bavail = kst->f_bfree;
 
 	files = div_u64(le64_to_cpu(nst.total_meta_blocks) << SCOUTFS_BLOCK_LG_SHIFT, 2048);
