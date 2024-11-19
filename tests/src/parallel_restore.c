@@ -65,6 +65,18 @@ struct opts {
 	unsigned long long nr_writers;
 };
 
+struct scoutfs_parallel_restore_quota_rule template_rule = {
+	.limit = 33,
+	.prio = 7,
+	.op = 0,
+	.rule_flags = 0,
+	.names[0] = (struct quota_rule_name){ .val = 13, .source = 0, .flags = 0},
+	.names[1] = (struct quota_rule_name){ .val = 15, .source = 0, .flags = 0},
+	.names[2] = (struct quota_rule_name){ .val = 17, .source = 0, .flags = 0},
+	.value = "7 13,L,- 15,L,- 17,L,- I 33 -",
+	.value_len = 8,
+};
+
 static void usage(void)
 {
 	printf("usage:\n"
@@ -217,7 +229,6 @@ static struct gen_inode *generate_inode(struct opts *opts, u64 ino, mode_t mode)
 		for (i = 0; i < nr; i++)
 			gino->xattrs[i] = generate_xattr(opts, ino, i, nv[i].name, nv[i].len,
 							 nv[i].value, nv[i].value_len);
-
 		gino->nr_xattrs = nr;
 		gino->inode.nr_xattrs = nr;
 
@@ -252,33 +263,6 @@ generate_entry(struct opts *opts, char *prefix, u64 nr, u64 dir_ino, u64 pos, u6
 	memcpy(entry->name, buf, bytes);
 
 	return entry;
-}
-
-/*
- * since the _parallel_restore_quota_rule mimics the squota_rule found in the
- * kernel we can also mimic its rule_to_irule function
- */
-
-#define TEST_RULE_STR "7 13,L,- 15,L,- 17,L,- I 33 -"
-
-static struct scoutfs_parallel_restore_quota_rule *
-generate_quota(struct opts *opts)
-{
-	struct scoutfs_parallel_restore_quota_rule *prule;
-	int err;
-
-	prule = calloc(1, sizeof(struct scoutfs_parallel_restore_quota_rule));
-	error_exit(!prule, "Quota rule alloc failed");
-
-	err = sscanf(TEST_RULE_STR, " %hhu %llu,%c,%c %llu,%c,%c %llu,%c,%c %c %llu %c",
-		     &prule->prio,
-			 &prule->names[0].val, &prule->names[0].source, &prule->names[0].flags,
-		     &prule->names[1].val, &prule->names[1].source, &prule->names[1].flags,
-			 &prule->names[2].val, &prule->names[2].source, &prule->names[2].flags,
-			 &prule->op, &prule->limit, &prule->rule_flags);
-	error_exit(err != 13, "invalid quota rule, missing fields. nr fields: %d rule str: %s\n", err, TEST_RULE_STR);
-
-	return prule;
 }
 
 static u64 random64(void)
@@ -486,6 +470,9 @@ static void writer_proc(struct opts *opts, struct writer_args *args)
 
 	/* writer 0 creates the root dir */
 	if (args->writer_nr == 0) {
+		ret = scoutfs_parallel_restore_add_quota_rule(wri, &template_rule);
+		error_exit(ret, "add quotas %d", ret);
+
 		gino = generate_inode(opts, SCOUTFS_ROOT_INO, DIR_MODE);
 		gino->inode.nr_subdirs = opts->nr_writers;
 		gino->inode.total_entry_name_bytes = topdir_entry_bytes(opts->nr_writers);
@@ -591,7 +578,6 @@ static int do_restore(struct opts *opts)
 {
 	struct scoutfs_parallel_restore_writer *wri = NULL;
 	struct scoutfs_parallel_restore_slice *slices = NULL;
-	struct scoutfs_parallel_restore_quota_rule *rule = NULL;
 	struct scoutfs_super_block *super = NULL;
 	struct write_result res;
 	struct writer_args *args;
@@ -631,11 +617,6 @@ static int do_restore(struct opts *opts)
 
 	ret = scoutfs_parallel_restore_import_super(wri, super, dev_fd);
 	error_exit(ret, "import super %d", ret);
-
-	rule = generate_quota(opts);
-	ret = scoutfs_parallel_restore_add_quota_rule(wri, rule);
-	free(rule);
-	error_exit(ret, "add quotas %d", ret);
 
 	slices = calloc(1 + opts->nr_writers, sizeof(struct scoutfs_parallel_restore_slice));
 	error_exit(!slices, "alloc slices");
