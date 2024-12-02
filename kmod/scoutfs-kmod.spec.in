@@ -53,6 +53,18 @@ Source:		%{kmod_name}-kmod-%{kmod_version}.tar
 %global flavors_to_build x86_64
 %endif
 
+# el9 sanity: make sure we lock to the minor release we built for and block upgrades
+%{lua:
+  if string.match(rpm.expand("%{dist}"), "%.el9") then
+    rpm.define("el9 1")
+  end
+}
+
+%if 0%{?el9}
+%define release_major_minor 9.%{lua: print(rpm.expand("%{dist}"):match("%.el9_(%d)"))}
+Requires: system-release = %{release_major_minor}
+%endif
+
 %description
 %{kmod_name} - kernel module
 
