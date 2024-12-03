@@ -13,12 +13,14 @@ extents: 1
 0: offset: 0 length: 1 flags: O.L
 extents: 1
     Type  Size     Total   Used      Free  Use%  
-MetaData  64KB    163840  34722    129118    21  
+MetaData  64KB    163840  34721    129119    21  
     Data   4KB  15728640     64  15728576     0  
   7 13,L,- 15,L,- 17,L,- I 33 -
+== retention bit
+1
 == under ENOSPC
     Type  Size     Total    Used      Free  Use%  
-MetaData  64KB    163840  115362     48478    70  
+MetaData  64KB    163840  115361     48479    70  
     Data   4KB  15728640      64  15728576     0  
 == ENOSPC
 == attempt to restore data device

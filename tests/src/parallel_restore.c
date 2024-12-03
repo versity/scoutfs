@@ -185,6 +185,7 @@ static struct gen_inode *generate_inode(struct opts *opts, u64 ino, mode_t mode)
 		.meta_seq = ino,
 		.data_seq = 0,
 		.mode = mode,
+		.flags = SCOUTFS_INO_FLAG_RETENTION,
 		.atime = now,
 		.ctime = now,
 		.mtime = now,
