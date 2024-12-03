@@ -18,6 +18,7 @@ MetaData  64KB    163840  34721    129119    21
   7 13,L,- 15,L,- 17,L,- I 33 -
 == retention bit
 1
+64728
 == under ENOSPC
     Type  Size     Total    Used      Free  Use%  
 MetaData  64KB    163840  115361     48479    70  

@@ -190,6 +190,8 @@ static struct gen_inode *generate_inode(struct opts *opts, u64 ino, mode_t mode)
 		.ctime = now,
 		.mtime = now,
 		.crtime = now,
+		/* Set project ID to a recognizable value*/
+		.proj = 64728,
 	};
 
 	/*

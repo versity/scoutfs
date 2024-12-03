@@ -37,8 +37,9 @@ scoutfs search-xattrs -p "$SCR" scoutfs.hide.srch.sam_vol_F01030L6 -p "$SCR" | w
 find "$SCR" -type f -name "file-*" | head -n 4 | xargs -n 1 scoutfs get-fiemap -L
 scoutfs df -p "$SCR"
 scoutfs quota-list -p "$SCR"
-echo "== retention bit"
+echo "== retention bit and project ID"
 find "$SCR" -type f -name "file-*" | head -n 1 | xargs -n 1 scoutfs get-attr-x -t
+find "$SCR" -type f -name "file-*" | head -n 1 | xargs -n 1 scoutfs get-attr-x -p
 umount "$SCR"
 scratch_check || t_fail "check after mount failed"
 
