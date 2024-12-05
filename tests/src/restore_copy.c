@@ -382,6 +382,106 @@ static struct scoutfs_parallel_restore_inode *read_inode_data(char *path, u64 in
 	return inode;
 }
 
+typedef int (*quota_ioctl_in)(struct scoutfs_ioctl_quota_rule *irules,
+							  struct scoutfs_ioctl_get_quota_rules *gqr,
+							  size_t nr, int fd);
+
+static int get_quota_ioctl(struct scoutfs_ioctl_quota_rule *irules,
+						   struct scoutfs_ioctl_get_quota_rules *rules_in,
+						   size_t nr, int fd)
+{
+	struct scoutfs_ioctl_get_quota_rules *gqr = rules_in;
+	int ret;
+
+	gqr->rules_ptr = (intptr_t)irules;
+	gqr->rules_nr = nr;
+
+	ret = ioctl(fd, SCOUTFS_IOC_GET_QUOTA_RULES, gqr);
+	error_exit(ret < 0, "quota ioctl error");
+
+	return ret;
+}
+
+static int insert_quota_rule(struct scoutfs_parallel_restore_writer *wri,
+					   struct scoutfs_ioctl_quota_rule *irule)
+{
+	struct scoutfs_parallel_restore_quota_rule *prule = NULL;
+	int ret;
+
+	prule = calloc(1, sizeof(struct scoutfs_parallel_restore_quota_rule));
+	error_exit(!prule, "quota rule alloc failed");
+	prule->limit = irule->limit;
+	prule->prio = irule->prio;
+	prule->op = irule->op;
+	prule->rule_flags = irule->rule_flags;
+	prule->names[0].val = irule->name_val[0];
+	prule->names[0].source = irule->name_source[0];
+	prule->names[0].flags = irule->name_flags[0];
+	prule->names[1].val = irule->name_val[1];
+	prule->names[1].source = irule->name_source[1];
+	prule->names[1].flags = irule->name_flags[1];
+	prule->names[2].val = irule->name_val[2];
+	prule->names[2].source = irule->name_source[2];
+	prule->names[2].flags = irule->name_flags[2];
+
+	ret = scoutfs_parallel_restore_add_quota_rule(wri, prule);
+	error_exit(ret, "quota add rule %d", ret);
+	free(prule);
+	return ret;
+}
+
+static int restore_quotas(struct scoutfs_parallel_restore_writer *wri,
+						  struct scoutfs_ioctl_get_quota_rules *gqr,
+						  quota_ioctl_in quota_in, char *path)
+{
+	struct scoutfs_ioctl_quota_rule *irules = NULL;
+	size_t rule_alloc = 0;
+	size_t rule_nr = 0;
+	size_t rule_count;
+	size_t i;
+	int fd = -1;
+	int ret;
+
+	fd = open(path, O_RDONLY);
+	error_exit(fd < 0, "open"ERRF, ERRA);
+
+	for (;;) {
+		if (rule_nr == rule_alloc) {
+			rule_alloc += 1024;
+			irules = realloc(irules, rule_alloc * sizeof(irules[0]));
+			error_exit(!irules, "irule realloc failed rule_nr:%zu alloced:%zu", rule_nr, rule_alloc);
+			if (!irules) {
+				ret = -errno;
+				fprintf(stderr, "memory allocation failed: %s (%d)\n",
+					strerror(errno), errno);
+				goto out;
+			}
+		}
+
+		ret = quota_in(&irules[rule_nr], gqr, rule_alloc - rule_nr, fd);
+		if (ret == 0)
+			break;
+		if (ret < 0)
+			goto out;
+
+		rule_count = ret;
+
+		for (i = 0; i < rule_count; i++) {
+			ret = insert_quota_rule(wri, &irules[i]);
+			if (ret < 0)
+				goto out;
+		}
+	}
+
+	ret = 0;
+out:
+	if (fd >= 0)
+		close(fd);
+	if (irules)
+		free(irules);
+	return ret;
+}
+
 struct writer_args {
 	struct list_head head;
 
@@ -395,6 +495,8 @@ static void restore_path(struct scoutfs_parallel_restore_writer *wri, struct wri
 {
 	struct scoutfs_parallel_restore_inode *inode;
 	struct scoutfs_parallel_restore_entry *entry;
+	struct scoutfs_ioctl_get_quota_rules gqr = {{0,}};
+	static bool quota_restore = false;
 	DIR *dirp = NULL;
 	char *subdir = NULL;
 	char link[PATH_MAX + 1];
@@ -417,6 +519,16 @@ static void restore_path(struct scoutfs_parallel_restore_writer *wri, struct wri
 	if (!is_scoutfs && !warn_scoutfs) {
 		warn_scoutfs = true;
 		fprintf(stderr, "Non-scoutfs source path detected: scoutfs specific features disabled\n");
+	}
+
+	/*
+	 * Use static flag to make sure we don't restore the rules again
+	 * as we recurse
+	 */
+	if (!quota_restore) {
+		ret = restore_quotas(wri, &gqr, get_quota_ioctl, path);
+		error_exit(ret, "quota add %d", ret);
+		quota_restore = true;
 	}
 
 	/* traverse the entire tree */
