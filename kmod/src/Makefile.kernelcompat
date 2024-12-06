@@ -7,26 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v3.10-rc6-21-gbb6f619b3a49
-#
-# _readdir changes from fop->readdir() to fop->iterate() and from
-# filldir(dirent) to dir_emit(ctx).
-#
-ifneq (,$(shell grep 'iterate.*dir_context' include/linux/fs.h))
-ccflags-y += -DKC_ITERATE_DIR_CONTEXT
-endif
-
-#
-# v3.10-rc6-23-g5f99f4e79abc
-#
-# Helpers including dir_emit_dots() are added in the process of
-# switching dcache_readdir() from fop->readdir() to fop->iterate()
-#
-ifneq (,$(shell grep 'dir_emit_dots' include/linux/fs.h))
-ccflags-y += -DKC_DIR_EMIT_DOTS
-endif
-
-#
 # v3.18-rc2-19-gb5ae6b15bd73
 # 
 # Folds d_materialise_unique into d_splice_alias. Note reversal
@@ -430,4 +410,27 @@ endif
 # which requires us to use the file method from now on.
 ifneq (,$(shell grep 'struct file.*bdev_file_open_by_path.const char.*path' include/linux/blkdev.h))
 ccflags-y += -DKC_BDEV_FILE_OPEN_BY_PATH
+endif
+
+# v4.0-rc7-1796-gfe0f07d08ee3
+#
+# direct-io changes modify inode_dio_done to now be called inode_dio_end
+ifneq (,$(shell grep 'void inode_dio_end.struct inode' include/linux/fs.h))
+ccflags-y += -DKC_INODE_DIO_END
+endif
+
+#
+# v5.0-6476-g3d3539018d2c
+#
+# page fault handlers return a bitmask vm_fault_t instead
+# Note: el8's header has a slightly modified prefix here
+ifneq (,$(shell grep 'typedef.*__bitwise unsigned.*int vm_fault_t' include/linux/mm_types.h))
+ccflags-y += -DKC_MM_VM_FAULT_T
+endif
+
+# v3.19-499-gd83a08db5ba6
+#
+# .remap pages becomes obsolete
+ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
+ccflags-y += -DKC_MM_REMAP_PAGES
 endif
