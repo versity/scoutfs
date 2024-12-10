@@ -1809,7 +1809,7 @@ spr_err_t scoutfs_parallel_restore_add_progress(struct scoutfs_parallel_restore_
 spr_err_t scoutfs_parallel_restore_add_quota_rule(struct scoutfs_parallel_restore_writer *wri,
 						struct scoutfs_parallel_restore_quota_rule *rule)
 {
-	if (!wri_has_super(wri))
+	if (wri_has_super(wri))
 		return EINVAL;
 
 	return insert_quota_item(wri, rule);
