@@ -44,3 +44,37 @@ int srch_decode_entry(void *buf, struct scoutfs_srch_entry *sre,
 
 	return tot;
 }
+
+static int encode_u64(__le64 *buf, u64 val)
+{
+	int bytes;
+
+	val = (val << 1) ^ ((s64)val >> 63); /* shift sign extend */
+	bytes = (fls64(val) + 7) >> 3;
+
+	put_unaligned_le64(val, buf);
+	return bytes;
+}
+
+int srch_encode_entry(void *buf, struct scoutfs_srch_entry *sre, struct scoutfs_srch_entry *prev)
+{
+	u64 diffs[] = {
+		le64_to_cpu(sre->hash) - le64_to_cpu(prev->hash),
+		le64_to_cpu(sre->ino) - le64_to_cpu(prev->ino),
+		le64_to_cpu(sre->id) - le64_to_cpu(prev->id),
+	};
+	u16 lengths = 0;
+	int bytes;
+	int tot = 2;
+	int i;
+
+	for (i = 0; i < array_size(diffs); i++) {
+		bytes = encode_u64(buf + tot, diffs[i]);
+		lengths |= bytes << (i << 2);
+		tot += bytes;
+	}
+
+	put_unaligned_le16(lengths, buf);
+
+	return tot;
+}
