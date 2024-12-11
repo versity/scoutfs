@@ -2,6 +2,13 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.23
+\
+*Dec 11, 2024*
+
+Add support for kernels in the RHEL 9.5 minor release.
+
+---
 v1.22
 \
 *Nov 1, 2024*
