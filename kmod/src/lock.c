@@ -302,6 +302,7 @@ static void lock_inc_count(unsigned int *counts, enum scoutfs_lock_mode mode)
 static void lock_dec_count(unsigned int *counts, enum scoutfs_lock_mode mode)
 {
 	BUG_ON(mode < 0 || mode >= SCOUTFS_LOCK_NR_MODES);
+	BUG_ON(counts[mode] == 0);
 	counts[mode]--;
 }
 
