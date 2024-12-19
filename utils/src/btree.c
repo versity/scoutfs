@@ -8,7 +8,7 @@
 #include "leaf_item_hash.h"
 #include "btree.h"
 
-static void init_block(struct scoutfs_btree_block *bt, int level)
+void btree_init_block(struct scoutfs_btree_block *bt, int level)
 {
 	int free;
 
@@ -33,7 +33,7 @@ void btree_init_root_single(struct scoutfs_btree_root *root,
 
 	memset(bt, 0, SCOUTFS_BLOCK_LG_SIZE);
 
-	init_block(bt, 0);
+	btree_init_block(bt, 0);
 }
 
 static void *alloc_val(struct scoutfs_btree_block *bt, int len)
