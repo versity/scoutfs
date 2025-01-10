@@ -7,7 +7,7 @@ toolchain go1.23.3
 require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.1
-	github.com/versity/scoutam v0.1.42-0.20250108063735-76ecc0f700b0
+	github.com/versity/scoutam v0.1.42-0.20250109183155-80029b20e991
 	golang.org/x/sys v0.29.0
 )
 
