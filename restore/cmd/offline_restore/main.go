@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"restore/pkg/restore"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/versity/scoutam/acct"
 	"github.com/versity/scoutam/cmd/dump-restore/cwalk"
@@ -357,13 +357,13 @@ func doRestore(cmd *cobra.Command, _ []string) {
 		log.Fatalf("failed to get --version flag: %v", err)
 	}
 
-	log.Printf("dev: %s, database: %s, version: %d, workers: %d", dev, database, version, workers)
+	log.Infof("dev: %s, database: %s, version: %d, workers: %d", dev, database, version, workers)
 
 	db, err := dumpdb.NewBadgerDB(database, dumpdb.WithRO())
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
-	masterWriter, workerWriters, err := restore.NewWriters(dev, workers)
+	masterWriter, workerWriters, err := restore.NewWriters(dev, workers, restore.WithLogger(log.StandardLogger()))
 	if err != nil {
 		log.Fatalf("failed create writer: %v", err)
 	}
@@ -382,7 +382,7 @@ func doRestore(cmd *cobra.Command, _ []string) {
 
 	walkFn := func(path string, info scoutamfs.RestoreInfo, err error) error {
 		if err != nil {
-			log.Printf("failed to restore %s: %v", path, err)
+			log.Fatalf("failed to restore %s: %v", path, err)
 			return err
 		}
 
@@ -433,20 +433,20 @@ func ProcessRestoreTask(worker *restore.WorkerWriter, restoreCh chan *restoreDat
 	for r := range restoreCh {
 		if r.entryInfo != nil {
 			if err := worker.CreateEntry(*r.entryInfo); err != nil {
-				log.Printf("failed to restore entry for path %v: %v", r.path, err)
+				log.Fatalf("failed to restore entry for path %v: %v", r.path, err)
 			}
 		}
 		if r.inodeInfo != nil {
 			if err := worker.CreateInode(*r.inodeInfo); err != nil {
-				log.Printf("failed to restore inode for path %v: %v", r.path, err)
+				log.Fatalf("failed to restore inode for path %v: %v", r.path, err)
 			}
 		} else {
-			log.Printf("missing inode info for path %v", r.path)
+			log.Fatalf("missing inode info for path %v", r.path)
 		}
 		var pos uint64
-		for _, xattr := range r.xattrs {
-			if err := worker.SetXattr(r.inodeInfo.Ino, pos, xattr.Name, xattr.Value); err != nil {
-				log.Printf("failed to restore xattr for path %v: %v", r.path, err)
+		for _, v := range r.xattrs {
+			if err := worker.SetXattr(r.inodeInfo.Ino, pos, v.Name, v.Value); err != nil {
+				log.Fatalf("failed to restore xattr for path %v: %v", r.path, err)
 			} else {
 				pos++
 			}

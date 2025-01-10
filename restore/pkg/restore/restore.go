@@ -20,7 +20,6 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -290,8 +289,7 @@ func (m *MasterWriter) aggregateProgress() {
 	for progress := range m.progressCh {
 		ret := C.scoutfs_parallel_restore_add_progress(m.writer, progress.Progress)
 		if ret != 0 {
-			// TODO: Handle error appropriately
-			m.logger.Errorf("Failed to add progress %+v, error code: %d\n", progress, ret)
+			m.logger.Fatalf("Failed to add progress %+v, error code: %v\n", progress, ret)
 			continue
 		}
 		C.free(unsafe.Pointer(progress.Progress))
@@ -300,8 +298,7 @@ func (m *MasterWriter) aggregateProgress() {
 			ret = C.scoutfs_parallel_restore_add_slice(m.writer, progress.Slice)
 			C.free(unsafe.Pointer(progress.Slice))
 			if ret != 0 {
-				// TODO: Handle error appropriately
-				m.logger.Errorf("Failed to add slice %+v, error code: %d\n", progress, ret)
+				m.logger.Fatalf("Failed to add slice %+v, error code: %v\n", progress, ret)
 				continue
 			}
 		}
@@ -342,15 +339,13 @@ func (m *MasterWriter) Finish() {
 	m.progressWg.Wait()
 
 	if _, err := m.writeBuffer(); err != nil {
-		// TODO: handle the error
-		m.logger.Errorf("master writer failed to write buffer during destroy: %s", err)
+		m.logger.Fatalf("master writer failed to write buffer during destroy: %s", err)
 	}
 	// Export and write final superblock
 	if m.super != nil {
 		ret := C.scoutfs_parallel_restore_export_super(m.writer, m.super)
 		if ret != 0 {
-			m.logger.Errorf("Failed to export superblock: %d\n", ret)
-			os.Exit(1)
+			m.logger.Fatalf("Failed to export superblock: %d\n", ret)
 		}
 		// Write superblock to device
 		superOffset := C.SCOUTFS_SUPER_BLKNO << C.SCOUTFS_BLOCK_SM_SHIFT
@@ -358,20 +353,17 @@ func (m *MasterWriter) Finish() {
 			C.SCOUTFS_BLOCK_SM_SIZE), int64(superOffset))
 
 		if err != nil {
-			m.logger.Errorf("Failed to write superblock: %d\n", err)
-			os.Exit(1)
+			m.logger.Fatalf("Failed to write superblock: %d\n", err)
 		}
 		if count != int(C.SCOUTFS_BLOCK_SM_SIZE) {
-			m.logger.Errorf("written superblock does not match: expect %d, written %d\n",
+			m.logger.Fatalf("written superblock does not match: expect %d, written %d\n",
 				int(C.SCOUTFS_BLOCK_SM_SIZE), count)
-			os.Exit(1)
 		}
 	} else {
-		m.logger.Errorf("Missing super block")
-		os.Exit(1)
+		m.logger.Fatalf("Missing super block")
 	}
 	m.cleanup()
-	m.logger.Printf("Master writer destroyed\n")
+	m.logger.Infof("Master writer destroyed\n")
 }
 
 type Option func(w *Writer)
@@ -701,7 +693,7 @@ func (w *WorkerWriter) Finish() {
 			defer w.wg.Done()
 			err := w.flushBuffer(true)
 			if err != nil {
-				w.logger.Errorf("worker failed to write buffer during destroy: %v", err)
+				w.logger.Fatalf("worker failed to write buffer during destroy: %v", err)
 			}
 			w.cleanup()
 		})
