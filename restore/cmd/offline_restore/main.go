@@ -375,8 +375,8 @@ func doRestore(cmd *cobra.Command, _ []string) {
 	for _, w := range workerWriters {
 		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			ProcessRestoreTask(w, restoreCh)
-			wg.Done()
 		}()
 	}
 
