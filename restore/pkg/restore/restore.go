@@ -35,208 +35,6 @@ const memAlignSize = 4096
 const fileNameMax = 255
 const pathMax = 4096
 
-// InodePool manages C.struct_scoutfs_parallel_restore_inode objects.
-// The InodePool and the EntryPool should have been in a different file, but due to the complexity of the CGO
-// preamble (the comment block containing #cgo directives and #include statements), I put them in a single file.
-// I could use Go Generic to create a generic buffered pool struct, but there are only two structs, inode and entry,
-// need to use the pool, I decided not to add the extra complexity to create a generic buffered pool.
-type InodePool struct {
-	pool chan *C.struct_scoutfs_parallel_restore_inode
-	once sync.Once
-}
-
-// NewInodePool initializes a new InodePool with the given size.
-// It preallocates the specified number of inodes and populates the pool.
-func NewInodePool(size int) (*InodePool, error) {
-	if size <= 0 {
-		return nil, fmt.Errorf("InodePool size must be positive")
-	}
-
-	ip := &InodePool{
-		pool: make(chan *C.struct_scoutfs_parallel_restore_inode, size*2),
-	}
-
-	for i := 0; i < size; i++ {
-		inode := (*C.struct_scoutfs_parallel_restore_inode)(C.calloc(1,
-			C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_inode{}))+C.size_t(pathMax)))
-
-		if inode == nil {
-			// Cleanup already allocated inodes before returning error
-			ip.Cleanup()
-			return nil, fmt.Errorf("failed to allocate inode for InodePool")
-		}
-		inode.target = (*C.char)(unsafe.Add(unsafe.Pointer(inode),
-			unsafe.Sizeof(C.struct_scoutfs_parallel_restore_inode{})))
-		C.memset(unsafe.Pointer(inode.target), 0, C.size_t(pathMax))
-		ip.pool <- inode
-	}
-
-	return ip, nil
-}
-
-// Get retrieves an inode from the pool, create a new inode if pool is empty
-func (ip *InodePool) Get() (*C.struct_scoutfs_parallel_restore_inode, error) {
-	select {
-	case inode, ok := <-ip.pool:
-		if !ok || inode == nil {
-			return nil, fmt.Errorf("Failed to get inode from pool")
-		}
-		return inode, nil
-	default:
-		// Pool is empty; create a new inode
-		inode := (*C.struct_scoutfs_parallel_restore_inode)(C.calloc(1,
-			C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_inode{}))))
-		if inode == nil {
-			return nil, fmt.Errorf("failed to allocate inode on demand")
-		}
-		return inode, nil
-	}
-}
-
-// Put returns an inode to the pool after resetting it.
-// If the pool is full, the inode is freed.
-func (ip *InodePool) Put(inode *C.struct_scoutfs_parallel_restore_inode) {
-	if inode == nil {
-		return
-	}
-	ip.resetInode(inode)
-	select {
-	case ip.pool <- inode:
-		// Successfully returned to the pool
-	default:
-		// Pool is full; free the inode
-		C.free(unsafe.Pointer(inode))
-	}
-}
-
-// Cleanup frees all inodes in the pool and closes the channel.
-// Ensures that cleanup is performed only once.
-func (ip *InodePool) Cleanup() {
-	ip.once.Do(func() {
-		close(ip.pool)
-		for inode := range ip.pool {
-			C.free(unsafe.Pointer(inode))
-		}
-	})
-}
-
-// resetInode resets the fields of an inode to default values.
-func (ip *InodePool) resetInode(inode *C.struct_scoutfs_parallel_restore_inode) {
-	inode.ino = 0
-	inode.mode = 0
-	inode.uid = 0
-	inode.gid = 0
-	inode.size = 0
-	inode.rdev = 0
-	inode.atime = C.struct_timespec{}
-	inode.mtime = C.struct_timespec{}
-	inode.ctime = C.struct_timespec{}
-	inode.crtime = C.struct_timespec{}
-	inode.meta_seq = 0
-	inode.data_seq = 0
-	inode.nr_subdirs = 0
-	inode.nr_xattrs = 0
-	inode.proj = 0
-	inode.total_entry_name_bytes = 0
-	inode.data_version = 0
-	inode.flags = 0
-	inode.offline = C.bool(false)
-
-	C.memset(unsafe.Pointer(inode.target), 0, C.size_t(pathMax))
-	inode.target_len = 0
-}
-
-// EntryPool manages C.struct_scoutfs_parallel_restore_entry objects.
-type EntryPool struct {
-	pool chan *C.struct_scoutfs_parallel_restore_entry
-	once sync.Once
-}
-
-// NewEntryPool initializes a new EntryPool with the given size.
-// It preallocates the specified number of entry structs and populates the pool.
-func NewEntryPool(size int) (*EntryPool, error) {
-	if size <= 0 {
-		return nil, fmt.Errorf("EntryPool size must be positive")
-	}
-
-	ep := &EntryPool{
-		pool: make(chan *C.struct_scoutfs_parallel_restore_entry, size*2),
-	}
-
-	for i := 0; i < size; i++ {
-		entry := (*C.struct_scoutfs_parallel_restore_entry)(C.malloc(
-			C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_entry{})) + C.size_t(fileNameMax)))
-		if entry == nil {
-			// Cleanup already allocated entry structs before returning error
-			ep.Cleanup()
-			return nil, fmt.Errorf("failed to allocate entry for EntryPool")
-		}
-
-		entry.name = (*C.char)(unsafe.Add(unsafe.Pointer(entry), unsafe.Sizeof(C.struct_scoutfs_parallel_restore_entry{})))
-		ep.pool <- entry
-	}
-
-	return ep, nil
-}
-
-// Get retrieves an entry struct from the pool.
-// If the pool is empty, it creates a new entry struct.
-func (ep *EntryPool) Get() (*C.struct_scoutfs_parallel_restore_entry, error) {
-	select {
-	case entry, ok := <-ep.pool:
-		if !ok || entry == nil {
-			return nil, fmt.Errorf("Failed to get entry from pool")
-		}
-		return entry, nil
-	default:
-		entry := (*C.struct_scoutfs_parallel_restore_entry)(C.malloc(
-			C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_entry{}))))
-		if entry == nil {
-			return nil, fmt.Errorf("failed to allocate entry struct on demand")
-		}
-		return entry, nil
-	}
-}
-
-// Put returns an entry struct to the pool after resetting it.
-// If the pool is full, the entry struct is freed.
-func (ep *EntryPool) Put(entry *C.struct_scoutfs_parallel_restore_entry) {
-	if entry == nil {
-		return
-	}
-	ep.resetEntry(entry)
-	select {
-	case ep.pool <- entry:
-	default:
-		C.free(unsafe.Pointer(entry))
-	}
-}
-
-// Cleanup frees all entry structs in the pool and closes the channel.
-// Ensures that cleanup is performed only once.
-func (ep *EntryPool) Cleanup() {
-	ep.once.Do(func() {
-		close(ep.pool)
-		for entry := range ep.pool {
-			C.free(unsafe.Pointer(entry))
-		}
-	})
-}
-
-// resetEntry resets the fields of an entry struct to default values.
-func (ep *EntryPool) resetEntry(entry *C.struct_scoutfs_parallel_restore_entry) {
-	entry.dir_ino = 0
-	entry.pos = 0
-	entry.ino = 0
-	entry.mode = 0
-
-	C.memset(unsafe.Pointer(entry.name), 0, fileNameMax)
-	entry.name_len = 0
-}
-
-var inodePool *InodePool
-var entryPool *EntryPool
-
 type Writer struct {
 	logger *logrus.Logger
 
@@ -261,16 +59,18 @@ type WorkerWriter struct {
 	bytesWritten int64
 	complete     bool
 	destroyOnce  sync.Once
-	xattrPt      *C.struct_scoutfs_parallel_restore_xattr
 
-	wg *sync.WaitGroup // need to call done
+	xattrPt *C.struct_scoutfs_parallel_restore_xattr
+	inodePt *C.struct_scoutfs_parallel_restore_inode
+	entryPt *C.struct_scoutfs_parallel_restore_entry
+
 	Writer
 }
 
 type MasterWriter struct {
-	finishOnce sync.Once
-	workers    []*WorkerWriter
-	workerWg   sync.WaitGroup
+	finishOnce         sync.Once
+	workers            []*WorkerWriter
+	expectedNumWorkers int
 
 	progressWg sync.WaitGroup
 	progressCh chan *ScoutfsParallelWriterProgress
@@ -347,7 +147,6 @@ func (m *MasterWriter) cleanup() {
 func (m *MasterWriter) Finish() {
 	m.finishOnce.Do(func() {
 		// Wait for all workers to complete
-		m.workerWg.Wait()
 		close(m.progressCh)
 		m.progressWg.Wait()
 
@@ -391,7 +190,7 @@ func WithLogger(logger *logrus.Logger) Option {
 
 func (m *MasterWriter) getWorkerSlice(i int) *C.struct_scoutfs_parallel_restore_slice {
 	// +1 for master writer
-	slices := unsafe.Slice(m.slice, len(m.workers)+1)
+	slices := unsafe.Slice(m.slice, m.expectedNumWorkers+1)
 	return &slices[1+i]
 }
 
@@ -410,8 +209,9 @@ func createMasterWriter(path string, numWorkerWriters int) (*MasterWriter, error
 	}
 
 	masterWriter := MasterWriter{
-		progressCh: make(chan *ScoutfsParallelWriterProgress, numWorkerWriters*2),
-		workers:    make([]*WorkerWriter, 0, numWorkerWriters),
+		progressCh:         make(chan *ScoutfsParallelWriterProgress, numWorkerWriters*2),
+		workers:            make([]*WorkerWriter, 0, numWorkerWriters),
+		expectedNumWorkers: numWorkerWriters,
 		Writer: Writer{
 			buf:    bufPtr,
 			devFd:  devFd,
@@ -483,20 +283,68 @@ func createMasterWriter(path string, numWorkerWriters int) (*MasterWriter, error
 	return &masterWriter, nil
 }
 
+func createWorkerWriter(masterWriter *MasterWriter, id int) (*WorkerWriter, error) {
+	worker := &WorkerWriter{
+		progressCh: masterWriter.progressCh,
+		Writer: Writer{
+			devFd:  masterWriter.devFd,
+			logger: masterWriter.logger,
+		},
+		id: id,
+	}
+
+	var ret C.int
+	ret = C.scoutfs_parallel_restore_create_writer(&worker.writer)
+	if ret != 0 {
+		worker.cleanup()
+		return nil, errors.New("failed to create worker writer")
+	}
+
+	var bufPtr unsafe.Pointer
+	if ret := C.posix_memalign(&bufPtr, memAlignSize, bufSize); ret != 0 {
+		worker.cleanup()
+		return nil, fmt.Errorf("failed to allocate aligned worker buffer: %d", ret)
+	}
+	worker.buf = bufPtr
+
+	worker.xattrPt = (*C.struct_scoutfs_parallel_restore_xattr)(C.malloc(C.size_t(getXattrBufSize())))
+	if worker.xattrPt == nil {
+		worker.cleanup()
+		return nil, fmt.Errorf("failed to allocate aligned worker buffer for xattr: %d", ret)
+	}
+
+	worker.inodePt = (*C.struct_scoutfs_parallel_restore_inode)(C.calloc(1,
+		C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_inode{}))+C.size_t(pathMax)))
+	if worker.inodePt == nil {
+		worker.cleanup()
+		return nil, fmt.Errorf("failed to allocate aligned worker buffer for inode: %d", ret)
+	}
+	worker.inodePt.target = (*C.char)(unsafe.Add(unsafe.Pointer(worker.inodePt),
+		unsafe.Sizeof(C.struct_scoutfs_parallel_restore_inode{})))
+
+	worker.entryPt = (*C.struct_scoutfs_parallel_restore_entry)(C.calloc(1,
+		C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_entry{}))+C.size_t(fileNameMax)))
+	if worker.entryPt == nil {
+		worker.cleanup()
+		return nil, fmt.Errorf("failed to allocate aligned worker buffer for entry: %d", ret)
+	}
+
+	worker.entryPt.name = (*C.char)(unsafe.Add(unsafe.Pointer(worker.entryPt),
+		unsafe.Sizeof(C.struct_scoutfs_parallel_restore_entry{})))
+
+	// Use each slice for the corresponding worker
+	ret = C.scoutfs_parallel_restore_add_slice(worker.writer, masterWriter.getWorkerSlice(id))
+	if ret != 0 {
+		worker.cleanup()
+		return nil, errors.New("failed to add slice to worker writer")
+	}
+
+	return worker, nil
+}
+
 func NewWriters(path string, numWorkerWriters int, options ...Option) (*MasterWriter, []*WorkerWriter, error) {
 	if numWorkerWriters <= 0 {
 		return nil, nil, errors.New("number of writers must be positive")
-	}
-
-	var err error
-	inodePool, err = NewInodePool(numWorkerWriters)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	entryPool, err = NewEntryPool(numWorkerWriters)
-	if err != nil {
-		return nil, nil, err
 	}
 
 	masterWriter, err := createMasterWriter(path, numWorkerWriters)
@@ -510,47 +358,12 @@ func NewWriters(path string, numWorkerWriters int, options ...Option) (*MasterWr
 
 	// Create worker writers
 	for i := 0; i < numWorkerWriters; i++ {
-		worker := &WorkerWriter{
-			progressCh: masterWriter.progressCh,
-			wg:         &masterWriter.workerWg,
-			Writer: Writer{
-				devFd:  masterWriter.devFd,
-				logger: masterWriter.logger,
-			},
-			id: i,
+		worker, err := createWorkerWriter(masterWriter, i)
+		if err != nil {
+			masterWriter.cleanup()
+			return nil, nil, err
 		}
-
-		// In error case, the masterWriter.cleanup() will free all the workers allocated so far
 		masterWriter.workers = append(masterWriter.workers, worker)
-		masterWriter.workerWg.Add(1)
-
-		var ret C.int
-		ret = C.scoutfs_parallel_restore_create_writer(&worker.writer)
-		if ret != 0 {
-			masterWriter.cleanup()
-			return nil, nil, errors.New("failed to create worker writer")
-		}
-
-		var bufPtr unsafe.Pointer
-		if ret := C.posix_memalign(&bufPtr, memAlignSize, bufSize); ret != 0 {
-			masterWriter.cleanup()
-			return nil, nil, fmt.Errorf("failed to allocate aligned worker buffer: %d", ret)
-		}
-		worker.buf = bufPtr
-
-		worker.xattrPt = (*C.struct_scoutfs_parallel_restore_xattr)(C.malloc(C.size_t(getXattrBufSize())))
-		if worker.xattrPt == nil {
-			masterWriter.cleanup()
-			return nil, nil, fmt.Errorf("failed to allocate aligned worker buffer: %d", ret)
-		}
-
-		// Use each slice for the corresponding worker
-		ret = C.scoutfs_parallel_restore_add_slice(worker.writer, masterWriter.getWorkerSlice(i))
-		if ret != 0 {
-			masterWriter.Finish()
-			return nil, nil, errors.New("failed to add slice to worker writer")
-		}
-
 	}
 	masterWriter.progressWg.Add(1)
 	go masterWriter.aggregateProgress()
@@ -696,6 +509,14 @@ func (w *WorkerWriter) cleanup() {
 		C.free(unsafe.Pointer(w.xattrPt))
 		w.xattrPt = nil
 	}
+	if w.inodePt != nil {
+		C.free(unsafe.Pointer(w.inodePt))
+		w.inodePt = nil
+	}
+	if w.entryPt != nil {
+		C.free(unsafe.Pointer(w.entryPt))
+		w.entryPt = nil
+	}
 	if w.writer != nil {
 		C.scoutfs_parallel_restore_destroy_writer(&w.writer)
 		w.writer = nil
@@ -705,7 +526,6 @@ func (w *WorkerWriter) cleanup() {
 func (w *WorkerWriter) Finish() {
 	w.destroyOnce.Do(
 		func() {
-			defer w.wg.Done()
 			err := w.flushBuffer(true)
 			if err != nil {
 				w.logger.Fatalf("worker failed to write buffer during destroy: %v", err)
@@ -756,14 +576,18 @@ const (
 	SCOUTFS_IOC_MAGIC = 0xBF
 )
 
+func (w *WorkerWriter) resetInode() {
+	C.memset(unsafe.Pointer(w.inodePt), 0,
+		C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_inode{}))+C.size_t(pathMax))
+
+	w.inodePt.target = (*C.char)(unsafe.Add(unsafe.Pointer(w.inodePt),
+		unsafe.Sizeof(C.struct_scoutfs_parallel_restore_inode{})))
+}
+
 // CreateInode creates a C inode structure from InodeInfo
 func (w *WorkerWriter) CreateInode(info InodeInfo) error {
-	inode, err := inodePool.Get()
-	if err != nil {
-		return fmt.Errorf("failed to get inode from pool: %v", err)
-	}
-
-	defer inodePool.Put(inode)
+	w.resetInode()
+	inode := w.inodePt
 
 	if info.Target != "" {
 		targetBytes := []byte(info.Target)
@@ -817,28 +641,33 @@ func (w *WorkerWriter) CreateInode(info InodeInfo) error {
 	return w.insertInode(inode)
 }
 
+func (w *WorkerWriter) resetEntry() {
+	C.memset(unsafe.Pointer(w.entryPt), 0,
+		C.size_t(unsafe.Sizeof(C.struct_scoutfs_parallel_restore_entry{}))+C.size_t(fileNameMax))
+
+	w.entryPt.name = (*C.char)(unsafe.Add(unsafe.Pointer(w.entryPt),
+		unsafe.Sizeof(C.struct_scoutfs_parallel_restore_entry{})))
+}
+
 // CreateEntry creates a directory entry
 func (w *WorkerWriter) CreateEntry(entryInfo EntryInfo) error {
-	entryC, err := entryPool.Get()
-	if err != nil {
-		return fmt.Errorf("failed to get entry from pool: %v", err)
-	}
-	defer entryPool.Put(entryC)
+	w.resetEntry()
+	entry := w.entryPt
 
-	entryC.dir_ino = C.__u64(entryInfo.DirInode)
-	entryC.pos = C.__u64(entryInfo.Position)
-	entryC.ino = C.__u64(entryInfo.Inode)
-	entryC.mode = C.__u32(entryInfo.Mode)
+	entry.dir_ino = C.__u64(entryInfo.DirInode)
+	entry.pos = C.__u64(entryInfo.Position)
+	entry.ino = C.__u64(entryInfo.Inode)
+	entry.mode = C.__u32(entryInfo.Mode)
 
 	nameBytes := []byte(entryInfo.Name)
 	if len(nameBytes) > fileNameMax {
 		w.logger.Fatalf("name %v too long: %d", entryInfo.Name, len(nameBytes))
 	}
-	C.memcpy(unsafe.Pointer(entryC.name), unsafe.Pointer(&nameBytes[0]), C.size_t(len(nameBytes)))
+	C.memcpy(unsafe.Pointer(entry.name), unsafe.Pointer(&nameBytes[0]), C.size_t(len(nameBytes)))
 
-	entryC.name_len = C.uint(len(entryInfo.Name))
+	entry.name_len = C.uint(len(entryInfo.Name))
 
-	ret := C.scoutfs_parallel_restore_add_entry(w.writer, entryC)
+	ret := C.scoutfs_parallel_restore_add_entry(w.writer, entry)
 	if ret != 0 {
 		return fmt.Errorf("failed to add entry, error code: %d", ret)
 	}
