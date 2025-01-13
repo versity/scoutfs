@@ -27,9 +27,6 @@
 #include "../../kmod/src/ioctl.h"
 #include "../../utils/src/parallel_restore.h"
 
-#include <zlib.h> 
-
-
 /*
  * XXX:
  */
@@ -96,13 +93,6 @@ static size_t write_bufs(struct scoutfs_parallel_restore_writer *wri,
 		error_exit(ret, "write buf %d", ret);
 
 		if (count > 0) {
-			printf("count: %zu, offset: %lld\n", count, (long long)off);
-			printf("Buffer contents (binary): ");
-
-
-			fprintf(stdout, "writing buf signature: %08x\n",
-    			(uint32_t)crc32(0, (const unsigned char *)buf, count));
-
 			ret = pwrite(dev_fd, buf, count, off);
 			error_exit(ret != count, "pwrite count %zu ret %d", count, ret);
 			total += ret;
@@ -816,9 +806,6 @@ static int do_restore(struct opts *opts)
 		    SCOUTFS_SUPER_BLKNO << SCOUTFS_BLOCK_SM_SHIFT);
 	error_exit(ret != SCOUTFS_BLOCK_SM_SIZE, "error reading super, ret %d", ret);
 
-	/* Calculate and print a 32-bit CRC of the entire super block */
-	fprintf(stdout, "reading Super block signature: %08x\n",
-    (uint32_t)crc32(0, (const unsigned char *)super, SCOUTFS_BLOCK_SM_SIZE));
 	error_exit((super->flags & SCOUTFS_FLAG_IS_META_BDEV) == 0, "super block is not meta dev");
 
 	ret = scoutfs_parallel_restore_create_writer(&wri);
@@ -901,7 +888,6 @@ static int do_restore(struct opts *opts)
 		tot_dirs += le64_to_cpu(res.dirs_created);
 	}
 
-	printf("master writing final buffers\n");
 	tot_bytes += write_bufs(wri, buf, args->dev_fd);
 
 	fprintf(stdout, "Wrote %lld directories, %lld files, %lld bytes total\n",
@@ -911,9 +897,6 @@ static int do_restore(struct opts *opts)
 	ret = scoutfs_parallel_restore_export_super(wri, super);
 	error_exit(ret, "update super %d", ret);
 
-
-	fprintf(stdout, "writing Super block signature: %08x\n",
-    (uint32_t)crc32(0, (const unsigned char *)super, SCOUTFS_BLOCK_SM_SIZE));
 	ret = pwrite(dev_fd, super, SCOUTFS_BLOCK_SM_SIZE,
 		     SCOUTFS_SUPER_BLKNO << SCOUTFS_BLOCK_SM_SHIFT);
 	error_exit(ret != SCOUTFS_BLOCK_SM_SIZE, "error writing super, ret %d", ret);
