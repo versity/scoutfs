@@ -58,6 +58,7 @@ struct scoutfs_parallel_restore_inode {
 	u64 data_version;
 	u64 size;
 	bool offline;
+	u32 nlink;
 
 	/* only used for directories */
 	u64 nr_subdirs;

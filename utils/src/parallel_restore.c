@@ -813,7 +813,7 @@ static spr_err_t insert_inode_items(struct scoutfs_parallel_restore_writer *wri,
 	si->next_readdir_pos = 0;
 	si->next_xattr_id = cpu_to_le64(inode->nr_xattrs + 1);
 	si->version = cpu_to_le64(1);
-	si->nlink = cpu_to_le32(1);
+	si->nlink = cpu_to_le32(inode->nlink ? inode->nlink : 1);
 	si->uid = cpu_to_le32(inode->uid);
 	si->gid = cpu_to_le32(inode->gid);
 	si->mode = cpu_to_le32(inode->mode);

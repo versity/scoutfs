@@ -349,6 +349,7 @@ static struct scoutfs_parallel_restore_inode *read_inode_data(char *path, u64 in
 	inode->ctime = st.st_ctim;
 	inode->mtime = st.st_mtim;
 	inode->size = st.st_size;
+	inode->nlink = st.st_nlink;
 
 	inode->rdev = st.st_rdev;
 
