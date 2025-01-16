@@ -35,10 +35,10 @@ srwxr-xr-x. 1     0     0        0  s
 prw-r--r--. 1     0     0        0  p
 -rwsrwsrwx. 1     0     0        0  mode_t
 lrwxrwxrwx. 1     0     0        7  l -> broken
--rw-r--r--. 1     0     0        0  h
+-rw-r--r--. 2     0     0        0  h
 -rw-r--r--. 1     0     0   131072  falloc
 -rw-r--r--. 1     0     0     4096  f4096
--rw-r--r--. 1     0     0        0  f
+-rw-r--r--. 2     0     0        0  f
 drwxr-xr-x. 2     0     0        0  d
 crw-r--r--. 1     0     0     0, 0  c
 brw-r--r--. 1     0     0     1, 1  b
