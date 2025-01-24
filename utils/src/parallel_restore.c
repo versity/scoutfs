@@ -951,7 +951,7 @@ static spr_err_t insert_quota_item(struct scoutfs_parallel_restore_writer *wri,
 	memset(&rv->_pad, 0, sizeof(rv->_pad));
 
 	init_key(&bti->key, SCOUTFS_QUOTA_ZONE, SCOUTFS_QUOTA_RULE_TYPE,
-			0, scoutfs_hash64(&rv, sizeof(rv)), 0, 0);
+			0, scoutfs_hash64(rv, sizeof(struct scoutfs_quota_rule_val)), 0, 0);
 
 	err = insert_fs_item(wri, bti);
 	if (err) {
