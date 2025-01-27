@@ -537,15 +537,18 @@ static int scoutfs_readdir(struct file *file, struct dir_context *ctx)
 
 		dent = page_address(page);
 		for (; entries > 0; entries--) {
+			ctx->pos = le64_to_cpu(dent->pos);
 			if (!dir_emit(ctx, dent->name, dent->hacky_name_len,
 					le64_to_cpu(dent->ino),
 					dentry_type(dent->type))) {
 				ret = 0;
 				goto out;
 			}
-			ctx->pos = le64_to_cpu(dent->pos) + 1;
 
 			dent = next_aligned_dirent(dent, dent->hacky_name_len);
+
+			/* always advance ctx->pos past */
+			ctx->pos++;
 		}
 
 		if (complete)
