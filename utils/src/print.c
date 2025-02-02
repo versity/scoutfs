@@ -645,6 +645,8 @@ static int print_alloc_list_block(int fd, char *str, struct scoutfs_block_ref *r
 	u64 blkno;
 	u64 start;
 	u64 len;
+	u64 st;
+	u64 nr;
 	int wid;
 	int ret;
 	int i;
@@ -663,27 +665,37 @@ static int print_alloc_list_block(int fd, char *str, struct scoutfs_block_ref *r
 	       AL_REF_A(&lblk->next), le32_to_cpu(lblk->start),
 	       le32_to_cpu(lblk->nr));
 
-	if (lblk->nr) {
-		wid = printf("  exts: ");
-		start = 0;
-		len = 0;
-		for (i = 0; i < le32_to_cpu(lblk->nr); i++) {
-			if (len == 0)
-				start = le64_to_cpu(lblk->blknos[i]);
-			len++;
-
-			if (i == (le32_to_cpu(lblk->nr) - 1) ||
-			    start + len != le64_to_cpu(lblk->blknos[i + 1])) {
-				if (wid >= 72)
-					wid = printf("\n        ");
-
-				wid += printf("%llu,%llu ", start, len);
-				len = 0;
-			}
-		}
-		printf("\n");
+	st = le32_to_cpu(lblk->start);
+	nr = le32_to_cpu(lblk->nr);
+	if (st >= SCOUTFS_ALLOC_LIST_MAX_BLOCKS ||
+	    nr > SCOUTFS_ALLOC_LIST_MAX_BLOCKS ||
+	    (st + nr) > SCOUTFS_ALLOC_LIST_MAX_BLOCKS) {
+		printf("  (invalid start and nr fields)\n");
+		goto out;
 	}
 
+	if (lblk->nr == 0)
+		goto out;
+
+	wid = printf("  exts: ");
+	start = 0;
+	len = 0;
+	for (i = 0; i < nr; i++) {
+		if (len == 0)
+			start = le64_to_cpu(lblk->blknos[st + i]);
+		len++;
+
+		if (i == (nr - 1) || (start + len) != le64_to_cpu(lblk->blknos[st + i + 1])) {
+			if (wid >= 72)
+				wid = printf("\n        ");
+
+			wid += printf("%llu,%llu ", start, len);
+			len = 0;
+		}
+	}
+	printf("\n");
+
+out:
 	next = lblk->next;
 	free(lblk);
 	return print_alloc_list_block(fd, str, &next);

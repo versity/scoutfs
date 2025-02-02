@@ -3,5 +3,6 @@
 
 int srch_decode_entry(void *buf, struct scoutfs_srch_entry *sre,
 		      struct scoutfs_srch_entry *prev);
+int srch_encode_entry(void *buf, struct scoutfs_srch_entry *sre, struct scoutfs_srch_entry *prev);
 
 #endif

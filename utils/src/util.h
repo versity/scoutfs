@@ -70,6 +70,8 @@ do {				\
 #define container_of(ptr, type, memb) \
 	((type *)((void *)(ptr) - offsetof(type, memb)))
 
+#define NSEC_PER_SEC 1000000000
+
 #define BITS_PER_LONG (sizeof(long) * 8)
 #define U8_MAX ((u8)~0ULL)
 #define U16_MAX ((u16)~0ULL)
@@ -82,6 +84,7 @@ do {				\
 							\
 	(_x == 0 ? 0 : 64 - __builtin_clzll(_x));	\
 })
+#define fls64(x) flsll(x)
 
 #define ilog2(x)					\
 ({							\
@@ -98,6 +101,16 @@ static inline __u##nr get_unaligned_le##nr(void *buf)	\
 emit_get_unaligned_le(16)
 emit_get_unaligned_le(32)
 emit_get_unaligned_le(64)
+
+#define emit_put_unaligned_le(nr)				\
+static inline void put_unaligned_le##nr(u##nr val, void *buf)	\
+{								\
+	__le##nr x = cpu_to_le##nr(val);			\
+	memcpy(buf, &x, sizeof(x));				\
+}
+emit_put_unaligned_le(16)
+emit_put_unaligned_le(32)
+emit_put_unaligned_le(64)
 
 /*
  * return -1,0,+1 based on the memcmp comparison of the minimum of their
