@@ -668,14 +668,16 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	 * the reserved blocks after having filled the log trees's avail
 	 * allocator during its transaction.  To avoid prematurely
 	 * setting the low flag and causing enospc we make sure that the
-	 * next transaction's meta_avail has 2x the reserved blocks so
+	 * next transaction's meta_avail has 3x the reserved blocks so
 	 * that it can consume a full reserved amount and still have
 	 * enough to avoid enospc.  We swap to freed if avail is under
-	 * the buffer and freed is larger.
+	 * the buffer and freed is larger by 50%. This results in much less
+	 * swapping overall and allows the pools to refill naturally.
 	 */
 	if ((le64_to_cpu(server->meta_avail->total_len) <
-	     (scoutfs_server_reserved_meta_blocks(sb) * 2)) &&
-	    (le64_to_cpu(server->meta_freed->total_len) >
+	     (scoutfs_server_reserved_meta_blocks(sb) * 3)) &&
+	    ((le64_to_cpu(server->meta_freed->total_len) +
+	     (le64_to_cpu(server->meta_freed->total_len) >> 1)) >
 	     le64_to_cpu(server->meta_avail->total_len)))
 		swap(server->meta_avail, server->meta_freed);
 
