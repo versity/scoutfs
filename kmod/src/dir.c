@@ -1765,7 +1765,7 @@ retry:
 	}
 	old_inode->i_ctime = now;
 	if (new_inode)
-		old_inode->i_ctime = now;
+		new_inode->i_ctime = now;
 
 	inode_inc_iversion(old_dir);
 	inode_inc_iversion(old_inode);
