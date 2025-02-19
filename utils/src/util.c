@@ -7,7 +7,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <wordexp.h>
 
 #include "util.h"
 #include "format.h"
@@ -18,25 +17,14 @@
 
 static int open_path(char *path, int flags)
 {
-	wordexp_t exp_result;
 	int ret;
 
-	ret = wordexp(path, &exp_result, WRDE_NOCMD | WRDE_SHOWERR | WRDE_UNDEF);
-	if (ret) {
-		fprintf(stderr, "wordexp() failure for \"%s\": %d\n", path, ret);
-		ret = -EINVAL;
-		goto out;
-	}
-
-	ret = open(exp_result.we_wordv[0], flags);
+	ret = open(path, flags);
 	if (ret < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
 			path, strerror(errno), errno);
 	}
-
-out:
-	wordfree(&exp_result);
 
 	return ret;
 }
