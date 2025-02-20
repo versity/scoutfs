@@ -65,26 +65,14 @@ EOF
 
 cat << EOF > local.exclude
 generic/003	# missing atime update in buffered read
-generic/029	# mmap missing
-generic/030	# mmap missing
 generic/075	# file content mismatch failures (fds, etc)
-generic/080	# mmap missing
 generic/103	# enospc causes trans commit failures
 generic/108	# mount fails on failing device?
 generic/112	# file content mismatch failures (fds, etc)
-generic/120	# (can't exec 'cause no mmap)
-generic/126	# (can't exec 'cause no mmap)
-generic/141	# mmap missing
 generic/213	# enospc causes trans commit failures
-generic/215	# mmap missing
-generic/246	# mmap missing
-generic/247	# mmap missing
-generic/248	# mmap missing
 generic/318	# can't support user namespaces until v5.11
 generic/321	# requires selinux enabled for '+' in ls?
-generic/325	# mmap missing
 generic/338	# BUG_ON update inode error handling
-generic/346	# mmap missing
 generic/347	# _dmthin_mount doesn't work?
 generic/356	# swap
 generic/357	# swap
@@ -92,16 +80,13 @@ generic/409	# bind mounts not scripted yet
 generic/410	# bind mounts not scripted yet
 generic/411	# bind mounts not scripted yet
 generic/423	# symlink inode size is strlen() + 1 on scoutfs
-generic/428	# mmap missing
 generic/430	# xfs_io copy_range missing in el7
 generic/431	# xfs_io copy_range missing in el7
 generic/432	# xfs_io copy_range missing in el7
 generic/433	# xfs_io copy_range missing in el7
 generic/434	# xfs_io copy_range missing in el7
-generic/437	# mmap missing
 generic/441	# dm-mapper
 generic/444	# el9's posix_acl_update_mode is buggy ?
-generic/452	# exec test - no mmap
 generic/467	# open_by_handle ESTALE
 generic/472	# swap
 generic/484	# dm-mapper
@@ -118,11 +103,9 @@ generic/565	# xfs_io copy_range missing in el7
 generic/568	# falloc not resulting in block count increase
 generic/569	# swap
 generic/570	# swap
-generic/614	# mmap missing
 generic/620	# dm-hugedisk
-generic/633	# mmap, id-mapped mounts missing in el7
+generic/633	# id-mapped mounts missing in el7
 generic/636	# swap
-generic/638	# mmap missing
 generic/641	# swap
 generic/643	# swap
 EOF

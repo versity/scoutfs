@@ -29,50 +29,6 @@ do {						\
 })
 #endif
 
-#ifndef KC_ITERATE_DIR_CONTEXT
-typedef filldir_t kc_readdir_ctx_t;
-#define KC_DECLARE_READDIR(name, file, dirent, ctx) name(file, dirent, ctx)
-#define KC_FOP_READDIR readdir
-#define kc_readdir_pos(filp, ctx) (filp)->f_pos
-#define kc_dir_emit_dots(file, dirent, ctx) dir_emit_dots(file, dirent, ctx)
-#define kc_dir_emit(ctx, dirent, name, name_len, pos, ino, dt) \
-	(ctx(dirent, name, name_len, pos, ino, dt) == 0)
-#else
-typedef struct dir_context * kc_readdir_ctx_t;
-#define KC_DECLARE_READDIR(name, file, dirent, ctx) name(file, ctx)
-#define KC_FOP_READDIR iterate
-#define kc_readdir_pos(filp, ctx) (ctx)->pos
-#define kc_dir_emit_dots(file, dirent, ctx) dir_emit_dots(file, ctx)
-#define kc_dir_emit(ctx, dirent, name, name_len, pos, ino, dt) \
-	dir_emit(ctx, name, name_len, ino, dt)
-#endif
-
-#ifndef KC_DIR_EMIT_DOTS
-/*
- * Kernels before ->iterate and don't have dir_emit_dots so we give them
- * one that works with the ->readdir() filldir() method.
- */
-static inline int dir_emit_dots(struct file *file, void *dirent,
-				filldir_t filldir)
-{
-	if (file->f_pos == 0) {
-		if (filldir(dirent, ".", 1, 1,
-			    file->f_path.dentry->d_inode->i_ino, DT_DIR))
-			return 0;
-		file->f_pos = 1;
-	}
-
-	if (file->f_pos == 1) {
-		if (filldir(dirent, "..", 2, 1,
-			    parent_ino(file->f_path.dentry), DT_DIR))
-			return 0;
-		file->f_pos = 2;
-	}
-
-	return 1;
-}
-#endif
-
 #ifdef KC_POSIX_ACL_VALID_USER_NS
 #define kc_posix_acl_valid(user_ns, acl) posix_acl_valid(user_ns, acl)
 #else
@@ -435,6 +391,22 @@ static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
 {
 	int optval = 1;
 	return kernel_setsockopt(sock, SOL_TCP, TCP_NODELAY, (char *)&optval, sizeof(optval));
+}
+#endif
+
+#ifdef KC_INODE_DIO_END
+#define kc_inode_dio_end inode_dio_end
+#else
+#define kc_inode_dio_end inode_dio_done
+#endif
+
+#ifndef KC_MM_VM_FAULT_T
+typedef unsigned int vm_fault_t;
+static inline vm_fault_t vmf_error(int err)
+{
+	if (err == -ENOMEM)
+		return VM_FAULT_OOM;
+	return VM_FAULT_SIGBUS;
 }
 #endif
 

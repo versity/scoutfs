@@ -6,6 +6,7 @@ inode-items-updated.sh
 simple-inode-index.sh
 simple-staging.sh
 simple-release-extents.sh
+simple-readdir.sh
 get-referring-entries.sh
 fallocate.sh
 basic-truncate.sh
@@ -17,6 +18,7 @@ projects.sh
 large-fragmented-free.sh
 format-version-forward-back.sh
 enospc.sh
+mmap.sh
 srch-safe-merge-pos.sh
 srch-basic-functionality.sh
 simple-xattr-unit.sh
