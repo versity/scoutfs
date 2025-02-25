@@ -1030,6 +1030,8 @@ static spr_err_t build_btree_block(struct scoutfs_parallel_restore_writer *wri,
 	unsigned long val_align;
 	unsigned long bytes;
 	unsigned long nr;
+	unsigned long min_items;
+	long item_bytes_after_block;
 	void *val_buf;
 	spr_err_t err;
 	u8 height;
@@ -1083,8 +1085,14 @@ static spr_err_t build_btree_block(struct scoutfs_parallel_restore_writer *wri,
 	for_each_bti_safe(&btb->items[level].root, bti, tmp) {
 		val_align = round_up(bti->val_len, SCOUTFS_BTREE_VALUE_ALIGN);
 		bytes = sizeof(struct scoutfs_btree_item) + val_align;
+		item_bytes_after_block = (le64_to_cpu(btb->total_items) * bytes) - le16_to_cpu(bt->mid_free_len);
+		min_items = (SCOUTFS_BLOCK_LG_SIZE - sizeof(struct scoutfs_btree_block)) / 4;
 
 		if (le16_to_cpu(bt->mid_free_len) < bytes)
+			break;
+
+		/* stop when there are not enough items to fill the next block */
+		if (item_bytes_after_block > 0 && item_bytes_after_block < min_items)
 			break;
 
 		item->node.height = UNLINKED_AVL_HEIGHT;
