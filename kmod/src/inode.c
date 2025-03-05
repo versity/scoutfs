@@ -1111,7 +1111,7 @@ static int update_indices(struct super_block *sb,
 		{ SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE,
 			le64_to_cpu(sinode->data_seq), 0 },
 	};
-	int ret;
+	int ret = 0;
 	int i;
 
 	for (i = 0, upd = upds; i < ARRAY_SIZE(upds); i++, upd++) {
@@ -1275,7 +1275,7 @@ static int prepare_indices(struct super_block *sb, struct list_head *list,
 		{ SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE,
 			upd_data_seq(sbi, si, set_data_seq), 0},
 	};
-	int ret;
+	int ret = 0;
 	int i;
 
 	for (i = 0, upd = upds; i < ARRAY_SIZE(upds); i++, upd++) {
@@ -1332,7 +1332,7 @@ static int prepare_index_deletion(struct super_block *sb,
 		{ SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE,
 			le64_to_cpu(sinode->data_seq), 0 },
 	};
-	int ret;
+	int ret = 0;
 	int i;
 
 	for (i = 0, ind = inds; i < ARRAY_SIZE(inds); i++, ind++) {
