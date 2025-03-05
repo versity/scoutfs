@@ -87,7 +87,7 @@ scoutfs quota-list -p "$T_M0"
 scoutfs quota-add -p "$T_M0" -r "7 15,L,- 0,L,- 0,L,- I 33 -" || t_fail "quota-add failed"
 scoutfs quota-list -p "$T_M0"
 
-scoutfs df -p "$SCR"
+scoutfs df -p "$SCR" | awk '{print $1, $4}'
 
 echo "== umount restored fs and check"
 umount "$SCR"

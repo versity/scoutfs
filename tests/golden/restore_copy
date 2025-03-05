@@ -69,8 +69,8 @@ extents: 1
   7 12,L,- 0,L,- 0,L,- I 33 -
   7 11,L,- 0,L,- 0,L,- I 33 -
   7 10,L,- 0,L,- 0,L,- I 33 -
-    Type  Size     Total   Used      Free  Use%  
-MetaData  64KB   4194304  34698   4159606     0  
-    Data   4KB  67108864     64  67108800     0  
+Type Used
+MetaData 34698
+Data 64
 == umount restored fs and check
 == cleanup
