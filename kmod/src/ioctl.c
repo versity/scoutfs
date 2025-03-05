@@ -954,6 +954,9 @@ static int copy_alloc_detail_to_user(struct super_block *sb, void *arg,
 	if (args->copied == args->nr)
 		return -EOVERFLOW;
 
+	/* .type and .pad need clearing */
+	memset(&ade, 0, sizeof(struct scoutfs_ioctl_alloc_detail_entry));
+
 	ade.blocks = blocks;
 	ade.id = id;
 	ade.meta = !!meta;
