@@ -1372,7 +1372,7 @@ static long scoutfs_ioc_get_referring_entries(struct file *file, unsigned long a
 			ent.d_type = bref->d_type;
 			ent.name_len = name_len;
 
-			if (copy_to_user(uent, &ent, sizeof(struct scoutfs_ioctl_dirent)) ||
+			if (copy_to_user(uent, &ent, offsetof(struct scoutfs_ioctl_dirent, name[0])) ||
 			    copy_to_user(&uent->name[0], bref->dent.name, name_len) ||
 			    put_user('\0', &uent->name[name_len])) {
 				ret = -EFAULT;
