@@ -113,7 +113,7 @@ struct scoutfs_avl_node *scoutfs_avl_next(struct scoutfs_avl_root *root,
 
 	if (node->right) {
 		node = node_ptr(root, node->right);
-		while (node->left)
+		while (node && node->left)
 			node = node_ptr(root, node->left);
 		return node;
 	}
@@ -132,7 +132,7 @@ struct scoutfs_avl_node *scoutfs_avl_prev(struct scoutfs_avl_root *root,
 
 	if (node->left) {
 		node = node_ptr(root, node->left);
-		while (node->right)
+		while (node && node->right)
 			node = node_ptr(root, node->right);
 		return node;
 	}
@@ -300,7 +300,7 @@ static struct scoutfs_avl_node *avl_successor(struct scoutfs_avl_root *root,
 					      struct scoutfs_avl_node *node)
 {
 	node = node_ptr(root, node->right);
-	while (node->left)
+	while (node && node->left)
 		node = node_ptr(root, node->left);
 
 	return node;
