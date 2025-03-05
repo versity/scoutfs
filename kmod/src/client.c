@@ -435,8 +435,8 @@ static int lookup_mounted_client_item(struct super_block *sb, u64 rid)
 	if (ret == -ENOENT)
 		ret = 0;
 
-	kfree(super);
 out:
+	kfree(super);
 	return ret;
 }
 
