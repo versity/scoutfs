@@ -2254,10 +2254,9 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	int err;
 
 	sc = kmalloc(sizeof(struct scoutfs_srch_compact), GFP_NOFS);
-	if (sc == NULL) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	if (sc == NULL)
+		/* don't goto out, we'd deref sc->nr! */
+		return;
 
 	scoutfs_block_writer_init(sb, &wri);
 

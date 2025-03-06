@@ -424,8 +424,10 @@ static int lookup_mounted_client_item(struct super_block *sb, u64 rid)
 	}
 
 	ret = scoutfs_read_super(sb, super);
-	if (ret)
+	if (ret) {
+		kfree(super);
 		goto out;
+	}
 
 	ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key, &iref);
 	if (ret == 0) {
