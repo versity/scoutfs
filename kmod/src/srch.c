@@ -2301,7 +2301,7 @@ out:
 		scoutfs_inc_counter(sb, srch_compact_error);
 
 	scoutfs_block_writer_forget_all(sb, &wri);
-	queue_compact_work(srinf, sc->nr > 0 && ret == 0);
+	queue_compact_work(srinf, sc != NULL && sc->nr > 0 && ret == 0);
 
 	kfree(sc);
 }
