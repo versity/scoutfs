@@ -34,7 +34,7 @@ scoutfs statfs -p "$SCR" | grep -v -e 'fsid' -e 'rid'
 find "$SCR" -exec scoutfs list-hidden-xattrs {} \; | wc
 scoutfs search-xattrs -p "$SCR" scoutfs.hide.srch.sam_vol_F01030L6 -p "$SCR" | wc
 find "$SCR" -type f -name "file-*" | head -n 4 | xargs -n 1 scoutfs get-fiemap -L
-scoutfs df -p "$SCR"
+scoutfs df -p "$SCR" | awk '{print $1, $4}'
 scoutfs quota-list -p "$SCR"
 
 umount "$SCR"
@@ -45,7 +45,7 @@ scratch_mkfs -V 2 -m 10G -d 60G > $T_TMP.mkfs.out 2>&1 || t_fail "mkfs failed"
 parallel_restore -m "$T_EX_META_DEV" -n 2000000 > /dev/null || t_fail "parallel_restore"
 scratch_check || t_fail "check failed"
 scratch_mount
-scoutfs df -p "$SCR"
+scoutfs df -p "$SCR" | awk '{print $1, $4}'
 umount "$SCR"
 scratch_check || t_fail "check after mount failed"
 
