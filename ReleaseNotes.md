@@ -2,6 +2,22 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.24
+\
+*Mar 14, 2025*
+
+Add support for coherent read and write mmap() mappings of regular file
+data between mounts.
+
+Fix a bug that was causing scoutfs utilities to parse and change some
+file names before passing them on to the kernel for processing.  This
+fixes spurious scoutfs command errors for files with the offending
+patterns in their names.
+
+Fix a bug where rename wasn't updating the ctime of the inode at the
+destination name if it existed.
+
+---
 v1.23
 \
 *Dec 11, 2024*
