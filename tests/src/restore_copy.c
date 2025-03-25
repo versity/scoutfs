@@ -358,10 +358,11 @@ static struct scoutfs_parallel_restore_inode *read_inode_data(char *path, u64 in
 	inode->data_seq = 0;
 	inode->crtime = st.st_ctim;
 
-	if (S_ISREG(inode->mode)) {
-		if (inode->size > 0)
-			inode->offline = true;
+	/* we don't restore data */
+	if (S_ISREG(inode->mode) && (inode->size > 0))
+		inode->offline = true;
 
+	if (S_ISREG(inode->mode) || S_ISDIR(inode->mode)) {
 		if (is_scoutfs) {
 			fd = open(path, O_RDONLY);
 			error_exit(!fd, "open failure"ERRF, ERRA);
