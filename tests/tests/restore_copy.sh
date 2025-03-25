@@ -57,6 +57,10 @@ scoutfs set-attr-x -t 1 "$T_M0/data/retention"
 # set project ID
 touch "$T_M0/data/proj"
 scoutfs set-attr-x -p 12345 "$T_M0/data/proj"
+mkdir -p "$T_M0/data/proj_d"
+touch "$T_M0/data/proj_d/f"
+scoutfs set-attr-x -p 12345 "$T_M0/data/proj_d/f"
+scoutfs set-attr-x -p 54321 "$T_M0/data/proj_d"
 # quotas
 for a in $(seq 10 15); do
 	scoutfs quota-add -p "$T_M0" -r "7 $a,L,- 0,L,- 0,L,- I 33 -"
@@ -77,6 +81,8 @@ inspect() {
 	scoutfs get-fiemap -L "falloc"
 	scoutfs get-fiemap -L "truncate"
 	scoutfs quota-list -p "."
+	scoutfs get-attr-x -p "proj_d/f"
+	scoutfs get-attr-x -p "proj_d"
 }
 
 ( cd "$SCR" ; inspect )
