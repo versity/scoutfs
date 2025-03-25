@@ -62,6 +62,8 @@ extents: 1
   7 10,L,- 0,L,- 0,L,- I 33 -
 12345
 54321
+crtime            55555.666666666
+crtime            55556.666666666
 == verify quota rules on restored fs
   7 14,L,- 0,L,- 0,L,- I 33 -
   7 13,L,- 0,L,- 0,L,- I 33 -

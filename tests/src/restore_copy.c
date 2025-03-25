@@ -370,8 +370,10 @@ static struct scoutfs_parallel_restore_inode *read_inode_data(char *path, u64 in
 			ret = ioctl(fd, SCOUTFS_IOC_STAT_MORE, &stm);
 			error_exit(ret, "failure SCOUTFS_IOC_STAT_MORE inode");
 
+			/* these aren't restored! */
 			inode->meta_seq = stm.meta_seq;
 			inode->data_seq = stm.data_seq;
+
 			inode->crtime = (struct timespec){.tv_sec = stm.crtime_sec, .tv_nsec = stm.crtime_nsec};
 
 			/* project ID, retention bit */

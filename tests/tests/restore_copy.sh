@@ -65,6 +65,10 @@ scoutfs set-attr-x -p 54321 "$T_M0/data/proj_d"
 for a in $(seq 10 15); do
 	scoutfs quota-add -p "$T_M0" -r "7 $a,L,- 0,L,- 0,L,- I 33 -"
 done
+# crtime
+scoutfs set-attr-x -r 55555.666666666 "$T_M0/data/proj_d"
+scoutfs set-attr-x -r 55556.666666666 "$T_M0/data/proj_d/f"
+# data_seq, meta_seq, data_version is not restored.
 
 scratch_mkfs -V 2 > $T_TMP.mkfs.out 2>&1 || t_fail "mkfs failed"
 restore_copy -m $T_EX_META_DEV -s "$T_M0/data" | t_filter_fs
@@ -83,6 +87,9 @@ inspect() {
 	scoutfs quota-list -p "."
 	scoutfs get-attr-x -p "proj_d/f"
 	scoutfs get-attr-x -p "proj_d"
+
+	scoutfs stat proj_d | grep crtime
+	scoutfs stat proj_d/f | grep crtime
 }
 
 ( cd "$SCR" ; inspect )
