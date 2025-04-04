@@ -511,10 +511,10 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	mapping_set_gfp_mask(sb->s_bdev->bd_inode->i_mapping, GFP_NOFS);
 
 	sbi = kzalloc(sizeof(struct scoutfs_sb_info), GFP_KERNEL);
-	sb->s_fs_info = sbi;
-	sbi->sb = sb;
 	if (!sbi)
 		return -ENOMEM;
+	sb->s_fs_info = sbi;
+	sbi->sb = sb;
 
 	ret = assign_random_id(sbi);
 	if (ret < 0)
