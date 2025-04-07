@@ -3,13 +3,13 @@
 # operations in one mount and verify the results in another.
 #
 
-t_require_commands getfattr setfattr dd filefrag diff touch stat scoutfs
+t_require_commands getfattr setfattr dd diff touch stat scoutfs
 t_require_mounts 2
 
 GETFATTR="getfattr --absolute-names"
 SETFATTR="setfattr"
 DD="dd status=none"
-FILEFRAG="filefrag -v -b4096"
+FIEMAP="scoutfs get-fiemap"
 
 echo "== root inode updates flow back and forth"
 sleep 1
@@ -55,8 +55,8 @@ for i in $(seq 1 10); do
 		conv=notrunc oflag=append &
 	wait
 done
-$FILEFRAG "$T_D0/file" | t_filter_fs > "$T_TMP.0"
-$FILEFRAG "$T_D1/file" | t_filter_fs > "$T_TMP.1"
+$FIEMAP "$T_D0/file" > "$T_TMP.0"
+$FIEMAP "$T_D1/file" > "$T_TMP.1"
 diff -u "$T_TMP.0" "$T_TMP.1"
 
 echo "== unlinked file isn't found"
@@ -149,6 +149,10 @@ find "$T_D0/dir" -ls 2>&1 | t_filter_fs > "$T_TMP.0"
 find "$T_D1/dir" -ls 2>&1 | t_filter_fs > "$T_TMP.1"
 diff -u "$T_TMP.0" "$T_TMP.1"
 rm -rf "$T_D0/dir"
+echo "--- can rename into root"
+touch "$T_D0/rename-into-root"
+mv "$T_D0/rename-into-root" "$T_M0/"
+rm -f "$T_M0/rename-into-root"
 
 echo "== path resoluion"
 touch "$T_D0/file"
@@ -205,5 +209,8 @@ for i in $(t_fs_nrs); do
 done
 wait
 ls "$T_D0/concurrent"
+
+echo "== cleanup"
+rm -f "$T_TMP.0" "$T_TMP.1"
 
 t_pass

@@ -61,7 +61,7 @@ install -m 644 -D fenced/scoutfs-fenced.conf.example $RPM_BUILD_ROOT%{_sysconfdi
 %files
 %defattr(644,root,root,755)
 %{_mandir}/man*/scoutfs*.gz
-%{_unitdir}/scoutfs-fenced.service
+/%{_unitdir}/scoutfs-fenced.service
 %{_sysconfdir}/scoutfs
 %defattr(755,root,root,755)
 %{_sbindir}/scoutfs

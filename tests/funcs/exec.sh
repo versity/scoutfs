@@ -7,8 +7,9 @@ t_status_msg()
 export T_PASS_STATUS=100
 export T_SKIP_STATUS=101
 export T_FAIL_STATUS=102
+export T_SKIP_PERMITTED_STATUS=103
 export T_FIRST_STATUS="$T_PASS_STATUS"
-export T_LAST_STATUS="$T_FAIL_STATUS"
+export T_LAST_STATUS="$T_SKIP_PERMITTED_STATUS"
 
 t_pass()
 {
@@ -19,6 +20,17 @@ t_skip()
 {
 	t_status_msg "$@"
 	exit $T_SKIP_STATUS
+}
+
+#
+# This exit code is *reserved* for tests that are up-front never going to work
+# in certain cases. This should be expressly documented per-case and made
+# abundantly clear before merging. The test itself should document its case.
+#
+t_skip_permitted()
+{
+	t_status_msg "$@"
+	exit $T_SKIP_PERMITTED_STATUS
 }
 
 t_fail()
@@ -35,8 +47,20 @@ t_fail()
 t_quiet()
 {
 	echo "# $*" >> "$T_TMPDIR/quiet.log"
-	"$@" > "$T_TMPDIR/quiet.log" 2>&1 || \
+	"$@" >> "$T_TMPDIR/quiet.log" 2>&1 || \
 		t_fail "quiet command failed"
+}
+
+#
+# Quietly run a command during a test.  The output is logged but only
+# the return code is printed, presumably because the output contains
+# a lot of invocation specific text that is difficult to filter.
+#
+t_rc()
+{
+	echo "# $*" >> "$T_TMP.rc.log"
+	"$@" >> "$T_TMP.rc.log" 2>&1
+	echo "rc: $?"
 }
 
 #

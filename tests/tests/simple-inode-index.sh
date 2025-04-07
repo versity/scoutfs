@@ -103,4 +103,34 @@ while [ "$nr" -lt 100 ]; do
 	((nr++))
 done
 
+#
+# make sure rapid concurrent metadata updates don't create multiple
+# meta_seq entries
+#
+# we had a bug where deletion items created under concurrent_write locks
+# could get versions older than the items they're deleting which were
+# protected by read/write locks.
+#
+echo "== concurrent update attempts maintain single entries"
+FILES=4
+nr=1
+while [ "$nr" -lt 10 ]; do
+	# touch a bunch of files in parallel from all mounts
+	for i in $(t_fs_nrs); do
+		eval path="\$T_D${i}"
+		seq -f "$path/file-%.0f" 1 $FILES | xargs touch &
+	done
+	wait || t_fail "concurrent file updates failed"
+
+	# make sure no inodes have duplicate entries
+	sync
+	scoutfs walk-inodes -p "$T_D0" meta_seq -- 0 -1 | \
+		grep -v "minor" | \
+		awk '{print $4}' | \
+		sort -n | uniq -c | \
+		awk '($1 != 1)' | \
+		sort -n
+	((nr++))
+done
+
 t_pass

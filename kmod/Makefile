@@ -12,17 +12,22 @@ else
 SP = @:
 endif
 
-SCOUTFS_GIT_DESCRIBE := \
+SCOUTFS_GIT_DESCRIBE ?= \
 	$(shell git describe --all --abbrev=6 --long 2>/dev/null || \
 		echo no-git)
 
+ESCAPED_GIT_DESCRIBE := \
+	$(shell echo $(SCOUTFS_GIT_DESCRIBE) |sed -e 's/\//\\\//g')
+
+RPM_GITHASH ?= $(shell git rev-parse --short HEAD)
+
 SCOUTFS_ARGS := SCOUTFS_GIT_DESCRIBE=$(SCOUTFS_GIT_DESCRIBE) \
+		RPM_GITHASH=$(RPM_GITHASH) \
 		CONFIG_SCOUTFS_FS=m -C $(SK_KSRC) M=$(CURDIR)/src \
 		EXTRA_CFLAGS="-Werror"
 
 # - We use the git describe from tags to set up the RPM versioning
 RPM_VERSION := $(shell git describe --long --tags | awk -F '-' '{gsub(/^v/,""); print $$1}')
-RPM_GITHASH := $(shell git rev-parse --short HEAD)
 TARFILE = scoutfs-kmod-$(RPM_VERSION).tar
 
 
@@ -31,17 +36,18 @@ TARFILE = scoutfs-kmod-$(RPM_VERSION).tar
 all: module
 
 module:
-	make $(SCOUTFS_ARGS)
-	$(SP) make C=2 CF="-D__CHECK_ENDIAN__" $(SCOUTFS_ARGS)
+	$(MAKE) $(SCOUTFS_ARGS)
+	$(SP) $(MAKE) C=2 CF="-D__CHECK_ENDIAN__" $(SCOUTFS_ARGS)
 
 
 modules_install:
-	make $(SCOUTFS_ARGS) modules_install
+	$(MAKE) $(SCOUTFS_ARGS) modules_install
 
 
 %.spec: %.spec.in .FORCE
 	sed -e 's/@@VERSION@@/$(RPM_VERSION)/g' \
-	    -e 's/@@GITHASH@@/$(RPM_GITHASH)/g' < $< > $@+
+	    -e 's/@@GITHASH@@/$(RPM_GITHASH)/g' \
+	    -e 's/@@GITDESCRIBE@@/$(ESCAPED_GIT_DESCRIBE)/g' < $< > $@+
 	mv $@+ $@
 
 
@@ -50,4 +56,4 @@ dist: scoutfs-kmod.spec
 	@ tar rf $(TARFILE) --transform="s@\(.*\)@scoutfs-kmod-$(RPM_VERSION)/\1@" scoutfs-kmod.spec
 
 clean:
-	make $(SCOUTFS_ARGS) clean
+	$(MAKE) $(SCOUTFS_ARGS) clean

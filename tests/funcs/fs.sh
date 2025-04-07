@@ -29,13 +29,12 @@ t_mount_rid()
 }
 
 #
-# Output the "f.$fsid.r.$rid" identifier string for the given mount
-# number, 0 is used by default if none is specified. 
+# Output the "f.$fsid.r.$rid" identifier string for the given path
+# in a mounted scoutfs volume.
 #
-t_ident()
+t_ident_from_mnt()
 {
-	local nr="${1:-0}"
-	local mnt="$(eval echo \$T_M$nr)"
+	local mnt="$1"
 	local fsid
 	local rid
 
@@ -46,6 +45,38 @@ t_ident()
 }
 
 #
+# Output the "f.$fsid.r.$rid" identifier string for the given mount
+# number, 0 is used by default if none is specified.
+#
+t_ident()
+{
+	local nr="${1:-0}"
+	local mnt="$(eval echo \$T_M$nr)"
+
+	t_ident_from_mnt "$mnt"
+}
+
+#
+# Output the sysfs path for a path in a mounted fs.
+#
+t_sysfs_path_from_ident()
+{
+	local ident="$1"
+
+	echo "/sys/fs/scoutfs/$ident"
+}
+
+#
+# Output the sysfs path for a path in a mounted fs.
+#
+t_sysfs_path_from_mnt()
+{
+	local mnt="$1"
+
+	t_sysfs_path_from_ident $(t_ident_from_mnt $mnt)
+}
+
+#
 # Output the mount's sysfs path, defaulting to mount 0 if none is
 # specified.
 #
@@ -53,7 +84,7 @@ t_sysfs_path()
 {
 	local nr="$1"
 
-	echo "/sys/fs/scoutfs/$(t_ident $nr)"
+	t_sysfs_path_from_ident $(t_ident $nr)
 }
 
 #
@@ -73,6 +104,15 @@ t_debugfs_path()
 t_fs_nrs()
 {
 	seq 0 $((T_NR_MOUNTS - 1))
+}
+
+#
+# output the fs nrs of quorum nodes, we "know" that
+# the quorum nrs are the first consequtive nrs
+#
+t_quorum_nrs()
+{
+	seq 0 $((T_QUORUM - 1))
 }
 
 #
@@ -144,7 +184,27 @@ t_mount()
 	test "$nr" -lt "$T_NR_MOUNTS" || \
 		t_fail "fs nr $nr invalid"
 
-	eval t_quiet mount -t scoutfs \$T_O$nr \$T_DB$nr \$T_M$nr
+	eval t_quiet mount -t scoutfs \$T_O$nr\$opt \$T_DB$nr \$T_M$nr
+}
+
+#
+# Mount with an optional mount option string.  If the string is empty
+# then the saved mount options are used.  If the string has contents
+# then it is appended to the end of the saved options with a separating
+# comma.
+#
+# Unlike t_mount this won't inherently fail in t_quiet, errors are
+# returned so bad options can be tested.
+#
+t_mount_opt()
+{
+	local nr="$1"
+	local opt="${2:+,$2}"
+
+	test "$nr" -lt "$T_NR_MOUNTS" || \
+		t_fail "fs nr $nr invalid"
+
+	eval mount -t scoutfs \$T_O$nr\$opt \$T_DB$nr \$T_M$nr
 }
 
 t_umount()
@@ -236,6 +296,15 @@ t_trigger_get() {
 	cat "$(t_trigger_path "$nr")/$which"
 }
 
+t_trigger_set() {
+	local which="$1"
+	local nr="$2"
+	local val="$3"
+	local path=$(t_trigger_path "$nr")
+
+	echo "$val" > "$path/$which"
+}
+
 t_trigger_show() {
 	local which="$1"
 	local string="$2"
@@ -247,9 +316,8 @@ t_trigger_show() {
 t_trigger_arm_silent() {
 	local which="$1"
 	local nr="$2"
-	local path=$(t_trigger_path "$nr")
 
-	echo 1 > "$path/$which"
+	t_trigger_set "$which" "$nr" 1
 }
 
 t_trigger_arm() {
@@ -377,13 +445,21 @@ t_wait_for_leader() {
 	done
 }
 
+t_get_sysfs_mount_option() {
+	local nr="$1"
+	local name="$2"
+	local opt="$(t_sysfs_path $nr)/mount_options/$name"
+
+	cat "$opt"
+}
+
 t_set_sysfs_mount_option() {
 	local nr="$1"
 	local name="$2"
 	local val="$3"
 	local opt="$(t_sysfs_path $nr)/mount_options/$name"
 
-	echo "$val" > "$opt"
+	echo "$val" > "$opt" 2>/dev/null
 }
 
 t_set_all_sysfs_mount_options() {
@@ -405,7 +481,7 @@ t_save_all_sysfs_mount_options() {
 
 	for i in $(t_fs_nrs); do
 		opt="$(t_sysfs_path $i)/mount_options/$name"
-		ind="$name_$i"
+		ind="${name}_${i}"
 
 		_saved_opts[$ind]="$(cat $opt)"
 	done
@@ -417,7 +493,7 @@ t_restore_all_sysfs_mount_options() {
 	local i
 
 	for i in $(t_fs_nrs); do
-		ind="$name_$i"
+		ind="${name}_${i}"
 
 		t_set_sysfs_mount_option $i $name "${_saved_opts[$ind]}"
 	done

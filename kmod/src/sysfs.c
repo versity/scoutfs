@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
+#include <linux/blkdev.h>
 
 #include "super.h"
 #include "sysfs.h"
@@ -60,10 +61,9 @@ static ssize_t fsid_show(struct kobject *kobj, struct attribute *attr,
 			 char *buf)
 {
 	struct super_block *sb = KOBJ_TO_SB(kobj, sb_id_kobj);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
-	return snprintf(buf, PAGE_SIZE, "%016llx\n",
-			le64_to_cpu(super->hdr.fsid));
+	return snprintf(buf, PAGE_SIZE, "%016llx\n", sbi->fsid);
 }
 ATTR_FUNCS_RO(fsid);
 
@@ -268,7 +268,7 @@ int __init scoutfs_sysfs_init(void)
 	return 0;
 }
 
-void __exit scoutfs_sysfs_exit(void)
+void scoutfs_sysfs_exit(void)
 {
 	if (scoutfs_kset)
 		kset_unregister(scoutfs_kset);

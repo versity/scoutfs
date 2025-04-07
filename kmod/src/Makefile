@@ -8,6 +8,8 @@ CFLAGS_scoutfs_trace.o = -I$(src) # define_trace.h double include
 -include $(src)/Makefile.kernelcompat
  
 scoutfs-y +=			\
+	acl.o			\
+	attr_x.o		\
 	avl.o			\
 	alloc.o			\
 	block.o			\
@@ -24,6 +26,7 @@ scoutfs-y +=			\
 	inode.o			\
 	ioctl.o			\
 	item.o			\
+	kernelcompat.o		\
 	lock.o			\
 	lock_server.o		\
 	msg.o			\
@@ -32,6 +35,7 @@ scoutfs-y +=			\
 	options.o		\
 	per_task.o		\
 	quorum.o		\
+	quota.o			\
 	recov.o			\
 	scoutfs_trace.o		\
 	server.o		\
@@ -40,10 +44,12 @@ scoutfs-y +=			\
 	srch.o			\
 	super.o			\
 	sysfs.o			\
+	totl.o			\
 	trans.o			\
 	triggers.o		\
 	tseq.o			\
 	volopt.o		\
+	wkic.o			\
 	xattr.o
 
 #

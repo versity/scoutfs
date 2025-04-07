@@ -20,6 +20,7 @@
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <asm/barrier.h>
+#include <linux/overflow.h>
 
 #include "format.h"
 #include "counters.h"
@@ -68,6 +69,7 @@ int scoutfs_client_alloc_inodes(struct super_block *sb, u64 count,
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 	struct scoutfs_net_inode_alloc ial;
 	__le64 lecount = cpu_to_le64(count);
+	u64 tmp;
 	int ret;
 
 	ret = scoutfs_net_sync_request(sb, client->conn,
@@ -80,7 +82,7 @@ int scoutfs_client_alloc_inodes(struct super_block *sb, u64 count,
 
 		if (*nr == 0)
 			ret = -ENOSPC;
-		else if (*ino + *nr < *ino)
+		else if (check_add_overflow(*ino, *nr - 1, &tmp))
 			ret = -EINVAL;
 	}
 
@@ -356,7 +358,6 @@ static int client_greeting(struct super_block *sb,
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct client_info *client = sbi->client_info;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct scoutfs_net_greeting *gr = resp;
 	bool new_server;
 	int ret;
@@ -371,9 +372,9 @@ static int client_greeting(struct super_block *sb,
 		goto out;
 	}
 
-	if (gr->fsid != super->hdr.fsid) {
+	if (gr->fsid != cpu_to_le64(sbi->fsid)) {
 		scoutfs_warn(sb, "server greeting response fsid 0x%llx did not match client fsid 0x%llx",
-			     le64_to_cpu(gr->fsid), le64_to_cpu(super->hdr.fsid));
+			     le64_to_cpu(gr->fsid), sbi->fsid);
 		ret = -EINVAL;
 		goto out;
 	}
@@ -476,7 +477,6 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 						  connect_dwork.work);
 	struct super_block *sb = client->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
 	struct scoutfs_mount_options opts;
 	struct scoutfs_net_greeting greet;
 	struct sockaddr_in sin;
@@ -508,7 +508,7 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 		goto out;
 
 	/* send a greeting to verify endpoints of each connection */
-	greet.fsid = super->hdr.fsid;
+	greet.fsid = cpu_to_le64(sbi->fsid);
 	greet.fmt_vers = cpu_to_le64(sbi->fmt_vers);
 	greet.server_term = cpu_to_le64(client->server_term);
 	greet.rid = cpu_to_le64(sbi->rid);

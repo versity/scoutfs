@@ -67,6 +67,7 @@ struct commit_users {
 	unsigned int nr_holders;
 	u32 avail_before;
 	u32 freed_before;
+	bool committing;
 	bool exceeded;
 };
 
@@ -84,12 +85,13 @@ do {												\
 	__typeof__(cusers) _cusers = (cusers);							\
 	trace_scoutfs_server_commit_##which(sb, !list_empty(&_cusers->holding),			\
 		!list_empty(&_cusers->applying), _cusers->nr_holders, _cusers->avail_before,	\
-		_cusers->freed_before, _cusers->exceeded);					\
+		_cusers->freed_before, _cusers->committing, _cusers->exceeded);			\
 } while (0)
 
 struct server_info {
 	struct super_block *sb;
 	spinlock_t lock;
+	seqlock_t seqlock;
 	wait_queue_head_t waitq;
 
 	struct workqueue_struct *wq;
@@ -130,12 +132,10 @@ struct server_info {
 	struct mutex srch_mutex;
 	struct mutex mounted_clients_mutex;
 
-	/* stable versions stored from commits, given in locks and rpcs */
-	seqcount_t roots_seqcount;
-	struct scoutfs_net_roots roots;
+	/* stable super stored from commits, given in locks and rpcs */
+	struct scoutfs_super_block stable_super;
 
 	/* serializing and get and set volume options */
-	seqcount_t volopt_seqcount;
 	struct mutex volopt_mutex;
 	struct scoutfs_volume_options volopt;
 
@@ -143,10 +143,19 @@ struct server_info {
 	struct work_struct fence_pending_recov_work;
 	/* while running we check for fenced mounts to reclaim */
 	struct delayed_work reclaim_dwork;
+
+	/* a running server gets a static quorum config from quorum as it starts */
+	struct scoutfs_quorum_config qconf;
+	/* a running server maintains a private dirty super */
+	struct scoutfs_super_block dirty_super;
+
+	u64 finalize_sent_seq;
 };
 
 #define DECLARE_SERVER_INFO(sb, name) \
 	struct server_info *name = SCOUTFS_SB(sb)->server_info
+
+#define DIRTY_SUPER_SB(sb)	(&SCOUTFS_SB(sb)->server_info->dirty_super)
 
 /*
  * The server tracks each connected client.
@@ -174,7 +183,7 @@ static bool get_volopt_val(struct server_info *server, int nr, u64 *val)
 	unsigned seq;
 
 	do {
-		seq = read_seqcount_begin(&server->volopt_seqcount);
+		seq = read_seqbegin(&server->seqlock);
 		if ((le64_to_cpu(server->volopt.set_bits) & bit)) {
 			is_set = true;
 			*val = le64_to_cpup(opt);
@@ -182,7 +191,7 @@ static bool get_volopt_val(struct server_info *server, int nr, u64 *val)
 			is_set = false;
 			*val = 0;
 		};
-	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+	} while (read_seqretry(&server->seqlock, seq));
 
 	return is_set;
 }
@@ -275,13 +284,21 @@ struct commit_hold {
  * per-holder allocation consumption tracking.   The best we can do is
  * flag all the current holders so that as they release we can see
  * everyone involved in crossing the limit.
+ *
+ * The consumption of space to record freed blocks is tricky.  The
+ * freed_before value was the space available as the holder started.
+ * But that happens before we actually dirty the first block in the
+ * freed list.  If that block is too full then we just allocate a new
+ * empty first block.  In that case the current remaining here can be a
+ * lot more than the initial freed_before.  We account for that and
+ * treat freed_before as the maximum capacity.
  */
 static void check_holder_budget(struct super_block *sb, struct server_info *server,
 				struct commit_users *cusers)
 {
 	static bool exceeded_once = false;
 	struct commit_hold *hold;
-	struct timespec ts;
+	struct timespec64 ts;
 	u32 avail_used;
 	u32 freed_used;
 	u32 avail_now;
@@ -294,8 +311,13 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 		return;
 
 	scoutfs_alloc_meta_remaining(&server->alloc, &avail_now, &freed_now);
+
 	avail_used = cusers->avail_before - avail_now;
-	freed_used = cusers->freed_before - freed_now;
+	if (freed_now < cusers->freed_before)
+		freed_used = cusers->freed_before - freed_now;
+	else
+		freed_used = SCOUTFS_ALLOC_LIST_MAX_BLOCKS - freed_now;
+
 	budget = cusers->nr_holders * COMMIT_HOLD_ALLOC_BUDGET;
 	if (avail_used <= budget && freed_used <= budget)
 		return;
@@ -308,7 +330,7 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 		    cusers->freed_before, freed_now);
 
 	list_for_each_entry(hold, &cusers->holding, entry) {
-		ts = ktime_to_timespec(hold->start);
+		ts = ktime_to_timespec64(hold->start);
 		scoutfs_err(sb, "exceeding hold start %llu.%09llu av %u fr %u",
 			    (u64)ts.tv_sec, (u64)ts.tv_nsec, hold->avail, hold->freed);
 		hold->exceeded = true;
@@ -318,31 +340,18 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 /*
  * We don't have per-holder consumption.   We allow commit holders as
  * long as the total budget of all the holders doesn't exceed the alloc
- * resources that were available
+ * resources that were available.  If a hold is waiting for budget
+ * availability in the allocators then we try and kick off a commit to
+ * fill and use the next allocators after the current transaction.
  */
-static bool commit_alloc_has_room(struct server_info *server, struct commit_users *cusers,
-				  unsigned int more_holders)
-{
-	u32 avail_before;
-	u32 freed_before;
-	u32 budget;
-
-	if (cusers->nr_holders > 0) {
-		avail_before = cusers->avail_before;
-		freed_before = cusers->freed_before;
-	} else {
-		scoutfs_alloc_meta_remaining(&server->alloc, &avail_before, &freed_before);
-	}
-
-	budget = (cusers->nr_holders + more_holders) * COMMIT_HOLD_ALLOC_BUDGET;
-
-	return avail_before >= budget && freed_before >= budget;
-}
-
 static bool hold_commit(struct super_block *sb, struct server_info *server,
 			struct commit_users *cusers, struct commit_hold *hold)
 {
-	bool held = false;
+	bool has_room;
+	bool held;
+	u32 budget;
+	u32 av;
+	u32 fr;
 
 	spin_lock(&cusers->lock);
 
@@ -350,19 +359,39 @@ static bool hold_commit(struct super_block *sb, struct server_info *server,
 
 	check_holder_budget(sb, server, cusers);
 
+	if (cusers->nr_holders == 0) {
+		scoutfs_alloc_meta_remaining(&server->alloc, &av, &fr);
+	} else {
+		av = cusers->avail_before;
+		fr = cusers->freed_before;
+	}
+
 	/* +2 for our additional hold and then for the final commit work the server does */
-	if (list_empty(&cusers->applying) && commit_alloc_has_room(server, cusers, 2)) {
-		scoutfs_alloc_meta_remaining(&server->alloc, &hold->avail, &hold->freed);
+	budget = (cusers->nr_holders + 2) * COMMIT_HOLD_ALLOC_BUDGET;
+	has_room = av >= budget && fr >= budget;
+	/* checking applying so holders drain once an apply caller starts waiting */
+	held = !cusers->committing && has_room && list_empty(&cusers->applying);
+
+	if (held) {
 		if (cusers->nr_holders == 0) {
-			cusers->avail_before = hold->avail;
-			cusers->freed_before = hold->freed;
+			cusers->avail_before = av;
+			cusers->freed_before = fr;
+			hold->avail = av;
+			hold->freed = fr;
 			cusers->exceeded = false;
+		} else {
+			scoutfs_alloc_meta_remaining(&server->alloc, &hold->avail, &hold->freed);
 		}
+
 		hold->exceeded = false;
 		hold->start = ktime_get();
 		list_add_tail(&hold->entry, &cusers->holding);
+
 		cusers->nr_holders++;
-		held = true;
+
+	} else if (!has_room && cusers->nr_holders == 0 && !cusers->committing) {
+		cusers->committing = true;
+		queue_work(server->wq, &server->commit_work);
 	}
 
 	spin_unlock(&cusers->lock);
@@ -387,6 +416,27 @@ static void server_hold_commit(struct super_block *sb, struct commit_hold *hold)
 }
 
 /*
+ * Return the higher of the avail or freed used by the active commit
+ * since this holder joined the commit.  This is *not* the amount used
+ * by the holder, we don't track per-holder alloc use.
+ */
+static u32 server_hold_alloc_used_since(struct super_block *sb, struct commit_hold *hold)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	u32 avail_used;
+	u32 freed_used;
+	u32 avail_now;
+	u32 freed_now;
+
+	scoutfs_alloc_meta_remaining(&server->alloc, &avail_now, &freed_now);
+
+	avail_used = hold->avail - avail_now;
+	freed_used = hold->freed - freed_now;
+
+	return max(avail_used, freed_used);
+}
+
+/*
  * This is called while holding the commit and returns once the commit
  * is successfully written.  Many holders can all wait for all holders
  * to drain before their shared commit is applied and they're all woken.
@@ -395,8 +445,7 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct commit_users *cusers = &server->cusers;
-	struct timespec ts;
-	bool start_commit;
+	struct timespec64 ts;
 
 	spin_lock(&cusers->lock);
 
@@ -405,7 +454,7 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 	check_holder_budget(sb, server, cusers);
 
 	if (hold->exceeded) {
-		ts = ktime_to_timespec(hold->start);
+		ts = ktime_to_timespec64(hold->start);
 		scoutfs_err(sb, "exceeding hold start %llu.%09llu stack:",
 			    (u64)ts.tv_sec, (u64)ts.tv_nsec);
 		dump_stack();
@@ -417,12 +466,14 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 		list_del_init(&hold->entry);
 		hold->ret = err;
 	}
-	cusers->nr_holders--;
-	start_commit = cusers->nr_holders == 0 && !list_empty(&cusers->applying);
-	spin_unlock(&cusers->lock);
 
-	if (start_commit)
+	cusers->nr_holders--;
+	if (cusers->nr_holders == 0 && !cusers->committing && !list_empty(&cusers->applying)) {
+		cusers->committing = true;
 		queue_work(server->wq, &server->commit_work);
+	}
+
+	spin_unlock(&cusers->lock);
 
 	wait_event(cusers->waitq, list_empty_careful(&hold->entry));
 	smp_rmb(); /* entry load before ret */
@@ -431,8 +482,8 @@ static int server_apply_commit(struct super_block *sb, struct commit_hold *hold,
 
 /*
  * Start a commit from the commit work.  We should only have been queued
- * while a holder is waiting to apply after all active holders have
- * finished.
+ * while there are no active holders and someone started the commit.
+ * There may or may not be blocked apply callers waiting for the result.
  */
 static int commit_start(struct super_block *sb, struct commit_users *cusers)
 {
@@ -441,7 +492,7 @@ static int commit_start(struct super_block *sb, struct commit_users *cusers)
 	/* make sure holders held off once commit started */
 	spin_lock(&cusers->lock);
 	TRACE_COMMIT_USERS(sb, cusers, start);
-	if (WARN_ON_ONCE(list_empty(&cusers->applying) || cusers->nr_holders != 0))
+	if (WARN_ON_ONCE(!cusers->committing || cusers->nr_holders != 0))
 		ret = -EINVAL;
 	spin_unlock(&cusers->lock);
 
@@ -464,21 +515,28 @@ static void commit_end(struct super_block *sb, struct commit_users *cusers, int 
 	smp_wmb(); /* ret stores before list updates */
 	list_for_each_entry_safe(hold, tmp, &cusers->applying, entry)
 		list_del_init(&hold->entry);
+	cusers->committing = false;
 	spin_unlock(&cusers->lock);
 
 	wake_up(&cusers->waitq);
 }
 
-static void get_roots(struct super_block *sb,
-			      struct scoutfs_net_roots *roots)
+static void get_stable(struct super_block *sb, struct scoutfs_super_block *super,
+		       struct scoutfs_net_roots *roots)
 {
 	DECLARE_SERVER_INFO(sb, server);
 	unsigned int seq;
 
 	do {
-		seq = read_seqcount_begin(&server->roots_seqcount);
-		*roots = server->roots;
-	} while (read_seqcount_retry(&server->roots_seqcount, seq));
+		seq = read_seqbegin(&server->seqlock);
+		if (super)
+			*super = server->stable_super;
+		if (roots) {
+			roots->fs_root = server->stable_super.fs_root;
+			roots->logs_root = server->stable_super.logs_root;
+			roots->srch_root = server->stable_super.srch_root;
+		}
+	} while (read_seqretry(&server->seqlock, seq));
 }
 
 u64 scoutfs_server_seq(struct super_block *sb)
@@ -510,18 +568,11 @@ void scoutfs_server_set_seq_if_greater(struct super_block *sb, u64 seq)
 	}
 }
 
-static void set_roots(struct server_info *server,
-		      struct scoutfs_btree_root *fs_root,
-		      struct scoutfs_btree_root *logs_root,
-		      struct scoutfs_btree_root *srch_root)
+static void set_stable_super(struct server_info *server, struct scoutfs_super_block *super)
 {
-	preempt_disable();
-	write_seqcount_begin(&server->roots_seqcount);
-	server->roots.fs_root = *fs_root;
-	server->roots.logs_root = *logs_root;
-	server->roots.srch_root = *srch_root;
-	write_seqcount_end(&server->roots_seqcount);
-	preempt_enable();
+	write_seqlock(&server->seqlock);
+	server->stable_super = *super;
+	write_sequnlock(&server->seqlock);
 }
 
 /*
@@ -535,7 +586,7 @@ static void set_roots(struct server_info *server,
  * implement commits with a single pending work func.
  *
  * Processing paths hold the commit while they're making multiple
- * dependent changes.  When they're done and want it persistent they add
+ * dependent changes.  When they're done and want it persistent they
  * queue the commit work.  This work runs, performs the commit, and
  * wakes all the applying waiters with the result.  Readers can run
  * concurrently with these commits.
@@ -545,7 +596,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  commit_work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct commit_users *cusers = &server->cusers;
 	int ret;
 
@@ -603,8 +654,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 		goto out;
 	}
 
-	set_roots(server, &super->fs_root, &super->logs_root,
-		  &super->srch_root);
+	set_stable_super(server, super);
 
 	/* swizzle the active and idle server alloc/freed heads */
 	server->other_ind ^= 1;
@@ -641,7 +691,7 @@ static int server_alloc_inodes(struct super_block *sb,
 			       u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_inode_alloc ial = { 0, };
 	COMMIT_HOLD(hold);
 	__le64 lecount;
@@ -694,13 +744,13 @@ static int alloc_move_refill_zoned(struct super_block *sb, struct scoutfs_alloc_
 
 static int alloc_move_empty(struct super_block *sb,
 			    struct scoutfs_alloc_root *dst,
-			    struct scoutfs_alloc_root *src, u64 meta_reserved)
+			    struct scoutfs_alloc_root *src, u64 meta_budget)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	return scoutfs_alloc_move(sb, &server->alloc, &server->wri,
 				  dst, src, le64_to_cpu(src->total_len), NULL, NULL, 0,
-				  meta_reserved);
+				  meta_budget);
 }
 
 /*
@@ -809,7 +859,7 @@ static void mod_bitmap_bits(__le64 *dst, u64 dst_zone_blocks,
 static int get_data_alloc_zone_bits(struct super_block *sb, u64 rid, __le64 *exclusive,
 				    __le64 *vacant, u64 zone_blocks)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees *lt;
 	struct scoutfs_key key;
@@ -911,22 +961,24 @@ static int find_log_trees_item(struct super_block *sb,
 }
 
 /*
- * Find the next log_trees item from the key.  Fills the caller's log_trees and sets
- * the key past the returned log_trees for iteration.  Returns 0 when done, > 0 for each
- * item, and -errno on fatal errors.
+ * Find the log_trees item with the greatest nr for each rid.  Fills the
+ * caller's log_trees and sets the key before the returned log_trees for
+ * the next iteration.  Returns 0 when done, > 0 for each item, and
+ * -errno on fatal errors.
  */
-static int for_each_lt(struct super_block *sb, struct scoutfs_btree_root *root,
-		       struct scoutfs_key *key, struct scoutfs_log_trees *lt)
+static int for_each_rid_last_lt(struct super_block *sb, struct scoutfs_btree_root *root,
+				struct scoutfs_key *key, struct scoutfs_log_trees *lt)
 {
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	int ret;
 
-	ret = scoutfs_btree_next(sb, root, key, &iref);
+	ret = scoutfs_btree_prev(sb, root, key, &iref);
 	if (ret == 0) {
 		if (iref.val_len == sizeof(struct scoutfs_log_trees)) {
 			memcpy(lt, iref.val, iref.val_len);
 			*key = *iref.key;
-			scoutfs_key_inc(key);
+			key->sklt_nr = 0;
+			scoutfs_key_dec(key);
 			ret = 1;
 		} else {
 			ret = -EIO;
@@ -1021,30 +1073,24 @@ static int next_log_merge_item(struct super_block *sb,
  * abandoned log btree finalized.  If it takes too long each client has
  * a change to make forward progress before being asked to commit again.
  *
- * We're waiting on heavy state that is protected by mutexes and
- * transaction machinery.  It's tricky to recreate that state for
- * lightweight condition tests that don't change task state.  Instead of
- * trying to get that right, particularly as we unwind after success or
- * after timeouts, waiters use an unsatisfying poll.   Short enough to
- * not add terrible latency, given how heavy and infrequent this already
- * is, and long enough to not melt the cpu.  This could be tuned if it
- * becomes a problem.
- *
  * This can end up finalizing a new empty log btree if a new mount
  * happens to arrive at just the right time.  That's fine, merging will
  * ignore and tear down the empty input.
  */
-#define FINALIZE_POLL_MS	(11)
-#define FINALIZE_TIMEOUT_MS	(MSEC_PER_SEC / 2)
+#define FINALIZE_POLL_MIN_DELAY_MS	5U
+#define FINALIZE_POLL_MAX_DELAY_MS	100U
+#define FINALIZE_POLL_DELAY_GROWTH_PCT	150U
 static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_log_trees *lt,
 					u64 rid, struct commit_hold *hold)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_range rng;
+	struct scoutfs_mount_options opts;
 	struct scoutfs_log_trees each_lt;
 	struct scoutfs_log_trees fin;
+	unsigned int delay_ms;
 	unsigned long timeo;
 	bool saw_finalized;
 	bool others_active;
@@ -1052,10 +1098,14 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 	bool ours_visible;
 	struct scoutfs_key key;
 	char *err_str = NULL;
+	ktime_t start;
 	int ret;
 	int err;
 
-	timeo = jiffies + msecs_to_jiffies(FINALIZE_TIMEOUT_MS);
+	scoutfs_options_read(sb, &opts);
+	timeo = jiffies + msecs_to_jiffies(opts.log_merge_wait_timeout_ms);
+	delay_ms = FINALIZE_POLL_MIN_DELAY_MS;
+	start = ktime_get_raw();
 
 	for (;;) {
 		/* nothing to do if there's already a merge in flight */
@@ -1072,8 +1122,13 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		saw_finalized = false;
 		others_active = false;
 		ours_visible = false;
-		scoutfs_key_init_log_trees(&key, 0, 0);
-		while ((ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+		scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
+		while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+
+			trace_scoutfs_server_finalize_items(sb, rid, le64_to_cpu(each_lt.rid),
+							    le64_to_cpu(each_lt.nr),
+							    le64_to_cpu(each_lt.flags),
+							    le64_to_cpu(each_lt.get_trans_seq));
 
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
 				saw_finalized = true;
@@ -1098,6 +1153,10 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		finalize_ours = (lt->item_root.height > 2) ||
 				(le32_to_cpu(lt->meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW);
 
+		trace_scoutfs_server_finalize_decision(sb, rid, saw_finalized, others_active,
+						       ours_visible, finalize_ours, delay_ms,
+						       server->finalize_sent_seq);
+
 		/* done if we're not finalizing and there's no finalized */
 		if (!finalize_ours && !saw_finalized) {
 			ret = 0;
@@ -1105,12 +1164,13 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		}
 
 		/* send sync requests soon to give time to commit */
-		scoutfs_key_init_log_trees(&key, 0, 0);
+		scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
 		while (others_active &&
-		       (ret = for_each_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
+		       (ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &each_lt)) > 0) {
 
 			if ((le64_to_cpu(each_lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) ||
-			    (le64_to_cpu(each_lt.rid) == rid))
+			    (le64_to_cpu(each_lt.rid) == rid) ||
+			    (le64_to_cpu(each_lt.get_trans_seq) <= server->finalize_sent_seq))
 				continue;
 
 			ret = scoutfs_net_submit_request_node(sb, server->conn,
@@ -1129,6 +1189,8 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			err_str = "sending sync log tree request";
 			break;
 		}
+
+		server->finalize_sent_seq = scoutfs_server_seq(sb);
 
 		/* Finalize ours if it's visible to others */
 		if (ours_visible) {
@@ -1167,13 +1229,16 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			if (ret < 0)
 				err_str = "applying commit before waiting for finalized";
 
-			msleep(FINALIZE_POLL_MS);
+			msleep(delay_ms);
+			delay_ms = min(delay_ms * FINALIZE_POLL_DELAY_GROWTH_PCT / 100,
+				       FINALIZE_POLL_MAX_DELAY_MS);
 
 			server_hold_commit(sb, hold);
 			mutex_lock(&server->logs_mutex);
 
 			/* done if we timed out */
 			if (time_after(jiffies, timeo)) {
+				scoutfs_inc_counter(sb, log_merge_wait_timeout);
 				ret = 0;
 				break;
 			}
@@ -1227,6 +1292,82 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 }
 
 /*
+ * The calling get_log_trees ran out of available blocks in its commit's
+ * metadata allocator while moving extents from the log tree's
+ * data_freed into the core data_avail.  This finishes moving the
+ * extents in as many additional commits as it takes.   The logs mutex
+ * is nested inside holding commits so we recheck the persistent item
+ * each time we commit to make sure it's still what we think.   The
+ * caller is still going to send the item to the client so we update the
+ * caller's each time we make progress.  This is a best-effort attempt
+ * to clean up and it's valid to leave extents in data_freed we don't
+ * return errors to the caller.  The client will continue the work later
+ * in get_log_trees or as the rid is reclaimed.
+ */
+static void try_drain_data_freed(struct super_block *sb, struct scoutfs_log_trees *lt)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
+	const u64 rid = le64_to_cpu(lt->rid);
+	const u64 nr = le64_to_cpu(lt->nr);
+	struct scoutfs_log_trees drain;
+	struct scoutfs_key key;
+	COMMIT_HOLD(hold);
+	int ret = 0;
+	int err;
+
+	scoutfs_key_init_log_trees(&key, rid, nr);
+
+	while (lt->data_freed.total_len != 0) {
+		server_hold_commit(sb, &hold);
+		mutex_lock(&server->logs_mutex);
+
+		ret = find_log_trees_item(sb, &super->logs_root, false, rid, U64_MAX, &drain);
+		if (ret < 0)
+			break;
+
+		/* careful to only keep draining the caller's specific open trans */
+		if (drain.nr != lt->nr || drain.get_trans_seq != lt->get_trans_seq ||
+		    drain.commit_trans_seq != lt->commit_trans_seq || drain.flags != lt->flags) {
+			ret = -ENOENT;
+			break;
+		}
+
+		ret = scoutfs_btree_dirty(sb, &server->alloc, &server->wri,
+					  &super->logs_root, &key);
+		if (ret < 0)
+			break;
+
+		/* moving can modify and return errors, always update caller and item */
+		mutex_lock(&server->alloc_mutex);
+		ret = alloc_move_empty(sb, &super->data_alloc, &drain.data_freed,
+				       COMMIT_HOLD_ALLOC_BUDGET / 2);
+		mutex_unlock(&server->alloc_mutex);
+		if (ret == -EINPROGRESS)
+			ret = 0;
+
+		*lt = drain;
+		err = scoutfs_btree_force(sb, &server->alloc, &server->wri,
+					  &super->logs_root, &key, &drain, sizeof(drain));
+		BUG_ON(err < 0); /* dirtying must guarantee success */
+
+		mutex_unlock(&server->logs_mutex);
+
+		ret = server_apply_commit(sb, &hold, ret);
+		if (ret < 0) {
+			ret = 0; /* don't try to abort, ignoring ret */
+			break;
+		}
+	}
+
+	/* try to cleanly abort and write any partial dirty btree blocks, but ignore result */
+	if (ret < 0) {
+		mutex_unlock(&server->logs_mutex);
+		server_apply_commit(sb, &hold, 0);
+	}
+}
+
+/*
  * Give the client roots to all the trees that they'll use to build
  * their transaction.
  *
@@ -1253,7 +1394,7 @@ static int server_get_log_trees(struct super_block *sb,
 				struct scoutfs_net_connection *conn,
 				u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	u64 rid = scoutfs_net_client_rid(conn);
 	DECLARE_SERVER_INFO(sb, server);
 	__le64 exclusive[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
@@ -1267,6 +1408,7 @@ static int server_get_log_trees(struct super_block *sb,
 	char *err_str = NULL;
 	u64 nr;
 	int ret;
+	int err;
 
 	if (arg_len != 0) {
 		ret = -EINVAL;
@@ -1310,16 +1452,27 @@ static int server_get_log_trees(struct super_block *sb,
 		goto unlock;
 	}
 
+	if (ret != -ENOENT) {
+		/* need to sync lt with respect to changes in other structures */
+		scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid), le64_to_cpu(lt.nr));
+		ret = scoutfs_btree_dirty(sb, &server->alloc, &server->wri,
+					  &super->logs_root, &key);
+		if (ret < 0) {
+			err_str = "dirtying lt btree key";
+			goto unlock;
+		}
+	}
+
 	/* drops and re-acquires the mutex and commit if it has to wait */
 	ret = finalize_and_start_log_merge(sb, &lt, rid, &hold);
 	if (ret < 0)
-		goto unlock;
+		goto update;
 
 	if (get_volopt_val(server, SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_NR, &data_zone_blocks)) {
 		ret = get_data_alloc_zone_bits(sb, rid, exclusive, vacant, data_zone_blocks);
 		if (ret < 0) {
 			err_str = "getting alloc zone bits";
-			goto unlock;
+			goto update;
 		}
 	} else {
 		data_zone_blocks = 0;
@@ -1336,13 +1489,15 @@ static int server_get_log_trees(struct super_block *sb,
 					&lt.meta_freed);
 	if (ret < 0) {
 		err_str = "splicing committed meta_freed";
-		goto unlock;
+		goto update;
 	}
 
-	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 0);
+	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 100);
+	if (ret == -EINPROGRESS)
+		ret = 0;
 	if (ret < 0) {
 		err_str = "emptying committed data_freed";
-		goto unlock;
+		goto update;
 	}
 
 	ret = scoutfs_alloc_fill_list(sb, &server->alloc, &server->wri,
@@ -1351,7 +1506,7 @@ static int server_get_log_trees(struct super_block *sb,
 				      SCOUTFS_SERVER_META_FILL_TARGET);
 	if (ret < 0) {
 		err_str = "filling meta_avail";
-		goto unlock;
+		goto update;
 	}
 
 	if (le64_to_cpu(server->meta_avail->total_len) <= scoutfs_server_reserved_meta_blocks(sb))
@@ -1364,7 +1519,7 @@ static int server_get_log_trees(struct super_block *sb,
 				      exclusive, vacant, data_zone_blocks);
 	if (ret < 0) {
 		err_str = "refilling data_avail";
-		goto unlock;
+		goto update;
 	}
 
 	if (le64_to_cpu(lt.data_avail.total_len) < SCOUTFS_SERVER_DATA_FILL_LO)
@@ -1384,7 +1539,7 @@ static int server_get_log_trees(struct super_block *sb,
 		if (ret < 0) {
 			zero_data_alloc_zone_bits(&lt);
 			err_str = "setting data_avail zone bits";
-			goto unlock;
+			goto update;
 		}
 
 		lt.data_alloc_zone_blocks = cpu_to_le64(data_zone_blocks);
@@ -1393,13 +1548,18 @@ static int server_get_log_trees(struct super_block *sb,
 	/* give the transaction a new seq (must have been ==) */
 	lt.get_trans_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
 
+update:
 	/* update client's log tree's item */
-	scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid),
-				   le64_to_cpu(lt.nr));
-	ret = scoutfs_btree_force(sb, &server->alloc, &server->wri,
+	scoutfs_key_init_log_trees(&key, le64_to_cpu(lt.rid), le64_to_cpu(lt.nr));
+	err = scoutfs_btree_force(sb, &server->alloc, &server->wri,
 				  &super->logs_root, &key, &lt, sizeof(lt));
-	if (ret < 0)
-		err_str = "updating log trees";
+	BUG_ON(err < 0); /* can duplicate extents.. move dst in super, still in in lt src */
+	if (err < 0) {
+		if (ret == 0) {
+			ret = err;
+			err_str = "updating log trees";
+		}
+	}
 
 unlock:
 	if (unlock_alloc)
@@ -1411,6 +1571,10 @@ out:
 	if (ret < 0)
 		scoutfs_err(sb, "error %d getting log trees for rid %016llx: %s",
 			    ret, rid, err_str);
+
+	/* try to drain excessive data_freed with additional commits, if needed, ignoring err */
+	if (ret == 0)
+		try_drain_data_freed(sb, &lt);
 
 	return scoutfs_net_response(sb, conn, cmd, id, ret, &lt, sizeof(lt));
 }
@@ -1425,7 +1589,7 @@ static int server_commit_log_trees(struct super_block *sb,
 				   struct scoutfs_net_connection *conn,
 				   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	const u64 rid = scoutfs_net_client_rid(conn);
 	DECLARE_SERVER_INFO(sb, server);
 	SCOUTFS_BTREE_ITEM_REF(iref);
@@ -1480,6 +1644,13 @@ static int server_commit_log_trees(struct super_block *sb,
 	if (ret < 0 || committed)
 		goto unlock;
 
+	/* make sure _update succeeds before we modify srch items */
+	ret = scoutfs_btree_dirty(sb, &server->alloc, &server->wri, &super->logs_root, &key);
+	if (ret < 0) {
+		err_str = "dirtying lt item";
+		goto unlock;
+	}
+
 	/* try to rotate the srch log when big enough */
 	mutex_lock(&server->srch_mutex);
 	ret = scoutfs_srch_rotate_log(sb, &server->alloc, &server->wri,
@@ -1494,6 +1665,7 @@ static int server_commit_log_trees(struct super_block *sb,
 
 	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				   &super->logs_root, &key, &lt, sizeof(lt));
+	BUG_ON(ret < 0); /* dirtying should have guaranteed success */
 	if (ret < 0)
 		err_str = "updating log trees item";
 
@@ -1525,7 +1697,7 @@ static int server_get_roots(struct super_block *sb,
 		memset(&roots, 0, sizeof(roots));
 		ret = -EINVAL;
 	}  else {
-		get_roots(sb, &roots);
+		get_stable(sb, NULL, &roots);
 		ret = 0;
 	}
 
@@ -1555,7 +1727,7 @@ static int server_get_roots(struct super_block *sb,
  */
 static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	DECLARE_SERVER_INFO(sb, server);
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_log_trees lt;
@@ -1649,44 +1821,29 @@ out:
  * Give the caller the last seq before outstanding client commits.  All
  * seqs up to and including this are stable, new client transactions can
  * only have greater seqs.
+ *
+ * For each rid, only its greatest log trees nr can be an open commit.
+ * We look at the last log_trees item for each client rid and record its
+ * trans seq if it hasn't been committed.
  */
 static int get_stable_trans_seq(struct super_block *sb, u64 *last_seq_ret)
 {
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
-	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_log_trees *lt;
+	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
 	u64 last_seq = 0;
 	int ret;
 
 	last_seq = scoutfs_server_seq(sb) - 1;
-	scoutfs_key_init_log_trees(&key, 0, 0);
 
 	mutex_lock(&server->logs_mutex);
 
-	for (;; scoutfs_key_inc(&key)) {
-		ret = scoutfs_btree_next(sb, &super->logs_root, &key, &iref);
-		if (ret == 0) {
-			if (iref.val_len == sizeof(*lt)) {
-				lt = iref.val;
-				if ((le64_to_cpu(lt->get_trans_seq) >
-				     le64_to_cpu(lt->commit_trans_seq)) &&
-				     le64_to_cpu(lt->get_trans_seq) <= last_seq) {
-					last_seq = le64_to_cpu(lt->get_trans_seq) - 1;
-				}
-				key = *iref.key;
-			} else {
-				ret = -EIO;
-			}
-			scoutfs_btree_put_iref(&iref);
-		}
-		if (ret < 0) {
-			if (ret == -ENOENT) {
-				ret = 0;
-				break;
-			}
+	scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
+	while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &lt)) > 0) {
+		if ((le64_to_cpu(lt.get_trans_seq) > le64_to_cpu(lt.commit_trans_seq)) &&
+		     le64_to_cpu(lt.get_trans_seq) <= last_seq) {
+			last_seq = le64_to_cpu(lt.get_trans_seq) - 1;
 		}
 	}
 
@@ -1810,9 +1967,8 @@ static int server_srch_get_compact(struct super_block *sb,
 				   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
 	struct scoutfs_srch_compact *sc = NULL;
 	COMMIT_HOLD(hold);
 	int ret;
@@ -1834,9 +1990,7 @@ static int server_srch_get_compact(struct super_block *sb,
 	ret = scoutfs_srch_get_compact(sb, &server->alloc, &server->wri,
 				       &super->srch_root, rid, sc);
 	mutex_unlock(&server->srch_mutex);
-	if (ret == 0 && sc->nr == 0)
-		ret = -ENOENT;
-	if (ret < 0)
+	if (ret < 0 || (ret == 0 && sc->nr == 0))
 		goto apply;
 
 	mutex_lock(&server->alloc_mutex);
@@ -1877,8 +2031,7 @@ static int server_srch_commit_compact(struct super_block *sb,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_srch_compact *sc;
 	struct scoutfs_alloc_list_head av;
 	struct scoutfs_alloc_list_head fr;
@@ -1947,27 +2100,47 @@ out:
  * reset the next range key if there's still work to do.  If the
  * operation is complete then we tear down the input log_trees items and
  * delete the status.
+ *
+ * Processing all the completions can take more than one transaction.
+ * We return -EINPROGRESS if we have to commit a transaction and the
+ * caller will apply the commit and immediate call back in so we can
+ * perform another commit.  We need to be very careful to leave the
+ * status in a state where requests won't be issued at the wrong time
+ * (by forcing nr_completions to a batch while we delete them).
  */
 static int splice_log_merge_completions(struct super_block *sb,
 					struct scoutfs_log_merge_status *stat,
 					bool no_ranges)
 {
 	struct server_info *server = SCOUTFS_SB(sb)->server_info;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_complete comp;
 	struct scoutfs_log_merge_freeing fr;
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_log_trees lt = {{{0,}}};
 	SCOUTFS_BTREE_ITEM_REF(iref);
+	bool upd_stat = true;
+	int einprogress = 0;
 	struct scoutfs_key key;
 	char *err_str = NULL;
+	u32 alloc_low;
+	u32 tmp;
 	u64 seq;
 	int ret;
+	int err;
 
 	/* musn't rebalance fs tree parents while reqs rely on their key bounds */
 	if (WARN_ON_ONCE(le64_to_cpu(stat->nr_requests) > 0))
 		return -EIO;
+
+	/*
+	 * Be overly conservative about how low the allocator can get
+	 * before we commit.  This gives us a lot of work to do in a
+	 * commit while also allowing a pretty big smallest allocator to
+	 * work with the theoretically unbounded alloc list splicing.
+	 */
+	scoutfs_alloc_meta_remaining(&server->alloc, &alloc_low, &tmp);
+	alloc_low = min(alloc_low, tmp) / 4;
 
 	/*
 	 * Splice in all the completed subtrees at the initial parent
@@ -1989,6 +2162,22 @@ static int splice_log_merge_completions(struct super_block *sb,
 		}
 
 		seq = le64_to_cpu(comp.seq);
+
+		/*
+		 * Use having cleared the lists as an indication that
+		 * we've already set the parents and don't need to dirty
+		 * the btree blocks to do it all over again.  This is
+		 * safe because there is always an fs block that the
+		 * merge dirties and frees into the meta_freed list.
+		 */
+		if (comp.meta_avail.ref.blkno == 0 && comp.meta_freed.ref.blkno == 0)
+			continue;
+
+		if (scoutfs_alloc_meta_low(sb, &server->alloc, alloc_low)) {
+			einprogress = -EINPROGRESS;
+			ret = 0;
+			goto out;
+		}
 
 		ret = scoutfs_btree_set_parent(sb, &server->alloc, &server->wri,
 					       &super->fs_root, &comp.start,
@@ -2025,6 +2214,14 @@ static int splice_log_merge_completions(struct super_block *sb,
 	}
 
 	/*
+	 * Once we start rebalancing we force the number of completions
+	 * to a batch so that requests won't be issued.  Once we're done
+	 * we clear the completion count and requests can flow again.
+	 */
+	if (le64_to_cpu(stat->nr_complete) < LOG_MERGE_SPLICE_BATCH)
+		stat->nr_complete = cpu_to_le64(LOG_MERGE_SPLICE_BATCH);
+
+	/*
 	 * Now with all the parent blocks spliced in, rebalance items
 	 * amongst parents that needed to split/join and delete the
 	 * completion items, possibly returning ranges to process.
@@ -2044,6 +2241,12 @@ static int splice_log_merge_completions(struct super_block *sb,
 		}
 
 		seq = le64_to_cpu(comp.seq);
+
+		if (scoutfs_alloc_meta_low(sb, &server->alloc, alloc_low)) {
+			einprogress = -EINPROGRESS;
+			ret = 0;
+			goto out;
+		}
 
 		/* balance when there was a remaining key range */
 		if (le64_to_cpu(comp.flags) & SCOUTFS_LOG_MERGE_COMP_REMAIN) {
@@ -2084,18 +2287,11 @@ static int splice_log_merge_completions(struct super_block *sb,
 		}
 	}
 
-	/* update the status once all completes are processed */
-	scoutfs_key_set_zeros(&stat->next_range_key);
-	stat->nr_complete = 0;
-
 	/* update counts and done if there's still ranges to process */
 	if (!no_ranges) {
-		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
-		ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
-					   &super->log_merge, &key,
-					   stat, sizeof(*stat));
-		if (ret < 0)
-			err_str = "update status";
+		scoutfs_key_set_zeros(&stat->next_range_key);
+		stat->nr_complete = 0;
+		ret = 0;
 		goto out;
 	}
 
@@ -2131,6 +2327,12 @@ static int splice_log_merge_completions(struct super_block *sb,
 		      (le64_to_cpu(lt.finalize_seq) < le64_to_cpu(stat->seq))))
 			continue;
 
+		if (scoutfs_alloc_meta_low(sb, &server->alloc, alloc_low)) {
+			einprogress = -EINPROGRESS;
+			ret = 0;
+			goto out;
+		}
+
 		fr.root = lt.item_root;
 		scoutfs_key_set_zeros(&fr.key);
 		fr.seq = cpu_to_le64(scoutfs_server_next_seq(sb));
@@ -2164,9 +2366,10 @@ static int splice_log_merge_completions(struct super_block *sb,
 		}
 
 		le64_add_cpu(&super->inode_count, le64_to_cpu(lt.inode_count_delta));
-
 	}
 
+	/* everything's done, remove the merge operation */
+	upd_stat = false;
 	init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
 	ret = scoutfs_btree_delete(sb, &server->alloc, &server->wri,
 				   &super->log_merge, &key);
@@ -2175,12 +2378,23 @@ static int splice_log_merge_completions(struct super_block *sb,
 	else
 		err_str = "deleting merge status item";
 out:
+	if (upd_stat) {
+		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
+		err = scoutfs_btree_update(sb, &server->alloc, &server->wri,
+					   &super->log_merge, &key,
+					   stat, sizeof(struct scoutfs_log_merge_status));
+		if (err && !ret) {
+			err_str = "updating merge status item";
+			ret = err;
+		}
+	}
+
 	if (ret < 0)
 		scoutfs_err(sb, "server error %d splicing log merge completion: %s", ret, err_str);
 
 	BUG_ON(ret); /* inconsistent */
 
-	return ret;
+	return ret ?: einprogress;
 }
 
 /*
@@ -2271,7 +2485,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  log_merge_free_work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_freeing fr;
 	struct scoutfs_key key;
 	COMMIT_HOLD(hold);
@@ -2281,9 +2495,11 @@ static void server_log_merge_free_work(struct work_struct *work)
 
 	while (!server_is_stopping(server)) {
 
-		server_hold_commit(sb, &hold);
-		mutex_lock(&server->logs_mutex);
-		commit = true;
+		if (!commit) {
+			server_hold_commit(sb, &hold);
+			mutex_lock(&server->logs_mutex);
+			commit = true;
+		}
 
 		ret = next_log_merge_item(sb, &super->log_merge,
 					  SCOUTFS_LOG_MERGE_FREEING_ZONE,
@@ -2330,12 +2546,14 @@ static void server_log_merge_free_work(struct work_struct *work)
 		/* freed blocks are in allocator, we *have* to update fr */
 		BUG_ON(ret < 0);
 
-		mutex_unlock(&server->logs_mutex);
-		ret = server_apply_commit(sb, &hold, ret);
-		commit = false;
-		if (ret < 0) {
-			err_str = "looping commit del/upd freeing item";
-			break;
+		if (server_hold_alloc_used_since(sb, &hold) >= COMMIT_HOLD_ALLOC_BUDGET / 2) {
+			mutex_unlock(&server->logs_mutex);
+			ret = server_apply_commit(sb, &hold, ret);
+			commit = false;
+			if (ret < 0) {
+				err_str = "looping commit del/upd freeing item";
+				break;
+			}
 		}
 	}
 
@@ -2355,6 +2573,12 @@ static void server_log_merge_free_work(struct work_struct *work)
 }
 
 /*
+ * Clients regularly ask if there is log merge work to do.  We process
+ * completions inline before responding so that we don't create large
+ * delays between completion processing and the next request.  We don't
+ * mind if the client get_log_merge request sees high latency, the
+ * blocked caller has nothing else to do.
+ *
  * This will return ENOENT to the client if there is no work to do.
  */
 static int server_get_log_merge(struct super_block *sb,
@@ -2363,8 +2587,7 @@ static int server_get_log_merge(struct super_block *sb,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_log_merge_range remain;
@@ -2423,14 +2646,22 @@ restart:
 			goto out;
 		}
 
-		/* maybe splice now that we know if there's ranges */
+		/* splice if we have a batch or ran out of ranges */
 		no_next = ret == -ENOENT;
 		no_ranges = scoutfs_key_is_zeros(&stat.next_range_key) && ret == -ENOENT;
 		if (le64_to_cpu(stat.nr_requests) == 0 &&
 		    (no_next || le64_to_cpu(stat.nr_complete) >= LOG_MERGE_SPLICE_BATCH)) {
 			ret = splice_log_merge_completions(sb, &stat, no_ranges);
-			if (ret < 0)
+			if (ret == -EINPROGRESS) {
+				mutex_unlock(&server->logs_mutex);
+				ret = server_apply_commit(sb, &hold, 0);
+				if (ret < 0)
+					goto respond;
+				server_hold_commit(sb, &hold);
+				mutex_lock(&server->logs_mutex);
+			} else if (ret < 0) {
 				goto out;
+			}
 			/* splicing resets key and adds ranges, could finish status */
 			goto restart;
 		}
@@ -2632,6 +2863,7 @@ out:
 	mutex_unlock(&server->logs_mutex);
 	ret = server_apply_commit(sb, &hold, ret);
 
+respond:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, &req, sizeof(req));
 }
 
@@ -2647,8 +2879,7 @@ static int server_commit_log_merge(struct super_block *sb,
 {
 	DECLARE_SERVER_INFO(sb, server);
 	u64 rid = scoutfs_net_client_rid(conn);
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_request orig_req;
 	struct scoutfs_log_merge_complete *comp;
 	struct scoutfs_log_merge_status stat;
@@ -2865,9 +3096,9 @@ static int server_get_volopt(struct super_block *sb, struct scoutfs_net_connecti
 	}
 
 	do {
-		seq = read_seqcount_begin(&server->volopt_seqcount);
+		seq = read_seqbegin(&server->seqlock);
 		volopt = server->volopt;
-	} while (read_seqcount_retry(&server->volopt_seqcount, seq));
+	} while (read_seqretry(&server->seqlock, seq));
 
 out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, &volopt, sizeof(volopt));
@@ -2883,7 +3114,7 @@ static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connecti
 			     u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_volume_options *volopt;
 	COMMIT_HOLD(hold);
 	u64 opt;
@@ -2936,12 +3167,12 @@ static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connecti
 apply:
 	ret = server_apply_commit(sb, &hold, ret);
 
-	write_seqcount_begin(&server->volopt_seqcount);
+	write_seqlock(&server->seqlock);
 	if (ret == 0)
 		server->volopt = super->volopt;
 	else
 		super->volopt = server->volopt;
-	write_seqcount_end(&server->volopt_seqcount);
+	write_sequnlock(&server->seqlock);
 
 	mutex_unlock(&server->volopt_mutex);
 out:
@@ -2952,7 +3183,7 @@ static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connec
 			       u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_volume_options *volopt;
 	COMMIT_HOLD(hold);
 	__le64 *opt;
@@ -2984,12 +3215,12 @@ static int server_clear_volopt(struct super_block *sb, struct scoutfs_net_connec
 
 	ret = server_apply_commit(sb, &hold, ret);
 
-	write_seqcount_begin(&server->volopt_seqcount);
+	write_seqlock(&server->seqlock);
 	if (ret == 0)
 		server->volopt = super->volopt;
 	else
 		super->volopt = server->volopt;
-	write_seqcount_end(&server->volopt_seqcount);
+	write_sequnlock(&server->seqlock);
 
 	mutex_unlock(&server->volopt_mutex);
 out:
@@ -3006,7 +3237,7 @@ static int server_resize_devices(struct super_block *sb, struct scoutfs_net_conn
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_resize_devices *nrd;
 	COMMIT_HOLD(hold);
 	u64 meta_tot;
@@ -3113,16 +3344,19 @@ static int count_free_blocks(struct super_block *sb, void *arg, int owner,
 }
 
 /*
- * We calculate the total inode count and free blocks from the current in-memory dirty
- * versions of the super block and log_trees structs, so we have to lock them.
+ * We calculate the total inode count and free blocks from the last
+ * stable super that was written.  Other users also walk stable blocks
+ * so by joining them we don't have to worry about ensuring that we've
+ * locked all the dirty structures that the summations could reference.
+ * We handle stale reads by retrying with the most recent stable super.
  */
 static int server_statfs(struct super_block *sb, struct scoutfs_net_connection *conn,
 			 u8 cmd, u64 id, void *arg, u16 arg_len)
 {
-	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block super;
 	struct scoutfs_net_statfs nst = {{0,}};
 	struct statfs_free_blocks sfb = {0,};
+	DECLARE_SAVED_REFS(saved);
 	u64 inode_count;
 	int ret;
 
@@ -3131,24 +3365,24 @@ static int server_statfs(struct super_block *sb, struct scoutfs_net_connection *
 		goto out;
 	}
 
-	mutex_lock(&server->alloc_mutex);
-	ret = scoutfs_alloc_foreach_super(sb, super, count_free_blocks, &sfb);
-	mutex_unlock(&server->alloc_mutex);
-	if (ret < 0)
-		goto out;
+	do {
+		get_stable(sb, &super, NULL);
 
-	mutex_lock(&server->logs_mutex);
-	ret = scoutfs_forest_inode_count(sb, super, &inode_count);
-	mutex_unlock(&server->logs_mutex);
-	if (ret < 0)
-		goto out;
+		ret = scoutfs_alloc_foreach_super(sb, &super, count_free_blocks, &sfb) ?:
+		      scoutfs_forest_inode_count(sb, &super, &inode_count);
+		if (ret < 0 && ret != -ESTALE)
+			goto out;
 
-	BUILD_BUG_ON(sizeof(nst.uuid) != sizeof(super->uuid));
-	memcpy(nst.uuid, super->uuid, sizeof(nst.uuid));
+		ret = scoutfs_block_check_stale(sb, ret, &saved, &super.logs_root.ref,
+						&super.srch_root.ref);
+	} while (ret == -ESTALE);
+
+	BUILD_BUG_ON(sizeof(nst.uuid) != sizeof(super.uuid));
+	memcpy(nst.uuid, super.uuid, sizeof(nst.uuid));
 	nst.free_meta_blocks = cpu_to_le64(sfb.meta);
-	nst.total_meta_blocks = super->total_meta_blocks;
+	nst.total_meta_blocks = super.total_meta_blocks;
 	nst.free_data_blocks = cpu_to_le64(sfb.data);
-	nst.total_data_blocks = super->total_data_blocks;
+	nst.total_data_blocks = super.total_data_blocks;
 	nst.inode_count = cpu_to_le64(inode_count);
 
 	ret = 0;
@@ -3179,7 +3413,7 @@ static int insert_mounted_client(struct super_block *sb, u64 rid, u64 gr_flags,
 				 struct sockaddr_in *sin)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_mounted_client_btree_val mcv;
 	struct scoutfs_key key;
 	int ret;
@@ -3205,7 +3439,7 @@ static int lookup_mounted_client_addr(struct super_block *sb, u64 rid,
 				      union scoutfs_inet_addr *addr)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_mounted_client_btree_val *mcv;
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
@@ -3239,7 +3473,7 @@ static int lookup_mounted_client_addr(struct super_block *sb, u64 rid,
 static int delete_mounted_client(struct super_block *sb, u64 rid)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_key key;
 	int ret;
 
@@ -3263,7 +3497,7 @@ static int delete_mounted_client(struct super_block *sb, u64 rid)
 static int cancel_srch_compact(struct super_block *sb, u64 rid)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_alloc_list_head av;
 	struct scoutfs_alloc_list_head fr;
 	int ret;
@@ -3315,7 +3549,7 @@ static int cancel_srch_compact(struct super_block *sb, u64 rid)
 static int cancel_log_merge(struct super_block *sb, u64 rid)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_log_merge_status stat;
 	struct scoutfs_log_merge_request req;
 	struct scoutfs_log_merge_range rng;
@@ -3439,7 +3673,7 @@ static int server_greeting(struct super_block *sb,
 			   u8 cmd, u64 id, void *arg, u16 arg_len)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_greeting *gr = arg;
 	struct scoutfs_net_greeting greet;
 	DECLARE_SERVER_INFO(sb, server);
@@ -3455,10 +3689,9 @@ static int server_greeting(struct super_block *sb,
 		goto send_err;
 	}
 
-	if (gr->fsid != super->hdr.fsid) {
+	if (gr->fsid != cpu_to_le64(sbi->fsid)) {
 		scoutfs_warn(sb, "client rid %016llx greeting fsid 0x%llx did not match server fsid 0x%llx",
-			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fsid),
-			     le64_to_cpu(super->hdr.fsid));
+			     le64_to_cpu(gr->rid), le64_to_cpu(gr->fsid), sbi->fsid);
 		ret = -EINVAL;
 		goto send_err;
 	}
@@ -3598,7 +3831,7 @@ static void farewell_worker(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  farewell_work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_mounted_client_btree_val *mcv;
 	struct farewell_request *tmp;
 	struct farewell_request *fw;
@@ -3960,7 +4193,7 @@ static void recovery_timeout(struct super_block *sb)
 static int start_recovery(struct super_block *sb)
 {
 	DECLARE_SERVER_INFO(sb, server);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key key;
 	unsigned int nr = 0;
@@ -4077,8 +4310,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  work);
 	struct super_block *sb = server->sb;
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_net_connection *conn = NULL;
 	struct scoutfs_mount_options opts;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
@@ -4090,13 +4322,14 @@ static void scoutfs_server_worker(struct work_struct *work)
 	trace_scoutfs_server_work_enter(sb, 0, 0);
 
 	scoutfs_options_read(sb, &opts);
-	scoutfs_quorum_slot_sin(super, opts.quorum_slot_nr, &sin);
+	scoutfs_quorum_slot_sin(&server->qconf, opts.quorum_slot_nr, &sin);
 	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
 
 	scoutfs_block_writer_init(sb, &server->wri);
+	server->finalize_sent_seq = 0;
 
 	/* first make sure no other servers are still running */
-	ret = scoutfs_quorum_fence_leaders(sb, server->term);
+	ret = scoutfs_quorum_fence_leaders(sb, &server->qconf, server->term);
 	if (ret < 0) {
 		scoutfs_err(sb, "server error %d attempting to fence previous leaders", ret);
 		goto out;
@@ -4127,13 +4360,12 @@ static void scoutfs_server_worker(struct work_struct *work)
 	}
 
 	/* update volume options early, possibly for use during startup */
-	write_seqcount_begin(&server->volopt_seqcount);
+	write_seqlock(&server->seqlock);
 	server->volopt = super->volopt;
-	write_seqcount_end(&server->volopt_seqcount);
+	write_sequnlock(&server->seqlock);
 
 	atomic64_set(&server->seq_atomic, le64_to_cpu(super->seq));
-	set_roots(server, &super->fs_root, &super->logs_root,
-		  &super->srch_root);
+	set_stable_super(server, super);
 
 	/* prepare server alloc for this transaction, larger first */
 	if (le64_to_cpu(super->server_meta_avail[0].total_nr) <
@@ -4227,11 +4459,12 @@ out:
 /*
  * Start the server but don't wait for it to complete.
  */
-void scoutfs_server_start(struct super_block *sb, u64 term)
+void scoutfs_server_start(struct super_block *sb, struct scoutfs_quorum_config *qconf, u64 term)
 {
 	DECLARE_SERVER_INFO(sb, server);
 
 	if (cmpxchg(&server->status, SERVER_DOWN, SERVER_STARTING) == SERVER_DOWN) {
+		server->qconf = *qconf;
 		server->term = term;
 		queue_work(server->wq, &server->work);
 	}
@@ -4255,7 +4488,7 @@ void scoutfs_server_stop_wait(struct super_block *sb)
 	DECLARE_SERVER_INFO(sb, server);
 
 	stop_server(server);
-	flush_work_sync(&server->work);
+	flush_work(&server->work);
 }
 
 int scoutfs_server_setup(struct super_block *sb)
@@ -4269,6 +4502,7 @@ int scoutfs_server_setup(struct super_block *sb)
 
 	server->sb = sb;
 	spin_lock_init(&server->lock);
+	seqlock_init(&server->seqlock);
 	init_waitqueue_head(&server->waitq);
 	INIT_WORK(&server->work, scoutfs_server_worker);
 	server->status = SERVER_DOWN;
@@ -4283,8 +4517,6 @@ int scoutfs_server_setup(struct super_block *sb)
 	INIT_WORK(&server->log_merge_free_work, server_log_merge_free_work);
 	mutex_init(&server->srch_mutex);
 	mutex_init(&server->mounted_clients_mutex);
-	seqcount_init(&server->roots_seqcount);
-	seqcount_init(&server->volopt_seqcount);
 	mutex_init(&server->volopt_mutex);
 	INIT_WORK(&server->fence_pending_recov_work, fence_pending_recov_worker);
 	INIT_DELAYED_WORK(&server->reclaim_dwork, reclaim_worker);

@@ -25,8 +25,9 @@ All options can be seen by running with -h.
 This script is built to test multi-node systems on one host by using
 different mounts of the same devices.  The script creates a fake block
 device in front of each fs block device for each mount that will be
-tested.  Currently it will create free loop devices and will mount on
-/mnt/test.[0-9].
+tested.  It will create predictable device mapper devices and mounts
+them on /mnt/test.N.  These static device names and mount paths limit
+the script to a single execution per host.
 
 All tests will be run by default.  Particular tests can be included or
 excluded by providing test name regular expressions with the -I and -E
@@ -104,14 +105,15 @@ used during the test.
 
 | Variable         | Description          | Origin          | Example           |
 | ---------------- | -------------------  | --------------- | ----------------- |
-| T\_MB[0-9]       | per-mount meta bdev  | created per run | /dev/loop0        |
-| T\_DB[0-9]       | per-mount data bdev  | created per run | /dev/loop1        |
+| T\_MB[0-9]       | per-mount meta bdev  | created per run | /dev/mapper/\_scoutfs\_test\_meta\_[0-9]        |
+| T\_DB[0-9]       | per-mount data bdev  | created per run | /dev/mapper/\_scoutfs\_test\_data\_[0-9]        |
 | T\_D[0-9]        | per-mount test dir   | made for test   | /mnt/test.[0-9]/t |
 | T\_META\_DEVICE  | main FS meta bdev    | -M              | /dev/vda          |
 | T\_DATA\_DEVICE  | main FS data bdev    | -D              | /dev/vdb          |
 | T\_EX\_META\_DEV | scratch meta bdev    | -f              | /dev/vdd          |
 | T\_EX\_DATA\_DEV | scratch meta bdev    | -e              | /dev/vdc          |
 | T\_M[0-9]        | mount paths          | mounted per run | /mnt/test.[0-9]/  |
+| T\_MODULE        | built kernel module  | created per run | ../kmod/src/..ko  |
 | T\_NR\_MOUNTS    | number of mounts     | -n              | 3                 |
 | T\_O[0-9]        | mount options        | created per run | -o server\_addr=  |
 | T\_QUORUM        | quorum count         | -q              | 2                 |

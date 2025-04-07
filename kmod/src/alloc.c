@@ -14,6 +14,7 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
+#include <linux/blkdev.h>
 #include <linux/sort.h>
 #include <linux/random.h>
 
@@ -892,12 +893,11 @@ static int find_zone_extent(struct super_block *sb, struct scoutfs_alloc_root *r
  * -ENOENT is returned if we run out of extents in the source tree
  * before moving the total.
  *
- * If meta_reserved is non-zero then -EINPROGRESS can be returned if the
- * current meta allocator's avail blocks or room for freed blocks would
- * have fallen under the reserved amount.  The could have been
- * successfully dirtied in this case but the number of blocks moved is
- * not returned.  The caller is expected to deal with the partial
- * progress by commiting the dirty trees and examining the resulting
+ * If meta_budget is non-zero then -EINPROGRESS can be returned if the
+ * the caller's budget is consumed in the allocator during this call
+ * (though not necessarily by us, we don't have per-thread tracking of
+ * allocator consumption :/).  The call can still have made progress and
+ * caller is expected commit the dirty trees and examining the resulting
  * modified trees to see if they need to continue moving extents.
  *
  * The caller can specify that extents in the source tree should first
@@ -914,7 +914,7 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
 		       struct scoutfs_alloc_root *src, u64 total,
-		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_reserved)
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_budget)
 {
 	struct alloc_ext_args args = {
 		.alloc = alloc,
@@ -922,6 +922,8 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 	};
 	struct scoutfs_extent found;
 	struct scoutfs_extent ext;
+	u32 avail_start = 0;
+	u32 freed_start = 0;
 	u64 moved = 0;
 	u64 count;
 	int ret = 0;
@@ -931,6 +933,9 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		exclusive = NULL;
 		vacant = NULL;
 	}
+
+	if (meta_budget != 0)
+		scoutfs_alloc_meta_remaining(alloc, &avail_start, &freed_start);
 
 	while (moved < total) {
 		count = total - moved;
@@ -964,11 +969,21 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		if (ret < 0)
 			break;
 
-		if (meta_reserved != 0 &&
-		    scoutfs_alloc_meta_low(sb, alloc, meta_reserved +
-					   extent_mod_blocks(src->root.height) +
-					   extent_mod_blocks(dst->root.height))) {
+		if (meta_budget != 0 &&
+		    scoutfs_alloc_meta_low_since(alloc, avail_start, freed_start, meta_budget,
+						 extent_mod_blocks(src->root.height) +
+						 extent_mod_blocks(dst->root.height))) {
 			ret = -EINPROGRESS;
+			break;
+		}
+
+		/* return partial if the server alloc can't dirty any more */
+		if (scoutfs_alloc_meta_low(sb, alloc, 50 + extent_mod_blocks(src->root.height) +
+						      extent_mod_blocks(dst->root.height))) {
+			if (WARN_ON_ONCE(!moved))
+				ret = -ENOSPC;
+			else
+				ret = 0;
 			break;
 		}
 
@@ -1351,6 +1366,27 @@ void scoutfs_alloc_meta_remaining(struct scoutfs_alloc *alloc, u32 *avail_total,
 	} while (read_seqretry(&alloc->seqlock, seq));
 }
 
+/*
+ * Returns true if the caller's consumption of nr from either avail or
+ * freed would end up exceeding their budget relative to the starting
+ * remaining snapshot they took.
+ */
+bool scoutfs_alloc_meta_low_since(struct scoutfs_alloc *alloc, u32 avail_start, u32 freed_start,
+				  u32 budget, u32 nr)
+{
+	u32 avail_use;
+	u32 freed_use;
+	u32 avail;
+	u32 freed;
+
+	scoutfs_alloc_meta_remaining(alloc, &avail, &freed);
+
+	avail_use = avail_start - avail;
+	freed_use = freed_start - freed;
+
+	return ((avail_use + nr) > budget) || ((freed_use + nr) > budget);
+}
+
 bool scoutfs_alloc_test_flag(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 flag)
 {
@@ -1547,12 +1583,10 @@ out:
  * call the caller's callback.  This assumes that the super it's reading
  * could be stale and will retry if it encounters stale blocks.
  */
-int scoutfs_alloc_foreach(struct super_block *sb,
-			  scoutfs_alloc_foreach_cb_t cb, void *arg)
+int scoutfs_alloc_foreach(struct super_block *sb, scoutfs_alloc_foreach_cb_t cb, void *arg)
 {
 	struct scoutfs_super_block *super = NULL;
-	struct scoutfs_block_ref stale_refs[2] = {{0,}};
-	struct scoutfs_block_ref refs[2] = {{0,}};
+	DECLARE_SAVED_REFS(saved);
 	int ret;
 
 	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
@@ -1561,26 +1595,18 @@ int scoutfs_alloc_foreach(struct super_block *sb,
 		goto out;
 	}
 
-retry:
-	ret = scoutfs_read_super(sb, super);
-	if (ret < 0)
-		goto out;
+	do {
+		ret = scoutfs_read_super(sb, super);
+		if (ret < 0)
+			goto out;
 
-	refs[0] = super->logs_root.ref;
-	refs[1] = super->srch_root.ref;
+		ret = scoutfs_alloc_foreach_super(sb, super, cb, arg);
 
-	ret = scoutfs_alloc_foreach_super(sb, super, cb, arg);
+		ret = scoutfs_block_check_stale(sb, ret, &saved, &super->logs_root.ref,
+						&super->srch_root.ref);
+	} while (ret == -ESTALE);
+
 out:
-	if (ret == -ESTALE) {
-		if (memcmp(&stale_refs, &refs, sizeof(refs)) == 0) {
-			ret = -EIO;
-		} else {
-			BUILD_BUG_ON(sizeof(stale_refs) != sizeof(refs));
-			memcpy(stale_refs, refs, sizeof(stale_refs));
-			goto retry;
-		}
-	}
-
 	kfree(super);
 	return ret;
 }

@@ -12,13 +12,13 @@
  */
 #include <linux/kernel.h>
 #include <linux/fs.h>
-#include <linux/preempt_mask.h> /* a rhel shed.h needed preempt_offset? */
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/sort.h>
 #include <linux/ctype.h>
 #include <linux/rhashtable.h>
+#include <linux/posix_acl.h>
 
 #include "super.h"
 #include "lock.h"
@@ -36,6 +36,9 @@
 #include "xattr.h"
 #include "item.h"
 #include "omap.h"
+#include "util.h"
+#include "totl.h"
+#include "quota.h"
 
 /*
  * scoutfs uses a lock service to manage item cache consistency between
@@ -84,7 +87,7 @@ struct lock_info {
 	bool unmounting;
 	struct rhashtable ht;
 	struct rb_root lock_range_tree;
-	struct shrinker shrinker;
+	KC_DEFINE_SHRINKER(shrinker);
 	struct list_head lru_active;
 	struct list_head lru_reclaim;
 	long lru_imbalance;
@@ -144,16 +147,13 @@ static bool lock_modes_match(int granted, int requested)
  * allows deletions to be performed by unlink without having to wait for
  * remote cached inodes to be dropped.
  *
- * If the cached inode was already deferring final inode deletion then
- * we can't perform that inline in invalidation.  The locking alone
- * deadlock, and it might also take multiple transactions to fully
- * delete an inode with significant metadata.  We only perform the iput
- * inline if we know that possible eviction can't perform the final
- * deletion, otherwise we kick it off to async work.
+ * We kick the d_prune and iput off to async work because they can end
+ * up in final iput and inode eviction item deletion which would
+ * deadlock.   d_prune->dput can end up in iput on parents in different
+ * locks entirely.
  */
 static void invalidate_inode(struct super_block *sb, u64 ino)
 {
-	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_inode_info *si;
 	struct inode *inode;
 
@@ -167,17 +167,9 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 			scoutfs_data_wait_changed(inode);
 		}
 
-		/* can't touch during unmount, dcache destroys w/o locks */
-		if (!linfo->unmounting)
-			d_prune_aliases(inode);
+		forget_all_cached_acls(inode);
 
-		si->drop_invalidated = true;
-		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink > 0) {
-			iput(inode);
-		} else {
-			/* defer iput to work context so we don't evict inodes from invalidation */
-			scoutfs_inode_queue_iput(inode);
-		}
+		scoutfs_inode_queue_iput(inode, SI_IPUT_FLAG_PRUNE);
 	}
 }
 
@@ -210,19 +202,12 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 			return ret;
 	}
 
+	if (lock->start.sk_zone == SCOUTFS_QUOTA_ZONE && !lock_mode_can_read(mode))
+		scoutfs_quota_invalidate(sb);
+
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
 retry:
-		/* invalidate inodes before removing coverage */
-		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
-			ino = le64_to_cpu(lock->start.ski_ino);
-			last = le64_to_cpu(lock->end.ski_ino);
-			while (ino <= last) {
-				invalidate_inode(sb, ino);
-				ino++;
-			}
-		}
-
 		/* remove cov items to tell users that their cache is stale */
 		spin_lock(&lock->cov_list_lock);
 		list_for_each_entry_safe(cov, tmp, &lock->cov_list, head) {
@@ -237,6 +222,16 @@ retry:
 			scoutfs_inc_counter(sb, lock_invalidate_coverage);
 		}
 		spin_unlock(&lock->cov_list_lock);
+
+		/* invalidate inodes after removing coverage so drop/evict aren't covered */
+		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
+			ino = le64_to_cpu(lock->start.ski_ino);
+			last = le64_to_cpu(lock->end.ski_ino);
+			while (ino <= last) {
+				invalidate_inode(sb, ino);
+				ino++;
+			}
+		}
 
 		scoutfs_item_invalidate(sb, &lock->start, &lock->end);
 	}
@@ -320,6 +315,7 @@ static void lock_inc_count(unsigned int *counts, enum scoutfs_lock_mode mode)
 static void lock_dec_count(unsigned int *counts, enum scoutfs_lock_mode mode)
 {
 	BUG_ON(mode < 0 || mode >= SCOUTFS_LOCK_NR_MODES);
+	BUG_ON(counts[mode] == 0);
 	counts[mode]--;
 }
 
@@ -1429,10 +1425,29 @@ int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode,
 	struct scoutfs_key start;
 	struct scoutfs_key end;
 
-	scoutfs_key_set_zeros(&start);
-	start.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
-	scoutfs_key_set_ones(&end);
-	end.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
+	scoutfs_totl_set_range(&start, &end);
+
+	return lock_key_range(sb, mode, flags, &start, &end, lock);
+}
+
+int scoutfs_lock_xattr_indx(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+			    struct scoutfs_lock **lock)
+{
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+
+	scoutfs_xattr_indx_get_range(&start, &end);
+
+	return lock_key_range(sb, mode, flags, &start, &end, lock);
+}
+
+int scoutfs_lock_quota(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+		       struct scoutfs_lock **lock)
+{
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+
+	scoutfs_quota_get_lock_range(&start, &end);
 
 	return lock_key_range(sb, mode, flags, &start, &end, lock);
 }
@@ -1533,7 +1548,7 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 			    enum scoutfs_lock_mode mode)
 {
-	signed char lock_mode = ACCESS_ONCE(lock->mode);
+	signed char lock_mode = READ_ONCE(lock->mode);
 
 	return lock_modes_match(lock_mode, mode) &&
 	       scoutfs_key_compare_ranges(key, key,
@@ -1591,6 +1606,17 @@ static void lock_shrink_worker(struct work_struct *work)
 	}
 }
 
+static unsigned long lock_count_objects(struct shrinker *shrink,
+					struct shrink_control *sc)
+{
+	struct lock_info *linfo = KC_SHRINKER_CONTAINER_OF(shrink, struct lock_info);
+	struct super_block *sb = linfo->sb;
+
+	scoutfs_inc_counter(sb, lock_count_objects);
+
+	return shrinker_min_long(linfo->lru_nr);
+}
+
 /*
  * Start the shrinking process for locks on the lru.  The reclaim and
  * active lists are walked from head to tail.   We hand locks off to the
@@ -1613,20 +1639,17 @@ static void lock_shrink_worker(struct work_struct *work)
  * mode which will prevent the lock from being freed when the null
  * response arrives.
  */
-static int scoutfs_lock_shrink(struct shrinker *shrink,
-			       struct shrink_control *sc)
+static unsigned long lock_scan_objects(struct shrinker *shrink,
+				       struct shrink_control *sc)
 {
-	struct lock_info *linfo = container_of(shrink, struct lock_info,
-					       shrinker);
+	struct lock_info *linfo = KC_SHRINKER_CONTAINER_OF(shrink, struct lock_info);
 	struct super_block *sb = linfo->sb;
 	struct scoutfs_lock *lock = NULL;
 	struct list_head *list;
-	unsigned long nr;
-	int ret;
+	unsigned long nr = sc->nr_to_scan;
+	unsigned long freed = 0;
 
-	nr = sc->nr_to_scan;
-	if (nr == 0)
-		goto out;
+	scoutfs_inc_counter(sb, lock_scan_objects);
 
 	spin_lock(&linfo->lock);
 
@@ -1645,6 +1668,7 @@ static int scoutfs_lock_shrink(struct shrinker *shrink,
 					spin_unlock(&linfo->shrink_wlist.lock);
 					get_lock(lock);
 					nr--;
+					freed++;
 				}
 				spin_unlock(&lock->lock);
 			}
@@ -1668,10 +1692,8 @@ static int scoutfs_lock_shrink(struct shrinker *shrink,
 		queue_work(linfo->workq, &linfo->shrink_wlist.work);
 	spin_unlock(&linfo->shrink_wlist.lock);
 
-out:
-	ret = min_t(unsigned long, linfo->lru_nr, INT_MAX);
-	trace_scoutfs_lock_shrink_exit(sb, sc->nr_to_scan, ret);
-	return ret;
+	trace_scoutfs_lock_shrink_exit(sb, sc->nr_to_scan, freed);
+	return freed;
 }
 
 void scoutfs_free_unused_locks(struct super_block *sb)
@@ -1682,7 +1704,7 @@ void scoutfs_free_unused_locks(struct super_block *sb)
 		.nr_to_scan = INT_MAX,
 	};
 
-	linfo->shrinker.shrink(&linfo->shrinker, &sc);
+	lock_scan_objects(KC_SHRINKER_FN(&linfo->shrinker), &sc);
 }
 
 static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
@@ -1724,6 +1746,43 @@ void scoutfs_lock_flush_invalidate(struct super_block *sb)
 		flush_work(&linfo->inv_wlist.work);
 }
 
+static u64 get_held_lock_refresh_gen(struct super_block *sb, struct scoutfs_key *start)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+	struct scoutfs_lock *lock;
+	u64 refresh_gen = 0;
+
+	/* this can be called from all manner of places */
+	if (!linfo)
+		return 0;
+
+#if 0 /*@@@*/
+	spin_lock(&linfo->lock);
+#endif
+	lock = find_lock(sb, start);
+	if (lock) {
+		if (lock_mode_can_read(lock->mode))
+			refresh_gen = lock->refresh_gen;
+		put_lock(linfo, lock);
+	}
+#if 0 /*@@@*/
+	spin_unlock(&linfo->lock);
+#endif
+
+	return refresh_gen;
+}
+
+u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino)
+{
+	struct scoutfs_key start;
+
+	scoutfs_key_set_zeros(&start);
+	start.sk_zone = SCOUTFS_FS_ZONE;
+	start.ski_ino = cpu_to_le64(ino & ~(u64)SCOUTFS_LOCK_INODE_GROUP_MASK);
+
+	return get_held_lock_refresh_gen(sb, &start);
+}
+
 /*
  * The caller is going to be shutting down transactions and the client.
  * We need to make sure that locking won't call either after we return.
@@ -1757,7 +1816,7 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 	trace_scoutfs_lock_shutdown(sb, linfo);
 
 	/* stop the shrinker from queueing work */
-	unregister_shrinker(&linfo->shrinker);
+	KC_UNREGISTER_SHRINKER(&linfo->shrinker);
 	flush_work(&linfo->shrink_wlist.work);
 
 	/* cause current and future lock calls to return errors */
@@ -1881,9 +1940,9 @@ int scoutfs_lock_setup(struct super_block *sb)
 	linfo->sb = sb;
 	spin_lock_init(&linfo->lock);
 	linfo->lock_range_tree = RB_ROOT;
-	linfo->shrinker.shrink = scoutfs_lock_shrink;
-	linfo->shrinker.seeks = DEFAULT_SEEKS;
-	register_shrinker(&linfo->shrinker);
+	KC_INIT_SHRINKER_FUNCS(&linfo->shrinker, lock_count_objects,
+			       lock_scan_objects);
+	KC_REGISTER_SHRINKER(&linfo->shrinker, "scoutfs-lock:" SCSBF, SCSB_ARGS(sb));
 	INIT_LIST_HEAD(&linfo->lru_active);
 	INIT_LIST_HEAD(&linfo->lru_reclaim);
 	init_work_list(&linfo->inv_wlist, lock_invalidate_worker);

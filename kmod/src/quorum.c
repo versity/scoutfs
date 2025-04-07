@@ -100,6 +100,11 @@ struct last_msg {
 	ktime_t ts;
 };
 
+struct count_recent {
+	u64 count;
+	ktime_t recent;
+};
+
 enum quorum_role { FOLLOWER, CANDIDATE, LEADER };
 
 struct quorum_status {
@@ -112,8 +117,12 @@ struct quorum_status {
 	ktime_t timeout;
 };
 
+#define HB_DELAY_NR		(SCOUTFS_QUORUM_MAX_HB_TIMEO_MS / MSEC_PER_SEC)
+
 struct quorum_info {
 	struct super_block *sb;
+	struct scoutfs_quorum_config qconf;
+	struct workqueue_struct *workq;
 	struct work_struct work;
 	struct socket *sock;
 	bool shutdown;
@@ -125,6 +134,8 @@ struct quorum_info {
 	struct quorum_status show_status;
 	struct last_msg last_send[SCOUTFS_QUORUM_MAX_SLOTS];
 	struct last_msg last_recv[SCOUTFS_QUORUM_MAX_SLOTS];
+	struct count_recent *hb_delay;
+	unsigned long max_hb_delay;
 
 	struct scoutfs_sysfs_attrs ssa;
 };
@@ -134,11 +145,18 @@ struct quorum_info {
 #define DECLARE_QUORUM_INFO_KOBJ(kobj, name) \
 	DECLARE_QUORUM_INFO(SCOUTFS_SYSFS_ATTRS_SB(kobj), name)
 
-static bool quorum_slot_present(struct scoutfs_super_block *super, int i)
+static bool quorum_slot_present(struct scoutfs_quorum_config *qconf, int i)
 {
 	BUG_ON(i < 0 || i > SCOUTFS_QUORUM_MAX_SLOTS);
 
-	return super->qconf.slots[i].addr.v4.family == cpu_to_le16(SCOUTFS_AF_IPV4);
+	return qconf->slots[i].addr.v4.family == cpu_to_le16(SCOUTFS_AF_IPV4);
+}
+
+static void quorum_slot_sin(struct scoutfs_quorum_config *qconf, int i, struct sockaddr_in *sin)
+{
+	BUG_ON(i < 0 || i >= SCOUTFS_QUORUM_MAX_SLOTS);
+
+	scoutfs_addr_to_sin(sin, &qconf->slots[i].addr);
 }
 
 static ktime_t election_timeout(void)
@@ -152,29 +170,29 @@ static ktime_t heartbeat_interval(void)
 	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_IVAL_MS);
 }
 
-static ktime_t heartbeat_timeout(void)
+static ktime_t heartbeat_timeout(struct scoutfs_mount_options *opts)
 {
-	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_HB_TIMEO_MS);
+	return ktime_add_ms(ktime_get(), opts->quorum_heartbeat_timeout_ms);
 }
 
 static int create_socket(struct super_block *sb)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	struct socket *sock = NULL;
 	struct sockaddr_in sin;
 	int addrlen;
 	int ret;
 
-	ret = sock_create_kern(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	ret = kc_sock_create_kern(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
 	if (ret) {
 		scoutfs_err(sb, "quorum couldn't create udp socket: %d", ret);
 		goto out;
 	}
 
-	sock->sk->sk_allocation = GFP_NOFS;
+	/* rather fail and retry than block waiting for free */
+	sock->sk->sk_allocation = GFP_ATOMIC;
 
-	scoutfs_quorum_slot_sin(super, qinf->our_quorum_slot_nr, &sin);
+	quorum_slot_sin(&qinf->qconf, qinf->our_quorum_slot_nr, &sin);
 
 	addrlen = sizeof(sin);
 	ret = kernel_bind(sock, (struct sockaddr *)&sin, addrlen);
@@ -201,16 +219,20 @@ static __le32 quorum_message_crc(struct scoutfs_quorum_message *qmes)
 	return cpu_to_le32(crc32c(~0, qmes, len));
 }
 
-static void send_msg_members(struct super_block *sb, int type, u64 term,
-			     int only)
+/*
+ * Returns the number of failures from sendmsg.
+ */
+static int send_msg_members(struct super_block *sb, int type, u64 term, int only)
 {
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	DECLARE_QUORUM_INFO(sb, qinf);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	int failed = 0;
 	ktime_t now;
+	int ret;
 	int i;
 
 	struct scoutfs_quorum_message qmes = {
-		.fsid = super->hdr.fsid,
+		.fsid = cpu_to_le64(sbi->fsid),
 		.term = cpu_to_le64(term),
 		.type = type,
 		.from = qinf->our_quorum_slot_nr,
@@ -221,8 +243,10 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 	};
 	struct sockaddr_in sin;
 	struct msghdr mh = {
+#ifndef KC_MSGHDR_STRUCT_IOV_ITER
 		.msg_iov = (struct iovec *)&kv,
 		.msg_iovlen = 1,
+#endif
 		.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL,
 		.msg_name = &sin,
 		.msg_namelen = sizeof(sin),
@@ -232,15 +256,24 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 
 	qmes.crc = quorum_message_crc(&qmes);
 
-
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (!quorum_slot_present(super, i) ||
+		if (!quorum_slot_present(&qinf->qconf, i) ||
 		    (only >= 0 && i != only) || i == qinf->our_quorum_slot_nr)
 			continue;
 
-		scoutfs_quorum_slot_sin(super, i, &sin);
+		if (scoutfs_forcing_unmount(sb)) {
+			failed = 0;
+			break;
+		}
+
+		scoutfs_quorum_slot_sin(&qinf->qconf, i, &sin);
 		now = ktime_get();
-		kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
+#ifdef KC_MSGHDR_STRUCT_IOV_ITER
+		iov_iter_init(&mh.msg_iter, WRITE, (struct iovec *)&kv, sizeof(qmes), 1);
+#endif
+		ret = kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
+		if (ret != kv.iov_len)
+			failed++;
 
 		spin_lock(&qinf->show_lock);
 		qinf->last_send[i].msg.term = term;
@@ -251,6 +284,8 @@ static void send_msg_members(struct super_block *sb, int type, u64 term,
 		if (i == only)
 			break;
 	}
+
+	return failed;
 }
 
 #define send_msg_to(sb, type, term, nr)  send_msg_members(sb, type, term, nr)
@@ -266,9 +301,8 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 		    ktime_t abs_to)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_quorum_message qmes;
-	struct timeval tv;
 	ktime_t rel_to;
 	ktime_t now;
 	int ret;
@@ -278,8 +312,10 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 		.iov_len = sizeof(struct scoutfs_quorum_message),
 	};
 	struct msghdr mh = {
+#ifndef KC_MSGHDR_STRUCT_IOV_ITER
 		.msg_iov = (struct iovec *)&kv,
 		.msg_iovlen = 1,
+#endif
 		.msg_flags = MSG_NOSIGNAL,
 	};
 
@@ -291,28 +327,30 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	else
 		rel_to = ns_to_ktime(0);
 
-	tv = ktime_to_timeval(rel_to);
-	if (tv.tv_sec == 0 && tv.tv_usec == 0) {
+	if (ktime_compare(rel_to, ns_to_ktime(NSEC_PER_USEC)) <= 0) {
 		mh.msg_flags |= MSG_DONTWAIT;
 	} else {
-		ret = kernel_setsockopt(qinf->sock, SOL_SOCKET, SO_RCVTIMEO,
-					(char *)&tv, sizeof(tv));
-		if (ret < 0)
-			return ret;
+		ret = kc_tcp_sock_set_rcvtimeo(qinf->sock, rel_to);
 	}
 
+#ifdef KC_MSGHDR_STRUCT_IOV_ITER
+	iov_iter_init(&mh.msg_iter, READ, (struct iovec *)&kv, sizeof(struct scoutfs_quorum_message), 1);
+#endif
 	ret = kernel_recvmsg(qinf->sock, &mh, &kv, 1, kv.iov_len, mh.msg_flags);
 	if (ret < 0)
 		return ret;
+
+	if (scoutfs_forcing_unmount(sb))
+		return 0;
 
 	now = ktime_get();
 
 	if (ret != sizeof(qmes) ||
 	    qmes.crc != quorum_message_crc(&qmes) ||
-	    qmes.fsid != super->hdr.fsid ||
+	    qmes.fsid != cpu_to_le64(sbi->fsid) ||
 	    qmes.type >= SCOUTFS_QUORUM_MSG_INVALID ||
 	    qmes.from >= SCOUTFS_QUORUM_MAX_SLOTS ||
-	    !quorum_slot_present(super, qmes.from)) {
+	    !quorum_slot_present(&qinf->qconf, qmes.from)) {
 		/* should we be trying to open a new socket? */
 		scoutfs_inc_counter(sb, quorum_recv_invalid);
 		return -EAGAIN;
@@ -342,7 +380,7 @@ static int read_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_q
 			     bool check_rid)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	const u64 fsid = sbi->fsid;
 	const u64 rid = sbi->rid;
 	char msg[150];
 	__le32 crc;
@@ -367,9 +405,9 @@ static int read_quorum_block(struct super_block *sb, u64 blkno, struct scoutfs_q
 	else if (le32_to_cpu(blk->hdr.magic) != SCOUTFS_BLOCK_MAGIC_QUORUM) 
 		snprintf(msg, sizeof(msg), "blk magic %08x != %08x",
 			 le32_to_cpu(blk->hdr.magic), SCOUTFS_BLOCK_MAGIC_QUORUM);
-	else if (blk->hdr.fsid != super->hdr.fsid)
+	else if (blk->hdr.fsid != cpu_to_le64(fsid))
 		snprintf(msg, sizeof(msg), "blk fsid %016llx != %016llx",
-			 le64_to_cpu(blk->hdr.fsid), le64_to_cpu(super->hdr.fsid));
+			 le64_to_cpu(blk->hdr.fsid), fsid);
 	else if (le64_to_cpu(blk->hdr.blkno) != blkno)
 		snprintf(msg, sizeof(msg), "blk blkno %llu != %llu",
 			 le64_to_cpu(blk->hdr.blkno), blkno);
@@ -410,8 +448,7 @@ out:
  */
 static void read_greatest_term(struct super_block *sb, u64 *term)
 {
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	DECLARE_QUORUM_INFO(sb, qinf);
 	struct scoutfs_quorum_block blk;
 	int ret;
 	int e;
@@ -420,7 +457,7 @@ static void read_greatest_term(struct super_block *sb, u64 *term)
 	*term = 0;
 
 	for (s = 0; s < SCOUTFS_QUORUM_MAX_SLOTS; s++) {
-		if (!quorum_slot_present(super, s))
+		if (!quorum_slot_present(&qinf->qconf, s))
 			continue;
 
 		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + s, &blk, false);
@@ -444,7 +481,7 @@ static void set_quorum_block_event(struct super_block *sb, struct scoutfs_quorum
 	if (WARN_ON_ONCE(event < 0 || event >= SCOUTFS_QUORUM_EVENT_NR))
 		return;
 
-	getnstimeofday64(&ts);
+	ktime_get_ts64(&ts);
 	le64_add_cpu(&blk->write_nr, 1);
 
 	ev = &blk->events[event];
@@ -514,14 +551,15 @@ static int update_quorum_block(struct super_block *sb, int event, u64 term, bool
  * keeps us from being fenced while we allow userspace fencing to take a
  * reasonably long time.  We still want to timeout eventually.
  */
-int scoutfs_quorum_fence_leaders(struct super_block *sb, u64 term)
+int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_config *qconf,
+				 u64 term)
 {
 #define NR_OLD 2
 	struct scoutfs_quorum_block_event old[SCOUTFS_QUORUM_MAX_SLOTS][NR_OLD] = {{{0,}}};
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
 	struct scoutfs_quorum_block blk;
 	struct sockaddr_in sin;
+	const __le64 lefsid = cpu_to_le64(sbi->fsid);
 	const u64 rid = sbi->rid;
 	bool fence_started = false;
 	u64 fenced = 0;
@@ -534,7 +572,7 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, u64 term)
 	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (!quorum_slot_present(super, i))
+		if (!quorum_slot_present(qconf, i))
 			continue;
 
 		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk, false);
@@ -567,11 +605,11 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, u64 term)
 				continue;
 
 			scoutfs_inc_counter(sb, quorum_fence_leader);
-			scoutfs_quorum_slot_sin(super, i, &sin);
+			quorum_slot_sin(qconf, i, &sin);
 			fence_rid = old[i][j].rid;
 
 			scoutfs_info(sb, "fencing previous leader "SCSBF" at term %llu in slot %u with address "SIN_FMT,
-				     SCSB_LEFR_ARGS(super->hdr.fsid, fence_rid),
+				     SCSB_LEFR_ARGS(lefsid, fence_rid),
 				     le64_to_cpu(old[i][j].term), i, SIN_ARG(&sin));
 			ret = scoutfs_fence_start(sb, le64_to_cpu(fence_rid), sin.sin_addr.s_addr,
 						  SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
@@ -590,6 +628,71 @@ out:
 		scoutfs_inc_counter(sb, quorum_fence_error);
 
 	return ret;
+}
+
+static void clear_hb_delay(struct quorum_info *qinf)
+{
+	int i;
+
+	spin_lock(&qinf->show_lock);
+	qinf->max_hb_delay = 0;
+	for (i = 0; i < HB_DELAY_NR; i++) {
+		qinf->hb_delay[i].recent = ns_to_ktime(0);
+		qinf->hb_delay[i].count = 0;
+	}
+	spin_unlock(&qinf->show_lock);
+}
+
+struct hb_recording {
+	ktime_t prev;
+	int count;
+};
+
+/*
+ * Record long heartbeat delays.  We only record the delay between back
+ * to back send attempts in the leader or back to back recv messages in
+ * the followers.  The worker caller sets record_hb when their iteration
+ * sent or received a heartbeat.  An iteration that does anything else
+ * resets the tracking.
+ */
+static void record_hb_delay(struct super_block *sb, struct quorum_info *qinf,
+			    struct hb_recording *hbr, bool record_hb, int role)
+{
+	bool log = false;
+	ktime_t now;
+	s64 s;
+
+	if (!record_hb) {
+		hbr->count = 0;
+		return;
+	}
+
+	now = ktime_get();
+
+	if (hbr->count < 2 && ++hbr->count < 2) {
+		hbr->prev = now;
+		return;
+	}
+
+	s = ktime_ms_delta(now, hbr->prev) / MSEC_PER_SEC;
+	hbr->prev = now;
+
+	if (s <= 0 || s >= HB_DELAY_NR)
+		return;
+
+	spin_lock(&qinf->show_lock);
+	if (qinf->max_hb_delay < s) {
+		qinf->max_hb_delay = s;
+		if (s >= 3)
+			log = true;
+	}
+	qinf->hb_delay[s].recent = now;
+	qinf->hb_delay[s].count++;
+	spin_unlock(&qinf->show_lock);
+
+	if (log)
+		scoutfs_info(sb, "longest quorum heartbeat %s delay of %lld sec",
+			     role == LEADER ? "send" : "recv", s);
 }
 
 /*
@@ -616,15 +719,22 @@ static void update_show_status(struct quorum_info *qinf, struct quorum_status *q
 static void scoutfs_quorum_worker(struct work_struct *work)
 {
 	struct quorum_info *qinf = container_of(work, struct quorum_info, work);
+	struct scoutfs_mount_options opts;
 	struct super_block *sb = qinf->sb;
 	struct sockaddr_in unused;
 	struct quorum_host_msg msg;
 	struct quorum_status qst = {0,};
+	struct hb_recording hbr;
+	bool record_hb;
 	int ret;
 	int err;
 
+	memset(&hbr, 0, sizeof(struct hb_recording));
+
 	/* recording votes from slots as native single word bitmap */
 	BUILD_BUG_ON(SCOUTFS_QUORUM_MAX_SLOTS > BITS_PER_LONG);
+
+	scoutfs_options_read(sb, &opts);
 
 	/* start out as a follower */
 	qst.role = FOLLOWER;
@@ -635,7 +745,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 	/* see if there's a server to chose heartbeat or election timeout */
 	if (scoutfs_quorum_server_sin(sb, &unused) == 0)
-		qst.timeout = heartbeat_timeout();
+		qst.timeout = heartbeat_timeout(&opts);
 	else
 		qst.timeout = election_timeout();
 
@@ -659,14 +769,16 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			ret = 0;
 		}
 
+		scoutfs_options_read(sb, &opts);
+		record_hb = false;
+
 		/* ignore messages from older terms */
 		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
 		    msg.term < qst.term)
 			msg.type = SCOUTFS_QUORUM_MSG_INVALID;
 
 		trace_scoutfs_quorum_loop(sb, qst.role, qst.term, qst.vote_for,
-					  qst.vote_bits,
-					  ktime_to_timespec64(qst.timeout));
+					  qst.vote_bits, ktime_to_ns(qst.timeout));
 
 		/* receiving greater terms resets term, becomes follower */
 		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
@@ -674,6 +786,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			if (qst.role == LEADER) {
 				scoutfs_warn(sb, "saw msg type %u from %u for term %llu while leader in term %llu, shutting down server.",
 					     msg.type, msg.from, msg.term, qst.term);
+				clear_hb_delay(qinf);
 			}
 			qst.role = FOLLOWER;
 			qst.term = msg.term;
@@ -682,7 +795,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			scoutfs_inc_counter(sb, quorum_term_follower);
 
 			if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT)
-				qst.timeout = heartbeat_timeout();
+				qst.timeout = heartbeat_timeout(&opts);
 			else
 				qst.timeout = election_timeout();
 
@@ -690,6 +803,21 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_TERM, qst.term, true);
 			if (ret < 0)
 				goto out;
+		}
+
+		/* receiving heartbeats extends timeout, delaying elections */
+		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
+			qst.timeout = heartbeat_timeout(&opts);
+			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
+			record_hb = true;
+		}
+
+		/* receiving a resignation from server starts election */
+		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
+		    qst.role == FOLLOWER &&
+		    msg.term == qst.term) {
+			qst.timeout = election_timeout();
+			scoutfs_inc_counter(sb, quorum_recv_resignation);
 		}
 
 		/* followers and candidates start new election on timeout */
@@ -744,6 +872,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			qst.timeout = heartbeat_interval();
 
 			update_show_status(qinf, &qst);
+			clear_hb_delay(qinf);
 
 			/* record that we've been elected before starting up server */
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_ELECT, qst.term, true);
@@ -752,7 +881,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 			qst.server_start_term = qst.term;
 			qst.server_event = SCOUTFS_QUORUM_EVENT_ELECT;
-			scoutfs_server_start(sb, qst.term);
+			scoutfs_server_start(sb, &qinf->qconf, qst.term);
 		}
 
 		/*
@@ -798,6 +927,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				send_msg_others(sb, SCOUTFS_QUORUM_MSG_RESIGNATION,
 						qst.server_start_term);
 				scoutfs_inc_counter(sb, quorum_send_resignation);
+				clear_hb_delay(qinf);
 			}
 
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_STOP,
@@ -811,24 +941,16 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		/* leaders regularly send heartbeats to delay elections */
 		if (qst.role == LEADER &&
 		    ktime_after(ktime_get(), qst.timeout)) {
-			send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT,
-					qst.term);
+			ret = send_msg_others(sb, SCOUTFS_QUORUM_MSG_HEARTBEAT, qst.term);
+			if (ret > 0) {
+				scoutfs_add_counter(sb, quorum_send_heartbeat_dropped, ret);
+				ret = 0;
+			}
+
 			qst.timeout = heartbeat_interval();
 			scoutfs_inc_counter(sb, quorum_send_heartbeat);
-		}
+			record_hb = true;
 
-		/* receiving heartbeats extends timeout, delaying elections */
-		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
-			qst.timeout = heartbeat_timeout();
-			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
-		}
-
-		/* receiving a resignation from server starts election */
-		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
-		    qst.role == FOLLOWER &&
-		    msg.term == qst.term) {
-			qst.timeout = election_timeout();
-			scoutfs_inc_counter(sb, quorum_recv_resignation);
 		}
 
 		/* followers vote once per term */
@@ -840,6 +962,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				    msg.from);
 			scoutfs_inc_counter(sb, quorum_send_vote);
 		}
+
+		record_hb_delay(sb, qinf, &hbr, record_hb, qst.role);
 	}
 
 	update_show_status(qinf, &qst);
@@ -877,16 +1001,25 @@ out:
  */
 int scoutfs_quorum_server_sin(struct super_block *sb, struct sockaddr_in *sin)
 {
-	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct scoutfs_super_block *super = &sbi->super;
+	struct scoutfs_super_block *super = NULL;
 	struct scoutfs_quorum_block blk;
 	u64 elect_term;
 	u64 term = 0;
 	int ret = 0;
 	int i;
 
+	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_NOFS);
+	if (!super) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = scoutfs_read_super(sb, super);
+	if (ret)
+		goto out;
+
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (!quorum_slot_present(super, i))
+		if (!quorum_slot_present(&super->qconf, i))
 			continue;
 
 		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk, false);
@@ -900,7 +1033,7 @@ int scoutfs_quorum_server_sin(struct super_block *sb, struct sockaddr_in *sin)
 		if (elect_term > term &&
 		    elect_term > le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_STOP].term)) {
 			term = elect_term;
-			scoutfs_quorum_slot_sin(super, i, sin);
+			scoutfs_quorum_slot_sin(&super->qconf, i, sin);
 			continue;
 		}
 	}
@@ -909,6 +1042,7 @@ int scoutfs_quorum_server_sin(struct super_block *sb, struct sockaddr_in *sin)
 		ret = -ENOENT;
 
 out:
+	kfree(super);
 	return ret;
 }
 
@@ -924,12 +1058,9 @@ u8 scoutfs_quorum_votes_needed(struct super_block *sb)
 	return qinf->votes_needed;
 }
 
-void scoutfs_quorum_slot_sin(struct scoutfs_super_block *super, int i,
-			     struct sockaddr_in *sin)
+void scoutfs_quorum_slot_sin(struct scoutfs_quorum_config *qconf, int i, struct sockaddr_in *sin)
 {
-	BUG_ON(i < 0 || i >= SCOUTFS_QUORUM_MAX_SLOTS);
-
-	scoutfs_addr_to_sin(sin, &super->qconf.slots[i].addr);
+	return quorum_slot_sin(qconf, i, sin);
 }
 
 static char *role_str(int role)
@@ -969,9 +1100,11 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 {
 	DECLARE_QUORUM_INFO_KOBJ(kobj, qinf);
 	struct quorum_status qst;
+	struct count_recent cr;
 	struct last_msg last;
 	struct timespec64 ts;
 	const ktime_t now = ktime_get();
+	unsigned long ul;
 	size_t size;
 	int ret;
 	int i;
@@ -1029,6 +1162,26 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 			     (s64)ts.tv_sec, (int)ts.tv_nsec);
 	}
 
+	spin_lock(&qinf->show_lock);
+	ul = qinf->max_hb_delay;
+	spin_unlock(&qinf->show_lock);
+	if (ul)
+		snprintf_ret(buf, size, &ret, "HB Delay(s)      Count  Secs Since\n");
+
+	for (i = 1; i <= ul && i < HB_DELAY_NR; i++) {
+		spin_lock(&qinf->show_lock);
+		cr = qinf->hb_delay[i];
+		spin_unlock(&qinf->show_lock);
+
+		if (cr.count == 0)
+			continue;
+
+		ts = ktime_to_timespec64(ktime_sub(now, cr.recent));
+		snprintf_ret(buf, size, &ret,
+			     "%11u  %9llu  %lld.%09u\n",
+			     i, cr.count, (s64)ts.tv_sec, (int)ts.tv_nsec);
+	}
+
 	return ret;
 }
 SCOUTFS_ATTR_RO(status);
@@ -1060,11 +1213,10 @@ static inline bool valid_ipv4_port(__be16 port)
 	return port != 0 && be16_to_cpu(port) != U16_MAX;
 }
 
-static int verify_quorum_slots(struct super_block *sb)
+static int verify_quorum_slots(struct super_block *sb, struct quorum_info *qinf,
+			       struct scoutfs_quorum_config *qconf)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
 	char slots[(SCOUTFS_QUORUM_MAX_SLOTS * 3) + 1];
-	DECLARE_QUORUM_INFO(sb, qinf);
 	struct sockaddr_in other;
 	struct sockaddr_in sin;
 	int found = 0;
@@ -1074,10 +1226,10 @@ static int verify_quorum_slots(struct super_block *sb)
 
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-		if (!quorum_slot_present(super, i))
+		if (!quorum_slot_present(qconf, i))
 			continue;
 
-		scoutfs_quorum_slot_sin(super, i, &sin);
+		scoutfs_quorum_slot_sin(qconf, i, &sin);
 
 		if (!valid_ipv4_unicast(sin.sin_addr.s_addr)) {
 			scoutfs_err(sb, "quorum slot #%d has invalid ipv4 unicast address: "SIN_FMT,
@@ -1092,10 +1244,10 @@ static int verify_quorum_slots(struct super_block *sb)
 		}
 
 		for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
-			if (!quorum_slot_present(super, j))
+			if (!quorum_slot_present(qconf, j))
 				continue;
 
-			scoutfs_quorum_slot_sin(super, j, &other);
+			scoutfs_quorum_slot_sin(qconf, j, &other);
 
 			if (sin.sin_addr.s_addr == other.sin_addr.s_addr &&
 			    sin.sin_port == other.sin_port) {
@@ -1113,11 +1265,11 @@ static int verify_quorum_slots(struct super_block *sb)
 		return -EINVAL;
 	}
 
-	if (!quorum_slot_present(super, qinf->our_quorum_slot_nr)) {
+	if (!quorum_slot_present(qconf, qinf->our_quorum_slot_nr)) {
 		char *str = slots;
 		*str = '\0';
 		for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
-			if (quorum_slot_present(super, i)) {
+			if (quorum_slot_present(qconf, i)) {
 				ret = snprintf(str, &slots[ARRAY_SIZE(slots)] - str, "%c%u",
 					       str == slots ? ' ' : ',', i);
 				if (ret < 2 || ret > 3) {
@@ -1141,16 +1293,22 @@ static int verify_quorum_slots(struct super_block *sb)
 	else
 		qinf->votes_needed = (found / 2) + 1;
 
+	qinf->qconf = *qconf;
+
 	return 0;
 }
 
 /*
  * Once this schedules the quorum worker it can be elected leader and
- * start the server, possibly before this returns.
+ * start the server, possibly before this returns.  The quorum agent
+ * would be responsible for tracking the quorum config in the super
+ * block if it changes.  Until then uses a static config that it reads
+ * during setup.
  */
 int scoutfs_quorum_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_super_block *super = NULL;
 	struct scoutfs_mount_options opts;
 	struct quorum_info *qinf;
 	int ret;
@@ -1160,7 +1318,14 @@ int scoutfs_quorum_setup(struct super_block *sb)
 		return 0;
 
 	qinf = kzalloc(sizeof(struct quorum_info), GFP_KERNEL);
-	if (!qinf) {
+	super = kmalloc(sizeof(struct scoutfs_super_block), GFP_KERNEL);
+	if (qinf)
+		qinf->hb_delay = kc__vmalloc(HB_DELAY_NR * sizeof(struct count_recent),
+					   GFP_KERNEL | __GFP_ZERO);
+	if (!qinf || !super || !qinf->hb_delay) {
+		if (qinf)
+			vfree(qinf->hb_delay);
+		kfree(qinf);
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -1174,7 +1339,20 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	sbi->quorum_info = qinf;
 	qinf->sb = sb;
 
-	ret = verify_quorum_slots(sb);
+	/* a high priority single threaded context without mem reclaim */
+	qinf->workq = alloc_workqueue("scoutfs_quorum_work",
+				       WQ_NON_REENTRANT | WQ_UNBOUND |
+				       WQ_HIGHPRI, 1);
+	if (!qinf->workq) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = scoutfs_read_super(sb, super);
+	if (ret < 0)
+		goto out;
+
+	ret = verify_quorum_slots(sb, qinf, &super->qconf);
 	if (ret < 0)
 		goto out;
 
@@ -1188,12 +1366,13 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	if (ret < 0)
 		goto out;
 
-	schedule_work(&qinf->work);
+	queue_work(qinf->workq, &qinf->work);
 
 out:
 	if (ret)
 		scoutfs_quorum_destroy(sb);
 
+	kfree(super);
 	return ret;
 }
 
@@ -1217,10 +1396,14 @@ void scoutfs_quorum_destroy(struct super_block *sb)
 		qinf->shutdown = true;
 		flush_work(&qinf->work);
 
+		if (qinf->workq)
+			destroy_workqueue(qinf->workq);
+
 		scoutfs_sysfs_destroy_attrs(sb, &qinf->ssa);
 		if (qinf->sock)
 			sock_release(qinf->sock);
 
+		vfree(qinf->hb_delay);
 		kfree(qinf);
 		sbi->quorum_info = NULL;
 	}

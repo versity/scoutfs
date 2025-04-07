@@ -83,9 +83,9 @@ touch "$OTHER"
 ln "$FROM" "$HARD"
 
 echo "== wrapped offsets should fail"
-HUGE=0x8000000000000000
-scoutfs move-blocks "$FROM" -f "$HUGE" -l "$HUGE" "$TO" -t 0 2>&1 | t_filter_fs
-scoutfs move-blocks "$FROM" -f 0 -l "$HUGE" "$TO" -t "$HUGE" 2>&1 | t_filter_fs
+HUGE=0xfffffffffffff000
+scoutfs move-blocks "$FROM" -f "$HUGE" -l "8192" "$TO" -t 0 2>&1 | t_filter_fs
+scoutfs move-blocks "$FROM" -f 0 -l "$HUGE" "$TO" -t "8192" 2>&1 | t_filter_fs
 
 echo "== specifying same file fails"
 scoutfs move-blocks "$FROM" -f 0 -l "$BS" "$HARD" -t 0 2>&1 | t_filter_fs

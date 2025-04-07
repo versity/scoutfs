@@ -27,17 +27,30 @@
 #include "options.h"
 #include "super.h"
 #include "inode.h"
+#include "alloc.h"
 
 enum {
+	Opt_acl,
+	Opt_data_prealloc_blocks,
+	Opt_data_prealloc_contig_only,
+	Opt_log_merge_wait_timeout_ms,
 	Opt_metadev_path,
+	Opt_noacl,
 	Opt_orphan_scan_delay_ms,
+	Opt_quorum_heartbeat_timeout_ms,
 	Opt_quorum_slot_nr,
 	Opt_err,
 };
 
 static const match_table_t tokens = {
+	{Opt_acl, "acl"},
+	{Opt_data_prealloc_blocks, "data_prealloc_blocks=%s"},
+	{Opt_data_prealloc_contig_only, "data_prealloc_contig_only=%s"},
+	{Opt_log_merge_wait_timeout_ms, "log_merge_wait_timeout_ms=%s"},
 	{Opt_metadev_path, "metadev_path=%s"},
+	{Opt_noacl, "noacl"},
 	{Opt_orphan_scan_delay_ms, "orphan_scan_delay_ms=%s"},
+	{Opt_quorum_heartbeat_timeout_ms, "quorum_heartbeat_timeout_ms=%s"},
 	{Opt_quorum_slot_nr, "quorum_slot_nr=%s"},
 	{Opt_err, NULL}
 };
@@ -102,15 +115,57 @@ static void free_options(struct scoutfs_mount_options *opts)
 	kfree(opts->metadev_path);
 }
 
+#define MIN_LOG_MERGE_WAIT_TIMEOUT_MS		100UL
+#define DEFAULT_LOG_MERGE_WAIT_TIMEOUT_MS	500
+#define MAX_LOG_MERGE_WAIT_TIMEOUT_MS		(60 * MSEC_PER_SEC)
+
 #define MIN_ORPHAN_SCAN_DELAY_MS	100UL
 #define DEFAULT_ORPHAN_SCAN_DELAY_MS	(10 * MSEC_PER_SEC)
 #define MAX_ORPHAN_SCAN_DELAY_MS	(60 * MSEC_PER_SEC)
 
+#define MIN_DATA_PREALLOC_BLOCKS	1ULL
+#define MAX_DATA_PREALLOC_BLOCKS	((unsigned long long)SCOUTFS_BLOCK_SM_MAX)
+
 static void init_default_options(struct scoutfs_mount_options *opts)
 {
 	memset(opts, 0, sizeof(*opts));
+
+	opts->data_prealloc_blocks = SCOUTFS_DATA_PREALLOC_DEFAULT_BLOCKS;
+	opts->data_prealloc_contig_only = 1;
+	opts->log_merge_wait_timeout_ms = DEFAULT_LOG_MERGE_WAIT_TIMEOUT_MS;
+	opts->orphan_scan_delay_ms = -1;
+	opts->quorum_heartbeat_timeout_ms = SCOUTFS_QUORUM_DEF_HB_TIMEO_MS;
 	opts->quorum_slot_nr = -1;
-	opts->orphan_scan_delay_ms = DEFAULT_ORPHAN_SCAN_DELAY_MS;
+}
+
+static int verify_log_merge_wait_timeout_ms(struct super_block *sb, int ret, int val)
+{
+	if (ret < 0) {
+		scoutfs_err(sb, "failed to parse log_merge_wait_timeout_ms value");
+		return -EINVAL;
+	}
+	if (val < MIN_LOG_MERGE_WAIT_TIMEOUT_MS || val > MAX_LOG_MERGE_WAIT_TIMEOUT_MS) {
+		scoutfs_err(sb, "invalid log_merge_wait_timeout_ms value %d, must be between %lu and %lu",
+			    val, MIN_LOG_MERGE_WAIT_TIMEOUT_MS, MAX_LOG_MERGE_WAIT_TIMEOUT_MS);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int verify_quorum_heartbeat_timeout_ms(struct super_block *sb, int ret, u64 val)
+{
+	if (ret < 0) {
+		scoutfs_err(sb, "failed to parse quorum_heartbeat_timeout_ms value");
+		return -EINVAL;
+	}
+	if (val < SCOUTFS_QUORUM_MIN_HB_TIMEO_MS || val > SCOUTFS_QUORUM_MAX_HB_TIMEO_MS) {
+		scoutfs_err(sb, "invalid quorum_heartbeat_timeout_ms value %llu, must be between %lu and %lu",
+			    val, SCOUTFS_QUORUM_MIN_HB_TIMEO_MS, SCOUTFS_QUORUM_MAX_HB_TIMEO_MS);
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 /*
@@ -122,6 +177,7 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 static int parse_options(struct super_block *sb, char *options, struct scoutfs_mount_options *opts)
 {
 	substring_t args[MAX_OPT_ARGS];
+	u64 nr64;
 	int nr;
 	int token;
 	char *p;
@@ -134,10 +190,50 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 		token = match_token(p, tokens, args);
 		switch (token) {
 
+		case Opt_acl:
+			sb->s_flags |= SB_POSIXACL;
+			break;
+
+		case Opt_data_prealloc_blocks:
+			ret = match_u64(args, &nr64);
+			if (ret < 0 ||
+			    nr64 < MIN_DATA_PREALLOC_BLOCKS || nr64 > MAX_DATA_PREALLOC_BLOCKS) {
+				scoutfs_err(sb, "invalid data_prealloc_blocks option, must be between %llu and %llu",
+					    MIN_DATA_PREALLOC_BLOCKS, MAX_DATA_PREALLOC_BLOCKS);
+				if (ret == 0)
+					ret = -EINVAL;
+				return ret;
+			}
+			opts->data_prealloc_blocks = nr64;
+			break;
+
+		case Opt_data_prealloc_contig_only:
+			ret = match_int(args, &nr);
+			if (ret < 0 || nr < 0 || nr > 1) {
+				scoutfs_err(sb, "invalid data_prealloc_contig_only option, bool must only be 0 or 1");
+				if (ret == 0)
+					ret = -EINVAL;
+				return ret;
+			}
+			opts->data_prealloc_contig_only = nr;
+			break;
+
+		case Opt_log_merge_wait_timeout_ms:
+			ret = match_int(args, &nr);
+			ret = verify_log_merge_wait_timeout_ms(sb, ret, nr);
+			if (ret < 0)
+				return ret;
+			opts->log_merge_wait_timeout_ms = nr;
+			break;
+
 		case Opt_metadev_path:
 			ret = parse_bdev_path(sb, &args[0], &opts->metadev_path);
 			if (ret < 0)
 				return ret;
+			break;
+
+		case Opt_noacl:
+			sb->s_flags &= ~SB_POSIXACL;
 			break;
 
 		case Opt_orphan_scan_delay_ms:
@@ -156,6 +252,14 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 				return ret;
 			}
 			opts->orphan_scan_delay_ms = nr;
+			break;
+
+		case Opt_quorum_heartbeat_timeout_ms:
+			ret = match_u64(args, &nr64);
+			ret = verify_quorum_heartbeat_timeout_ms(sb, ret, nr64);
+			if (ret < 0)
+				return ret;
+			opts->quorum_heartbeat_timeout_ms = nr64;
 			break;
 
 		case Opt_quorum_slot_nr:
@@ -180,6 +284,9 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 			return -EINVAL;
 		}
 	}
+
+	if (opts->orphan_scan_delay_ms == -1)
+		opts->orphan_scan_delay_ms = DEFAULT_ORPHAN_SCAN_DELAY_MS;
 
 	if (!opts->metadev_path) {
 		scoutfs_err(sb, "Required mount option \"metadev_path\" not found");
@@ -250,16 +357,137 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 {
 	struct super_block *sb = root->d_sb;
 	struct scoutfs_mount_options opts;
+	const bool is_acl = !!(sb->s_flags & SB_POSIXACL);
 
 	scoutfs_options_read(sb, &opts);
 
+	if (is_acl)
+		seq_puts(seq, ",acl");
+	seq_printf(seq, ",data_prealloc_blocks=%llu", opts.data_prealloc_blocks);
+	seq_printf(seq, ",data_prealloc_contig_only=%u", opts.data_prealloc_contig_only);
 	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
+	if (!is_acl)
+		seq_puts(seq, ",noacl");
 	seq_printf(seq, ",orphan_scan_delay_ms=%u", opts.orphan_scan_delay_ms);
 	if (opts.quorum_slot_nr >= 0)
 		seq_printf(seq, ",quorum_slot_nr=%d", opts.quorum_slot_nr);
 
 	return 0;
 }
+
+static ssize_t data_prealloc_blocks_show(struct kobject *kobj, struct kobj_attribute *attr,
+					 char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%llu", opts.data_prealloc_blocks);
+}
+static ssize_t data_prealloc_blocks_store(struct kobject *kobj, struct kobj_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	u64 val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoll(nullterm, 0, &val);
+	if (ret < 0 || val < MIN_DATA_PREALLOC_BLOCKS || val > MAX_DATA_PREALLOC_BLOCKS) {
+		scoutfs_err(sb, "invalid data_prealloc_blocks option, must be between %llu and %llu",
+			    MIN_DATA_PREALLOC_BLOCKS, MAX_DATA_PREALLOC_BLOCKS);
+		return -EINVAL;
+	}
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.data_prealloc_blocks = val;
+	write_sequnlock(&optinf->seqlock);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(data_prealloc_blocks);
+
+static ssize_t data_prealloc_contig_only_show(struct kobject *kobj, struct kobj_attribute *attr,
+					 char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%u", opts.data_prealloc_contig_only);
+}
+static ssize_t data_prealloc_contig_only_store(struct kobject *kobj, struct kobj_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[20]; /* more than enough for octal -U32_MAX */
+	long val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtol(nullterm, 0, &val);
+	if (ret < 0 || val < 0 || val > 1) {
+		scoutfs_err(sb, "invalid data_prealloc_contig_only option, bool must be 0 or 1");
+		return -EINVAL;
+	}
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.data_prealloc_contig_only = val;
+	write_sequnlock(&optinf->seqlock);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(data_prealloc_contig_only);
+
+static ssize_t log_merge_wait_timeout_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
+						char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%u", opts.log_merge_wait_timeout_ms);
+}
+static ssize_t log_merge_wait_timeout_ms_store(struct kobject *kobj, struct kobj_attribute *attr,
+						 const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	int val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoint(nullterm, 0, &val);
+	ret = verify_log_merge_wait_timeout_ms(sb, ret, val);
+	if (ret == 0) {
+		write_seqlock(&optinf->seqlock);
+		optinf->opts.log_merge_wait_timeout_ms = val;
+		write_sequnlock(&optinf->seqlock);
+		ret = count;
+	}
+
+	return ret;
+}
+SCOUTFS_ATTR_RW(log_merge_wait_timeout_ms);
 
 static ssize_t metadev_path_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -313,6 +541,43 @@ static ssize_t orphan_scan_delay_ms_store(struct kobject *kobj, struct kobj_attr
 }
 SCOUTFS_ATTR_RW(orphan_scan_delay_ms);
 
+static ssize_t quorum_heartbeat_timeout_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
+						char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%llu", opts.quorum_heartbeat_timeout_ms);
+}
+static ssize_t quorum_heartbeat_timeout_ms_store(struct kobject *kobj, struct kobj_attribute *attr,
+						 const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	u64 val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoll(nullterm, 0, &val);
+	ret = verify_quorum_heartbeat_timeout_ms(sb, ret, val);
+	if (ret == 0) {
+		write_seqlock(&optinf->seqlock);
+		optinf->opts.quorum_heartbeat_timeout_ms = val;
+		write_sequnlock(&optinf->seqlock);
+		ret = count;
+	}
+
+	return ret;
+}
+SCOUTFS_ATTR_RW(quorum_heartbeat_timeout_ms);
+
 static ssize_t quorum_slot_nr_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
@@ -325,8 +590,12 @@ static ssize_t quorum_slot_nr_show(struct kobject *kobj, struct kobj_attribute *
 SCOUTFS_ATTR_RO(quorum_slot_nr);
 
 static struct attribute *options_attrs[] = {
+	SCOUTFS_ATTR_PTR(data_prealloc_blocks),
+	SCOUTFS_ATTR_PTR(data_prealloc_contig_only),
+	SCOUTFS_ATTR_PTR(log_merge_wait_timeout_ms),
 	SCOUTFS_ATTR_PTR(metadev_path),
 	SCOUTFS_ATTR_PTR(orphan_scan_delay_ms),
+	SCOUTFS_ATTR_PTR(quorum_heartbeat_timeout_ms),
 	SCOUTFS_ATTR_PTR(quorum_slot_nr),
 	NULL,
 };

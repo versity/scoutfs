@@ -62,4 +62,7 @@ for r in $(seq 1 1000); do
 	done
 done
 
+echo "== cleanup"
+rm -f "$T_TMP.log"
+
 t_pass

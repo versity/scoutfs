@@ -1,0 +1,24 @@
+== default new files don't have project
+0
+== set new project on files and dirs
+8675309
+8675309
+== non-root can see id
+8675309
+== can use IDs around long width limits
+2147483647
+2147483648
+4294967295
+9223372036854775807
+9223372036854775808
+18446744073709551615
+== created files and dirs inherit project id
+8675309
+8675309
+== inheritance continues
+8675309
+== clearing project id stops inheritance
+0
+0
+== o_tmpfile creations inherit dir
+8675309

@@ -17,7 +17,7 @@ ino not found in dseq index
 mount 0 contents after mount 1 rm: contents
 ino found in dseq index
 ino found in dseq index
-stat: cannot stat ‘/mnt/test/test/inode-deletion/file’: No such file or directory
+stat: cannot stat '/mnt/test/test/inode-deletion/file': No such file or directory
 ino not found in dseq index
 ino not found in dseq index
 == lots of deletions use one open map

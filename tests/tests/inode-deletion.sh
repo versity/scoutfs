@@ -72,7 +72,7 @@ check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
 exec {FD}>&-  # close
 # we know that revalidating will unhash the remote dentry
-stat "$T_D0/file" 2>&1 | t_filter_fs
+stat "$T_D0/file" 2>&1 | sed 's/cannot statx/cannot stat/' | t_filter_fs
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
 

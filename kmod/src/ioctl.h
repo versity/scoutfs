@@ -559,4 +559,288 @@ struct scoutfs_ioctl_get_allocated_inos {
 #define SCOUTFS_IOC_GET_ALLOCATED_INOS \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 16, struct scoutfs_ioctl_get_allocated_inos)
 
+/*
+ * Get directory entries that refer to a specific inode.
+ *
+ * @ino: The target ino that we're finding referring entries to.
+ * Constant across all the calls that make up an iteration over all the
+ * inode's entries.
+ *
+ * @dir_ino: The inode number of a directory containing the entry to our
+ * inode to search from.  If this parent directory contains no more
+ * entries to our inode then we'll search through other parent directory
+ * inodes in inode order.
+ *
+ * @dir_pos: The position in the dir_ino parent directory of the entry
+ * to our inode to search from.  If there is no entry at this position
+ * then we'll search through other entry positions in increasing order.
+ * If we exhaust the parent directory then we'll search through
+ * additional parent directories in inode order.
+ *
+ * @entries_ptr: A pointer to the buffer where found entries will be
+ * stored.  The pointer must be aligned to 16 bytes.
+ *
+ * @entries_bytes: The size of the buffer that will contain entries.
+ *
+ * To start iterating set the desired target ino, dir_ino to 0, dir_pos
+ * to 0, and set result_ptr and _bytes to a sufficiently large buffer.
+ * Each entry struct that's stored in the buffer adds some overhead so a
+ * large multiple of the largest possible name is a reasonable choice.
+ * (A few multiples of PATH_MAX perhaps.)
+ *
+ * Each call returns the total number of entries that were stored in the
+ * entries buffer.  Zero is returned when the search was successful and
+ * no referring entries were found.  The entries can be iterated over by
+ * advancing each starting struct offset by the total number of bytes in
+ * each entry.  If the _LAST flag is set on an entry then there were no
+ * more entries referring to the inode at the time of the call and
+ * iteration can be stopped.
+ *
+ * To resume iteration set the next call's starting dir_ino and dir_pos
+ * to one past the last entry seen.  Increment the last entry's dir_pos,
+ * and if it wrapped to 0, increment its dir_ino.
+ *
+ * This does not check that the caller has permission to read the
+ * entries found in each containing directory.  It requires
+ * CAP_DAC_READ_SEARCH which bypasses path traversal permissions
+ * checking.
+ *
+ * Entries returned by a single call can reflect any combination of
+ * racing creation and removal of entries.  Each entry existed at the
+ * time it was read though it may have changed in the time it took to
+ * return from the call.  The set of entries returned may no longer
+ * reflect the current set of entries and may not have existed at the
+ * same time.
+ *
+ * This has no knowledge of the life cycle of the inode.  It can return
+ * 0 when there are no referring entries because either the target inode
+ * doesn't exist, it is in the process of being deleted, or because it
+ * is still open while being unlinked.
+ *
+ * On success this returns the number of entries filled in the buffer.
+ * A return of 0 indicates that no entries referred to the inode.
+ *
+ * EINVAL is returned when there is a problem with the buffer.  Either
+ * it was not aligned or it was not large enough for the first entry.
+ *
+ * Many other errnos indicate hard failure to find the next entry.
+ */
+struct scoutfs_ioctl_get_referring_entries {
+	__u64 ino;
+	__u64 dir_ino;
+	__u64 dir_pos;
+	__u64 entries_ptr;
+	__u64 entries_bytes;
+};
+
+/*
+ * @dir_ino: The inode of the directory containing the entry.
+ *
+ * @dir_pos: The readdir f_pos position of the entry within the
+ * directory.
+ *
+ * @ino: The inode number of the target of the entry.
+ *
+ * @flags: Flags associated with this entry.
+ *
+ * @d_type: Inode type as specified with DT_ enum values in readdir(3).
+ *
+ * @entry_bytes: The total bytes taken by the entry in memory, including
+ * the name and any alignment padding.  The start of a following entry
+ * will be found after this number of bytes.
+ *
+ * @name_len: The number of bytes in the name not including the trailing
+ * null, ala strlen(3).
+ *
+ * @name: The null terminated name of the referring entry.  In the
+ * struct definition this array is sized to naturally align the struct.
+ * That number of padded bytes are not necessarily found in the buffer
+ * returned by _get_referring_entries;
+ */
+struct scoutfs_ioctl_dirent {
+	__u64 dir_ino;
+	__u64 dir_pos;
+	__u64 ino;
+	__u16 entry_bytes;
+	__u8  flags;
+	__u8  d_type;
+	__u8  name_len;
+	__u8  name[3];
+};
+
+#define SCOUTFS_IOCTL_DIRENT_FLAG_LAST (1 << 0)
+
+#define SCOUTFS_IOC_GET_REFERRING_ENTRIES \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 17, struct scoutfs_ioctl_get_referring_entries)
+
+struct scoutfs_ioctl_inode_attr_x {
+	__u64 x_mask;
+	__u64 x_flags;
+	__u64 meta_seq;
+	__u64 data_seq;
+	__u64 data_version;
+	__u64 online_blocks;
+	__u64 offline_blocks;
+	__u64 ctime_sec;
+	__u32 ctime_nsec;
+	__u32 crtime_nsec;
+	__u64 crtime_sec;
+	__u64 size;
+	__u64 bits;
+	__u64 project_id;
+};
+
+/*
+ * Behavioral flags set in the x_flags field.  These flags don't
+ * necessarily correspond to specific attributes, but instead change the
+ * behaviour of a _get_ or _set_ operation.
+ *
+ * @SCOUTFS_IOC_IAX_F_SIZE_OFFLINE: When setting i_size, also create
+ * extents which are marked offline for the region of the file from
+ * offset 0 to the new set size.  This can only be set when setting the
+ * size and has no effect if setting the size fails.
+ */
+#define SCOUTFS_IOC_IAX_F_SIZE_OFFLINE	(1ULL << 0)
+#define SCOUTFS_IOC_IAX_F__UNKNOWN	(U64_MAX << 1)
+
+/*
+ * Single-bit values stored in the @bits field.  These indicate whether
+ * the bit is set, or not.  The main _IAX_ bits set in the mask indicate
+ * whether this value bit is populated by _get or stored by _set. 
+ */
+#define SCOUTFS_IOC_IAX_B_RETENTION	(1ULL << 0)
+
+/*
+ * x_mask bits which indicate which attributes of the inode to populate
+ * on return for _get or to set on the inode for _set.  Each mask bit
+ * corresponds to the matching named field in the attr_x struct passed
+ * to the _get_ and _set_ calls.
+ *
+ * Each field can have different permissions or other attribute
+ * requirements which can cause calls to fail.  If _set_ fails then no
+ * other attribute changes will have been made by the same call.
+ *
+ * @SCOUTFS_IOC_IAX_RETENTION: Mark a file for retention.  When marked,
+ * no modification can be made to the file other than changing extended
+ * attributes outside the "user." prefix and clearing the retention
+ * mark.  This can only be set on regular files and requires root (the
+ * CAP_SYS_ADMIN capability).  Other attributes can be set with a
+ * set_attr_x call on a retention inode as long as that call also
+ * successfully clears the retention mark.
+ */
+#define SCOUTFS_IOC_IAX_META_SEQ	(1ULL << 0)
+#define SCOUTFS_IOC_IAX_DATA_SEQ	(1ULL << 1)
+#define SCOUTFS_IOC_IAX_DATA_VERSION	(1ULL << 2)
+#define SCOUTFS_IOC_IAX_ONLINE_BLOCKS	(1ULL << 3)
+#define SCOUTFS_IOC_IAX_OFFLINE_BLOCKS	(1ULL << 4)
+#define SCOUTFS_IOC_IAX_CTIME		(1ULL << 5)
+#define SCOUTFS_IOC_IAX_CRTIME		(1ULL << 6)
+#define SCOUTFS_IOC_IAX_SIZE		(1ULL << 7)
+#define SCOUTFS_IOC_IAX_RETENTION	(1ULL << 8)
+#define SCOUTFS_IOC_IAX_PROJECT_ID	(1ULL << 9)
+
+/* single bit attributes that are packed in the bits field as _B_ */
+#define SCOUTFS_IOC_IAX__BITS		(SCOUTFS_IOC_IAX_RETENTION)
+/* inverse of all the bits we understand */
+#define SCOUTFS_IOC_IAX__UNKNOWN	(U64_MAX << 10)
+
+#define SCOUTFS_IOC_GET_ATTR_X \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 18, struct scoutfs_ioctl_inode_attr_x)
+
+#define SCOUTFS_IOC_SET_ATTR_X \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 19, struct scoutfs_ioctl_inode_attr_x)
+
+/*
+ * (These fields are documented in the order that they're displayed by
+ * the scoutfs cli utility which matches the sort order of the rules.)
+ *
+ * @prio: The priority of the rule.  Rules are sorted by their fields
+ * with prio at the highest magnitude.  When multiple rules match the
+ * rule with the highest sort order is enforced.  The priority field
+ * lets rules override the default field sort order.
+ *
+ * @name_val[3]: The three 64bit values that make up the name of the
+ * totl xattr whose total will be checked against the rule's limit to
+ * see if the quota rule has been exceeded.  The behavior of the values
+ * can be changed by their corresponding name_source and name_flags.
+ *
+ * @name_source[3]: The SQ_NS_ enums that control where the value comes
+ * from.  _LITERAL uses the value from name_val.  Inode attribute
+ * sources (_PROJ, _UID, _GID) are taken from the inode of the operation
+ * that is being checked against the rule.
+ *
+ * @name_flags[3]: The SQ_NF_ enums that alter the name values.  _SELECT
+ * makes the rule only match if the inode attribute of the operation
+ * matches the attribute value stored in name_val.  This lets rules
+ * match a specific value of an attribute rather than mapping all
+ * attribute values of to totl names.
+ *
+ * @op: The SQ_OP_ enums which specify the operation that can't exceed
+ * the rule's limit.  _INODE checks inode creation and the inode
+ * attributes are taken from the inode that would be created.  _DATA
+ * checks file data block allocation and the inode fields come from the
+ * inode that is allocating the blocks.
+ *
+ * @limit: The 64bit value that is checked against the totl value
+ * described by the rule.  If the totl value is greater than or equal to
+ * this value of the matching rule then the operation will return
+ * -EDQUOT.
+ *
+ * @rule_flags: SQ_RF_TOTL_COUNT indicates that the rule's limit should
+ * be checked against the number of xattrs contributing to a totl value
+ * instead of the sum of the xattrs.
+ */
+struct scoutfs_ioctl_quota_rule {
+	__u64 name_val[3];
+	__u64 limit;
+	__u8 prio;
+	__u8 op;
+	__u8 rule_flags;
+	__u8 name_source[3];
+	__u8 name_flags[3];
+	__u8 _pad[7];
+};
+
+struct scoutfs_ioctl_get_quota_rules {
+	__u64 iterator[2];
+	__u64 rules_ptr;
+	__u64 rules_nr;
+};
+
+/*
+ * Rules are uniquely identified by their non-padded fields.  Addition will fail
+ * with -EEXIST if the specified rule already exists and deletion must find a rule
+ * with all matching fields to delete.
+ */
+#define SCOUTFS_IOC_GET_QUOTA_RULES \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 20, struct scoutfs_ioctl_get_quota_rules)
+#define SCOUTFS_IOC_ADD_QUOTA_RULE \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 21, struct scoutfs_ioctl_quota_rule)
+#define SCOUTFS_IOC_DEL_QUOTA_RULE \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 22, struct scoutfs_ioctl_quota_rule)
+
+/*
+ * Inodes can be indexed in a global key space at a position determined
+ * by a .indx. tagged xattr.  The xattr name specifies the two index
+ * position values, with major having the more significant comparison
+ * order.
+ */
+struct scoutfs_ioctl_xattr_index_entry {
+	__u64 minor;
+	__u64 ino;
+	__u8 major;
+	__u8 _pad[7];
+};
+
+struct scoutfs_ioctl_read_xattr_index {
+	__u64 flags;
+	struct scoutfs_ioctl_xattr_index_entry first;
+	struct scoutfs_ioctl_xattr_index_entry last;
+	__u64 entries_ptr;
+	__u64 entries_nr;
+};
+
+#define SCOUTFS_IOC_READ_XATTR_INDEX \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 23, struct scoutfs_ioctl_read_xattr_index)
+
 #endif

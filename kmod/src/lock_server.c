@@ -202,21 +202,48 @@ static u8 invalidation_mode(u8 granted, u8 requested)
 
 /*
  * Return true of the client lock instances described by the entries can
- * be granted at the same time.  Typically this only means they're both
- * modes that are compatible between nodes. In addition there's the
- * special case where a read lock on a client is compatible with a write
- * lock on the same client because the client's cache covered by the
- * read lock is still valid if they get a write lock.
+ * be granted at the same time.  There's only three cases where this is
+ * true.
+ *
+ * First, the two locks are both of the same mode that allows full
+ * sharing -- read and write only.  The only point of these modes is
+ * that everyone can share them.
+ *
+ * Second, a write lock gives the client permission to read as well.
+ * This means that a client can upgrade its read lock to a write lock
+ * without having to invalidate the existing read and drop caches.
+ *
+ * Third, null locks are always compatible between clients.  It's as
+ * though the client with the null lock has no lock at all.  But it's
+ * never compatible with all locks on the client requesting null.
+ * Sending invalidations for existing locks on a client when we get a
+ * null request is how we resolve races in shrinking locks -- we turn it
+ * into the unsolicited remote invalidation case.
+ *
+ * All other mode and client combinations can not be shared, most
+ * typically a write lock invalidating all other non-write holders to
+ * drop caches and force a read after the write has completed.
  */
 static bool client_entries_compatible(struct client_lock_entry *granted,
 				      struct client_lock_entry *requested)
 {
-	return (granted->mode == requested->mode &&
-		(granted->mode == SCOUTFS_LOCK_READ ||
-		 granted->mode == SCOUTFS_LOCK_WRITE_ONLY)) ||
-	       (granted->rid == requested->rid &&
-		granted->mode == SCOUTFS_LOCK_READ &&
-		requested->mode == SCOUTFS_LOCK_WRITE);
+	/* only read and write_only can be full shared */
+	if ((granted->mode == requested->mode) &&
+	    (granted->mode == SCOUTFS_LOCK_READ || granted->mode == SCOUTFS_LOCK_WRITE_ONLY))
+		return true;
+
+	/* _write includes reading, so a client can upgrade its read to write */
+	if (granted->rid == requested->rid &&
+	    granted->mode == SCOUTFS_LOCK_READ &&
+	    requested->mode == SCOUTFS_LOCK_WRITE)
+		return true;
+
+	/* null is always compatible across clients, never within a client */
+	if ((granted->rid != requested->rid) &&
+	    (granted->mode == SCOUTFS_LOCK_NULL || requested->mode == SCOUTFS_LOCK_NULL))
+		return true;
+
+	return false;
 }
 
 /*
@@ -317,15 +344,17 @@ static void put_server_lock(struct lock_server_info *inf,
 
 	BUG_ON(!mutex_is_locked(&snode->mutex));
 
+	spin_lock(&inf->lock);
+
 	if (atomic_dec_and_test(&snode->refcount) &&
 	    list_empty(&snode->granted) &&
 	    list_empty(&snode->requested) &&
 	    list_empty(&snode->invalidated)) {
-		spin_lock(&inf->lock);
 		rb_erase(&snode->node, &inf->locks_root);
-		spin_unlock(&inf->lock);
 		should_free = true;
 	}
+
+	spin_unlock(&inf->lock);
 
 	mutex_unlock(&snode->mutex);
 

@@ -22,6 +22,8 @@
 #include <linux/sched.h>
 #include <linux/aio.h>
 #include <linux/list_sort.h>
+#include <linux/backing-dev.h>
+#include <linux/overflow.h>
 
 #include "format.h"
 #include "key.h"
@@ -41,7 +43,12 @@
 #include "alloc.h"
 #include "server.h"
 #include "counters.h"
+#include "attr_x.h"
+#include "totl.h"
+#include "wkic.h"
+#include "quota.h"
 #include "scoutfs_trace.h"
+#include "util.h"
 
 /*
  * We make inode index items coherent by locking fixed size regions of
@@ -51,25 +58,23 @@
  * key space after we find no items in a given lock region.  This is
  * relatively cheap because reading is going to check the segments
  * anyway.
- *
- * This is copying to userspace while holding a read lock.  This is safe
- * because faulting can send a request for a write lock while the read
- * lock is being used.  The cluster locks don't block tasks in a node,
- * they match and the tasks fall back to local locking.  In this case
- * the spin locks around the item cache.
  */
 static long scoutfs_ioc_walk_inodes(struct file *file, unsigned long arg)
 {
 	struct super_block *sb = file_inode(file)->i_sb;
 	struct scoutfs_ioctl_walk_inodes __user *uwalk = (void __user *)arg;
 	struct scoutfs_ioctl_walk_inodes walk;
-	struct scoutfs_ioctl_walk_inodes_entry ent;
+	struct scoutfs_ioctl_walk_inodes_entry *ent = NULL;
+	struct scoutfs_ioctl_walk_inodes_entry *end;
 	struct scoutfs_key next_key;
 	struct scoutfs_key last_key;
 	struct scoutfs_key key;
 	struct scoutfs_lock *lock;
+	struct page *page = NULL;
 	u64 last_seq;
+	u64 entries = 0;
 	int ret = 0;
+	int complete = 0;
 	u32 nr = 0;
 	u8 type;
 
@@ -100,6 +105,10 @@ static long scoutfs_ioc_walk_inodes(struct file *file, unsigned long arg)
 		}
 	}
 
+	page = alloc_page(GFP_KERNEL);
+	if (!page)
+		return -ENOMEM;
+
 	scoutfs_inode_init_index_key(&key, type, walk.first.major,
 				     walk.first.minor, walk.first.ino);
 	scoutfs_inode_init_index_key(&last_key, type, walk.last.major,
@@ -108,77 +117,107 @@ static long scoutfs_ioc_walk_inodes(struct file *file, unsigned long arg)
 	/* cap nr to the max the ioctl can return to a compat task */
 	walk.nr_entries = min_t(u64, walk.nr_entries, INT_MAX);
 
-	ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ, type,
-				       walk.first.major, walk.first.ino,
-				       &lock);
-	if (ret < 0)
-		goto out;
+	end = page_address(page) + PAGE_SIZE;
 
-	for (nr = 0; nr < walk.nr_entries; ) {
+	/* outer loop */
+	for (nr = 0;;) {
+		ent = page_address(page);
+		/* make sure _pad and minor are zeroed */
+		memset(ent, 0, PAGE_SIZE);
 
-		ret = scoutfs_item_next(sb, &key, &last_key, NULL, 0, lock);
-		if (ret < 0 && ret != -ENOENT)
+		ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ, type,
+					       le64_to_cpu(key.skii_major),
+					       le64_to_cpu(key.skii_ino),
+					       &lock);
+		if (ret)
 			break;
 
-		if (ret == -ENOENT) {
-
-			/* done if lock covers last iteration key */
-			if (scoutfs_key_compare(&last_key, &lock->end) <= 0) {
-				ret = 0;
+		/* inner loop 1 */
+		while (ent + 1 < end) {
+			ret = scoutfs_item_next(sb, &key, &last_key, NULL, 0, lock);
+			if (ret < 0 && ret != -ENOENT)
 				break;
+
+			if (ret == -ENOENT) {
+				/* done if lock covers last iteration key */
+				if (scoutfs_key_compare(&last_key, &lock->end) <= 0) {
+					ret = 0;
+					complete = 1;
+					break;
+				}
+
+				/* continue iterating after locked empty region */
+				key = lock->end;
+				scoutfs_key_inc(&key);
+
+				scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+				/* avoid double-unlocking here after break */
+				lock = NULL;
+
+				ret = scoutfs_forest_next_hint(sb, &key, &next_key);
+				if (ret < 0 && ret != -ENOENT)
+					break;
+
+				if (ret == -ENOENT ||
+				    scoutfs_key_compare(&next_key, &last_key) > 0) {
+					ret = 0;
+					complete = 1;
+					break;
+				}
+
+				key = next_key;
+
+				ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ,
+							type,
+							le64_to_cpu(key.skii_major),
+							le64_to_cpu(key.skii_ino),
+							&lock);
+				if (ret)
+					break;
+
+				continue;
 			}
 
-			/* continue iterating after locked empty region */
-			key = lock->end;
+			ent->major = le64_to_cpu(key.skii_major);
+			ent->ino = le64_to_cpu(key.skii_ino);
+
 			scoutfs_key_inc(&key);
 
-			scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+			ent++;
+			entries++;
 
-			ret = scoutfs_forest_next_hint(sb, &key, &next_key);
-			if (ret < 0 && ret != -ENOENT)
-				goto out;
+			if (nr + entries >= walk.nr_entries) {
+				complete = 1;
+				break;
+			}
+		}
 
-			if (ret == -ENOENT ||
-			    scoutfs_key_compare(&next_key, &last_key) > 0) {
-				ret = 0;
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+		if (ret < 0)
+			break;
+
+		/* inner loop 2 */
+		ent = page_address(page);
+		for (; entries > 0; entries--) {
+			if (copy_to_user((void __user *)walk.entries_ptr, ent,
+					 sizeof(struct scoutfs_ioctl_walk_inodes_entry))) {
+				ret = -EFAULT;
 				goto out;
 			}
-
-			key = next_key;
-
-			ret = scoutfs_lock_inode_index(sb, SCOUTFS_LOCK_READ,
-						key.sk_type,
-						le64_to_cpu(key.skii_major),
-						le64_to_cpu(key.skii_ino),
-						&lock);
-			if (ret < 0)
-				goto out;
-
-			continue;
+			walk.entries_ptr += sizeof(struct scoutfs_ioctl_walk_inodes_entry);
+			ent++;
+			nr++;
 		}
 
-		ent.major = le64_to_cpu(key.skii_major);
-		ent.minor = 0;
-		ent.ino = le64_to_cpu(key.skii_ino);
-
-		if (copy_to_user((void __user *)walk.entries_ptr, &ent,
-				 sizeof(ent))) {
-			ret = -EFAULT;
+		if (complete)
 			break;
-		}
-
-		nr++;
-		walk.entries_ptr += sizeof(ent);
-
-		scoutfs_key_inc(&key);
 	}
 
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
-
 out:
+	if (page)
+		__free_page(page);
 	if (nr > 0)
 		ret = nr;
-
 	return ret;
 }
 
@@ -283,6 +322,7 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	u64 online;
 	u64 offline;
 	u64 isize;
+	__u64 tmp;
 	int ret;
 
 	if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -292,17 +332,16 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 	if (args.length == 0)
 		return 0;
-	if (((args.offset + args.length) < args.offset) ||
+	if ((check_add_overflow(args.offset, args.length - 1, &tmp)) ||
 	    (args.offset & SCOUTFS_BLOCK_SM_MASK) ||
 	    (args.length & SCOUTFS_BLOCK_SM_MASK))
 		return -EINVAL;
-
 
 	ret = mnt_want_write_file(file);
 	if (ret)
 		return ret;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -351,7 +390,7 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 
 out:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 
 	trace_scoutfs_ioc_release_ret(sb, scoutfs_ino(inode), ret);
@@ -393,7 +432,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 		goto out;
 	}
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -411,7 +450,7 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 unlock:
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	iput(inode);
 out:
 	return ret;
@@ -448,7 +487,6 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
-	struct address_space *mapping = inode->i_mapping;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	struct scoutfs_ioctl_stage args;
@@ -480,8 +518,10 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	/* the iocb is really only used for the file pointer :P */
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = args.offset;
+#ifdef KC_LINUX_AIO_KI_LEFT
 	kiocb.ki_left = args.length;
 	kiocb.ki_nbytes = args.length;
+#endif
 	iov.iov_base = (void __user *)(unsigned long)args.buf_ptr;
 	iov.iov_len = args.length;
 
@@ -489,7 +529,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	if (ret)
 		return ret;
 
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
@@ -516,7 +556,9 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	}
 
 	si->staging = true;
-	current->backing_dev_info = mapping->backing_dev_info;
+#ifdef KC_CURRENT_BACKING_DEV_INFO
+	current->backing_dev_info = inode_to_bdi(inode);
+#endif
 
 	pos = args.offset;
 	written = 0;
@@ -529,11 +571,13 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	} while (ret > 0 && written < args.length);
 
 	si->staging = false;
+#ifdef KC_CURRENT_BACKING_DEV_INFO
 	current->backing_dev_info = NULL;
+#endif
 out:
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	mnt_drop_write_file(file);
 
 	trace_scoutfs_ioc_stage_ret(sb, scoutfs_ino(inode), ret);
@@ -543,20 +587,41 @@ out:
 static long scoutfs_ioc_stat_more(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
-	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	struct scoutfs_ioctl_stat_more stm;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
+	struct scoutfs_ioctl_stat_more *stm = NULL;
+	int ret;
 
-	stm.meta_seq = scoutfs_inode_meta_seq(inode);
-	stm.data_seq = scoutfs_inode_data_seq(inode);
-	stm.data_version = scoutfs_inode_data_version(inode);
-	scoutfs_inode_get_onoff(inode, &stm.online_blocks, &stm.offline_blocks);
-	stm.crtime_sec = si->crtime.tv_sec;
-	stm.crtime_nsec = si->crtime.tv_nsec;
+	iax = kmalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	stm = kmalloc(sizeof(struct scoutfs_ioctl_stat_more), GFP_KERNEL);
+	if (!iax || !stm) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
-	if (copy_to_user((void __user *)arg, &stm, sizeof(stm)))
-		return -EFAULT;
+	iax->x_mask = SCOUTFS_IOC_IAX_META_SEQ | SCOUTFS_IOC_IAX_DATA_SEQ |
+		      SCOUTFS_IOC_IAX_DATA_VERSION | SCOUTFS_IOC_IAX_ONLINE_BLOCKS |
+		      SCOUTFS_IOC_IAX_OFFLINE_BLOCKS | SCOUTFS_IOC_IAX_CRTIME;
+	iax->x_flags = 0;
+	ret = scoutfs_get_attr_x(inode, iax);
+	if (ret < 0)
+		goto out;
 
-	return 0;
+	stm->meta_seq = iax->meta_seq;
+	stm->data_seq = iax->data_seq;
+	stm->data_version = iax->data_version;
+	stm->online_blocks = iax->online_blocks;
+	stm->offline_blocks = iax->offline_blocks;
+	stm->crtime_sec = iax->crtime_sec;
+	stm->crtime_nsec = iax->crtime_nsec;
+
+	if (copy_to_user((void __user *)arg, stm, sizeof(struct scoutfs_ioctl_stat_more)))
+		ret = -EFAULT;
+	else
+		ret = 0;
+out:
+	kfree(iax);
+	kfree(stm);
+	return ret;
 }
 
 static bool inc_wrapped(u64 *ino, u64 *iblock)
@@ -613,23 +678,18 @@ static long scoutfs_ioc_data_waiting(struct file *file, unsigned long arg)
  * This is used when restoring files, it lets the caller set all the
  * inode attributes which are otherwise unreachable.  Changing the file
  * size can only be done for regular files with a data_version of 0.
+ *
+ * We unconditionally fill the iax attributes from the sm set and let
+ * set_attr_x check them.
  */
 static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 {
-	struct inode *inode = file->f_inode;
-	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	struct super_block *sb = inode->i_sb;
+	struct inode *inode = file_inode(file);
 	struct scoutfs_ioctl_setattr_more __user *usm = (void __user *)arg;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
 	struct scoutfs_ioctl_setattr_more sm;
-	struct scoutfs_lock *lock = NULL;
 	LIST_HEAD(ind_locks);
-	bool set_data_seq;
 	int ret;
-
-	if (!capable(CAP_SYS_ADMIN)) {
-		ret = -EPERM;
-		goto out;
-	}
 
 	if (!(file->f_mode & FMODE_WRITE)) {
 		ret = -EBADF;
@@ -641,65 +701,41 @@ static long scoutfs_ioc_setattr_more(struct file *file, unsigned long arg)
 		goto out;
 	}
 
-	if ((sm.i_size > 0 && sm.data_version == 0) ||
-	    ((sm.flags & SCOUTFS_IOC_SETATTR_MORE_OFFLINE) && !sm.i_size) ||
-	    (sm.flags & SCOUTFS_IOC_SETATTR_MORE_UNKNOWN)) {
+	if (sm.flags & SCOUTFS_IOC_SETATTR_MORE_UNKNOWN) {
 		ret = -EINVAL;
 		goto out;
 	}
+
+	iax = kzalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	if (!iax) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	iax->x_mask = SCOUTFS_IOC_IAX_CTIME | SCOUTFS_IOC_IAX_CRTIME |
+		      SCOUTFS_IOC_IAX_SIZE;
+	iax->data_version = sm.data_version;
+	iax->ctime_sec = sm.ctime_sec;
+	iax->ctime_nsec = sm.ctime_nsec;
+	iax->crtime_sec = sm.crtime_sec;
+	iax->crtime_nsec = sm.crtime_nsec;
+	iax->size = sm.i_size;
+
+	if (sm.flags & SCOUTFS_IOC_SETATTR_MORE_OFFLINE)
+		iax->x_flags |= SCOUTFS_IOC_IAX_F_SIZE_OFFLINE;
+
+	if (sm.data_version != 0)
+		iax->x_mask |= SCOUTFS_IOC_IAX_DATA_VERSION;
 
 	ret = mnt_want_write_file(file);
-	if (ret)
+	if (ret < 0)
 		goto out;
 
-	mutex_lock(&inode->i_mutex);
+	ret = scoutfs_set_attr_x(inode, iax);
 
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
-	if (ret)
-		goto unlock;
-
-	/* can only change size/dv on untouched regular files */
-	if ((sm.i_size != 0 || sm.data_version != 0) &&
-	    ((!S_ISREG(inode->i_mode) ||
-	      scoutfs_inode_data_version(inode) != 0))) {
-		ret = -EINVAL;
-		goto unlock;
-	}
-
-	/* create offline extents in potentially many transactions */
-	if (sm.flags & SCOUTFS_IOC_SETATTR_MORE_OFFLINE) {
-		ret = scoutfs_data_init_offline_extent(inode, sm.i_size, lock);
-		if (ret)
-			goto unlock;
-	}
-
-	/* setting only so we don't see 0 data seq with nonzero data_version */
-	set_data_seq = sm.data_version != 0 ? true : false;
-	ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, set_data_seq, false);
-	if (ret)
-		goto unlock;
-
-	if (sm.data_version)
-		scoutfs_inode_set_data_version(inode, sm.data_version);
-	if (sm.i_size)
-		i_size_write(inode, sm.i_size);
-	inode->i_ctime.tv_sec = sm.ctime_sec;
-	inode->i_ctime.tv_nsec = sm.ctime_nsec;
-	si->crtime.tv_sec = sm.crtime_sec;
-	si->crtime.tv_nsec = sm.crtime_nsec;
-
-	scoutfs_update_inode_item(inode, lock, &ind_locks);
-	ret = 0;
-
-	scoutfs_release_trans(sb);
-unlock:
-	scoutfs_inode_index_unlock(sb, &ind_locks);
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	mutex_unlock(&inode->i_mutex);
 	mnt_drop_write_file(file);
 out:
-
+	kfree(iax);
 	return ret;
 }
 
@@ -718,7 +754,8 @@ static long scoutfs_ioc_listxattr_hidden(struct file *file, unsigned long arg)
 	int total = 0;
 	int ret;
 
-	ret = inode_permission(inode, MAY_READ);
+	ret = inode_permission(KC_VFS_INIT_NS
+			       inode, MAY_READ);
 	if (ret < 0)
 		goto out;
 
@@ -956,6 +993,7 @@ static long scoutfs_ioc_move_blocks(struct file *file, unsigned long arg)
 	struct scoutfs_ioctl_move_blocks mb;
 	struct file *from_file;
 	struct inode *from;
+	u64 tmp;
 	int ret;
 
 	if (copy_from_user(&mb, umb, sizeof(mb)))
@@ -964,8 +1002,8 @@ static long scoutfs_ioc_move_blocks(struct file *file, unsigned long arg)
 	if (mb.len == 0)
 		return 0;
 
-	if (mb.from_off + mb.len < mb.from_off ||
-	    mb.to_off + mb.len < mb.to_off)
+	if ((check_add_overflow(mb.from_off, mb.len - 1, &tmp)) ||
+	    (check_add_overflow(mb.to_off, mb.len - 1, &tmp)))
 		return -EOVERFLOW;
 
 	from_file = fget(mb.from_fd);
@@ -1033,124 +1071,32 @@ out:
 	return ret;
 }
 
-struct xattr_total_entry {
-	struct rb_node node;
-	struct scoutfs_ioctl_xattr_total xt;
-	u64 fs_seq;
-	u64 fs_total;
-	u64 fs_count;
-	u64 fin_seq;
-	u64 fin_total;
-	s64 fin_count;
-	u64 log_seq;
-	u64 log_total;
-	s64 log_count;
+struct read_xattr_total_iter_cb_args {
+	struct scoutfs_ioctl_xattr_total *xt;
+	unsigned int copied;
+	unsigned int total;
 };
 
-static int cmp_xt_entry_name(const struct xattr_total_entry *a,
-			     const struct xattr_total_entry *b)
-
-{
-	return scoutfs_cmp_u64s(a->xt.name[0], b->xt.name[0]) ?:
-	       scoutfs_cmp_u64s(a->xt.name[1], b->xt.name[1]) ?:
-	       scoutfs_cmp_u64s(a->xt.name[2], b->xt.name[2]);
-}
-
 /*
- * Record the contribution of the three classes of logged items we can
- * see: the item in the fs_root, items from finalized log btrees, and
- * items from active log btrees.  Once we have the full set the caller
- * can decide which of the items contribute to the total it sends to the
- * user.
+ * This is called under an RCU read lock so it can't copy to userspace.
  */
-static int read_xattr_total_item(struct super_block *sb, struct scoutfs_key *key,
-				 u64 seq, u8 flags, void *val, int val_len, int fic, void *arg)
+static int read_xattr_total_iter_cb(struct scoutfs_key *key, void *val, unsigned int val_len,
+				    void *cb_arg)
 {
+	struct read_xattr_total_iter_cb_args *cba = cb_arg;
 	struct scoutfs_xattr_totl_val *tval = val;
-	struct xattr_total_entry *ent;
-	struct xattr_total_entry rd;
-	struct rb_root *root = arg;
-	struct rb_node *parent;
-	struct rb_node **node;
-	int cmp;
+	struct scoutfs_ioctl_xattr_total *xt = &cba->xt[cba->copied];
 
-	rd.xt.name[0] = le64_to_cpu(key->skxt_a);
-	rd.xt.name[1] = le64_to_cpu(key->skxt_b);
-	rd.xt.name[2] = le64_to_cpu(key->skxt_c);
+	xt->name[0] = le64_to_cpu(key->skxt_a);
+	xt->name[1] = le64_to_cpu(key->skxt_b);
+	xt->name[2] = le64_to_cpu(key->skxt_c);
+	xt->total = le64_to_cpu(tval->total);
+	xt->count = le64_to_cpu(tval->count);
 
-	/* find entry matching name */
-	node = &root->rb_node;
-	parent = NULL;
-	cmp = -1;
-	while (*node) {
-		parent = *node;
-		ent = container_of(*node, struct xattr_total_entry, node);
-
-		/* sort merge items by key then newest to oldest */
-		cmp = cmp_xt_entry_name(&rd, ent);
-		if (cmp < 0)
-			node = &(*node)->rb_left;
-		else if (cmp > 0)
-			node = &(*node)->rb_right;
-		else
-			break;
-	}
-
-	/* allocate and insert new node if we need to */
-	if (cmp != 0) {
-		ent = kzalloc(sizeof(*ent), GFP_KERNEL);
-		if (!ent)
-			return -ENOMEM;
-
-		memcpy(&ent->xt.name, &rd.xt.name, sizeof(ent->xt.name));
-
-		rb_link_node(&ent->node, parent, node);
-		rb_insert_color(&ent->node, root);
-	}
-
-	if (fic & FIC_FS_ROOT) {
-		ent->fs_seq = seq;
-		ent->fs_total = le64_to_cpu(tval->total);
-		ent->fs_count = le64_to_cpu(tval->count);
-	} else if (fic & FIC_FINALIZED) {
-		ent->fin_seq = seq;
-		ent->fin_total += le64_to_cpu(tval->total);
-		ent->fin_count += le64_to_cpu(tval->count);
-	} else {
-		ent->log_seq = seq;
-		ent->log_total += le64_to_cpu(tval->total);
-		ent->log_count += le64_to_cpu(tval->count);
-	}
-
-	scoutfs_inc_counter(sb, totl_read_item);
-
-	return 0;
-}
-
-/* these are always _safe, node stores next */
-#define for_each_xt_ent(ent, node, root)					\
-	for (node = rb_first(root);						\
-	     node && (ent = rb_entry(node, struct xattr_total_entry, node),	\
-		      node = rb_next(node), 1); )
-
-#define for_each_xt_ent_reverse(ent, node, root)				\
-	for (node = rb_last(root);						\
-	     node && (ent = rb_entry(node, struct xattr_total_entry, node),	\
-		      node = rb_prev(node), 1); )
-
-static void free_xt_ent(struct rb_root *root, struct xattr_total_entry *ent)
-{
-	rb_erase(&ent->node, root);
-	kfree(ent);
-}
-
-static void free_all_xt_ents(struct rb_root *root)
-{
-	struct xattr_total_entry *ent;
-	struct rb_node *node;
-
-	for_each_xt_ent(ent, node, root)
-		free_xt_ent(root, ent);
+	if (++cba->copied < cba->total)
+		return -EAGAIN;
+	else
+		return 0;
 }
 
 /*
@@ -1160,30 +1106,6 @@ static void free_all_xt_ents(struct rb_root *root)
  * have been committed.  It doesn't use locking to force commits and
  * block writers so it can be a little bit out of date with respect to
  * dirty xattrs in memory across the system.
- *
- * Our reader has to be careful because the log btree merging code can
- * write partial results to the fs_root.  This means that a reader can
- * see both cases where new finalized logs should be applied to the old
- * fs items and where old finalized logs have already been applied to
- * the partially merged fs items.  Currently active logged items are
- * always applied on top of all cases.
- *
- * These cases are differentiated with a combination of sequence numbers
- * in items, the count of contributing xattrs, and a flag
- * differentiating finalized and active logged items.  This lets us
- * recognize all cases, including when finalized logs were merged and
- * deleted the fs item.
- *
- * We're allocating a tracking struct for each totl name we see while
- * traversing the item btrees.  The forest reader is providing the items
- * it finds in leaf blocks that contain the search key.  In the worst
- * case all of these blocks are full and none of the items overlap.  At
- * most, figure order a thousand names per mount.  But in practice many
- * of these factors fall away: leaf blocks aren't fill, leaf items
- * overlap, there aren't finalized log btrees, and not all mounts are
- * actively changing totals.   We're much more likely to only read a
- * leaf block's worth of totals that have been long since merged into
- * the fs_root.
  */
 static long scoutfs_ioc_read_xattr_totals(struct file *file, unsigned long arg)
 {
@@ -1191,14 +1113,13 @@ static long scoutfs_ioc_read_xattr_totals(struct file *file, unsigned long arg)
 	struct scoutfs_ioctl_read_xattr_totals __user *urxt = (void __user *)arg;
 	struct scoutfs_ioctl_read_xattr_totals rxt;
 	struct scoutfs_ioctl_xattr_total __user *uxt;
-	struct xattr_total_entry *ent;
+	struct read_xattr_total_iter_cb_args cba = {NULL, };
+	struct scoutfs_key range_start;
+	struct scoutfs_key range_end;
 	struct scoutfs_key key;
-	struct scoutfs_key bloom_key;
-	struct scoutfs_key start;
-	struct scoutfs_key end;
-	struct rb_root root = RB_ROOT;
-	struct rb_node *node;
-	int count = 0;
+	unsigned int copied = 0;
+	unsigned int total;
+	unsigned int ready;
 	int ret;
 
 	if (!(file->f_mode & FMODE_READ)) {
@@ -1210,6 +1131,13 @@ static long scoutfs_ioc_read_xattr_totals(struct file *file, unsigned long arg)
 		ret = -EPERM;
 		goto out;
 	}
+
+	cba.xt = (void *)__get_free_page(GFP_KERNEL);
+	if (!cba.xt) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	cba.total = PAGE_SIZE / sizeof(struct scoutfs_ioctl_xattr_total);
 
 	if (copy_from_user(&rxt, urxt, sizeof(rxt))) {
 		ret = -EFAULT;
@@ -1223,101 +1151,40 @@ static long scoutfs_ioc_read_xattr_totals(struct file *file, unsigned long arg)
 		goto out;
 	}
 
-	scoutfs_key_set_zeros(&bloom_key);
-	bloom_key.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
-	scoutfs_xattr_init_totl_key(&start, rxt.pos_name);
+	total = div_u64(min_t(u64, rxt.totals_bytes, INT_MAX),
+			sizeof(struct scoutfs_ioctl_xattr_total));
 
-	while (rxt.totals_bytes >= sizeof(struct scoutfs_ioctl_xattr_total)) {
+	scoutfs_totl_set_range(&range_start, &range_end);
+	scoutfs_xattr_init_totl_key(&key, rxt.pos_name);
 
-		scoutfs_key_set_ones(&end);
-		end.sk_zone = SCOUTFS_XATTR_TOTL_ZONE;
-		if (scoutfs_key_compare(&start, &end) > 0)
+	while (copied < total) {
+		cba.copied = 0;
+		ret = scoutfs_wkic_iterate(sb, &key, &range_end, &range_start, &range_end,
+					   read_xattr_total_iter_cb, &cba);
+		if (ret < 0)
+			goto out;
+
+		if (cba.copied == 0)
 			break;
 
-		key = start;
-		ret = scoutfs_forest_read_items(sb, &key, &bloom_key, &start, &end,
-						read_xattr_total_item, &root);
-		if (ret < 0) {
-			if (ret == -ESTALE) {
-				free_all_xt_ents(&root);
-				continue;
-			}
+		ready = min(total - copied, cba.copied);
+
+		if (copy_to_user(&uxt[copied], cba.xt, ready * sizeof(cba.xt[0]))) {
+			ret = -EFAULT;
 			goto out;
 		}
 
-		if (RB_EMPTY_ROOT(&root))
-			break;
-
-		/* trim totals that fall outside of the consistent range */
-		for_each_xt_ent(ent, node, &root) {
-			scoutfs_xattr_init_totl_key(&key, ent->xt.name);
-			if (scoutfs_key_compare(&key, &start) < 0) {
-				free_xt_ent(&root, ent);
-			} else {
-				break;
-			}
-		}
-		for_each_xt_ent_reverse(ent, node, &root) {
-			scoutfs_xattr_init_totl_key(&key, ent->xt.name);
-			if (scoutfs_key_compare(&key, &end) > 0) {
-				free_xt_ent(&root, ent);
-			} else {
-				break;
-			}
-		}
-
-		/* copy resulting unique non-zero totals to userspace */
-		for_each_xt_ent(ent, node, &root) {
-			if (rxt.totals_bytes < sizeof(ent->xt))
-				break;
-
-			/* start with the fs item if we have it */
-			if (ent->fs_seq != 0) {
-				ent->xt.total = ent->fs_total;
-				ent->xt.count = ent->fs_count;
-				scoutfs_inc_counter(sb, totl_read_fs);
-			}
-
-			/* apply finalized logs if they're newer or creating */
-			if (((ent->fs_seq != 0) && (ent->fin_seq > ent->fs_seq)) ||
-			    ((ent->fs_seq == 0) && (ent->fin_count > 0))) {
-				ent->xt.total += ent->fin_total;
-				ent->xt.count += ent->fin_count;
-				scoutfs_inc_counter(sb, totl_read_finalized);
-			}
-
-			/* always apply active logs which must be newer than fs and finalized */
-			if (ent->log_seq > 0) {
-				ent->xt.total += ent->log_total;
-				ent->xt.count += ent->log_count;
-				scoutfs_inc_counter(sb, totl_read_logged);
-			}
-
-			if (ent->xt.total != 0 || ent->xt.count != 0) {
-				if (copy_to_user(uxt, &ent->xt, sizeof(ent->xt))) {
-					ret = -EFAULT;
-					goto out;
-				}
-
-				uxt++;
-				rxt.totals_bytes -= sizeof(ent->xt);
-				count++;
-				scoutfs_inc_counter(sb, totl_read_copied);
-			}
-
-			free_xt_ent(&root, ent);
-		}
-
-		/* continue after the last possible key read */
-		start = end;
-		scoutfs_key_inc(&start);
+		scoutfs_xattr_init_totl_key(&key, cba.xt[ready - 1].name);
+		scoutfs_key_inc(&key);
+		copied += ready;
 	}
 
 	ret = 0;
 out:
-	free_all_xt_ents(&root);
+	if (cba.xt)
+		free_page((long)cba.xt);
 
-	return ret ?: count;
+	return ret ?: copied;
 }
 
 static long scoutfs_ioc_get_allocated_inos(struct file *file, unsigned long arg)
@@ -1328,11 +1195,15 @@ static long scoutfs_ioc_get_allocated_inos(struct file *file, unsigned long arg)
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_key key;
 	struct scoutfs_key end;
+	struct page *page = NULL;
 	u64 __user *uinos;
 	u64 bytes;
-	u64 ino;
+	u64 *ino;
+	u64 *ino_end;
+	int entries = 0;
 	int nr;
 	int ret;
+	int complete = 0;
 
 	if (!(file->f_mode & FMODE_READ)) {
 		ret = -EBADF;
@@ -1354,48 +1225,447 @@ static long scoutfs_ioc_get_allocated_inos(struct file *file, unsigned long arg)
 		goto out;
 	}
 
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	ino_end = page_address(page) + PAGE_SIZE;
+
 	scoutfs_inode_init_key(&key, gai.start_ino);
 	scoutfs_inode_init_key(&end, gai.start_ino | SCOUTFS_LOCK_INODE_GROUP_MASK);
 	uinos = (void __user *)gai.inos_ptr;
 	bytes = gai.inos_bytes;
 	nr = 0;
 
-	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, gai.start_ino, &lock);
-	if (ret < 0)
-		goto out;
+	for (;;) {
 
-	while (bytes >= sizeof(*uinos)) {
+		ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_READ, 0, gai.start_ino, &lock);
+		if (ret < 0)
+			goto out;
 
-		ret = scoutfs_item_next(sb, &key, &end, NULL, 0, lock);
+		ino = page_address(page);
+		while (ino < ino_end) {
+
+			ret = scoutfs_item_next(sb, &key, &end, NULL, 0, lock);
+			if (ret < 0) {
+				if (ret == -ENOENT) {
+					ret = 0;
+					complete = 1;
+				}
+				break;
+			}
+
+			if (key.sk_zone != SCOUTFS_FS_ZONE) {
+				ret = 0;
+				complete = 1;
+				break;
+			}
+
+			/* all fs items are owned by allocated inodes, and _first is always ino */
+			*ino = le64_to_cpu(key._sk_first);
+			scoutfs_inode_init_key(&key, *ino + 1);
+
+			ino++;
+			entries++;
+			nr++;
+
+			bytes -= sizeof(*uinos);
+			if (bytes < sizeof(*uinos)) {
+				complete = 1;
+				break;
+			}
+
+			if (nr == INT_MAX) {
+				complete = 1;
+				break;
+			}
+		}
+
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+
+		if (ret < 0)
+			break;
+
+		ino = page_address(page);
+		if (copy_to_user(uinos, ino, entries * sizeof(*uinos))) {
+			ret = -EFAULT;
+			goto out;
+		}
+
+		uinos += entries;
+		entries = 0;
+
+		if (complete)
+			break;
+	}
+out:
+	if (page)
+		__free_page(page);
+	return ret ?: nr;
+}
+
+/*
+ * Copy entries that point to an inode to the user's buffer.  We copy to
+ * userspace from copies of the entries that are acquired under a lock
+ * so that we don't fault while holding cluster locks.  It also gives us
+ * a chance to limit the amount of work under each lock hold.
+ */
+static long scoutfs_ioc_get_referring_entries(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_get_referring_entries gre;
+	struct scoutfs_link_backref_entry *bref = NULL;
+	struct scoutfs_link_backref_entry *bref_tmp;
+	struct scoutfs_ioctl_dirent __user *uent;
+	struct scoutfs_ioctl_dirent ent;
+	LIST_HEAD(list);
+	u64 copied;
+	int name_len;
+	int bytes;
+	long nr;
+	int ret;
+
+	if (!capable(CAP_DAC_READ_SEARCH))
+		return -EPERM;
+
+	if (copy_from_user(&gre, (void __user *)arg, sizeof(gre)))
+		return -EFAULT;
+
+	uent = (void __user *)(unsigned long)gre.entries_ptr;
+	copied = 0;
+	nr = 0;
+
+	/* use entry as cursor between calls */
+	ent.dir_ino = gre.dir_ino;
+	ent.dir_pos = gre.dir_pos;
+
+	for (;;) {
+		ret = scoutfs_dir_add_next_linkrefs(sb, gre.ino, ent.dir_ino, ent.dir_pos, 1024,
+						    &list);
 		if (ret < 0) {
 			if (ret == -ENOENT)
 				ret = 0;
-			break;
+			goto out;
 		}
 
-		if (key.sk_zone != SCOUTFS_FS_ZONE) {
-			ret = 0;
-			break;
+		/* _add_next adds each entry to the head, _reverse for key order */
+		list_for_each_entry_safe_reverse(bref, bref_tmp, &list, head) {
+			list_del_init(&bref->head);
+
+			name_len = bref->name_len;
+			bytes = ALIGN(offsetof(struct scoutfs_ioctl_dirent, name[name_len + 1]),
+				      16);
+			if (copied + bytes > gre.entries_bytes) {
+				ret = -EINVAL;
+				goto out;
+			}
+
+			ent.dir_ino = bref->dir_ino;
+			ent.dir_pos = bref->dir_pos;
+			ent.ino = gre.ino;
+			ent.entry_bytes = bytes;
+			ent.flags = bref->last ? SCOUTFS_IOCTL_DIRENT_FLAG_LAST : 0;
+			ent.d_type = bref->d_type;
+			ent.name_len = name_len;
+
+			if (copy_to_user(uent, &ent, sizeof(struct scoutfs_ioctl_dirent)) ||
+			    copy_to_user(&uent->name[0], bref->dent.name, name_len) ||
+			    put_user('\0', &uent->name[name_len])) {
+				ret = -EFAULT;
+				goto out;
+			}
+
+			kfree(bref);
+			bref = NULL;
+
+			uent = (void __user *)uent + bytes;
+			copied += bytes;
+			nr++;
+
+			if (nr == LONG_MAX || (ent.flags & SCOUTFS_IOCTL_DIRENT_FLAG_LAST)) {
+				ret = 0;
+				goto out;
+			}
 		}
 
-		/* all fs items are owned by allocated inodes, and _first is always ino */
-		ino = le64_to_cpu(key._sk_first);
-		if (put_user(ino, uinos)) {
-			ret = -EFAULT;
-			break;
+		/* advance cursor pos from last copied entry */
+		if (++ent.dir_pos == 0) {
+			if (++ent.dir_ino == 0) {
+				ret = 0;
+				goto out;
+			}
 		}
-
-		uinos++;
-		bytes -= sizeof(*uinos);
-		if (++nr == INT_MAX)
-			break;
-
-		scoutfs_inode_init_key(&key, ino + 1);
 	}
 
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+	ret = 0;
 out:
-	return ret ?: nr;
+	kfree(bref);
+	list_for_each_entry_safe(bref, bref_tmp, &list, head) {
+		list_del_init(&bref->head);
+		kfree(bref);
+	}
+
+	return nr ?: ret;
+}
+
+static long scoutfs_ioc_get_attr_x(struct file *file, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+	struct scoutfs_ioctl_inode_attr_x __user *uiax = (void __user *)arg;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
+	int ret;
+
+	iax = kmalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	if (!iax) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = get_user(iax->x_mask, &uiax->x_mask) ?:
+	      get_user(iax->x_flags, &uiax->x_flags);
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_get_attr_x(inode, iax);
+	if (ret < 0)
+		goto out;
+
+	/* only copy results after dropping cluster locks (could fault) */
+	if (ret > 0 && copy_to_user(uiax, iax, ret) != 0)
+		ret = -EFAULT;
+	else
+		ret = 0;
+out:
+	kfree(iax);
+	return ret;
+}
+
+static long scoutfs_ioc_set_attr_x(struct file *file, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+	struct scoutfs_ioctl_inode_attr_x __user *uiax = (void __user *)arg;
+	struct scoutfs_ioctl_inode_attr_x *iax = NULL;
+	int ret;
+
+	iax = kmalloc(sizeof(struct scoutfs_ioctl_inode_attr_x), GFP_KERNEL);
+	if (!iax) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	if (copy_from_user(iax, uiax, sizeof(struct scoutfs_ioctl_inode_attr_x))) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	ret = mnt_want_write_file(file);
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_set_attr_x(inode, iax);
+
+	mnt_drop_write_file(file);
+out:
+	kfree(iax);
+	return ret;
+}
+
+static long scoutfs_ioc_get_quota_rules(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_get_quota_rules __user *ugqr = (void __user *)arg;
+	struct scoutfs_ioctl_get_quota_rules gqr;
+	struct scoutfs_ioctl_quota_rule __user *uirules;
+	struct scoutfs_ioctl_quota_rule *irules;
+	struct page *page = NULL;
+	int copied = 0;
+	int nr;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (copy_from_user(&gqr, ugqr, sizeof(gqr)))
+		return -EFAULT;
+
+	if (gqr.rules_nr == 0)
+		return 0;
+
+	uirules = (void __user *)gqr.rules_ptr;
+	/* limit rules copied per call */
+	gqr.rules_nr = min_t(u64, gqr.rules_nr, INT_MAX);
+
+	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	irules = page_address(page);
+
+	while (copied < gqr.rules_nr) {
+		nr = min_t(u64, gqr.rules_nr - copied,
+				PAGE_SIZE / sizeof(struct scoutfs_ioctl_quota_rule));
+		ret = scoutfs_quota_get_rules(sb, gqr.iterator, page_address(page), nr);
+		if (ret <= 0)
+			goto out;
+
+		if (copy_to_user(&uirules[copied], irules, ret * sizeof(irules[0]))) {
+			ret = -EFAULT;
+			goto out;
+		}
+
+		copied += ret;
+	}
+
+	ret = 0;
+out:
+	if (page)
+		__free_page(page);
+
+	if (ret == 0 && copy_to_user(ugqr->iterator, gqr.iterator, sizeof(gqr.iterator)))
+		ret = -EFAULT;
+
+	return ret ?: copied;
+}
+
+static long scoutfs_ioc_mod_quota_rule(struct file *file, unsigned long arg, bool is_add)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_quota_rule __user *uirule = (void __user *)arg;
+	struct scoutfs_ioctl_quota_rule irule;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (copy_from_user(&irule, uirule, sizeof(irule)))
+		return -EFAULT;
+
+	return scoutfs_quota_mod_rule(sb, is_add, &irule);
+}
+
+struct read_index_buf {
+	int nr;
+	int size;
+	struct scoutfs_ioctl_xattr_index_entry ents[0];
+};
+
+#define READ_INDEX_BUF_MAX_ENTS \
+	((PAGE_SIZE - sizeof(struct read_index_buf)) / \
+		sizeof(struct scoutfs_ioctl_xattr_index_entry))
+
+/*
+ * This doesn't filter out duplicates, the caller filters them out to
+ * catch duplicates between iteration calls.
+ */
+static int read_index_cb(struct scoutfs_key *key, void *val, unsigned int val_len, void *cb_arg)
+{
+	struct read_index_buf *rib = cb_arg;
+	struct scoutfs_ioctl_xattr_index_entry *ent = &rib->ents[rib->nr];
+	u64 xid;
+
+	if (val_len != 0)
+		return -EIO;
+
+	/* discard the xid, they're not exposed to ioctl callers */
+	scoutfs_xattr_get_indx_key(key, &ent->major, &ent->minor, &ent->ino, &xid);
+
+	if (++rib->nr == rib->size)
+		return rib->nr;
+
+	return -EAGAIN;
+}
+
+static long scoutfs_ioc_read_xattr_index(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_read_xattr_index __user *urxi = (void __user *)arg;
+	struct scoutfs_ioctl_xattr_index_entry __user *uents;
+	struct scoutfs_ioctl_xattr_index_entry *ent;
+	struct scoutfs_ioctl_xattr_index_entry prev;
+	struct scoutfs_ioctl_read_xattr_index rxi;
+	struct read_index_buf *rib;
+	struct page *page = NULL;
+	struct scoutfs_key first;
+	struct scoutfs_key last;
+	struct scoutfs_key start;
+	struct scoutfs_key end;
+	int copied = 0;
+	int ret;
+	int i;
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&rxi, urxi, sizeof(rxi))) {
+		ret = -EFAULT;
+		goto out;
+	}
+	uents = (void __user *)rxi.entries_ptr;
+	rxi.entries_nr = min_t(u64, rxi.entries_nr, INT_MAX);
+
+	page = alloc_page(GFP_KERNEL);
+	if (!page) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	rib = page_address(page);
+
+	scoutfs_xattr_init_indx_key(&first, rxi.first.major, rxi.first.minor, rxi.first.ino, 0);
+	scoutfs_xattr_init_indx_key(&last, rxi.last.major, rxi.last.minor, rxi.last.ino, U64_MAX);
+	scoutfs_xattr_indx_get_range(&start, &end);
+
+	if (scoutfs_key_compare(&first, &last) > 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* 0 ino doesn't exist, can't ever match entry to return */
+	memset(&prev, 0, sizeof(prev));
+
+	while (copied < rxi.entries_nr) {
+		rib->nr = 0;
+		rib->size = min_t(u64, rxi.entries_nr - copied, READ_INDEX_BUF_MAX_ENTS);
+		ret = scoutfs_wkic_iterate(sb, &first, &last, &start, &end,
+					   read_index_cb, rib);
+		if (ret < 0)
+			goto out;
+		if (rib->nr == 0)
+			break;
+
+		/*
+		 * Copy entries to userspace, skipping duplicate entries
+		 * that can result from multiple xattrs indexing an
+		 * inode at the same position and which can span
+		 * multiple cache iterations.  (Comparing in order of
+		 * most likely to change to fail fast.)
+		 */
+		for (i = 0, ent = rib->ents; i < rib->nr; i++, ent++) {
+			if (ent->ino == prev.ino && ent->minor == prev.minor &&
+			    ent->major == prev.major)
+				continue;
+
+			if (copy_to_user(&uents[copied], ent, sizeof(*ent))) {
+				ret = -EFAULT;
+				goto out;
+			}
+
+			prev = *ent;
+			copied++;
+		}
+
+		scoutfs_xattr_init_indx_key(&first, prev.major, prev.minor, prev.ino, U64_MAX);
+		scoutfs_key_inc(&first);
+	}
+
+	ret = copied;
+out:
+	if (page)
+		__free_page(page);
+
+	return ret;
 }
 
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
@@ -1433,6 +1703,20 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_read_xattr_totals(file, arg);
 	case SCOUTFS_IOC_GET_ALLOCATED_INOS:
 		return scoutfs_ioc_get_allocated_inos(file, arg);
+	case SCOUTFS_IOC_GET_REFERRING_ENTRIES:
+		return scoutfs_ioc_get_referring_entries(file, arg);
+	case SCOUTFS_IOC_GET_ATTR_X:
+		return scoutfs_ioc_get_attr_x(file, arg);
+	case SCOUTFS_IOC_SET_ATTR_X:
+		return scoutfs_ioc_set_attr_x(file, arg);
+	case SCOUTFS_IOC_GET_QUOTA_RULES:
+		return scoutfs_ioc_get_quota_rules(file, arg);
+	case SCOUTFS_IOC_ADD_QUOTA_RULE:
+		return scoutfs_ioc_mod_quota_rule(file, arg, true);
+	case SCOUTFS_IOC_DEL_QUOTA_RULE:
+		return scoutfs_ioc_mod_quota_rule(file, arg, false);
+	case SCOUTFS_IOC_READ_XATTR_INDEX:
+		return scoutfs_ioc_read_xattr_index(file, arg);
 	}
 
 	return -ENOTTY;

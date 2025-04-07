@@ -18,6 +18,7 @@
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
 #include <linux/sort.h>
+#include <asm/unaligned.h>
 
 #include "super.h"
 #include "format.h"
@@ -30,6 +31,9 @@
 #include "client.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
+#include "triggers.h"
+#include "sysfs.h"
+#include "msg.h"
 
 /*
  * This srch subsystem gives us a way to find inodes that have a given
@@ -68,10 +72,14 @@ struct srch_info {
 	atomic_t shutdown;
 	struct workqueue_struct *workq;
 	struct delayed_work compact_dwork;
+	struct scoutfs_sysfs_attrs ssa;
+	atomic_t compact_delay_ms;
 };
 
 #define DECLARE_SRCH_INFO(sb, name) \
 	struct srch_info *name = SCOUTFS_SB(sb)->srch_info
+#define DECLARE_SRCH_INFO_KOBJ(kobj, name) \
+	DECLARE_SRCH_INFO(SCOUTFS_SYSFS_ATTRS_SB(kobj), name)
 
 #define SRE_FMT "%016llx.%llu.%llu"
 #define SRE_ARG(sre)						\
@@ -521,6 +529,95 @@ out:
 }
 
 /*
+ * Padded entries are encoded in pairs after an existing entry.  All of
+ * the pairs cancel each other out by all readers (the second encoding
+ * looks like deletion) so they aren't visible to the first/last bounds of
+ * the block or file.
+ */
+static int append_padded_entry(struct scoutfs_srch_file *sfl, u64 blk,
+			       struct scoutfs_srch_block *srb, struct scoutfs_srch_entry *sre)
+{
+	int ret;
+
+	ret = encode_entry(srb->entries + le32_to_cpu(srb->entry_bytes),
+			   sre, &srb->tail);
+	if (ret > 0) {
+		srb->tail = *sre;
+		le32_add_cpu(&srb->entry_nr, 1);
+		le32_add_cpu(&srb->entry_bytes, ret);
+		le64_add_cpu(&sfl->entries, 1);
+		ret = 0;
+	}
+
+	return ret;
+}
+
+/*
+ * This is called by a testing trigger to create a very specific case of
+ * encoded entry offsets.  We want the last entry in the block to start
+ * precisely at the _SAFE_BYTES offset.
+ *
+ * This is called when there is a single existing entry in the block.
+ * We have the entire block to work with.  We encode pairs of matching
+ * entries.  This hides them from readers (both searches and merging) as
+ * they're interpreted as creation and deletion and are deleted.  We use
+ * the existing hash value of the first entry in the block but then set
+ * the inode to an impossibly large number so it doesn't interfere with
+ * anything.
+ *
+ * To hit the specific offset we very carefully manage the amount of
+ * bytes of change between fields in the entry.  We know that if we
+ * change all the byte of the ino and id we end up with a 20 byte
+ * (2+8+8,2) encoding of the pair of entries.  To have the last entry
+ * start at the _SAFE_POS offset we know that the final 20 byte pair
+ * encoding needs to end at 2 bytes (second entry encoding) after the
+ * _SAFE_POS offset.
+ *
+ * So as we encode pairs we watch the delta of our current offset from
+ * that desired final offset of 2 past _SAFE_POS.  If we're a multiple
+ * of 20 away then we encode the full 20 byte pairs.  If we're not, then
+ * we drop a byte to encode 19 bytes.  That'll slowly change the offset
+ * to be a multiple of 20 again while encoding large entries.
+ */
+static void pad_entries_at_safe(struct scoutfs_srch_file *sfl, u64 blk,
+				struct scoutfs_srch_block *srb)
+{
+	struct scoutfs_srch_entry sre;
+	u32 target;
+	s32 diff;
+	u64 hash;
+	u64 ino;
+	u64 id;
+	int ret;
+
+	hash = le64_to_cpu(srb->tail.hash);
+	ino = le64_to_cpu(srb->tail.ino) | (1ULL << 62);
+	id = le64_to_cpu(srb->tail.id);
+
+	target = SCOUTFS_SRCH_BLOCK_SAFE_BYTES + 2;
+
+	while ((diff = target - le32_to_cpu(srb->entry_bytes)) > 0) {
+		ino ^= 1ULL << (7 * 8);
+		if (diff % 20 == 0) {
+			id ^= 1ULL << (7 * 8);
+		} else {
+			id ^= 1ULL << (6 * 8);
+		}
+
+		sre.hash = cpu_to_le64(hash);
+		sre.ino = cpu_to_le64(ino);
+		sre.id = cpu_to_le64(id);
+
+		ret = append_padded_entry(sfl, blk, srb, &sre);
+		if (ret == 0)
+			ret = append_padded_entry(sfl, blk, srb, &sre);
+		BUG_ON(ret != 0);
+
+		diff = target - le32_to_cpu(srb->entry_bytes);
+	}
+}
+
+/*
  * The caller is dropping an ino/id because the tracking rbtree is full.
  * This loses information so we can't return any entries at or after the
  * one that we dropped.  Update end to the entry before the dropped
@@ -861,7 +958,6 @@ int scoutfs_srch_search_xattrs(struct super_block *sb,
 			       struct scoutfs_srch_rb_root *sroot,
 			       u64 hash, u64 ino, u64 last_ino, bool *done)
 {
-	struct scoutfs_net_roots prev_roots;
 	struct scoutfs_net_roots roots;
 	struct scoutfs_srch_entry start;
 	struct scoutfs_srch_entry end;
@@ -869,6 +965,7 @@ int scoutfs_srch_search_xattrs(struct super_block *sb,
 	struct scoutfs_log_trees lt;
 	struct scoutfs_srch_file sfl;
 	SCOUTFS_BTREE_ITEM_REF(iref);
+	DECLARE_SAVED_REFS(saved);
 	struct scoutfs_key key;
 	unsigned long limit = SRCH_LIMIT;
 	int ret;
@@ -877,7 +974,6 @@ int scoutfs_srch_search_xattrs(struct super_block *sb,
 
 	*done = false;
 	srch_init_rb_root(sroot);
-	memset(&prev_roots, 0, sizeof(prev_roots));
 
 	start.hash = cpu_to_le64(hash);
 	start.ino = cpu_to_le64(ino);
@@ -892,7 +988,6 @@ retry:
 	ret = scoutfs_client_get_roots(sb, &roots);
 	if (ret)
 		goto out;
-	memset(&roots.fs_root, 0, sizeof(roots.fs_root));
 
 	end = final;
 
@@ -968,16 +1063,10 @@ retry:
 	*done = sre_cmp(&end, &final) == 0;
 	ret = 0;
 out:
-	if (ret == -ESTALE) {
-		if (memcmp(&prev_roots, &roots, sizeof(roots)) == 0) {
-			scoutfs_inc_counter(sb, srch_search_stale_eio);
-			ret = -EIO;
-		} else {
-			scoutfs_inc_counter(sb, srch_search_stale_retry);
-			prev_roots = roots;
-			goto retry;
-		}
-	}
+	ret = scoutfs_block_check_stale(sb, ret, &saved, &roots.srch_root.ref,
+					&roots.logs_root.ref);
+	if (ret == -ESTALE)
+		goto retry;
 
 	return ret;
 }
@@ -995,6 +1084,9 @@ int scoutfs_srch_rotate_log(struct super_block *sb,
 	struct scoutfs_key key;
 	int ret;
 
+	if (sfl->ref.blkno && !force && scoutfs_trigger(sb, SRCH_FORCE_LOG_ROTATE))
+		force = true;
+
 	if (sfl->ref.blkno == 0 ||
 	    (!force && le64_to_cpu(sfl->blocks) < SCOUTFS_SRCH_LOG_BLOCK_LIMIT))
 		return 0;
@@ -1003,6 +1095,14 @@ int scoutfs_srch_rotate_log(struct super_block *sb,
 		      le64_to_cpu(sfl->ref.blkno), 0);
 	ret = scoutfs_btree_insert(sb, alloc, wri, root, &key,
 				   sfl, sizeof(*sfl));
+	/*
+	 * While it's fine to replay moving the client's logging srch
+	 * file to the core btree item, server commits should keep it
+	 * from happening.  So we'll warn if we see it happen.  This can
+	 * be removed eventually.
+	 */
+	if (WARN_ON_ONCE(ret == -EEXIST))
+		ret = 0;
 	if (ret == 0) {
 		memset(sfl, 0, sizeof(*sfl));
 		scoutfs_inc_counter(sb, srch_rotate_log);
@@ -1462,7 +1562,7 @@ static int kway_merge(struct super_block *sb,
 		      struct scoutfs_block_writer *wri,
 		      struct scoutfs_srch_file *sfl,
 		      kway_get_t kway_get, kway_advance_t kway_adv,
-		      void **args, int nr)
+		      void **args, int nr, bool logs_input)
 {
 	DECLARE_SRCH_INFO(sb, srinf);
 	struct scoutfs_srch_block *srb = NULL;
@@ -1489,8 +1589,7 @@ static int kway_merge(struct super_block *sb,
 	nr_parents = max_t(unsigned long, 1, roundup_pow_of_two(nr) - 1);
 	/* root at [1] for easy sib/parent index calc, final pad for odd sib */
 	nr_nodes = 1 + nr_parents + nr + 1;
-	tnodes = __vmalloc(nr_nodes * sizeof(struct tourn_node),
-			   GFP_NOFS, PAGE_KERNEL);
+	tnodes = kc__vmalloc(nr_nodes * sizeof(struct tourn_node), GFP_NOFS);
 	if (!tnodes)
 		return -ENOMEM;
 
@@ -1567,6 +1666,15 @@ static int kway_merge(struct super_block *sb,
 				blk++;
 			}
 
+			/* end sorted block on _SAFE offset for testing */
+			if (bl && le32_to_cpu(srb->entry_nr) == 1 && logs_input &&
+			    scoutfs_trigger(sb, SRCH_COMPACT_LOGS_PAD_SAFE)) {
+				pad_entries_at_safe(sfl, blk, srb);
+				scoutfs_block_put(sb, bl);
+				bl = NULL;
+				blk++;
+			}
+
 			scoutfs_inc_counter(sb, srch_compact_entry);
 
 		} else {
@@ -1609,6 +1717,8 @@ static int kway_merge(struct super_block *sb,
 			empty++;
 			ret = 0;
 		} else if (ret < 0) {
+			if (ret == -ENOANO) /* just testing trigger */
+				ret = 0;
 			goto out;
 		}
 
@@ -1747,7 +1857,7 @@ static int compact_logs(struct super_block *sb,
 				goto out;
 			}
 			page->private = 0;
-			list_add_tail(&page->list, &pages);
+			list_add_tail(&page->lru, &pages);
 			nr_pages++;
 			scoutfs_inc_counter(sb, srch_compact_log_page);
 		}
@@ -1800,7 +1910,7 @@ static int compact_logs(struct super_block *sb,
 
 	/* sort page entries and reset private for _next */
 	i = 0;
-	list_for_each_entry(page, &pages, list) {
+	list_for_each_entry(page, &pages, lru) {
 		args[i++] = page;
 
 		if (atomic_read(&srinf->shutdown)) {
@@ -1816,12 +1926,12 @@ static int compact_logs(struct super_block *sb,
 	}
 
 	ret = kway_merge(sb, alloc, wri, &sc->out, kway_get_page, kway_adv_page,
-			 args, nr_pages);
+			 args, nr_pages, true);
 	if (ret < 0)
 		goto out;
 
 	/* make sure we finished all the pages */
-	list_for_each_entry(page, &pages, list) {
+	list_for_each_entry(page, &pages, lru) {
 		sre = page_priv_sre(page);
 		if (page->private < SRES_PER_PAGE && sre->ino != 0) {
 			ret = -ENOSPC;
@@ -1834,8 +1944,8 @@ static int compact_logs(struct super_block *sb,
 out:
 	scoutfs_block_put(sb, bl);
 	vfree(args);
-	list_for_each_entry_safe(page, tmp, &pages, list) {
-		list_del(&page->list);
+	list_for_each_entry_safe(page, tmp, &pages, lru) {
+		list_del(&page->lru);
 		__free_page(page);
 	}
 
@@ -1874,10 +1984,16 @@ static int kway_get_reader(struct super_block *sb,
 	srb = rdr->bl->data;
 
 	if (rdr->pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
-	    rdr->skip >= SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
+	    rdr->skip > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
 		return -EIO;
+	}
+
+	if (rdr->decoded_bytes == 0 && rdr->pos == SCOUTFS_SRCH_BLOCK_SAFE_BYTES &&
+	    scoutfs_trigger(sb, SRCH_MERGE_STOP_SAFE)) {
+		/* only used in testing */
+		return -ENOANO;
 	}
 
 	/* decode entry, possibly skipping start of the block */
@@ -1969,7 +2085,7 @@ static int compact_sorted(struct super_block *sb,
 	}
 
 	ret = kway_merge(sb, alloc, wri, &sc->out, kway_get_reader,
-			 kway_adv_reader, args, nr);
+			 kway_adv_reader, args, nr, false);
 
 	sc->flags |= SCOUTFS_SRCH_COMPACT_FLAG_DONE;
 	for (i = 0; i < nr; i++) {
@@ -2098,8 +2214,15 @@ static int delete_files(struct super_block *sb, struct scoutfs_alloc *alloc,
 	return ret;
 }
 
-/* wait 10s between compact attempts on error, immediate after success */
-#define SRCH_COMPACT_DELAY_MS (10 * MSEC_PER_SEC)
+static void queue_compact_work(struct srch_info *srinf, bool immediate)
+{
+	unsigned long delay;
+
+	if (!atomic_read(&srinf->shutdown)) {
+		delay = immediate ? 0 : msecs_to_jiffies(atomic_read(&srinf->compact_delay_ms));
+		queue_delayed_work(srinf->workq, &srinf->compact_dwork, delay);
+	}
+}
 
 /*
  * Get a compaction operation from the server, sort the entries from the
@@ -2127,7 +2250,6 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	struct super_block *sb = srinf->sb;
 	struct scoutfs_block_writer wri;
 	struct scoutfs_alloc alloc;
-	unsigned long delay;
 	int ret;
 	int err;
 
@@ -2140,6 +2262,8 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	scoutfs_block_writer_init(sb, &wri);
 
 	ret = scoutfs_client_srch_get_compact(sb, sc);
+	if (ret >= 0)
+		trace_scoutfs_srch_compact_client_recv(sb, sc);
 	if (ret < 0 || sc->nr == 0)
 		goto out;
 
@@ -2168,6 +2292,7 @@ commit:
 	sc->meta_freed = alloc.freed;
 	sc->flags |= ret < 0 ? SCOUTFS_SRCH_COMPACT_FLAG_ERROR : 0;
 
+	trace_scoutfs_srch_compact_client_send(sb, sc);
 	err = scoutfs_client_srch_commit_compact(sb, sc);
 	if (err < 0 && ret == 0)
 		ret = err;
@@ -2178,13 +2303,55 @@ out:
 		scoutfs_inc_counter(sb, srch_compact_error);
 
 	scoutfs_block_writer_forget_all(sb, &wri);
-	if (!atomic_read(&srinf->shutdown)) {
-		delay = ret == 0 ? 0 : msecs_to_jiffies(SRCH_COMPACT_DELAY_MS);
-		queue_delayed_work(srinf->workq, &srinf->compact_dwork, delay);
-	}
+	queue_compact_work(srinf, sc->nr > 0 && ret == 0);
 
 	kfree(sc);
 }
+
+static ssize_t compact_delay_ms_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	DECLARE_SRCH_INFO_KOBJ(kobj, srinf);
+
+	return snprintf(buf, PAGE_SIZE, "%u", atomic_read(&srinf->compact_delay_ms));
+}
+
+#define MIN_COMPACT_DELAY_MS MSEC_PER_SEC
+#define DEF_COMPACT_DELAY_MS (10 * MSEC_PER_SEC)
+#define MAX_COMPACT_DELAY_MS (60 * MSEC_PER_SEC)
+
+static ssize_t compact_delay_ms_store(struct kobject *kobj, struct kobj_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_SRCH_INFO(sb, srinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	u64 val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoll(nullterm, 0, &val);
+	if (ret < 0 || val < MIN_COMPACT_DELAY_MS || val > MAX_COMPACT_DELAY_MS) {
+		scoutfs_err(sb, "invalid compact_delay_ms value, must be between %lu and %lu",
+			    MIN_COMPACT_DELAY_MS, MAX_COMPACT_DELAY_MS);
+		return -EINVAL;
+	}
+
+	atomic_set(&srinf->compact_delay_ms, val);
+	cancel_delayed_work(&srinf->compact_dwork);
+	queue_compact_work(srinf, false);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(compact_delay_ms);
+
+static struct attribute *srch_attrs[] = {
+	SCOUTFS_ATTR_PTR(compact_delay_ms),
+	NULL,
+};
 
 void scoutfs_srch_destroy(struct super_block *sb)
 {
@@ -2201,6 +2368,8 @@ void scoutfs_srch_destroy(struct super_block *sb)
 		flush_workqueue(srinf->workq);
 		destroy_workqueue(srinf->workq);
 	}
+
+	scoutfs_sysfs_destroy_attrs(sb, &srinf->ssa);
 
 	kfree(srinf);
 	sbi->srch_info = NULL;
@@ -2219,7 +2388,14 @@ int scoutfs_srch_setup(struct super_block *sb)
 	srinf->sb = sb;
 	atomic_set(&srinf->shutdown, 0);
 	INIT_DELAYED_WORK(&srinf->compact_dwork, scoutfs_srch_compact_worker);
+	scoutfs_sysfs_init_attrs(sb, &srinf->ssa);
+	atomic_set(&srinf->compact_delay_ms, DEF_COMPACT_DELAY_MS);
+
 	sbi->srch_info = srinf;
+
+	ret = scoutfs_sysfs_create_attrs(sb, &srinf->ssa, srch_attrs, "srch");
+	if (ret < 0)
+		goto out;
 
 	srinf->workq = alloc_workqueue("scoutfs_srch_compact",
 				       WQ_NON_REENTRANT | WQ_UNBOUND |
@@ -2229,8 +2405,7 @@ int scoutfs_srch_setup(struct super_block *sb)
 		goto out;
 	}
 
-	queue_delayed_work(srinf->workq, &srinf->compact_dwork,
-			   msecs_to_jiffies(SRCH_COMPACT_DELAY_MS));
+	queue_compact_work(srinf, false);
 
 	ret = 0;
 out:

@@ -118,6 +118,33 @@ struct mkfs_args {
 	struct scoutfs_quorum_slot slots[SCOUTFS_QUORUM_MAX_SLOTS];
 };
 
+static int open_mkfs_dev(struct mkfs_args *args, char *path, mode_t mode, char *which)
+{
+	int ret;
+	int fd = -1;
+
+	fd = open(path, mode);
+	if (fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "failed to open %s dev '%s': %s (%d)\n",
+			which, path, strerror(errno), errno);
+		goto out;
+	}
+
+	ret = flush_device(fd);
+	if (ret < 0)
+		goto out;
+
+	if (!args->force)
+		ret = check_bdev(fd, path, which);
+
+out:
+	if (ret < 0 && fd >= 0)
+		close(fd);
+
+	return ret ?: fd;
+}
+
 /*
  * Make a new file system by writing:
  *  - super blocks
@@ -156,32 +183,17 @@ static int do_mkfs(struct mkfs_args *args)
 	gettimeofday(&tv, NULL);
 	pseudo_random_bytes(&fsid, sizeof(fsid));
 
-	meta_fd = open(args->meta_device, O_RDWR | O_EXCL);
+	meta_fd = open_mkfs_dev(args, args->meta_device, O_RDWR | O_EXCL, "meta");
 	if (meta_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			args->meta_device, strerror(errno), errno);
+		ret = meta_fd;
 		goto out;
 	}
-	if (!args->force) {
-		ret = check_bdev(meta_fd, args->meta_device, "meta");
-		if (ret)
-			return ret;
-	}
 
-	data_fd = open(args->data_device, O_RDWR | O_EXCL);
+	data_fd = open_mkfs_dev(args, args->data_device, O_RDWR | O_EXCL, "data");
 	if (data_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			args->data_device, strerror(errno), errno);
+		ret = data_fd;
 		goto out;
 	}
-	if (!args->force) {
-		ret = check_bdev(data_fd, args->data_device, "data");
-		if (ret)
-			return ret;
-	}
-
 
 	super = calloc(1, SCOUTFS_BLOCK_SM_SIZE);
 	bt = calloc(1, SCOUTFS_BLOCK_LG_SIZE);
@@ -194,14 +206,14 @@ static int do_mkfs(struct mkfs_args *args)
 	}
 
 	/* minumum meta device size to make reserved blocks reasonably large */
-	ret = device_size(args->meta_device, meta_fd, 64ULL * (1024 * 1024 * 1024),
-			  args->max_meta_size, args->allow_small_size, "meta", &meta_size);
+	ret = limit_device_size(args->meta_device, meta_fd, 64ULL * (1024 * 1024 * 1024),
+				args->max_meta_size, args->allow_small_size, "meta", &meta_size);
 	if (ret)
 		goto out;
 
 	/* .. then arbitrarily the same minimum data device size */
-	ret = device_size(args->data_device, data_fd, 64ULL * (1024 * 1024 * 1024),
-			  args->max_data_size, args->allow_small_size, "data", &data_size);
+	ret = limit_device_size(args->data_device, data_fd, 64ULL * (1024 * 1024 * 1024),
+				args->max_data_size, args->allow_small_size, "data", &data_size);
 	if (ret)
 		goto out;
 
@@ -262,7 +274,9 @@ static int do_mkfs(struct mkfs_args *args)
 	inode.ctime.nsec = inode.atime.nsec;
 	inode.mtime.sec = inode.atime.sec;
 	inode.mtime.nsec = inode.atime.nsec;
-	btree_append_item(bt, &key, &inode, sizeof(inode));
+	inode.crtime.sec = inode.atime.sec;
+	inode.crtime.nsec = inode.atime.nsec;
+	btree_append_item(bt, &key, &inode, scoutfs_inode_vers_bytes(args->fmt_vers));
 
 	ret = write_block(meta_fd, SCOUTFS_BLOCK_MAGIC_BTREE, fsid, 1, blkno,
 			  SCOUTFS_BLOCK_LG_SHIFT, &bt->hdr);

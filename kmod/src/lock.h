@@ -92,6 +92,10 @@ int scoutfs_lock_orphan(struct super_block *sb, enum scoutfs_lock_mode mode, int
 		        u64 ino, struct scoutfs_lock **lock);
 int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
 			    struct scoutfs_lock **lock);
+int scoutfs_lock_xattr_indx(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+			    struct scoutfs_lock **lock);
+int scoutfs_lock_quota(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
+		       struct scoutfs_lock **lock);
 void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock,
 		    enum scoutfs_lock_mode mode);
 
@@ -105,6 +109,8 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
 			       struct scoutfs_lock_coverage *cov);
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 			    enum scoutfs_lock_mode mode);
+
+u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino);
 
 void scoutfs_free_unused_locks(struct super_block *sb);
 

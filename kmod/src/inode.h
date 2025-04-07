@@ -21,8 +21,9 @@ struct scoutfs_inode_info {
 	u64 data_version;
 	u64 online_blocks;
 	u64 offline_blocks;
+	u64 proj;
 	u32 flags;
-	struct timespec crtime;
+	struct kc_timespec crtime;
 
 	/*
 	 * Protects per-inode extent items, most particularly readers
@@ -47,7 +48,7 @@ struct scoutfs_inode_info {
 	atomic64_t last_refreshed;
 
 	/* initialized once for slab object */
-	seqcount_t seqcount;
+	seqlock_t seqlock;
 	bool staging;			/* holder of i_mutex is staging */
 	struct scoutfs_per_task pt_data_lock;
 	struct scoutfs_data_waitq data_waitq;
@@ -56,13 +57,15 @@ struct scoutfs_inode_info {
 
 	struct scoutfs_lock_coverage ino_lock_cov;
 
-	/* drop if i_count hits 0, allows drop while invalidate holds coverage */
-	bool drop_invalidated;
-	struct llist_node iput_llnode;
-	atomic_t iput_count;
+	struct list_head iput_head;
+	unsigned long iput_count;
+	unsigned long iput_flags;
 
 	struct inode inode;
 };
+
+/* try to prune dcache aliases with queued iput */
+#define SI_IPUT_FLAG_PRUNE	(1 << 0)
 
 static inline struct scoutfs_inode_info *SCOUTFS_I(struct inode *inode)
 {
@@ -78,7 +81,7 @@ struct inode *scoutfs_alloc_inode(struct super_block *sb);
 void scoutfs_destroy_inode(struct inode *inode);
 int scoutfs_drop_inode(struct inode *inode);
 void scoutfs_evict_inode(struct inode *inode);
-void scoutfs_inode_queue_iput(struct inode *inode);
+void scoutfs_inode_queue_iput(struct inode *inode, unsigned long flags);
 
 #define SCOUTFS_IGF_LINKED (1 << 0) /* enoent if nlink == 0 */
 struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf);
@@ -118,15 +121,31 @@ u64 scoutfs_inode_meta_seq(struct inode *inode);
 u64 scoutfs_inode_data_seq(struct inode *inode);
 u64 scoutfs_inode_data_version(struct inode *inode);
 void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off);
+u32 scoutfs_inode_get_flags(struct inode *inode);
+void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or);
+u64 scoutfs_inode_get_proj(struct inode *inode);
+void scoutfs_inode_set_proj(struct inode *inode, u64 proj);
+
 int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock);
 
+int scoutfs_inode_check_retention(struct inode *inode);
+
 int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock);
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat);
-int scoutfs_setattr(struct dentry *dentry, struct iattr *attr);
+#else
+int scoutfs_getattr(KC_VFS_NS_DEF
+		    const struct path *path, struct kstat *stat,
+		    u32 request_mask, unsigned int query_flags);
+#endif
+int scoutfs_setattr(KC_VFS_NS_DEF
+		    struct dentry *dentry, struct iattr *attr);
 
-int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
-int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock);
+int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary);
+int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary);
 void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb);
 
 void scoutfs_inode_queue_writeback(struct inode *inode);

@@ -19,14 +19,11 @@
 	(128ULL * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
 /*
- * The largest aligned region that we'll try to allocate at the end of
- * the file as it's extended.  This is also limited to the current file
- * size so we can only waste at most twice the total file size when
- * files are less than this.  We try to keep this around the point of
- * diminishing returns in streaming performance of common data devices
- * to limit waste.
+ * The default size that we'll try to preallocate.  This is trying to
+ * hit the limit of large efficient device writes while minimizing
+ * wasted preallocation that is never used.
  */
-#define SCOUTFS_DATA_EXTEND_PREALLOC_LIMIT \
+#define SCOUTFS_DATA_PREALLOC_DEFAULT_BLOCKS \
 	(8ULL * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
 /*
@@ -131,7 +128,7 @@ int scoutfs_alloc_move(struct super_block *sb, struct scoutfs_alloc *alloc,
 		       struct scoutfs_block_writer *wri,
 		       struct scoutfs_alloc_root *dst,
 		       struct scoutfs_alloc_root *src, u64 total,
-		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_reserved);
+		       __le64 *exclusive, __le64 *vacant, u64 zone_blocks, u64 meta_budget);
 int scoutfs_alloc_insert(struct super_block *sb, struct scoutfs_alloc *alloc,
 			 struct scoutfs_block_writer *wri, struct scoutfs_alloc_root *root,
 			 u64 start, u64 len);
@@ -159,6 +156,8 @@ int scoutfs_alloc_splice_list(struct super_block *sb,
 bool scoutfs_alloc_meta_low(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 nr);
 void scoutfs_alloc_meta_remaining(struct scoutfs_alloc *alloc, u32 *avail_total, u32 *freed_space);
+bool scoutfs_alloc_meta_low_since(struct scoutfs_alloc *alloc, u32 avail_start, u32 freed_start,
+				  u32 budget, u32 nr);
 bool scoutfs_alloc_test_flag(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 flag);
 

@@ -30,11 +30,13 @@
 	EXPAND_COUNTER(block_cache_free)			\
 	EXPAND_COUNTER(block_cache_free_work)			\
 	EXPAND_COUNTER(block_cache_remove_stale)		\
+	EXPAND_COUNTER(block_cache_count_objects)		\
+	EXPAND_COUNTER(block_cache_scan_objects)		\
 	EXPAND_COUNTER(block_cache_shrink)			\
 	EXPAND_COUNTER(block_cache_shrink_next)			\
 	EXPAND_COUNTER(block_cache_shrink_recent)		\
 	EXPAND_COUNTER(block_cache_shrink_remove)		\
-	EXPAND_COUNTER(block_cache_shrink_restart)		\
+	EXPAND_COUNTER(block_cache_shrink_stop)			\
 	EXPAND_COUNTER(btree_compact_values)			\
 	EXPAND_COUNTER(btree_compact_values_enomem)		\
 	EXPAND_COUNTER(btree_delete)				\
@@ -75,8 +77,6 @@
 	EXPAND_COUNTER(data_write_begin_enobufs_retry)		\
 	EXPAND_COUNTER(dentry_revalidate_error)			\
 	EXPAND_COUNTER(dentry_revalidate_invalid)		\
-	EXPAND_COUNTER(dentry_revalidate_locked)		\
-	EXPAND_COUNTER(dentry_revalidate_orphan)		\
 	EXPAND_COUNTER(dentry_revalidate_rcu)			\
 	EXPAND_COUNTER(dentry_revalidate_root)			\
 	EXPAND_COUNTER(dentry_revalidate_valid)			\
@@ -90,6 +90,8 @@
 	EXPAND_COUNTER(forest_read_items)			\
 	EXPAND_COUNTER(forest_roots_next_hint)			\
 	EXPAND_COUNTER(forest_set_bloom_bits)			\
+	EXPAND_COUNTER(item_cache_count_objects)		\
+	EXPAND_COUNTER(item_cache_scan_objects)			\
 	EXPAND_COUNTER(item_clear_dirty)			\
 	EXPAND_COUNTER(item_create)				\
 	EXPAND_COUNTER(item_delete)				\
@@ -123,6 +125,7 @@
 	EXPAND_COUNTER(item_update)				\
 	EXPAND_COUNTER(item_write_dirty)			\
 	EXPAND_COUNTER(lock_alloc)				\
+	EXPAND_COUNTER(lock_count_objects)			\
 	EXPAND_COUNTER(lock_free)				\
 	EXPAND_COUNTER(lock_grant_request)			\
 	EXPAND_COUNTER(lock_grant_response)			\
@@ -136,11 +139,13 @@
 	EXPAND_COUNTER(lock_lock_error)				\
 	EXPAND_COUNTER(lock_nonblock_eagain)			\
 	EXPAND_COUNTER(lock_recover_request)			\
+	EXPAND_COUNTER(lock_scan_objects)			\
 	EXPAND_COUNTER(lock_shrink_attempted)			\
 	EXPAND_COUNTER(lock_shrink_aborted)			\
 	EXPAND_COUNTER(lock_shrink_work)			\
 	EXPAND_COUNTER(lock_unlock)				\
 	EXPAND_COUNTER(lock_wait)				\
+	EXPAND_COUNTER(log_merge_wait_timeout)			\
 	EXPAND_COUNTER(net_dropped_response)			\
 	EXPAND_COUNTER(net_send_bytes)				\
 	EXPAND_COUNTER(net_send_error)				\
@@ -157,6 +162,8 @@
 	EXPAND_COUNTER(orphan_scan_error)			\
 	EXPAND_COUNTER(orphan_scan_item)			\
 	EXPAND_COUNTER(orphan_scan_omap_set)			\
+	EXPAND_COUNTER(quota_info_count_objects)		\
+	EXPAND_COUNTER(quota_info_scan_objects)			\
 	EXPAND_COUNTER(quorum_candidate_server_stopping)	\
 	EXPAND_COUNTER(quorum_elected)				\
 	EXPAND_COUNTER(quorum_fence_error)			\
@@ -168,6 +175,7 @@
 	EXPAND_COUNTER(quorum_recv_resignation)			\
 	EXPAND_COUNTER(quorum_recv_vote)			\
 	EXPAND_COUNTER(quorum_send_heartbeat)			\
+	EXPAND_COUNTER(quorum_send_heartbeat_dropped)		\
 	EXPAND_COUNTER(quorum_send_resignation)			\
 	EXPAND_COUNTER(quorum_send_request)			\
 	EXPAND_COUNTER(quorum_send_vote)			\
@@ -189,26 +197,23 @@
 	EXPAND_COUNTER(srch_search_retry_empty)			\
 	EXPAND_COUNTER(srch_search_sorted)			\
 	EXPAND_COUNTER(srch_search_sorted_block)		\
-	EXPAND_COUNTER(srch_search_stale_eio)			\
-	EXPAND_COUNTER(srch_search_stale_retry)			\
 	EXPAND_COUNTER(srch_search_xattrs)			\
 	EXPAND_COUNTER(srch_read_stale)				\
 	EXPAND_COUNTER(statfs)					\
 	EXPAND_COUNTER(totl_read_copied)			\
-	EXPAND_COUNTER(totl_read_finalized)			\
-	EXPAND_COUNTER(totl_read_fs)				\
 	EXPAND_COUNTER(totl_read_item)				\
-	EXPAND_COUNTER(totl_read_logged)			\
 	EXPAND_COUNTER(trans_commit_data_alloc_low)		\
 	EXPAND_COUNTER(trans_commit_dirty_meta_full)		\
 	EXPAND_COUNTER(trans_commit_fsync)			\
 	EXPAND_COUNTER(trans_commit_meta_alloc_low)		\
 	EXPAND_COUNTER(trans_commit_sync_fs)			\
 	EXPAND_COUNTER(trans_commit_timer)			\
-	EXPAND_COUNTER(trans_commit_written)
+	EXPAND_COUNTER(trans_commit_written)			\
+	EXPAND_COUNTER(wkic_count_objects)			\
+	EXPAND_COUNTER(wkic_scan_objects)
 
 #define FIRST_COUNTER	alloc_alloc_data
-#define LAST_COUNTER	trans_commit_written
+#define LAST_COUNTER	wkic_scan_objects
 
 #undef EXPAND_COUNTER
 #define EXPAND_COUNTER(which) struct percpu_counter which;
@@ -235,12 +240,12 @@ struct scoutfs_counters {
 #define SCOUTFS_PCPU_COUNTER_BATCH (1 << 30)
 
 #define scoutfs_inc_counter(sb, which)					\
-	__percpu_counter_add(&SCOUTFS_SB(sb)->counters->which, 1,	\
-			     SCOUTFS_PCPU_COUNTER_BATCH)
+	percpu_counter_add_batch(&SCOUTFS_SB(sb)->counters->which, 1,	\
+				 SCOUTFS_PCPU_COUNTER_BATCH)
 
 #define scoutfs_add_counter(sb, which, cnt)				\
-	__percpu_counter_add(&SCOUTFS_SB(sb)->counters->which, cnt,	\
-			     SCOUTFS_PCPU_COUNTER_BATCH)
+	percpu_counter_add_batch(&SCOUTFS_SB(sb)->counters->which, cnt,	\
+				 SCOUTFS_PCPU_COUNTER_BATCH)
 
 void __init scoutfs_init_counters(void);
 int scoutfs_setup_counters(struct super_block *sb);

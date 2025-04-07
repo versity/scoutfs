@@ -53,6 +53,6 @@ int scoutfs_setup_sysfs(struct super_block *sb);
 void scoutfs_destroy_sysfs(struct super_block *sb);
 
 int __init scoutfs_sysfs_init(void);
-void __exit scoutfs_sysfs_exit(void);
+void scoutfs_sysfs_exit(void);
 
 #endif

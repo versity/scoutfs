@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <ctype.h>
 #include <uuid/uuid.h>
 #include <sys/socket.h>
@@ -26,6 +27,7 @@
 #include "avl.h"
 #include "srch.h"
 #include "leaf_item_hash.h"
+#include "dev.h"
 
 static void print_block_header(struct scoutfs_block_header *hdr, int size)
 {
@@ -47,7 +49,7 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_inode *inode = val;
 
-	printf("    inode: ino %llu size %llu version %llu nlink %u\n"
+	printf("    inode: ino %llu size %llu version %llu proj %llu nlink %u\n"
 	       "      uid %u gid %u mode 0%o rdev 0x%x flags 0x%x\n"
 	       "      next_readdir_pos %llu meta_seq %llu data_seq %llu data_version %llu\n"
 	       "      atime %llu.%08u ctime %llu.%08u\n"
@@ -55,6 +57,7 @@ static void print_inode(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->ski_ino),
 	       le64_to_cpu(inode->size),
 	       le64_to_cpu(inode->version),
+	       le64_to_cpu(inode->proj),
 	       le32_to_cpu(inode->nlink), le32_to_cpu(inode->uid),
 	       le32_to_cpu(inode->gid), le32_to_cpu(inode->mode),
 	       le32_to_cpu(inode->rdev),
@@ -77,6 +80,24 @@ static void print_orphan(struct scoutfs_key *key, void *val, int val_len)
 }
 
 
+#define SQR_FMT "[%u %llu,%u,%x %llu,%u,%x %llu,%u,%x %u %llu %x]"
+
+#define SQR_ARGS(r)								\
+	(r)->prio,								\
+	le64_to_cpu((r)->name_val[0]), (r)->name_source[0], (r)->name_flags[0],	\
+	le64_to_cpu((r)->name_val[1]), (r)->name_source[1], (r)->name_flags[1],	\
+	le64_to_cpu((r)->name_val[2]), (r)->name_source[2], (r)->name_flags[2],	\
+	(r)->op, le64_to_cpu((r)->limit), (r)->rule_flags
+
+static void print_quota(struct scoutfs_key *key, void *val, int val_len)
+{
+	struct scoutfs_quota_rule_val *rv = val;
+
+	printf("    quota rule: hash 0x%016llx coll_nr %llu\n"
+	       "      "SQR_FMT"\n",
+	       le64_to_cpu(key->skqr_hash), le64_to_cpu(key->skqr_coll_nr), SQR_ARGS(rv));
+}
+
 static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_xattr_totl_val *tval = val;
@@ -85,6 +106,17 @@ static void print_xattr_totl(struct scoutfs_key *key, void *val, int val_len)
 	       le64_to_cpu(key->skxt_a), le64_to_cpu(key->skxt_b),
 	       le64_to_cpu(key->skxt_c), le64_to_cpu(tval->total),
 	       le64_to_cpu(tval->count));
+}
+
+static void print_xattr_indx(struct scoutfs_key *key, void *val, int val_len)
+{
+	u64 minor;
+	u64 ino;
+	u64 xid;
+	u8 major;
+
+	scoutfs_xattr_get_indx_key(key, &major, &minor, &ino, &xid);
+	printf("    xattr indx: major %u minor %llu ino %llu xid %llu", major, minor, ino, xid);
 }
 
 static u8 *global_printable_name(u8 *name, int name_len)
@@ -175,8 +207,14 @@ static print_func_t find_printer(u8 zone, u8 type)
 			return print_orphan;
 	}
 
+	if (zone == SCOUTFS_QUOTA_ZONE)
+		return print_quota;
+
 	if (zone == SCOUTFS_XATTR_TOTL_ZONE)
 		return print_xattr_totl;
+
+	if (zone == SCOUTFS_XATTR_INDX_ZONE)
+		return print_xattr_indx;
 
 	if (zone == SCOUTFS_FS_ZONE) {
 		switch(type) {
@@ -607,6 +645,8 @@ static int print_alloc_list_block(int fd, char *str, struct scoutfs_block_ref *r
 	u64 blkno;
 	u64 start;
 	u64 len;
+	u64 st;
+	u64 nr;
 	int wid;
 	int ret;
 	int i;
@@ -625,27 +665,37 @@ static int print_alloc_list_block(int fd, char *str, struct scoutfs_block_ref *r
 	       AL_REF_A(&lblk->next), le32_to_cpu(lblk->start),
 	       le32_to_cpu(lblk->nr));
 
-	if (lblk->nr) {
-		wid = printf("  exts: ");
-		start = 0;
-		len = 0;
-		for (i = 0; i < le32_to_cpu(lblk->nr); i++) {
-			if (len == 0)
-				start = le64_to_cpu(lblk->blknos[i]);
-			len++;
-
-			if (i == (le32_to_cpu(lblk->nr) - 1) ||
-			    start + len != le64_to_cpu(lblk->blknos[i + 1])) {
-				if (wid >= 72)
-					wid = printf("\n        ");
-
-				wid += printf("%llu,%llu ", start, len);
-				len = 0;
-			}
-		}
-		printf("\n");
+	st = le32_to_cpu(lblk->start);
+	nr = le32_to_cpu(lblk->nr);
+	if (st >= SCOUTFS_ALLOC_LIST_MAX_BLOCKS ||
+	    nr > SCOUTFS_ALLOC_LIST_MAX_BLOCKS ||
+	    (st + nr) > SCOUTFS_ALLOC_LIST_MAX_BLOCKS) {
+		printf("  (invalid start and nr fields)\n");
+		goto out;
 	}
 
+	if (lblk->nr == 0)
+		goto out;
+
+	wid = printf("  exts: ");
+	start = 0;
+	len = 0;
+	for (i = 0; i < nr; i++) {
+		if (len == 0)
+			start = le64_to_cpu(lblk->blknos[st + i]);
+		len++;
+
+		if (i == (nr - 1) || (start + len) != le64_to_cpu(lblk->blknos[st + i + 1])) {
+			if (wid >= 72)
+				wid = printf("\n        ");
+
+			wid += printf("%llu,%llu ", start, len);
+			len = 0;
+		}
+	}
+	printf("\n");
+
+out:
 	next = lblk->next;
 	free(lblk);
 	return print_alloc_list_block(fd, str, &next);
@@ -989,9 +1039,10 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 
 struct print_args {
 	char *meta_device;
+	bool skip_likely_huge;
 };
 
-static int print_volume(int fd)
+static int print_volume(int fd, struct print_args *args)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct print_recursion_args pa;
@@ -1041,23 +1092,26 @@ static int print_volume(int fd)
 			ret = err;
 	}
 
-	for (i = 0; i < array_size(super->meta_alloc); i++) {
-		snprintf(str, sizeof(str), "meta_alloc[%u]", i);
-		err = print_btree(fd, super, str, &super->meta_alloc[i].root,
+	if (!args->skip_likely_huge) {
+		for (i = 0; i < array_size(super->meta_alloc); i++) {
+			snprintf(str, sizeof(str), "meta_alloc[%u]", i);
+			err = print_btree(fd, super, str, &super->meta_alloc[i].root,
+					  print_alloc_item, NULL);
+			if (err && !ret)
+				ret = err;
+		}
+
+		err = print_btree(fd, super, "data_alloc", &super->data_alloc.root,
 				  print_alloc_item, NULL);
 		if (err && !ret)
 			ret = err;
 	}
 
-	err = print_btree(fd, super, "data_alloc", &super->data_alloc.root,
-			  print_alloc_item, NULL);
-	if (err && !ret)
-		ret = err;
-
 	err = print_btree(fd, super, "srch_root", &super->srch_root,
 			  print_srch_root_item, NULL);
 	if (err && !ret)
 		ret = err;
+
 	err = print_btree(fd, super, "logs_root", &super->logs_root,
 			  print_log_trees_item, NULL);
 	if (err && !ret)
@@ -1065,19 +1119,23 @@ static int print_volume(int fd)
 
 	pa.super = super;
 	pa.fd = fd;
-	err = print_btree_leaf_items(fd, super, &super->srch_root.ref,
-				     print_srch_root_files, &pa);
-	if (err && !ret)
-		ret = err;
+	if (!args->skip_likely_huge) {
+		err = print_btree_leaf_items(fd, super, &super->srch_root.ref,
+					     print_srch_root_files, &pa);
+		if (err && !ret)
+			ret = err;
+	}
 	err = print_btree_leaf_items(fd, super, &super->logs_root.ref,
 				     print_log_trees_roots, &pa);
 	if (err && !ret)
 		ret = err;
 
-	err = print_btree(fd, super, "fs_root", &super->fs_root,
-			  print_fs_item, NULL);
-	if (err && !ret)
-		ret = err;
+	if (!args->skip_likely_huge) {
+		err = print_btree(fd, super, "fs_root", &super->fs_root,
+				  print_fs_item, NULL);
+		if (err && !ret)
+			ret = err;
+	}
 
 out:
 	free(super);
@@ -1098,7 +1156,12 @@ static int do_print(struct print_args *args)
 		return ret;
 	}
 
-	ret = print_volume(fd);
+	ret = flush_device(fd);
+	if (ret < 0)
+		goto out;
+
+	ret = print_volume(fd, args);
+out:
 	close(fd);
 	return ret;
 };
@@ -1108,6 +1171,9 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	struct print_args *args = state->input;
 
 	switch (key) {
+	case 'S':
+		args->skip_likely_huge = true;
+		break;
 	case ARGP_KEY_ARG:
 		if (!args->meta_device)
 			args->meta_device = strdup_or_error(state, arg);
@@ -1125,8 +1191,13 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
+static struct argp_option options[] = {
+	{ "skip-likely-huge", 'S', NULL, 0, "Skip large structures to minimize output size"},
+	{ NULL }
+};
+
 static struct argp argp = {
-	NULL,
+	options,
 	parse_opt,
 	"META-DEV",
 	"Print metadata structures"

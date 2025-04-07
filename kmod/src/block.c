@@ -21,6 +21,7 @@
 #include <linux/blkdev.h>
 #include <linux/rhashtable.h>
 #include <linux/random.h>
+#include <linux/sched/mm.h>
 
 #include "format.h"
 #include "super.h"
@@ -30,6 +31,7 @@
 #include "scoutfs_trace.h"
 #include "alloc.h"
 #include "triggers.h"
+#include "util.h"
 
 /*
  * The scoutfs block cache manages metadata blocks that can be larger
@@ -57,7 +59,7 @@ struct block_info {
 	atomic64_t access_counter;
 	struct rhashtable ht;
 	wait_queue_head_t waitq;
-	struct shrinker shrinker;
+	KC_DEFINE_SHRINKER(shrinker);
 	struct work_struct free_work;
 	struct llist_head free_llist;
 };
@@ -118,8 +120,7 @@ do {												\
 
 static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 {
-	int off = offsetof(struct scoutfs_block_header, crc) +
-		  FIELD_SIZEOF(struct scoutfs_block_header, crc);
+	int off = offsetofend(struct scoutfs_block_header, crc);
 	u32 calc = crc32c(~0, (char *)hdr + off, size - off);
 
 	return cpu_to_le32(calc);
@@ -128,7 +129,7 @@ static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 {
 	struct block_private *bp;
-	unsigned int noio_flags;
+	unsigned int nofs_flags;
 
 	/*
 	 * If we had multiple blocks per page we'd need to be a little
@@ -156,9 +157,9 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 		 * spurious reclaim-on dependencies and warnings.
 		 */
 		lockdep_off();
-		noio_flags = memalloc_noio_save();
-		bp->virt = __vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM, PAGE_KERNEL);
-		memalloc_noio_restore(noio_flags);
+		nofs_flags = memalloc_nofs_save();
+		bp->virt = kc__vmalloc(SCOUTFS_BLOCK_LG_SIZE, GFP_NOFS | __GFP_HIGHMEM);
+		memalloc_nofs_restore(nofs_flags);
 		lockdep_on();
 
 		if (!bp->virt) {
@@ -436,11 +437,10 @@ static void block_remove_all(struct super_block *sb)
  * possible.  Final freeing, verifying checksums, and unlinking errored
  * blocks are all done by future users of the blocks.
  */
-static void block_end_io(struct super_block *sb, int rw,
+static void block_end_io(struct super_block *sb, blk_opf_t opf,
 			 struct block_private *bp, int err)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
-	bool is_read = !(rw & WRITE);
 
 	if (err) {
 		scoutfs_inc_counter(sb, block_cache_end_io_error);
@@ -450,7 +450,7 @@ static void block_end_io(struct super_block *sb, int rw,
 	if (!atomic_dec_and_test(&bp->io_count))
 		return;
 
-	if (is_read && !test_bit(BLOCK_BIT_ERROR, &bp->bits))
+	if (!op_is_write(opf) && !test_bit(BLOCK_BIT_ERROR, &bp->bits))
 		set_bit(BLOCK_BIT_UPTODATE, &bp->bits);
 
 	clear_bit(BLOCK_BIT_IO_BUSY, &bp->bits);
@@ -463,13 +463,13 @@ static void block_end_io(struct super_block *sb, int rw,
 		wake_up(&binf->waitq);
 }
 
-static void block_bio_end_io(struct bio *bio, int err)
+static void KC_DECLARE_BIO_END_IO(block_bio_end_io, struct bio *bio)
 {
 	struct block_private *bp = bio->bi_private;
 	struct super_block *sb = bp->sb;
 
 	TRACE_BLOCK(end_io, bp);
-	block_end_io(sb, bio->bi_rw, bp, err);
+	block_end_io(sb, kc_bio_get_opf(bio), bp, kc_bio_get_errno(bio));
 	bio_put(bio);
 }
 
@@ -477,7 +477,7 @@ static void block_bio_end_io(struct bio *bio, int err)
  * Kick off IO for a single block.
  */
 static int block_submit_bio(struct super_block *sb, struct block_private *bp,
-			    int rw)
+			    blk_opf_t opf)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct bio *bio = NULL;
@@ -504,14 +504,13 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 
 	for (off = 0; off < SCOUTFS_BLOCK_LG_SIZE; off += PAGE_SIZE) {
 		if (!bio) {
-			bio = bio_alloc(GFP_NOFS, SCOUTFS_BLOCK_LG_PAGES_PER);
+			bio = kc_bio_alloc(sbi->meta_bdev, SCOUTFS_BLOCK_LG_PAGES_PER, opf, GFP_NOFS);
 			if (!bio) {
 				ret = -ENOMEM;
 				break;
 			}
 
-			bio->bi_sector = sector + (off >> 9);
-			bio->bi_bdev = sbi->meta_bdev;
+			kc_bio_set_sector(bio, sector + (off >> 9));
 			bio->bi_end_io = block_bio_end_io;
 			bio->bi_private = bp;
 
@@ -528,18 +527,18 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 			BUG();
 
 		if (!bio_add_page(bio, page, PAGE_SIZE, 0)) {
-			submit_bio(rw, bio);
+			kc_submit_bio(bio);
 			bio = NULL;
 		}
 	}
 
 	if (bio)
-		submit_bio(rw, bio);
+		kc_submit_bio(bio);
 
 	blk_finish_plug(&plug);
 
 	/* let racing end_io know we're done */
-	block_end_io(sb, rw, bp, ret);
+	block_end_io(sb, opf, bp, ret);
 
 	return ret;
 }
@@ -640,7 +639,7 @@ static struct block_private *block_read(struct super_block *sb, u64 blkno)
 
 	if (!test_bit(BLOCK_BIT_UPTODATE, &bp->bits) &&
 	     test_and_clear_bit(BLOCK_BIT_NEW, &bp->bits)) {
-		ret = block_submit_bio(sb, bp, READ);
+		ret = block_submit_bio(sb, bp, REQ_OP_READ);
 		if (ret < 0)
 			goto out;
 	}
@@ -677,10 +676,11 @@ out:
 int scoutfs_block_read_ref(struct super_block *sb, struct scoutfs_block_ref *ref, u32 magic,
 			   struct scoutfs_block **bl_ret)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_block_header *hdr;
 	struct block_private *bp = NULL;
 	bool retried = false;
+	__le32 crc = 0;
 	int ret;
 
 retry:
@@ -693,7 +693,9 @@ retry:
 
 	/* corrupted writes might be a sign of a stale reference */
 	if (!test_bit(BLOCK_BIT_CRC_VALID, &bp->bits)) {
-		if (hdr->crc != block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE)) {
+		crc = block_calc_crc(hdr, SCOUTFS_BLOCK_LG_SIZE);
+		if (hdr->crc != crc) {
+			trace_scoutfs_block_stale(sb, ref, hdr, magic, le32_to_cpu(crc));
 			ret = -ESTALE;
 			goto out;
 		}
@@ -701,8 +703,9 @@ retry:
 		set_bit(BLOCK_BIT_CRC_VALID, &bp->bits);
 	}
 
-	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != super->hdr.fsid ||
+	if (hdr->magic != cpu_to_le32(magic) || hdr->fsid != cpu_to_le64(sbi->fsid) ||
 	    hdr->seq != ref->seq || hdr->blkno != ref->blkno) {
+		trace_scoutfs_block_stale(sb, ref, hdr, magic, 0);
 		ret = -ESTALE;
 		goto out;
 	}
@@ -725,6 +728,36 @@ out:
 	}
 
 	*bl_ret = bp ? &bp->bl : NULL;
+	return ret;
+}
+
+static bool stale_refs_match(struct scoutfs_block_ref *caller, struct scoutfs_block_ref *saved)
+{
+	return !caller || (caller->blkno == saved->blkno && caller->seq == saved->seq);
+}
+
+/*
+ * Check if a read of a reference that gave ESTALE should be retried or
+ * should generate a hard error.  If this is the second time we got
+ * ESTALE from the same refs then we return EIO and the caller should
+ * stop.  As long as we keep seeing different refs we'll return ESTALE
+ * and the caller can keep trying.
+ */
+int scoutfs_block_check_stale(struct super_block *sb, int ret,
+			      struct scoutfs_block_saved_refs *saved,
+			      struct scoutfs_block_ref *a, struct scoutfs_block_ref *b)
+{
+	if (ret == -ESTALE) {
+		if (stale_refs_match(a, &saved->refs[0]) && stale_refs_match(b, &saved->refs[1])){
+			ret = -EIO;
+		} else {
+			if (a)
+				saved->refs[0] = *a;
+			if (b)
+				saved->refs[1] = *b;
+		}
+	}
+
 	return ret;
 }
 
@@ -797,7 +830,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 			    u32 magic, struct scoutfs_block **bl_ret,
 			    u64 dirty_blkno, u64 *ref_blkno)
 {
-	struct scoutfs_super_block *super = &SCOUTFS_SB(sb)->super;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_block *cow_bl = NULL;
 	struct scoutfs_block *bl = NULL;
 	struct block_private *exist_bp = NULL;
@@ -865,7 +898,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 
 	hdr = bl->data;
 	hdr->magic = cpu_to_le32(magic);
-	hdr->fsid = super->hdr.fsid;
+	hdr->fsid = cpu_to_le64(sbi->fsid);
 	hdr->blkno = cpu_to_le64(bl->blkno);
 	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
 
@@ -939,7 +972,7 @@ int scoutfs_block_writer_write(struct super_block *sb,
 		/* retry previous write errors */
 		clear_bit(BLOCK_BIT_ERROR, &bp->bits);
 
-		ret = block_submit_bio(sb, bp, WRITE);
+		ret = block_submit_bio(sb, bp, REQ_OP_WRITE);
 		if (ret < 0)
 			break;
 	}
@@ -1039,6 +1072,16 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
 	return wri->nr_dirty_blocks * SCOUTFS_BLOCK_LG_SIZE;
 }
 
+static unsigned long block_count_objects(struct shrinker *shrink, struct shrink_control *sc)
+{
+	struct block_info *binf = KC_SHRINKER_CONTAINER_OF(shrink, struct block_info);
+	struct super_block *sb = binf->sb;
+
+	scoutfs_inc_counter(sb, block_cache_count_objects);
+
+	return shrinker_min_long(atomic_read(&binf->total_inserted));
+}
+
 /*
  * Remove a number of cached blocks that haven't been used recently.
  *
@@ -1059,25 +1102,19 @@ u64 scoutfs_block_writer_dirty_bytes(struct super_block *sb,
  * atomically remove blocks when the only references are ours and the
  * hash table.
  */
-static int block_shrink(struct shrinker *shrink, struct shrink_control *sc)
+static unsigned long block_scan_objects(struct shrinker *shrink, struct shrink_control *sc)
 {
-	struct block_info *binf = container_of(shrink, struct block_info,
-					       shrinker);
+	struct block_info *binf = KC_SHRINKER_CONTAINER_OF(shrink, struct block_info);
 	struct super_block *sb = binf->sb;
 	struct rhashtable_iter iter;
 	struct block_private *bp;
-	unsigned long nr;
+	bool stop = false;
+	unsigned long freed = 0;
+	unsigned long nr = sc->nr_to_scan;
 	u64 recently;
 
-	nr = sc->nr_to_scan;
-	if (nr == 0)
-		goto out;
+	scoutfs_inc_counter(sb, block_cache_scan_objects);
 
-	scoutfs_inc_counter(sb, block_cache_shrink);
-
-	nr = DIV_ROUND_UP(nr, SCOUTFS_BLOCK_LG_PAGES_PER);
-
-restart:
 	recently = accessed_recently(binf);
 	rhashtable_walk_enter(&binf->ht, &iter);
 	rhashtable_walk_start(&iter);
@@ -1099,12 +1136,15 @@ restart:
 		if (bp == NULL)
 			break;
 		if (bp == ERR_PTR(-EAGAIN)) {
-			/* hard exit to wait for rcu rebalance to finish */
-			rhashtable_walk_stop(&iter);
-			rhashtable_walk_exit(&iter);
-			scoutfs_inc_counter(sb, block_cache_shrink_restart);
-			synchronize_rcu();
-			goto restart;
+			/*
+			 * We can be called from reclaim in the allocation
+			 * to resize the hash table itself.  We have to
+			 * return so that the caller can proceed and
+			 * enable hash table iteration again.
+			 */
+			scoutfs_inc_counter(sb, block_cache_shrink_stop);
+			stop = true;
+			break;
 		}
 
 		scoutfs_inc_counter(sb, block_cache_shrink_next);
@@ -1118,6 +1158,7 @@ restart:
 			if (block_remove_solo(sb, bp)) {
 				scoutfs_inc_counter(sb, block_cache_shrink_remove);
 				TRACE_BLOCK(shrink, bp);
+				freed++;
 				nr--;
 			}
 			block_put(sb, bp);
@@ -1126,9 +1167,11 @@ restart:
 
 	rhashtable_walk_stop(&iter);
 	rhashtable_walk_exit(&iter);
-out:
-	return min_t(u64, (u64)atomic_read(&binf->total_inserted) * SCOUTFS_BLOCK_LG_PAGES_PER,
-		     INT_MAX);
+
+	if (stop)
+		return SHRINK_STOP;
+	else
+		return freed;
 }
 
 struct sm_block_completion {
@@ -1136,11 +1179,11 @@ struct sm_block_completion {
 	int err;
 };
 
-static void sm_block_bio_end_io(struct bio *bio, int err)
+static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
 {
 	struct sm_block_completion *sbc = bio->bi_private;
 
-	sbc->err = err;
+	sbc->err = kc_bio_get_errno(bio);
 	complete(&sbc->comp);
 	bio_put(bio);
 }
@@ -1155,9 +1198,8 @@ static void sm_block_bio_end_io(struct bio *bio, int err)
  * only layer that sees the full block buffer so we pass the calculated
  * crc to the caller for them to check in their context.
  */
-static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw, u64 blkno,
-		       struct scoutfs_block_header *hdr, size_t len,
-		       __le32 *blk_crc)
+static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_opf_t opf,
+		       u64 blkno, struct scoutfs_block_header *hdr, size_t len, __le32 *blk_crc)
 {
 	struct scoutfs_block_header *pg_hdr;
 	struct sm_block_completion sbc;
@@ -1171,7 +1213,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 		return -EIO;
 
 	if (WARN_ON_ONCE(len > SCOUTFS_BLOCK_SM_SIZE) ||
-	    WARN_ON_ONCE(!(rw & WRITE) && !blk_crc))
+	    WARN_ON_ONCE(!op_is_write(opf) && !blk_crc))
 		return -EINVAL;
 
 	page = alloc_page(GFP_NOFS);
@@ -1180,7 +1222,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 
 	pg_hdr = page_address(page);
 
-	if (rw & WRITE) {
+	if (op_is_write(opf)) {
 		memcpy(pg_hdr, hdr, len);
 		if (len < SCOUTFS_BLOCK_SM_SIZE)
 			memset((char *)pg_hdr + len, 0,
@@ -1188,14 +1230,13 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 		pg_hdr->crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
 
-	bio = bio_alloc(GFP_NOFS, 1);
+	bio = kc_bio_alloc(bdev, 1, opf, GFP_NOFS);
 	if (!bio) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	bio->bi_sector = blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9);
-	bio->bi_bdev = bdev;
+	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
 	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
@@ -1203,12 +1244,12 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, int rw
 	init_completion(&sbc.comp);
 	sbc.err = 0;
 
-	submit_bio((rw & WRITE) ? WRITE_SYNC : READ_SYNC, bio);
+	kc_submit_bio(bio);
 
 	wait_for_completion(&sbc.comp);
 	ret = sbc.err;
 
-	if (ret == 0 && !(rw & WRITE)) {
+	if (ret == 0 && !op_is_write(opf)) {
 		memcpy(hdr, pg_hdr, len);
 		*blk_crc = block_calc_crc(pg_hdr, SCOUTFS_BLOCK_SM_SIZE);
 	}
@@ -1222,14 +1263,14 @@ int scoutfs_block_read_sm(struct super_block *sb,
 			  struct scoutfs_block_header *hdr, size_t len,
 			  __le32 *blk_crc)
 {
-	return sm_block_io(sb, bdev, READ, blkno, hdr, len, blk_crc);
+	return sm_block_io(sb, bdev, REQ_OP_READ, blkno, hdr, len, blk_crc);
 }
 
 int scoutfs_block_write_sm(struct super_block *sb,
 			   struct block_device *bdev, u64 blkno,
 			   struct scoutfs_block_header *hdr, size_t len)
 {
-	return sm_block_io(sb, bdev, WRITE, blkno, hdr, len, NULL);
+	return sm_block_io(sb, bdev, REQ_OP_WRITE, blkno, hdr, len, NULL);
 }
 
 int scoutfs_block_setup(struct super_block *sb)
@@ -1254,9 +1295,9 @@ int scoutfs_block_setup(struct super_block *sb)
 	atomic_set(&binf->total_inserted, 0);
 	atomic64_set(&binf->access_counter, 0);
 	init_waitqueue_head(&binf->waitq);
-	binf->shrinker.shrink = block_shrink;
-	binf->shrinker.seeks = DEFAULT_SEEKS;
-	register_shrinker(&binf->shrinker);
+	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
+			       block_scan_objects);
+	KC_REGISTER_SHRINKER(&binf->shrinker, "scoutfs-block:" SCSBF, SCSB_ARGS(sb));
 	INIT_WORK(&binf->free_work, block_free_work);
 	init_llist_head(&binf->free_llist);
 
@@ -1276,7 +1317,7 @@ void scoutfs_block_destroy(struct super_block *sb)
 	struct block_info *binf = SCOUTFS_SB(sb)->block_info;
 
 	if (binf) {
-		unregister_shrinker(&binf->shrinker);
+		KC_UNREGISTER_SHRINKER(&binf->shrinker);
 		block_remove_all(sb);
 		flush_work(&binf->free_work);
 		rhashtable_destroy(&binf->ht);

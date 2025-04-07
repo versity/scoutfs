@@ -114,8 +114,8 @@ static struct dentry *scoutfs_get_parent(struct dentry *child)
 	int ret;
 	u64 ino;
 
-	ret = scoutfs_dir_add_next_linkref(sb, scoutfs_ino(inode), 0, 0, &list);
-	if (ret)
+	ret = scoutfs_dir_add_next_linkrefs(sb, scoutfs_ino(inode), 0, 0, 1, &list);
+	if (ret < 0)
 		return ERR_PTR(ret);
 
 	ent = list_first_entry(&list, struct scoutfs_link_backref_entry, head);
@@ -138,9 +138,9 @@ static int scoutfs_get_name(struct dentry *parent, char *name,
 	LIST_HEAD(list);
 	int ret;
 
-	ret = scoutfs_dir_add_next_linkref(sb, scoutfs_ino(inode), dir_ino,
-					   0, &list);
-	if (ret)
+	ret = scoutfs_dir_add_next_linkrefs(sb, scoutfs_ino(inode), dir_ino,
+					    0, 1, &list);
+	if (ret < 0)
 		return ret;
 
 	ret = -ENOENT;

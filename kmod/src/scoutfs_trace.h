@@ -24,7 +24,6 @@
 
 #include <linux/tracepoint.h>
 #include <linux/in.h>
-#include <linux/unaligned/access_ok.h>
 
 #include "key.h"
 #include "format.h"
@@ -37,6 +36,10 @@
 #include "net.h"
 #include "data.h"
 #include "ext.h"
+#include "quota.h"
+
+#include "trace/quota.h"
+#include "trace/wkic.h"
 
 struct lock_info;
 
@@ -283,6 +286,52 @@ TRACE_EVENT(scoutfs_data_alloc_block_enter,
 		  STE_ENTRY_ARGS(ext))
 );
 
+TRACE_EVENT(scoutfs_data_page_mkwrite,
+	TP_PROTO(struct super_block *sb, __u64 ino, __u64 pos, __u32 ret),
+
+	TP_ARGS(sb, ino, pos, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(__u64, pos)
+		__field(__u32, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->pos = pos;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu pos %llu ret %u ",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->pos, __entry->ret)
+);
+
+TRACE_EVENT(scoutfs_data_filemap_fault,
+	TP_PROTO(struct super_block *sb, __u64 ino, __u64 pos, __u32 ret),
+
+	TP_ARGS(sb, ino, pos, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(__u64, pos)
+		__field(__u32, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->pos = pos;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu pos %llu ret %u ",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->pos, __entry->ret)
+);
+
 DECLARE_EVENT_CLASS(scoutfs_data_file_extent_class,
 	TP_PROTO(struct super_block *sb, __u64 ino, struct scoutfs_extent *ext),
 
@@ -439,6 +488,7 @@ DECLARE_EVENT_CLASS(scoutfs_trans_hold_release_class,
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->journal_info = (unsigned long)journal_info;
 		__entry->holders = holders;
+		__entry->ret = ret;
 	),
 
 	TP_printk(SCSBF" journal_info 0x%0lx holders %d ret %d",
@@ -691,16 +741,16 @@ TRACE_EVENT(scoutfs_evict_inode,
 
 TRACE_EVENT(scoutfs_drop_inode,
 	TP_PROTO(struct super_block *sb, __u64 ino, unsigned int nlink,
-		 unsigned int unhashed, bool drop_invalidated),
+		 unsigned int unhashed, bool lock_covered),
 
-	TP_ARGS(sb, ino, nlink, unhashed, drop_invalidated),
+	TP_ARGS(sb, ino, nlink, unhashed, lock_covered),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, ino)
 		__field(unsigned int, nlink)
 		__field(unsigned int, unhashed)
-		__field(unsigned int, drop_invalidated)
+		__field(unsigned int, lock_covered)
 	),
 
 	TP_fast_assign(
@@ -708,12 +758,12 @@ TRACE_EVENT(scoutfs_drop_inode,
 		__entry->ino = ino;
 		__entry->nlink = nlink;
 		__entry->unhashed = unhashed;
-		__entry->drop_invalidated = !!drop_invalidated;
+		__entry->lock_covered = !!lock_covered;
 	),
 
-	TP_printk(SCSBF" ino %llu nlink %u unhashed %d drop_invalidated %u", SCSB_TRACE_ARGS,
+	TP_printk(SCSBF" ino %llu nlink %u unhashed %d lock_covered %u", SCSB_TRACE_ARGS,
 		  __entry->ino, __entry->nlink, __entry->unhashed,
-		  __entry->drop_invalidated)
+		  __entry->lock_covered)
 );
 
 TRACE_EVENT(scoutfs_inode_walk_writeback,
@@ -817,22 +867,17 @@ TRACE_EVENT(scoutfs_advance_dirty_super,
 	TP_printk(SCSBF" super seq now %llu", SCSB_TRACE_ARGS, __entry->seq)
 );
 
-TRACE_EVENT(scoutfs_dir_add_next_linkref,
+TRACE_EVENT(scoutfs_dir_add_next_linkref_found,
 	TP_PROTO(struct super_block *sb, __u64 ino, __u64 dir_ino,
-		 __u64 dir_pos, int ret, __u64 found_dir_ino,
-		 __u64 found_dir_pos, unsigned int name_len),
+		 __u64 dir_pos, unsigned int name_len),
 
-	TP_ARGS(sb, ino, dir_ino, dir_pos, ret, found_dir_pos, found_dir_ino,
-		name_len),
+	TP_ARGS(sb, ino, dir_ino, dir_pos, name_len),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, ino)
 		__field(__u64, dir_ino)
 		__field(__u64, dir_pos)
-		__field(int, ret)
-		__field(__u64, found_dir_ino)
-		__field(__u64, found_dir_pos)
 		__field(unsigned int, name_len)
 	),
 
@@ -841,16 +886,43 @@ TRACE_EVENT(scoutfs_dir_add_next_linkref,
 		__entry->ino = ino;
 		__entry->dir_ino = dir_ino;
 		__entry->dir_pos = dir_pos;
-		__entry->ret = ret;
-		__entry->found_dir_ino = dir_ino;
-		__entry->found_dir_pos = dir_pos;
 		__entry->name_len = name_len;
 	),
 
-	TP_printk(SCSBF" ino %llu dir_ino %llu dir_pos %llu ret %d found_dir_ino %llu found_dir_pos %llu name_len %u",
-		  SCSB_TRACE_ARGS, __entry->ino, __entry->dir_pos,
-		  __entry->dir_ino, __entry->ret, __entry->found_dir_pos,
-		  __entry->found_dir_ino, __entry->name_len)
+	TP_printk(SCSBF" ino %llu dir_ino %llu dir_pos %llu name_len %u",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->dir_ino,
+		  __entry->dir_pos, __entry->name_len)
+);
+
+TRACE_EVENT(scoutfs_dir_add_next_linkrefs,
+	TP_PROTO(struct super_block *sb, __u64 ino, __u64 dir_ino,
+		 __u64 dir_pos, int count, int nr, int ret),
+
+	TP_ARGS(sb, ino, dir_ino, dir_pos, count, nr, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(__u64, dir_ino)
+		__field(__u64, dir_pos)
+		__field(int, count)
+		__field(int, nr)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->dir_ino = dir_ino;
+		__entry->dir_pos = dir_pos;
+		__entry->count = count;
+		__entry->nr = nr;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu dir_ino %llu dir_pos %llu count %d nr %d ret %d",
+		  SCSB_TRACE_ARGS, __entry->ino, __entry->dir_ino,
+		  __entry->dir_pos, __entry->count, __entry->nr, __entry->ret)
 );
 
 TRACE_EVENT(scoutfs_write_begin,
@@ -1020,10 +1092,13 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		sk_trace_define(start)
 		sk_trace_define(end)
 		__field(u64, refresh_gen)
+		__field(u64, write_seq)
+		__field(u64, dirty_trans_seq)
 		__field(unsigned char, request_pending)
 		__field(unsigned char, invalidate_pending)
 		__field(int, mode)
 		__field(unsigned int, refcount)
+		__field(int, invalidating_mode)
 		__field(unsigned int, waiters_cw)
 		__field(unsigned int, waiters_pr)
 		__field(unsigned int, waiters_ex)
@@ -1036,10 +1111,13 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		sk_trace_assign(start, &lck->start);
 		sk_trace_assign(end, &lck->end);
 		__entry->refresh_gen = lck->refresh_gen;
+		__entry->write_seq = lck->write_seq;
+		__entry->dirty_trans_seq = lck->dirty_trans_seq;
 		__entry->request_pending = lck->request_pending;
 		__entry->invalidate_pending = lck->invalidate_pending;
 		__entry->mode = lck->mode;
 		__entry->refcount = atomic_read(&lck->refcount);
+		__entry->invalidating_mode = lck->invalidating_mode;
 		__entry->waiters_pr = lck->waiters[SCOUTFS_LOCK_READ];
 		__entry->waiters_ex = lck->waiters[SCOUTFS_LOCK_WRITE];
 		__entry->waiters_cw = lck->waiters[SCOUTFS_LOCK_WRITE_ONLY];
@@ -1047,10 +1125,11 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		__entry->users_ex = lck->users[SCOUTFS_LOCK_WRITE];
 		__entry->users_cw = lck->users[SCOUTFS_LOCK_WRITE_ONLY];
         ),
-        TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" mode %u reqpnd %u invpnd %u rfrgen %llu rfcnt %d waiters: pr %u ex %u cw %u users: pr %u ex %u cw %u",
+        TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" mode %u invmd %u reqp %u invp %u refg %llu rfcnt %d wris %llu dts %llu waiters: pr %u ex %u cw %u users: pr %u ex %u cw %u",
 		  SCSB_TRACE_ARGS, sk_trace_args(start), sk_trace_args(end),
-		  __entry->mode, __entry->request_pending,
+		  __entry->mode, __entry->invalidating_mode, __entry->request_pending,
 		  __entry->invalidate_pending, __entry->refresh_gen, __entry->refcount,
+		  __entry->write_seq, __entry->dirty_trans_seq,
 		  __entry->waiters_pr, __entry->waiters_ex, __entry->waiters_cw,
 		  __entry->users_pr, __entry->users_ex, __entry->users_cw)
 );
@@ -1419,42 +1498,71 @@ TRACE_EVENT(scoutfs_rename,
 );
 
 TRACE_EVENT(scoutfs_d_revalidate,
-	TP_PROTO(struct super_block *sb,
-		 struct dentry *dentry, int flags, struct dentry *parent,
-		 bool is_covered, int ret),
+	TP_PROTO(struct super_block *sb, struct dentry *dentry, int flags, u64 dir_ino, int ret),
 
-	TP_ARGS(sb, dentry, flags, parent, is_covered, ret),
+	TP_ARGS(sb, dentry, flags, dir_ino, ret),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
+		__field(void *, dentry)
 		__string(name, dentry->d_name.name)
 		__field(__u64, ino)
-		__field(__u64, parent_ino)
+		__field(__u64, dir_ino)
 		__field(int, flags)
 		__field(int, is_root)
-		__field(int, is_covered)
 		__field(int, ret)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
+		__entry->dentry = dentry;
 		__assign_str(name, dentry->d_name.name)
-		__entry->ino = dentry->d_inode ?
-			       scoutfs_ino(dentry->d_inode) : 0;
-		__entry->parent_ino = parent->d_inode ?
-			       scoutfs_ino(parent->d_inode) : 0;
+		__entry->ino = dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
+		__entry->dir_ino = dir_ino;
 		__entry->flags = flags;
 		__entry->is_root = IS_ROOT(dentry);
-		__entry->is_covered = is_covered;
 		__entry->ret = ret;
 	),
 
-	TP_printk(SCSBF" name %s ino %llu parent_ino %llu flags 0x%x s_root %u is_covered %u ret %d",
-		  SCSB_TRACE_ARGS, __get_str(name), __entry->ino,
-		  __entry->parent_ino, __entry->flags,
-		  __entry->is_root,
-		  __entry->is_covered,
-		  __entry->ret)
+	TP_printk(SCSBF" dentry %p name %s ino %llu dir_ino %llu flags 0x%x s_root %u ret %d",
+		  SCSB_TRACE_ARGS, __entry->dentry, __get_str(name), __entry->ino, __entry->dir_ino,
+		  __entry->flags, __entry->is_root, __entry->ret)
+);
+
+TRACE_EVENT(scoutfs_validate_dentry,
+	TP_PROTO(struct super_block *sb, struct dentry *dentry, u64 dir_ino, u64 dentry_ino,
+		 u64 dent_ino, u64 refresh_gen, int ret),
+
+	TP_ARGS(sb, dentry, dir_ino, dentry_ino, dent_ino, refresh_gen, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(void *, dentry)
+		__field(__u64, dir_ino)
+		__string(name, dentry->d_name.name)
+		__field(__u64, dentry_ino)
+		__field(__u64, dent_ino)
+		__field(__u64, fsdata_gen)
+		__field(__u64, refresh_gen)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->dentry = dentry;
+		__entry->dir_ino = dir_ino;
+		__assign_str(name, dentry->d_name.name)
+		__entry->dentry_ino = dentry_ino;
+		__entry->dent_ino = dent_ino;
+		__entry->fsdata_gen = (unsigned long long)dentry->d_fsdata;
+		__entry->refresh_gen = refresh_gen;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" dentry %p dir %llu name %s dentry_ino %llu dent_ino %llu fsdata_gen %llu refresh_gen %llu ret %d",
+		  SCSB_TRACE_ARGS, __entry->dentry, __entry->dir_ino, __get_str(name),
+		  __entry->dentry_ino, __entry->dent_ino, __entry->fsdata_gen,
+		  __entry->refresh_gen, __entry->ret)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_super_lifecycle_class,
@@ -1697,21 +1805,41 @@ TRACE_EVENT(scoutfs_btree_merge,
 		  sk_trace_args(end))
 );
 
+TRACE_EVENT(scoutfs_btree_merge_read_range,
+	TP_PROTO(struct super_block *sb, struct scoutfs_key *start, struct scoutfs_key *end,
+		 int size),
+
+	TP_ARGS(sb, start, end, size),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		sk_trace_define(start)
+		sk_trace_define(end)
+		__field(int, size)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		sk_trace_assign(start, start);
+		sk_trace_assign(end, end);
+		__entry->size = size;
+	),
+
+	TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" size %d",
+		  SCSB_TRACE_ARGS, sk_trace_args(start), sk_trace_args(end), __entry->size)
+);
+
 TRACE_EVENT(scoutfs_btree_merge_items,
 	TP_PROTO(struct super_block *sb,
-		 struct scoutfs_btree_root *m_root,
 		 struct scoutfs_key *m_key, int m_val_len,
 		 struct scoutfs_btree_root *f_root,
 		 struct scoutfs_key *f_key, int f_val_len,
 		 int is_del),
 
-	TP_ARGS(sb, m_root, m_key, m_val_len, f_root, f_key, f_val_len, is_del),
+	TP_ARGS(sb, m_key, m_val_len, f_root, f_key, f_val_len, is_del),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
-		__field(__u64, m_root_blkno)
-		__field(__u64, m_root_seq)
-		__field(__u8, m_root_height)
 		sk_trace_define(m_key)
 		__field(int, m_val_len)
 		__field(__u64, f_root_blkno)
@@ -1724,10 +1852,6 @@ TRACE_EVENT(scoutfs_btree_merge_items,
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
-		__entry->m_root_blkno = m_root ?
-					le64_to_cpu(m_root->ref.blkno) : 0;
-		__entry->m_root_seq = m_root ? le64_to_cpu(m_root->ref.seq) : 0;
-		__entry->m_root_height = m_root ? m_root->height : 0;
 		sk_trace_assign(m_key, m_key);
 		__entry->m_val_len = m_val_len;
 		__entry->f_root_blkno = f_root ?
@@ -1739,11 +1863,9 @@ TRACE_EVENT(scoutfs_btree_merge_items,
 		__entry->is_del = !!is_del;
 	),
 
-	TP_printk(SCSBF" merge item root blkno %llu seq %llu height %u key "SK_FMT" val_len %d, fs item root blkno %llu seq %llu height %u key "SK_FMT" val_len %d, is_del %d",
-		  SCSB_TRACE_ARGS, __entry->m_root_blkno, __entry->m_root_seq,
-		  __entry->m_root_height, sk_trace_args(m_key),
-		  __entry->m_val_len, __entry->f_root_blkno,
-		  __entry->f_root_seq, __entry->f_root_height,
+	TP_printk(SCSBF" merge item key "SK_FMT" val_len %d, fs item root blkno %llu seq %llu height %u key "SK_FMT" val_len %d, is_del %d",
+		  SCSB_TRACE_ARGS, sk_trace_args(m_key), __entry->m_val_len,
+		  __entry->f_root_blkno, __entry->f_root_seq, __entry->f_root_height,
 		  sk_trace_args(f_key), __entry->f_val_len, __entry->is_del)
 );
 
@@ -1847,8 +1969,9 @@ DEFINE_EVENT(scoutfs_server_client_count_class, scoutfs_server_client_down,
 
 DECLARE_EVENT_CLASS(scoutfs_server_commit_users_class,
         TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, exceeded),
+		 u32 avail_before, u32 freed_before, int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing,
+		exceeded),
         TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(int, holding)
@@ -1856,6 +1979,7 @@ DECLARE_EVENT_CLASS(scoutfs_server_commit_users_class,
 		__field(int, nr_holders)
 		__field(__u32, avail_before)
 		__field(__u32, freed_before)
+		__field(int, committing)
 		__field(int, exceeded)
         ),
         TP_fast_assign(
@@ -1865,31 +1989,33 @@ DECLARE_EVENT_CLASS(scoutfs_server_commit_users_class,
 		__entry->nr_holders = nr_holders;
 		__entry->avail_before = avail_before;
 		__entry->freed_before = freed_before;
+		__entry->committing = !!committing;
 		__entry->exceeded = !!exceeded;
         ),
-	TP_printk(SCSBF" holding %u applying %u nr %u avail_before %u freed_before %u exceeded %u",
+	TP_printk(SCSBF" holding %u applying %u nr %u avail_before %u freed_before %u committing %u exceeded %u",
 		  SCSB_TRACE_ARGS, __entry->holding, __entry->applying, __entry->nr_holders,
-		  __entry->avail_before, __entry->freed_before, __entry->exceeded)
+		  __entry->avail_before, __entry->freed_before, __entry->committing,
+		  __entry->exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_hold,
         TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, exceeded)
+		 u32 avail_before, u32 freed_before, int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_apply,
         TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, exceeded)
+		 u32 avail_before, u32 freed_before, int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_start,
         TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, exceeded)
+		 u32 avail_before, u32 freed_before, int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_end,
         TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, exceeded)
+		 u32 avail_before, u32 freed_before, int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
 );
 
 #define slt_symbolic(mode)						\
@@ -1971,9 +2097,9 @@ DEFINE_EVENT(scoutfs_quorum_message_class, scoutfs_quorum_recv_message,
 
 TRACE_EVENT(scoutfs_quorum_loop,
 	TP_PROTO(struct super_block *sb, int role, u64 term, int vote_for,
-		 unsigned long vote_bits, struct timespec64 timeout),
+		 unsigned long vote_bits, unsigned long long nsecs),
 
-	TP_ARGS(sb, role, term, vote_for, vote_bits, timeout),
+	TP_ARGS(sb, role, term, vote_for, vote_bits, nsecs),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
@@ -1982,8 +2108,7 @@ TRACE_EVENT(scoutfs_quorum_loop,
 		__field(int, vote_for)
 		__field(unsigned long, vote_bits)
 		__field(unsigned long, vote_count)
-		__field(unsigned long long, timeout_sec)
-		__field(int, timeout_nsec)
+		__field(unsigned long long, nsecs)
 	),
 
 	TP_fast_assign(
@@ -1993,14 +2118,13 @@ TRACE_EVENT(scoutfs_quorum_loop,
 		__entry->vote_for = vote_for;
 		__entry->vote_bits = vote_bits;
 		__entry->vote_count = hweight_long(vote_bits);
-		__entry->timeout_sec = timeout.tv_sec;
-		__entry->timeout_nsec = timeout.tv_nsec;
+		__entry->nsecs = nsecs;
 	),
 
-	TP_printk(SCSBF" term %llu role %d vote_for %d vote_bits 0x%lx vote_count %lu timeout %llu.%u",
+	TP_printk(SCSBF" term %llu role %d vote_for %d vote_bits 0x%lx vote_count %lu timeout %llu",
 		  SCSB_TRACE_ARGS, __entry->term, __entry->role,
 		  __entry->vote_for, __entry->vote_bits, __entry->vote_count,
-		  __entry->timeout_sec, __entry->timeout_nsec)
+		  __entry->nsecs)
 );
 
 TRACE_EVENT(scoutfs_trans_seq_last,
@@ -2022,6 +2146,71 @@ TRACE_EVENT(scoutfs_trans_seq_last,
 
 	TP_printk(SCSBF" rid %016llx trans_seq %llu",
 		  SCSB_TRACE_ARGS, __entry->s_rid, __entry->trans_seq)
+);
+
+TRACE_EVENT(scoutfs_server_finalize_items,
+	TP_PROTO(struct super_block *sb, u64 rid, u64 item_rid, u64 item_nr, u64 item_flags,
+		 u64 item_get_trans_seq),
+
+	TP_ARGS(sb, rid, item_rid, item_nr, item_flags, item_get_trans_seq),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(__u64, item_rid)
+		__field(__u64, item_nr)
+		__field(__u64, item_flags)
+		__field(__u64, item_get_trans_seq)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->item_rid = item_rid;
+		__entry->item_nr = item_nr;
+		__entry->item_flags = item_flags;
+		__entry->item_get_trans_seq = item_get_trans_seq;
+	),
+
+	TP_printk(SCSBF" rid %016llx item_rid %016llx item_nr %llu item_flags 0x%llx item_get_trans_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->item_rid, __entry->item_nr,
+		  __entry->item_flags, __entry->item_get_trans_seq)
+);
+
+TRACE_EVENT(scoutfs_server_finalize_decision,
+	TP_PROTO(struct super_block *sb, u64 rid, bool saw_finalized, bool others_active,
+		 bool ours_visible, bool finalize_ours, unsigned int delay_ms,
+		 u64 finalize_sent_seq),
+
+	TP_ARGS(sb, rid, saw_finalized, others_active, ours_visible, finalize_ours, delay_ms,
+		finalize_sent_seq),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(bool, saw_finalized)
+		__field(bool, others_active)
+		__field(bool, ours_visible)
+		__field(bool, finalize_ours)
+		__field(unsigned int, delay_ms)
+		__field(__u64, finalize_sent_seq)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->saw_finalized = saw_finalized;
+		__entry->others_active = others_active;
+		__entry->ours_visible = ours_visible;
+		__entry->finalize_ours = finalize_ours;
+		__entry->delay_ms = delay_ms;
+		__entry->finalize_sent_seq = finalize_sent_seq;
+	),
+
+	TP_printk(SCSBF" rid %016llx saw_finalized %u others_active %u ours_visible %u finalize_ours %u delay_ms %u finalize_sent_seq %llu",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->saw_finalized, __entry->others_active,
+		  __entry->ours_visible, __entry->finalize_ours, __entry->delay_ms,
+		  __entry->finalize_sent_seq)
 );
 
 TRACE_EVENT(scoutfs_get_log_merge_status,
@@ -2262,6 +2451,44 @@ TRACE_EVENT(scoutfs_block_dirty_ref,
 	TP_printk(SCSBF" ref_blkno %llu ref_seq %llu block_blkno %llu block_seq %llu",
 		  SCSB_TRACE_ARGS, __entry->ref_blkno, __entry->ref_seq,
 		  __entry->block_blkno, __entry->block_seq)
+);
+
+TRACE_EVENT(scoutfs_block_stale,
+	TP_PROTO(struct super_block *sb, struct scoutfs_block_ref *ref,
+		 struct scoutfs_block_header *hdr, u32 magic, u32 crc),
+
+	TP_ARGS(sb, ref, hdr, magic, crc),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ref_blkno)
+		__field(__u64, ref_seq)
+		__field(__u32, hdr_crc)
+		__field(__u32, hdr_magic)
+		__field(__u64, hdr_fsid)
+		__field(__u64, hdr_seq)
+		__field(__u64, hdr_blkno)
+		__field(__u32, magic)
+		__field(__u32, crc)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ref_blkno = le64_to_cpu(ref->blkno);
+		__entry->ref_seq = le64_to_cpu(ref->seq);
+		__entry->hdr_crc = le32_to_cpu(hdr->crc);
+		__entry->hdr_magic = le32_to_cpu(hdr->magic);
+		__entry->hdr_fsid = le64_to_cpu(hdr->fsid);
+		__entry->hdr_seq = le64_to_cpu(hdr->seq);
+		__entry->hdr_blkno = le64_to_cpu(hdr->blkno);
+		__entry->magic = magic;
+		__entry->crc = crc;
+	),
+
+	TP_printk(SCSBF" ref_blkno %llu ref_seq %016llx hdr_crc %08x hdr_magic %08x hdr_fsid %016llx hdr_seq %016llx hdr_blkno %llu magic %08x crc %08x",
+		  SCSB_TRACE_ARGS, __entry->ref_blkno, __entry->ref_seq, __entry->hdr_crc,
+		  __entry->hdr_magic, __entry->hdr_fsid, __entry->hdr_seq, __entry->hdr_blkno,
+		  __entry->magic, __entry->crc)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_block_class,
@@ -2746,6 +2973,81 @@ TRACE_EVENT(scoutfs_omap_should_delete,
 
 	TP_printk(SCSBF" ino %llu nlink %u ret %d",
 		  SCSB_TRACE_ARGS, __entry->ino, __entry->nlink, __entry->ret)
+);
+
+#define SSCF_FMT "[bo %llu bs %llu es %llu]"
+#define SSCF_FIELDS(pref)					\
+	__field(__u64, pref##_blkno)				\
+	__field(__u64, pref##_blocks)				\
+	__field(__u64, pref##_entries)
+#define SSCF_ASSIGN(pref, sfl)					\
+	__entry->pref##_blkno = le64_to_cpu((sfl)->ref.blkno);	\
+	__entry->pref##_blocks = le64_to_cpu((sfl)->blocks);	\
+	__entry->pref##_entries = le64_to_cpu((sfl)->entries);
+#define SSCF_ENTRY_ARGS(pref)					\
+	__entry->pref##_blkno,					\
+	__entry->pref##_blocks,					\
+	__entry->pref##_entries
+
+DECLARE_EVENT_CLASS(scoutfs_srch_compact_class,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
+
+	TP_ARGS(sb, sc),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, id)
+		__field(__u8, nr)
+		__field(__u8, flags)
+		SSCF_FIELDS(out)
+		__field(__u64, in0_blk)
+		__field(__u64, in0_pos)
+		SSCF_FIELDS(in0)
+		__field(__u64, in1_blk)
+		__field(__u64, in1_pos)
+		SSCF_FIELDS(in1)
+		__field(__u64, in2_blk)
+		__field(__u64, in2_pos)
+		SSCF_FIELDS(in2)
+		__field(__u64, in3_blk)
+		__field(__u64, in3_pos)
+		SSCF_FIELDS(in3)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->id = le64_to_cpu(sc->id);
+		__entry->nr = sc->nr;
+		__entry->flags = sc->flags;
+		SSCF_ASSIGN(out, &sc->out)
+		__entry->in0_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in0_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in0, &sc->in[0].sfl)
+		__entry->in1_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in1_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in1, &sc->in[1].sfl)
+		__entry->in2_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in2_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in2, &sc->in[2].sfl)
+		__entry->in3_blk = le64_to_cpu(sc->in[0].blk);
+		__entry->in3_pos = le64_to_cpu(sc->in[0].pos);
+		SSCF_ASSIGN(in3, &sc->in[3].sfl)
+	),
+
+	TP_printk(SCSBF" id %llu nr %u flags 0x%x out "SSCF_FMT" in0 b %llu p %llu "SSCF_FMT" in1 b %llu p %llu "SSCF_FMT" in2 b %llu p %llu "SSCF_FMT" in3 b %llu p %llu "SSCF_FMT,
+		  SCSB_TRACE_ARGS, __entry->id, __entry->nr, __entry->flags, SSCF_ENTRY_ARGS(out),
+		  __entry->in0_blk, __entry->in0_pos, SSCF_ENTRY_ARGS(in0),
+		  __entry->in1_blk, __entry->in1_pos, SSCF_ENTRY_ARGS(in1),
+		  __entry->in2_blk, __entry->in2_pos, SSCF_ENTRY_ARGS(in2),
+		  __entry->in3_blk, __entry->in3_pos, SSCF_ENTRY_ARGS(in3))
+);
+DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_send,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
+	TP_ARGS(sb, sc)
+);
+DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_recv,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
+	TP_ARGS(sb, sc)
 );
 
 #endif /* _TRACE_SCOUTFS_H */

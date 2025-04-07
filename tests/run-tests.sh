@@ -1,5 +1,8 @@
 #!/usr/bin/bash
 
+# Force system tools to use ASCII quotes
+export LC_ALL=C
+
 #
 # XXX
 #  - could have helper functions for waiting for pids
@@ -58,6 +61,7 @@ $(basename $0) options:
     -m        | Run mkfs on the device before mounting and running
               | tests.  Implies unmounting existing mounts first.
     -n <nr>   | The number of devices and mounts to test.
+    -o <opts> | Add option string to all mounts during all tests.
     -P        | Enable trace_printk.
     -p        | Exit script after preparing mounts only, don't run tests.
     -q <nr>   | The first <nr> mounts will be quorum members.  Must be
@@ -68,6 +72,8 @@ $(basename $0) options:
     -s        | Skip git repo checkouts.
     -t        | Enabled trace events that match the given glob argument.
               | Multiple options enable multiple globbed events.
+    -T <nr>   | Multiply the original trace buffer size by nr during the run.
+    -V <nr>   | Set mkfs device format version.
     -X        | xfstests git repo. Used by tests/xfstests.sh.
     -x        | xfstests git branch to checkout and track.
     -y        | xfstests ./check additional args
@@ -136,6 +142,12 @@ while true; do
 		T_NR_MOUNTS="$2"
 		shift
 		;;
+	-o)
+		test -n "$2" || die "-o must have option string argument"
+		# always appending to existing options
+		T_MNT_OPTIONS+=",$2"
+		shift
+		;;
 	-P)
 		T_TRACE_PRINTK="1"
 		;;
@@ -158,6 +170,16 @@ while true; do
 	-t)
 		test -n "$2" || die "-t must have trace glob argument"
 		T_TRACE_GLOB+=("$2")
+		shift
+		;;
+	-T)
+		test -n "$2" || die "-T must have trace buffer size multiplier argument"
+		T_TRACE_MULT="$2"
+		shift
+		;;
+	-V)
+		test -n "$2" || die "-V must have a format version argument"
+		T_MKFS_FORMAT_VERSION="-V $2"
 		shift
 		;;
 	-X)
@@ -310,16 +332,10 @@ unmount_all() {
 		cmd wait $p
 	done
 
-	# delete all temp meta devices
-	for dev in $(losetup --associated "$T_META_DEVICE" | cut -d : -f 1); do
-		if [ -e "$dev" ]; then
-			cmd losetup -d "$dev"
-		fi
-	done
-	# delete all temp data devices
-	for dev in $(losetup --associated "$T_DATA_DEVICE" | cut -d : -f 1); do
-		if [ -e "$dev" ]; then
-			cmd losetup -d "$dev"
+	# delete all temp devices
+	for dev in /dev/mapper/_scoutfs_test_*; do
+		if [ -b "$dev" ]; then
+			cmd dmsetup remove $dev
 		fi
 	done
 }
@@ -334,7 +350,7 @@ if [ -n "$T_MKFS" ]; then
 	done
 
 	msg "making new filesystem with $T_QUORUM quorum members"
-	cmd scoutfs mkfs -f $quo $T_DATA_ALLOC_ZONE_BLOCKS \
+	cmd scoutfs mkfs -f $quo $T_DATA_ALLOC_ZONE_BLOCKS $T_MKFS_FORMAT_VERSION \
 		"$T_META_DEVICE" "$T_DATA_DEVICE"
 fi
 
@@ -342,7 +358,15 @@ if [ -n "$T_INSMOD" ]; then
 	msg "removing and reinserting scoutfs module"
 	test -e /sys/module/scoutfs && cmd rmmod scoutfs
 	cmd modprobe libcrc32c
-	cmd insmod "$T_KMOD/src/scoutfs.ko"
+	T_MODULE="$T_KMOD/src/scoutfs.ko"
+	cmd insmod "$T_MODULE"
+fi
+
+if [ -n "$T_TRACE_MULT" ]; then
+	orig_trace_size=$(cat /sys/kernel/debug/tracing/buffer_size_kb)
+	mult_trace_size=$((orig_trace_size * T_TRACE_MULT))
+	msg "increasing trace buffer size from $orig_trace_size KiB to $mult_trace_size KiB"
+	echo $mult_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
 fi
 
 nr_globs=${#T_TRACE_GLOB[@]}
@@ -374,6 +398,7 @@ fi
 # always describe tracing in the logs
 cmd cat /sys/kernel/debug/tracing/set_event
 cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
+	    /sys/kernel/debug/tracing/buffer_size_kb \
 	    /proc/sys/kernel/ftrace_dump_on_oops
 
 #
@@ -410,6 +435,12 @@ $T_UTILS/fenced/scoutfs-fenced > "$T_FENCED_LOG" 2>&1 &
 fenced_pid=$!
 fenced_log "started fenced pid $fenced_pid in the background"
 
+# setup dm tables
+echo "0 $(blockdev --getsz $T_META_DEVICE) linear $T_META_DEVICE 0" > \
+	$T_RESULTS/dmtable.meta
+echo "0 $(blockdev --getsz $T_DATA_DEVICE) linear $T_DATA_DEVICE 0" > \
+	$T_RESULTS/dmtable.data
+
 #
 # mount concurrently so that a quorum is present to elect the leader and
 # start a server.
@@ -418,10 +449,13 @@ msg "mounting $T_NR_MOUNTS mounts on meta $T_META_DEVICE data $T_DATA_DEVICE"
 pids=""
 for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 
-	meta_dev=$(losetup --find --show $T_META_DEVICE)
-	test -b "$meta_dev" || die "failed to create temp device $meta_dev"
-	data_dev=$(losetup --find --show $T_DATA_DEVICE)
-	test -b "$data_dev" || die "failed to create temp device $data_dev"
+	name="_scoutfs_test_meta_$i"
+	cmd dmsetup create "$name" --table "$(cat $T_RESULTS/dmtable.meta)"
+	meta_dev="/dev/mapper/$name"
+
+	name="_scoutfs_test_data_$i"
+	cmd dmsetup create "$name" --table "$(cat $T_RESULTS/dmtable.data)"
+	data_dev="/dev/mapper/$name"
 
 	dir="/mnt/test.$i"
 	test -d "$dir" || cmd mkdir -p "$dir"
@@ -430,6 +464,7 @@ for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 	if [ "$i" -lt "$T_QUORUM" ]; then
 		opts="$opts,quorum_slot_nr=$i"
 	fi
+	opts="${opts}${T_MNT_OPTIONS}"
 
 	msg "mounting $meta_dev|$data_dev on $dir"
 	cmd mount -t scoutfs $opts "$data_dev" "$dir" &
@@ -480,6 +515,7 @@ msg "running tests"
 passed=0
 skipped=0
 failed=0
+skipped_permitted=0
 for t in $tests; do
 	# tests has basenames from sequence, get path and name
 	t="tests/$t"
@@ -521,6 +557,9 @@ for t in $tests; do
 	test -n "$stats" && stats="last: $stats"
 
 	printf "  %-30s $stats" "$test_name"
+
+	# mark in dmesg as to what test we are running
+	echo "run scoutfs test $test_name" > /dev/kmsg
 
 	# record dmesg before
 	dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.before"
@@ -583,6 +622,10 @@ for t in $tests; do
 		grep -s -v "^$test_name " "$last" > "$last.tmp"
 		echo "$test_name $stats" >> "$last.tmp"
 		mv -f "$last.tmp" "$last"
+	elif [ "$sts" == "$T_SKIP_PERMITTED_STATUS" ]; then
+		echo "  [ skipped (permitted): $message ]"
+		echo "$test_name skipped (permitted) $message " >> "$T_RESULTS/skip.log"
+		((skipped_permitted++))
 	elif [ "$sts" == "$T_SKIP_STATUS" ]; then
 		echo "  [ skipped: $message ]"
 		echo "$test_name $message" >> "$T_RESULTS/skip.log"
@@ -596,7 +639,7 @@ for t in $tests; do
 	fi
 done
 
-msg "all tests run: $passed passed, $skipped skipped, $failed failed"
+msg "all tests run: $passed passed, $skipped skipped, $skipped_permitted skipped (permitted), $failed failed"
 
 
 if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
@@ -604,6 +647,9 @@ if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
 	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
 	echo 0 > /sys/kernel/debug/tracing/options/trace_printk
 	cat /sys/kernel/debug/tracing/trace > "$T_RESULTS/traces"
+	if [ -n "$orig_trace_size" ]; then
+		echo $orig_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
+	fi
 fi
 
 if [ "$skipped" == 0 -a "$failed" == 0 ]; then

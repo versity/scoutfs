@@ -43,6 +43,9 @@ extern const struct file_operations scoutfs_file_fops;
 struct scoutfs_alloc;
 struct scoutfs_block_writer;
 
+int scoutfs_get_block_write(struct inode *inode, sector_t iblock, struct buffer_head *bh,
+			    int create);
+
 int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 				u64 ino, u64 iblock, u64 last, bool offline,
 				struct scoutfs_lock *lock);

@@ -6,10 +6,13 @@
 #include "format.h"
 
 struct scoutfs_mount_options {
+	u64 data_prealloc_blocks;
+	bool data_prealloc_contig_only;
+	unsigned int log_merge_wait_timeout_ms;
 	char *metadev_path;
 	unsigned int orphan_scan_delay_ms;
 	int quorum_slot_nr;
-
+	u64 quorum_heartbeat_timeout_ms;
 };
 
 void scoutfs_options_read(struct super_block *sb, struct scoutfs_mount_options *opts);

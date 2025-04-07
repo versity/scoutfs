@@ -19,6 +19,8 @@
 #include <linux/pagemap.h>
 #include <linux/sched.h>
 #include <linux/list_sort.h>
+#include <linux/workqueue.h>
+#include <linux/buffer_head.h>
 
 #include "format.h"
 #include "super.h"
@@ -36,6 +38,7 @@
 #include "omap.h"
 #include "forest.h"
 #include "btree.h"
+#include "acl.h"
 
 /*
  * XXX
@@ -66,8 +69,10 @@ struct inode_sb_info {
 
 	struct delayed_work orphan_scan_dwork;
 
+	struct workqueue_struct *iput_workq;
 	struct work_struct iput_work;
-	struct llist_head iput_llist;
+	spinlock_t iput_lock;
+	struct list_head iput_list;
 };
 
 #define DECLARE_INODE_SB_INFO(sb, name) \
@@ -86,7 +91,7 @@ static void scoutfs_inode_ctor(void *obj)
 
 	init_rwsem(&si->extent_sem);
 	mutex_init(&si->item_mutex);
-	seqcount_init(&si->seqcount);
+	seqlock_init(&si->seqlock);
 	si->staging = false;
 	scoutfs_per_task_init(&si->pt_data_lock);
 	atomic64_set(&si->data_waitq.changed, 0);
@@ -94,7 +99,9 @@ static void scoutfs_inode_ctor(void *obj)
 	init_rwsem(&si->xattr_rwsem);
 	INIT_LIST_HEAD(&si->writeback_entry);
 	scoutfs_lock_init_coverage(&si->ino_lock_cov);
-	atomic_set(&si->iput_count, 0);
+	INIT_LIST_HEAD(&si->iput_head);
+	si->iput_count = 0;
+	si->iput_flags = 0;
 
 	inode_init_once(&si->inode);
 }
@@ -136,20 +143,26 @@ void scoutfs_destroy_inode(struct inode *inode)
 static const struct inode_operations scoutfs_file_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+	.removexattr	= generic_removexattr,
+#endif
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.get_acl	= scoutfs_get_acl,
 	.fiemap		= scoutfs_data_fiemap,
 };
 
 static const struct inode_operations scoutfs_special_iops = {
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-	.setxattr	= scoutfs_setxattr,
-	.getxattr	= scoutfs_getxattr,
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+	.removexattr	= generic_removexattr,
+#endif
 	.listxattr	= scoutfs_listxattr,
-	.removexattr	= scoutfs_removexattr,
+	.get_acl	= scoutfs_get_acl,
 };
 
 /*
@@ -165,8 +178,12 @@ static void set_inode_ops(struct inode *inode)
 		inode->i_fop = &scoutfs_file_fops;
 		break;
 	case S_IFDIR:
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 		inode->i_op = &scoutfs_dir_iops.ops;
 		inode->i_flags |= S_IOPS_WRAPPER;
+#else
+		inode->i_op = &scoutfs_dir_iops;
+#endif
 		inode->i_fop = &scoutfs_dir_fops;
 		break;
 	case S_IFLNK:
@@ -233,12 +250,12 @@ static void set_item_info(struct scoutfs_inode_info *si,
 	set_item_major(si, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE, sinode->data_seq);
 }
 
-static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
+static void load_inode(struct inode *inode, struct scoutfs_inode *cinode, int inode_bytes)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
 	i_size_write(inode, le64_to_cpu(cinode->size));
-	inode->i_version = le64_to_cpu(cinode->version);
+	inode_set_iversion_queried(inode, le64_to_cpu(cinode->version));
 	set_nlink(inode, le32_to_cpu(cinode->nlink));
 	i_uid_write(inode, le32_to_cpu(cinode->uid));
 	i_gid_write(inode, le32_to_cpu(cinode->gid));
@@ -261,6 +278,7 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode)
 	si->flags = le32_to_cpu(cinode->flags);
 	si->crtime.tv_sec = le64_to_cpu(cinode->crtime.sec);
 	si->crtime.tv_nsec = le32_to_cpu(cinode->crtime.nsec);
+	si->proj = le64_to_cpu(cinode->proj);
 
 	/*
 	 * i_blocks is initialized from online and offline and is then
@@ -279,6 +297,24 @@ void scoutfs_inode_init_key(struct scoutfs_key *key, u64 ino)
 		.ski_ino = cpu_to_le64(ino),
 		.sk_type = SCOUTFS_INODE_TYPE,
 	};
+}
+
+/*
+ * Read an inode item into the caller's buffer and return the size that
+ * we read.   Returns errors if the inode size is unsupported or doesn't
+ * make sense for the format version.
+ */
+static int lookup_inode_item(struct super_block *sb, struct scoutfs_key *key,
+			     struct scoutfs_inode *sinode, struct scoutfs_lock *lock)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	int ret;
+
+	ret = scoutfs_item_lookup_smaller_zero(sb, key, sinode, sizeof(struct scoutfs_inode), lock);
+	if (ret >= 0 && !scoutfs_inode_valid_vers_bytes(sbi->fmt_vers, ret))
+		return -EIO;
+
+	return ret;
 }
 
 /*
@@ -316,13 +352,12 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 
 	mutex_lock(&si->item_mutex);
 	if (atomic64_read(&si->last_refreshed) < refresh_gen) {
-		ret = scoutfs_item_lookup_exact(sb, &key, &sinode,
-						sizeof(sinode), lock);
-		if (ret == 0) {
-			load_inode(inode, &sinode);
+		ret = lookup_inode_item(sb, &key, &sinode, lock);
+		if (ret > 0) {
+			load_inode(inode, &sinode, ret);
 			atomic64_set(&si->last_refreshed, refresh_gen);
 			scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
-			si->drop_invalidated = false;
+			ret = 0;
 		}
 	} else {
 		ret = 0;
@@ -332,10 +367,18 @@ int scoutfs_inode_refresh(struct inode *inode, struct scoutfs_lock *lock)
 	return ret;
 }
 
+#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 		    struct kstat *stat)
 {
 	struct inode *inode = dentry->d_inode;
+#else
+int scoutfs_getattr(KC_VFS_NS_DEF
+		    const struct path *path, struct kstat *stat,
+		    u32 request_mask, unsigned int query_flags)
+{
+	struct inode *inode = d_inode(path->dentry);
+#endif
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
 	int ret;
@@ -343,7 +386,8 @@ int scoutfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret == 0) {
-		generic_fillattr(inode, stat);
+		generic_fillattr(KC_VFS_INIT_NS
+				 inode, stat);
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	}
 	return ret;
@@ -354,6 +398,7 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	LIST_HEAD(ind_locks);
 	int ret;
 
@@ -364,17 +409,25 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 	if (ret)
 		return ret;
 
+	scoutfs_per_task_add(&si->pt_data_lock, &pt_ent, lock);
+	ret = block_truncate_page(inode->i_mapping, new_size, scoutfs_get_block_write);
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	if (ret < 0)
+		goto unlock;
+	scoutfs_inode_queue_writeback(inode);
+
 	if (new_size != i_size_read(inode))
 		scoutfs_inode_inc_data_version(inode);
 
 	truncate_setsize(inode, new_size);
-	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
+	inode->i_ctime = inode->i_mtime = current_time(inode);
 	if (truncate)
 		si->flags |= SCOUTFS_INO_FLAG_TRUNCATE;
 	scoutfs_inode_set_data_seq(inode);
 	inode_inc_iversion(inode);
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 
+unlock:
 	scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 
@@ -432,7 +485,8 @@ int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock)
  * re-acquire it.  Ideally we'd fix this so that we can acquire the lock
  * instead of the caller.
  */
-int scoutfs_setattr(struct dentry *dentry, struct iattr *attr)
+int scoutfs_setattr(KC_VFS_NS_DEF
+		    struct dentry *dentry, struct iattr *attr)
 {
 	struct inode *inode = dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
@@ -450,9 +504,13 @@ retry:
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret)
 		return ret;
-
-	ret = inode_change_ok(inode, attr);
+	ret = setattr_prepare(KC_VFS_INIT_NS
+			      dentry, attr);
 	if (ret)
+		goto out;
+
+	ret = scoutfs_inode_check_retention(inode);
+	if (ret < 0)
 		goto out;
 
 	attr_size = (attr->ia_valid & ATTR_SIZE) ? attr->ia_size :
@@ -479,9 +537,9 @@ retry:
 				scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 
 				/* XXX callee locks instead? */
-				mutex_unlock(&inode->i_mutex);
+				inode_unlock(inode);
 				ret = scoutfs_data_wait(inode, &dw);
-				mutex_lock(&inode->i_mutex);
+				inode_lock(inode);
 
 				if (ret == 0)
 					goto retry;
@@ -507,10 +565,16 @@ retry:
 	if (ret)
 		goto out;
 
-	setattr_copy(inode, attr);
+	ret = scoutfs_acl_chmod_locked(inode, attr, lock, &ind_locks);
+	if (ret < 0)
+		goto release;
+
+	setattr_copy(KC_VFS_INIT_NS
+		     inode, attr);
 	inode_inc_iversion(inode);
 	scoutfs_update_inode_item(inode, lock, &ind_locks);
 
+release:
 	scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
 out:
@@ -530,11 +594,9 @@ static void set_trans_seq(struct inode *inode, u64 *seq)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 
 	if (*seq != sbi->trans_seq) {
-		preempt_disable();
-		write_seqcount_begin(&si->seqcount);
+		write_seqlock(&si->seqlock);
 		*seq = sbi->trans_seq;
-		write_seqcount_end(&si->seqcount);
-		preempt_enable();
+		write_sequnlock(&si->seqlock);
 	}
 }
 
@@ -556,22 +618,18 @@ void scoutfs_inode_inc_data_version(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	preempt_disable();
-	write_seqcount_begin(&si->seqcount);
+	write_seqlock(&si->seqlock);
 	si->data_version++;
-	write_seqcount_end(&si->seqcount);
-	preempt_enable();
+	write_sequnlock(&si->seqlock);
 }
 
 void scoutfs_inode_set_data_version(struct inode *inode, u64 data_version)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	preempt_disable();
-	write_seqcount_begin(&si->seqcount);
+	write_seqlock(&si->seqlock);
 	si->data_version = data_version;
-	write_seqcount_end(&si->seqcount);
-	preempt_enable();
+	write_sequnlock(&si->seqlock);
 }
 
 void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
@@ -580,8 +638,7 @@ void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
 
 	if (inode && (on || off)) {
 		si = SCOUTFS_I(inode);
-		preempt_disable();
-		write_seqcount_begin(&si->seqcount);
+		write_seqlock(&si->seqlock);
 
 		/* inode and extents out of sync, bad callers */
 		if (((s64)si->online_blocks + on < 0) ||
@@ -602,8 +659,7 @@ void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
 						    si->online_blocks,
 						    si->offline_blocks);
 
-		write_seqcount_end(&si->seqcount);
-		preempt_enable();
+		write_sequnlock(&si->seqlock);
 	}
 
 	/* any time offline extents decreased we try and wake waiters */
@@ -611,16 +667,16 @@ void scoutfs_inode_add_onoff(struct inode *inode, s64 on, s64 off)
 		scoutfs_data_wait_changed(inode);
 }
 
-static u64 read_seqcount_u64(struct inode *inode, u64 *val)
+static u64 read_seqlock_u64(struct inode *inode, u64 *val)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	unsigned int seq;
+	unsigned seq;
 	u64 v;
 
 	do {
-		seq = read_seqcount_begin(&si->seqcount);
+		seq = read_seqbegin(&si->seqlock);
 		v = *val;
-	} while (read_seqcount_retry(&si->seqcount, seq));
+	} while (read_seqretry(&si->seqlock, seq));
 
 	return v;
 }
@@ -629,33 +685,82 @@ u64 scoutfs_inode_meta_seq(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	return read_seqcount_u64(inode, &si->meta_seq);
+	return read_seqlock_u64(inode, &si->meta_seq);
 }
 
 u64 scoutfs_inode_data_seq(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	return read_seqcount_u64(inode, &si->data_seq);
+	return read_seqlock_u64(inode, &si->data_seq);
 }
 
 u64 scoutfs_inode_data_version(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 
-	return read_seqcount_u64(inode, &si->data_version);
+	return read_seqlock_u64(inode, &si->data_version);
 }
 
 void scoutfs_inode_get_onoff(struct inode *inode, s64 *on, s64 *off)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
-	unsigned int seq;
+	unsigned seq;
 
 	do {
-		seq = read_seqcount_begin(&si->seqcount);
+		seq = read_seqbegin(&si->seqlock);
 		*on = SCOUTFS_I(inode)->online_blocks;
 		*off = SCOUTFS_I(inode)->offline_blocks;
-	} while (read_seqcount_retry(&si->seqcount, seq));
+	} while (read_seqretry(&si->seqlock, seq));
+}
+
+/*
+ * Get our private scoutfs inode flags, not the vfs i_flags.
+ */
+u32 scoutfs_inode_get_flags(struct inode *inode)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned seq;
+	u32 flags;
+
+	do {
+		seq = read_seqbegin(&si->seqlock);
+		flags = si->flags;
+	} while (read_seqretry(&si->seqlock, seq));
+
+	return flags;
+}
+
+void scoutfs_inode_set_flags(struct inode *inode, u32 and, u32 or)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	write_seqlock(&si->seqlock);
+	si->flags = (si->flags & and) | or;
+	write_sequnlock(&si->seqlock);
+}
+
+u64 scoutfs_inode_get_proj(struct inode *inode)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	unsigned seq;
+	u64 proj;
+
+	do {
+		seq = read_seqbegin(&si->seqlock);
+		proj = si->proj;
+	} while (read_seqretry(&si->seqlock, seq));
+
+	return proj;
+}
+
+void scoutfs_inode_set_proj(struct inode *inode, u64 proj)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	write_seqlock(&si->seqlock);
+	si->proj = proj;
+	write_sequnlock(&si->seqlock);
 }
 
 static int scoutfs_iget_test(struct inode *inode, void *arg)
@@ -728,7 +833,7 @@ struct inode *scoutfs_iget(struct super_block *sb, u64 ino, int lkf, int igf)
 		/* XXX ensure refresh, instead clear in drop_inode? */
 		si = SCOUTFS_I(inode);
 		atomic64_set(&si->last_refreshed, 0);
-		inode->i_version = 0;
+		inode_set_iversion_queried(inode, 0);
 	}
 
 	ret = scoutfs_inode_refresh(inode, lock);
@@ -767,7 +872,7 @@ out:
 	return inode;
 }
 
-static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
+static void store_inode(struct scoutfs_inode *cinode, struct inode *inode, int inode_bytes)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	u64 online_blocks;
@@ -776,7 +881,7 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	scoutfs_inode_get_onoff(inode, &online_blocks, &offline_blocks);
 
 	cinode->size = cpu_to_le64(i_size_read(inode));
-	cinode->version = cpu_to_le64(inode->i_version);
+	cinode->version = cpu_to_le64(inode_peek_iversion(inode));
 	cinode->nlink = cpu_to_le32(inode->i_nlink);
 	cinode->uid = cpu_to_le32(i_uid_read(inode));
 	cinode->gid = cpu_to_le32(i_gid_read(inode));
@@ -803,6 +908,7 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 	cinode->crtime.sec = cpu_to_le64(si->crtime.tv_sec);
 	cinode->crtime.nsec = cpu_to_le32(si->crtime.tv_nsec);
 	memset(cinode->crtime.__pad, 0, sizeof(cinode->crtime.__pad));
+	cinode->proj = cpu_to_le64(si->proj);
 }
 
 /*
@@ -826,15 +932,18 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode)
 int scoutfs_dirty_inode_item(struct inode *inode, struct scoutfs_lock *lock)
 {
 	struct super_block *sb = inode->i_sb;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
+	int inode_bytes;
 	int ret;
 
-	store_inode(&sinode, inode);
+	inode_bytes = scoutfs_inode_vers_bytes(sbi->fmt_vers);
+	store_inode(&sinode, inode, inode_bytes);
 
 	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
-	ret = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = scoutfs_item_update(sb, &key, &sinode, inode_bytes, lock);
 	if (!ret)
 		trace_scoutfs_dirty_inode(inode);
 	return ret;
@@ -875,10 +984,10 @@ static bool inode_has_index(umode_t mode, u8 type)
 	}
 }
 
-static int cmp_index_lock(void *priv, struct list_head *A, struct list_head *B)
+static int cmp_index_lock(void *priv, KC_LIST_CMP_CONST struct list_head *A, KC_LIST_CMP_CONST struct list_head *B)
 {
-	struct index_lock *a = list_entry(A, struct index_lock, head);
-	struct index_lock *b = list_entry(B, struct index_lock, head);
+	KC_LIST_CMP_CONST struct index_lock *a = list_entry(A, KC_LIST_CMP_CONST struct index_lock, head);
+	KC_LIST_CMP_CONST struct index_lock *b = list_entry(B, KC_LIST_CMP_CONST struct index_lock, head);
 
 	return ((int)a->type - (int)b->type) ?:
 	       scoutfs_cmp_u64s(a->major, b->major) ?:
@@ -947,7 +1056,8 @@ void scoutfs_inode_init_index_key(struct scoutfs_key *key, u8 type, u64 major,
 static int update_index_items(struct super_block *sb,
 			      struct scoutfs_inode_info *si, u64 ino, u8 type,
 			      u64 major, u32 minor,
-			      struct list_head *lock_list)
+			      struct list_head *lock_list,
+			      struct scoutfs_lock *primary)
 {
 	struct scoutfs_lock *ins_lock;
 	struct scoutfs_lock *del_lock;
@@ -964,7 +1074,7 @@ static int update_index_items(struct super_block *sb,
 	scoutfs_inode_init_index_key(&ins, type, major, minor, ino);
 
 	ins_lock = find_index_lock(lock_list, type, major, minor, ino);
-	ret = scoutfs_item_create_force(sb, &ins, NULL, 0, ins_lock);
+	ret = scoutfs_item_create_force(sb, &ins, NULL, 0, ins_lock, primary);
 	if (ret || !will_del_index(si, type, major, minor))
 		return ret;
 
@@ -976,7 +1086,7 @@ static int update_index_items(struct super_block *sb,
 
 	del_lock = find_index_lock(lock_list, type, get_item_major(si, type),
 				   get_item_minor(si, type), ino);
-	ret = scoutfs_item_delete_force(sb, &del, del_lock);
+	ret = scoutfs_item_delete_force(sb, &del, del_lock, primary);
 	if (ret) {
 		err = scoutfs_item_delete(sb, &ins, ins_lock);
 		BUG_ON(err);
@@ -988,7 +1098,8 @@ static int update_index_items(struct super_block *sb,
 static int update_indices(struct super_block *sb,
 			  struct scoutfs_inode_info *si, u64 ino, umode_t mode,
 			  struct scoutfs_inode *sinode,
-			  struct list_head *lock_list)
+			  struct list_head *lock_list,
+			  struct scoutfs_lock *primary)
 {
 	struct index_update {
 		u8 type;
@@ -1008,7 +1119,7 @@ static int update_indices(struct super_block *sb,
 			continue;
 
 		ret = update_index_items(sb, si, ino, upd->type, upd->major,
-					 upd->minor, lock_list);
+					 upd->minor, lock_list, primary);
 		if (ret)
 			break;
 	}
@@ -1034,9 +1145,11 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	const u64 ino = scoutfs_ino(inode);
-	struct scoutfs_key key;
 	struct scoutfs_inode sinode;
+	struct scoutfs_key key;
+	int inode_bytes;
 	int ret;
 	int err;
 
@@ -1045,15 +1158,17 @@ void scoutfs_update_inode_item(struct inode *inode, struct scoutfs_lock *lock,
 	/* set the meta version once per trans for any inode updates */
 	scoutfs_inode_set_meta_seq(inode);
 
-	/* only race with other inode field stores once */
-	store_inode(&sinode, inode);
+	inode_bytes = scoutfs_inode_vers_bytes(sbi->fmt_vers);
 
-	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list);
+	/* only race with other inode field stores once */
+	store_inode(&sinode, inode, inode_bytes);
+
+	ret = update_indices(sb, si, ino, inode->i_mode, &sinode, lock_list, lock);
 	BUG_ON(ret);
 
 	scoutfs_inode_init_key(&key, ino);
 
-	err = scoutfs_item_update(sb, &key, &sinode, sizeof(sinode), lock);
+	err = scoutfs_item_update(sb, &key, &sinode, inode_bytes, lock);
 	if (err) {
 		scoutfs_err(sb, "inode %llu update err %d", ino, err);
 		BUG_ON(err);
@@ -1317,7 +1432,7 @@ void scoutfs_inode_index_unlock(struct super_block *sb, struct list_head *list)
 
 /* this is called on final inode cleanup so enoent is fine */
 static int remove_index(struct super_block *sb, u64 ino, u8 type, u64 major,
-			u32 minor, struct list_head *ind_locks)
+			u32 minor, struct list_head *ind_locks, struct scoutfs_lock *primary)
 {
 	struct scoutfs_key key;
 	struct scoutfs_lock *lock;
@@ -1326,7 +1441,7 @@ static int remove_index(struct super_block *sb, u64 ino, u8 type, u64 major,
 	scoutfs_inode_init_index_key(&key, type, major, minor, ino);
 
 	lock = find_index_lock(ind_locks, type, major, minor, ino);
-	ret = scoutfs_item_delete_force(sb, &key, lock);
+	ret = scoutfs_item_delete_force(sb, &key, lock, primary);
 	if (ret == -ENOENT)
 		ret = 0;
 	return ret;
@@ -1343,16 +1458,17 @@ static int remove_index(struct super_block *sb, u64 ino, u8 type, u64 major,
  */
 static int remove_index_items(struct super_block *sb, u64 ino,
 			      struct scoutfs_inode *sinode,
-			      struct list_head *ind_locks)
+			      struct list_head *ind_locks,
+			      struct scoutfs_lock *primary)
 {
 	umode_t mode = le32_to_cpu(sinode->mode);
 	int ret;
 
 	ret = remove_index(sb, ino, SCOUTFS_INODE_INDEX_META_SEQ_TYPE,
-			   le64_to_cpu(sinode->meta_seq), 0, ind_locks);
+			   le64_to_cpu(sinode->meta_seq), 0, ind_locks, primary);
 	if (ret == 0 && S_ISREG(mode))
 		ret = remove_index(sb, ino, SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE,
-				   le64_to_cpu(sinode->data_seq), 0, ind_locks);
+				   le64_to_cpu(sinode->data_seq), 0, ind_locks, primary);
 	return ret;
 }
 
@@ -1420,10 +1536,12 @@ out:
 int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, dev_t rdev,
 		      u64 ino, struct scoutfs_lock *lock, struct inode **inode_ret)
 {
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_inode_info *si;
-	struct scoutfs_key key;
 	struct scoutfs_inode sinode;
+	struct scoutfs_key key;
 	struct inode *inode;
+	int inode_bytes;
 	int ret;
 
 	inode = new_inode(sb);
@@ -1439,30 +1557,33 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	si->offline_blocks = 0;
 	si->next_readdir_pos = SCOUTFS_DIRENT_FIRST_POS;
 	si->next_xattr_id = 0;
+	si->proj = 0;
 	si->have_item = false;
 	atomic64_set(&si->last_refreshed, lock->refresh_gen);
 	scoutfs_lock_add_coverage(sb, lock, &si->ino_lock_cov);
-	si->drop_invalidated = false;
 	si->flags = 0;
 
 	scoutfs_inode_set_meta_seq(inode);
 	scoutfs_inode_set_data_seq(inode);
 
 	inode->i_ino = ino; /* XXX overflow */
-	inode_init_owner(inode, dir, mode);
+	inode_init_owner(KC_VFS_INIT_NS
+			 inode, dir, mode);
 	inode_set_bytes(inode, 0);
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	inode->i_rdev = rdev;
 	set_inode_ops(inode);
 
-	store_inode(&sinode, inode);
+	inode_bytes = scoutfs_inode_vers_bytes(sbi->fmt_vers);
+
+	store_inode(&sinode, inode, inode_bytes);
 	scoutfs_inode_init_key(&key, scoutfs_ino(inode));
 
 	ret = scoutfs_omap_set(sb, ino);
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_item_create(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = scoutfs_item_create(sb, &key, &sinode, inode_bytes, lock);
 	if (ret < 0)
 		scoutfs_omap_clear(sb, ino);
 out:
@@ -1485,22 +1606,24 @@ static void init_orphan_key(struct scoutfs_key *key, u64 ino)
  * zone under a write only lock while the caller has the inode protected
  * by a write lock.
  */
-int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock)
+int scoutfs_inode_orphan_create(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary)
 {
 	struct scoutfs_key key;
 
 	init_orphan_key(&key, ino);
 
-	return scoutfs_item_create_force(sb, &key, NULL, 0, lock);
+	return scoutfs_item_create_force(sb, &key, NULL, 0, lock, primary);
 }
 
-int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock)
+int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_lock *lock,
+				struct scoutfs_lock *primary)
 {
 	struct scoutfs_key key;
 
 	init_orphan_key(&key, ino);
 
-	return scoutfs_item_delete_force(sb, &key, lock);
+	return scoutfs_item_delete_force(sb, &key, lock, primary);
 }
 
 /*
@@ -1553,7 +1676,7 @@ retry:
 
 	release = true;
 
-	ret = remove_index_items(sb, ino, sinode, &ind_locks);
+	ret = remove_index_items(sb, ino, sinode, &ind_locks, lock);
 	if (ret)
 		goto out;
 
@@ -1568,7 +1691,7 @@ retry:
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_inode_orphan_delete(sb, ino, orph_lock);
+	ret = scoutfs_inode_orphan_delete(sb, ino, orph_lock, lock);
 	if (ret < 0)
 		goto out;
 
@@ -1685,6 +1808,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	struct scoutfs_lock *lock = NULL;
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
+	bool clear_trying = false;
 	u64 group_nr;
 	int bit_nr;
 	int ret;
@@ -1704,6 +1828,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 		ret = 0;
 		goto out;
 	}
+	clear_trying = true;
 
 	/* can't delete if it's cached in local or remote mounts */
 	if (scoutfs_omap_test(sb, ino) || test_bit_le(bit_nr, ldata->map.bits)) {
@@ -1712,7 +1837,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	}
 
 	scoutfs_inode_init_key(&key, ino);
-	ret = scoutfs_item_lookup_exact(sb, &key, &sinode, sizeof(sinode), lock);
+	ret = lookup_inode_item(sb, &key, &sinode, lock);
 	if (ret < 0) {
 		if (ret == -ENOENT)
 			ret = 0;
@@ -1730,7 +1855,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 
 	ret = delete_inode_items(sb, ino, &sinode, lock, orph_lock);
 out:
-	if (ldata)
+	if (clear_trying)
 		clear_bit(bit_nr, ldata->trying);
 
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
@@ -1740,18 +1865,18 @@ out:
 }
 
 /*
- * As we drop an inode we need to decide to try and delete its items or
- * not, which is expensive.  The two common cases we want to get right
- * both have cluster lock coverage and don't want to delete.   Dropping
- * unused inodes during read lock invalidation has the current lock and
- * sees a nonzero nlink and knows not to delete.  Final iput after a
- * local unlink also has a lock, sees a zero nlink, and tries to perform
- * item deletion in the task that dropped the last link, as users
- * expect. 
+ * As we evicted an inode we need to decide to try and delete its items
+ * or not, which is expensive.  We only try when we have lock coverage
+ * and the inode has been unlinked.  This catches the common case of
+ * regular deletion so deletion will be performed in the final unlink
+ * task.  It also catches open-unlink or o_tmpfile that aren't cached on
+ * other nodes.
  *
- * Evicting an inode outside of cluster locking is the odd slow path
- * that involves lock contention during use the worst cross-mount
- * open-unlink/delete case.
+ * Inodes being evicted outside of lock coverage, by referenced dentries
+ * or inodes that survived the attempt to drop them as their lock was
+ * invalidated, will not try to delete.  This means that cross-mount
+ * open/unlink will almost certainly fall back to the orphan scanner to
+ * perform final deletion.
  */
 void scoutfs_evict_inode(struct inode *inode)
 {
@@ -1767,7 +1892,7 @@ void scoutfs_evict_inode(struct inode *inode)
 		/* clear before trying to delete tests */
 		scoutfs_omap_clear(sb, ino);
 
-		if (!scoutfs_lock_is_covered(sb, &si->ino_lock_cov) || inode->i_nlink == 0)
+		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink == 0)
 			try_delete_inode_items(sb, scoutfs_ino(inode));
 	}
 
@@ -1792,30 +1917,56 @@ int scoutfs_drop_inode(struct inode *inode)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	const bool covered = scoutfs_lock_is_covered(sb, &si->ino_lock_cov);
 
 	trace_scoutfs_drop_inode(sb, scoutfs_ino(inode), inode->i_nlink, inode_unhashed(inode),
-				 si->drop_invalidated);
+				 covered);
 
-	return si->drop_invalidated || !scoutfs_lock_is_covered(sb, &si->ino_lock_cov) ||
-	       generic_drop_inode(inode);
+	return !covered || generic_drop_inode(inode);
 }
 
+
+/*
+ * These iput workers can be concurrent amongst cpus.  This lets us get
+ * some concurrency when these async final iputs end up performing very
+ * expensive inode deletion.  Typically they're dropping linked inodes
+ * that lost lock coverage and the iput will evict without deleting.
+ *
+ * Keep in mind that the dputs in d_prune can ascend into parents and
+ * end up performing the final iput->evict deletion on other inodes.
+ */
 static void iput_worker(struct work_struct *work)
 {
 	struct inode_sb_info *inf = container_of(work, struct inode_sb_info, iput_work);
 	struct scoutfs_inode_info *si;
-	struct scoutfs_inode_info *tmp;
-	struct llist_node *inodes;
-	bool more;
+	struct inode *inode;
+	unsigned long count;
+	unsigned long flags;
 
-	inodes = llist_del_all(&inf->iput_llist);
+	spin_lock(&inf->iput_lock);
+	while ((si = list_first_entry_or_null(&inf->iput_list, struct scoutfs_inode_info,
+					      iput_head))) {
+		list_del_init(&si->iput_head);
+		count = si->iput_count;
+		flags = si->iput_flags;
+		si->iput_count = 0;
+		si->iput_flags = 0;
+		spin_unlock(&inf->iput_lock);
 
-	llist_for_each_entry_safe(si, tmp, inodes, iput_llnode) {
-		do {
-			more = atomic_dec_return(&si->iput_count) > 0;
-			iput(&si->inode);
-		} while (more);
+		inode = &si->inode;
+
+		/* can't touch during unmount, dcache destroys w/o locks */
+		if ((flags & SI_IPUT_FLAG_PRUNE) && !inf->stopped)
+			d_prune_aliases(inode);
+
+		while (count-- > 0)
+			iput(inode);
+
+		/* can't touch inode after final iput */
+
+		spin_lock(&inf->iput_lock);
 	}
+	spin_unlock(&inf->iput_lock);
 }
 
 /*
@@ -1832,15 +1983,21 @@ static void iput_worker(struct work_struct *work)
  * Nothing stops multiple puts of an inode before the work runs so we
  * can track multiple puts in flight.
  */
-void scoutfs_inode_queue_iput(struct inode *inode)
+void scoutfs_inode_queue_iput(struct inode *inode, unsigned long flags)
 {
 	DECLARE_INODE_SB_INFO(inode->i_sb, inf);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	bool should_queue;
 
-	if (atomic_inc_return(&si->iput_count) == 1)
-		llist_add(&si->iput_llnode, &inf->iput_llist);
-	smp_wmb(); /* count and list visible before work executes */
-	schedule_work(&inf->iput_work);
+	spin_lock(&inf->iput_lock);
+	si->iput_count++;
+	si->iput_flags |= flags;
+	if ((should_queue = list_empty(&si->iput_head)))
+		list_add_tail(&si->iput_head, &inf->iput_list);
+	spin_unlock(&inf->iput_lock);
+
+	if (should_queue)
+		queue_work(inf->iput_workq, &inf->iput_work);
 }
 
 /*
@@ -2044,7 +2201,7 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 		trace_scoutfs_inode_walk_writeback(sb, scoutfs_ino(inode),
 						   write, ret);
 		if (ret) {
-			scoutfs_inode_queue_iput(inode);
+			scoutfs_inode_queue_iput(inode, 0);
 			goto out;
 		}
 
@@ -2060,13 +2217,24 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 		if (!write)
 			list_del_init(&si->writeback_entry);
 
-		scoutfs_inode_queue_iput(inode);
+		scoutfs_inode_queue_iput(inode, 0);
 	}
 
 	spin_unlock(&inf->writeback_lock);
 out:
 
 	return ret;
+}
+
+/*
+ * Return an error if the inode has the retention flag set and can not
+ * be modified.  This mimics the errno returned by the vfs whan an
+ * inode's immutable flag is set.  The flag won't be set on older format
+ * versions so we don't check the mounted format version here.
+ */
+int scoutfs_inode_check_retention(struct inode *inode)
+{
+	return (scoutfs_inode_get_flags(inode) & SCOUTFS_INO_FLAG_RETENTION) ? -EPERM : 0;
 }
 
 int scoutfs_inode_setup(struct super_block *sb)
@@ -2085,7 +2253,15 @@ int scoutfs_inode_setup(struct super_block *sb)
 	spin_lock_init(&inf->ino_alloc.lock);
 	INIT_DELAYED_WORK(&inf->orphan_scan_dwork, inode_orphan_scan_worker);
 	INIT_WORK(&inf->iput_work, iput_worker);
-	init_llist_head(&inf->iput_llist);
+	spin_lock_init(&inf->iput_lock);
+	INIT_LIST_HEAD(&inf->iput_list);
+
+	/* re-entrant, worker locks with itself and queueing */
+	inf->iput_workq = alloc_workqueue("scoutfs_inode_iput", WQ_UNBOUND, 0);
+	if (!inf->iput_workq) {
+		kfree(inf);
+		return -ENOMEM;
+	}
 
 	sbi->inode_sb_info = inf;
 
@@ -2121,14 +2297,18 @@ void scoutfs_inode_flush_iput(struct super_block *sb)
 	DECLARE_INODE_SB_INFO(sb, inf);
 
 	if (inf)
-		flush_work(&inf->iput_work);
+		flush_workqueue(inf->iput_workq);
 }
 
 void scoutfs_inode_destroy(struct super_block *sb)
 {
 	struct inode_sb_info *inf = SCOUTFS_SB(sb)->inode_sb_info;
 
-	kfree(inf);
+	if (inf) {
+		if (inf->iput_workq)
+			destroy_workqueue(inf->iput_workq);
+		kfree(inf);
+	}
 }
 
 void scoutfs_inode_exit(void)

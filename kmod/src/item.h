@@ -3,6 +3,8 @@
 
 int scoutfs_item_lookup(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock);
+int scoutfs_item_lookup_smaller_zero(struct super_block *sb, struct scoutfs_key *key,
+				     void *val, int val_len, struct scoutfs_lock *lock);
 int scoutfs_item_lookup_exact(struct super_block *sb, struct scoutfs_key *key,
 			      void *val, int val_len,
 			      struct scoutfs_lock *lock);
@@ -15,16 +17,15 @@ int scoutfs_item_create(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock);
 int scoutfs_item_create_force(struct super_block *sb, struct scoutfs_key *key,
 			      void *val, int val_len,
-			      struct scoutfs_lock *lock);
+			      struct scoutfs_lock *lock, struct scoutfs_lock *primary);
 int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 			void *val, int val_len, struct scoutfs_lock *lock);
 int scoutfs_item_delta(struct super_block *sb, struct scoutfs_key *key,
 		       void *val, int val_len, struct scoutfs_lock *lock);
 int scoutfs_item_delete(struct super_block *sb, struct scoutfs_key *key,
 			  struct scoutfs_lock *lock);
-int scoutfs_item_delete_force(struct super_block *sb,
-				struct scoutfs_key *key,
-				struct scoutfs_lock *lock);
+int scoutfs_item_delete_force(struct super_block *sb, struct scoutfs_key *key,
+			      struct scoutfs_lock *lock, struct scoutfs_lock *primary);
 
 u64 scoutfs_item_dirty_pages(struct super_block *sb);
 int scoutfs_item_write_dirty(struct super_block *sb);

@@ -30,17 +30,21 @@ struct recov_info;
 struct omap_info;
 struct volopt_info;
 struct fence_info;
+struct wkic_info;
+struct squota_info;
 
 struct scoutfs_sb_info {
 	struct super_block *sb;
 
 	/* assigned once at the start of each mount, read-only */
+	u64 fsid;
 	u64 rid;
 	u64 fmt_vers;
 
-	struct scoutfs_super_block super;
-
 	struct block_device *meta_bdev;
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+	struct file *meta_bdev_file;
+#endif
 
 	spinlock_t next_ino_lock;
 
@@ -56,6 +60,8 @@ struct scoutfs_sb_info {
 	struct omap_info *omap_info;
 	struct volopt_info *volopt_info;
 	struct item_cache_info *item_cache_info;
+	struct wkic_info *wkic_info;
+	struct squota_info *squota_info;
 	struct fence_info *fence_info;
 
 	/* tracks tasks waiting for data extents */
@@ -98,7 +104,11 @@ static inline bool SCOUTFS_IS_META_BDEV(struct scoutfs_super_block *super_block)
 	return !!(le64_to_cpu(super_block->flags) & SCOUTFS_FLAG_IS_META_BDEV);
 }
 
+#ifdef KC_HAVE_BLK_MODE_T
+#define SCOUTFS_META_BDEV_MODE (BLK_OPEN_READ | BLK_OPEN_WRITE | BLK_OPEN_EXCL)
+#else
 #define SCOUTFS_META_BDEV_MODE (FMODE_READ | FMODE_WRITE | FMODE_EXCL)
+#endif
 
 static inline bool scoutfs_forcing_unmount(struct super_block *sb)
 {
@@ -135,14 +145,14 @@ static inline bool scoutfs_unmounting(struct super_block *sb)
 	(int)(le64_to_cpu(fsid) >> SCSB_SHIFT),				    \
 	(int)(le64_to_cpu(rid) >> SCSB_SHIFT)
 #define SCSB_ARGS(sb)							    \
-	(int)(le64_to_cpu(SCOUTFS_SB(sb)->super.hdr.fsid) >> SCSB_SHIFT),   \
+	(int)(SCOUTFS_SB(sb)->fsid >> SCSB_SHIFT),			    \
 	(int)(SCOUTFS_SB(sb)->rid >> SCSB_SHIFT)
 #define SCSB_TRACE_FIELDS	\
 	__field(__u64, fsid)	\
 	__field(__u64, rid)
 #define SCSB_TRACE_ASSIGN(sb)						\
 	__entry->fsid = SCOUTFS_HAS_SBI(sb) ?				\
-			le64_to_cpu(SCOUTFS_SB(sb)->super.hdr.fsid) : 0;\
+		        SCOUTFS_SB(sb)->fsid : 0;			\
 	__entry->rid = SCOUTFS_HAS_SBI(sb) ?				\
 		       SCOUTFS_SB(sb)->rid : 0;
 #define SCSB_TRACE_ARGS				\
@@ -156,5 +166,18 @@ int scoutfs_write_super(struct super_block *sb,
 
 /* to keep this out of the ioctl.h public interface definition */
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+
+/*
+ * Returns 0 when supported, non-zero -errno when unsupported.
+ */
+static inline int scoutfs_fmt_vers_unsupported(struct super_block *sb, u64 vers)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+
+	if (sbi && (sbi->fmt_vers < vers))
+		return -EOPNOTSUPP;
+	else
+		return 0;
+}
 
 #endif

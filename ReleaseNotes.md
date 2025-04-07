@@ -2,6 +2,313 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.24
+\
+*Mar 14, 2025*
+
+Add support for coherent read and write mmap() mappings of regular file
+data between mounts.
+
+Fix a bug that was causing scoutfs utilities to parse and change some
+file names before passing them on to the kernel for processing.  This
+fixes spurious scoutfs command errors for files with the offending
+patterns in their names.
+
+Fix a bug where rename wasn't updating the ctime of the inode at the
+destination name if it existed.
+
+---
+v1.23
+\
+*Dec 11, 2024*
+
+Add support for kernels in the RHEL 9.5 minor release.
+
+---
+v1.22
+\
+*Nov 1, 2024*
+
+Add support for building against the RHEL9 family of kernels.
+
+Fix failure of the setattr\_more ioctl() to set the attributes of a
+zero-length file when restoring.
+
+Fix support for POSIX ACLs in the RHEL8 and later family of kernels.
+
+Fix a race condition in the lock server that could drop lock requests
+under heavy load and cause cluster lock attempts to hang.
+
+---
+v1.21
+\
+*Jul 1, 2024*
+
+This release adds features that rely on incompatible changes to
+structure the file system.  The process of advancing the format version
+to enable these features is described in scoutfs(5).
+
+Added the ".indx." extended attribute tag which can be used to determine
+the sorting of files in a global index.
+
+Added ScoutFS quotas which let rules define file size and count limits
+in terms of ".totl." extended attribute totals.
+
+Added the project ID file attribute which is inherited from parent
+directories on creation.  ScoutFS quota rules can reference project IDs.
+
+Add a retention attribute for files which prevents modification once
+enabled.
+
+---
+v1.20
+\
+*Apr 22, 2024*
+
+Minor changes to packaging to better support "weak" module linking of
+the kernel module, and to including git hashes in the built package.  No
+changes in runtime behaviour.
+
+---
+v1.19
+\
+*Jan 30, 2024*
+
+Added the log\_merge\_wait\_timeout\_ms mount option to set the timeout
+for creating log merge operations.  The previous timeout, now the
+default, was too short for some systems and was resulting in consistent
+timeouts which created an excessive number of log trees waiting to be
+merged.
+
+Improved performance of many in-mount server operations when there are a
+large number of log trees waiting to be merged.
+
+---
+v1.18
+\
+*Nov 7, 2023*
+
+Fixed a bug where background srch file compaction could stop making
+forward progress if a partial compaction operation was committed at a
+specific byte offset in a block.  This would cause srch file searches to
+be progressively more expensive over time.  Once this fix is running
+background compaction will resume, bringing the cost of searches back
+down.
+
+---
+v1.17
+\
+*Oct 23, 2023*
+
+Add support for EL8 generation kernels.
+
+---
+v1.16
+\
+*Oct 4, 2023*
+
+Fix an issue where the server could hang on startup if its persistent
+allocator structures were left in a specific degraded state by the
+previously active server.
+
+---
+v1.15
+\
+*Jul 17, 2023*
+
+Process log btree merge splicing in multiple commits.  This prevents a
+rare case where pending log merge completions contain more work than can
+be done in a single server commit, causing the server to trigger an
+assert shortly after starting.
+
+Fix spurious EINVAL from data writes when data\_prealloc\_contig\_only was
+set to 0.
+
+---
+v1.14
+\
+*Jun 29, 2023*
+
+Add get\_referring\_entries ioctl for getting directory entries that
+refer to an inode.
+
+Fix excessive CPU use in the move\_blocks interface when moving a large
+number of extents.
+
+Reduce fragmented data allocation when contig\_only prealloc is not in
+use by more consistently allocating multi-block extents within each
+aligned prealloc region.
+
+Avoid rare deadlock in metadata block cache recalim under both heavy
+load and memory pressure.
+
+Fix crash when using quorum\_heartbeat\_timeout\_ms mount option.
+
+---
+v1.13
+\
+*May 19, 2023*
+
+Add the quorum\_heartbeat\_timeout\_ms mount option to set the quorum
+heartbeat timeout.
+
+Change some task prioritization and allocation behavior of the quorum
+agent to help reduce delays in sending and receiving heartbeat messages.
+
+---
+v1.12
+\
+*Apr 17, 2023*
+
+Add the prepare-empty-data-device scoutfs command.  A data device can be
+unused when no files have data blocks, perhaps because they're archived
+and offline.  In this case the data device can be swapped out for
+another device without changes to the metadata device.
+
+Fix an oversight which limited inode timestamps to second granularity
+for some operations.  All operations now record timestamps with full
+nanosecond precision.
+
+Fix spurious ENOENT failures when renaming from other directories into
+the root directory.
+
+---
+v1.11
+\
+*Feb 2, 2023*
+
+Fixed a free extent processing error that could prevent mount from
+proceeding when free data extents were sufficiently fragmented.  It now
+properly handle very fragmented free extent maps.
+
+Fixed a statfs server processing race that could return spurious errors
+and shut down the server.  With the race closed statfs processing is
+reliable.
+
+Fixed a rare livelock in the move\_blocks ioctl.  With the right
+relationship between ioctl arguments and eventual file extent items the
+core loop in the move\_blocks ioctl could get stuck looping on an extent
+item and never return.  The loop exit conditions were fixed and the loop
+will always advance through all extents.
+
+Changed the 'print' scoutfs commands to flush the block cache for the
+devices.  It was inconvenient to expect cache flushing to be a separate
+step to ensure consistency with remote node writes.
+
+---
+v1.10
+\
+*Dec 7, 2022*
+
+Fixed a potential directory entry cache management deadlock that could
+occur when many nodes performed heavy metadata write loads across shared
+directories and their child subdirectories.  The deadlock could halt
+invalidation progress on a node which could then stop use of locks that
+needed invalidation on that node which would result in almost all tasks
+hanging on those locks that would never make progress. 
+
+Fixed a circumstance where metadata change sequence index item
+modification could leave behind old stale metadata sequence items.  The
+duplication case required concurrent metadata updates across mounts with
+particular open transaction patterns so the duplicate items are rare.
+They resulted in a small amount of additional load when walking change
+indexes but had no effect on correctness.
+
+Fixed a rare case where sparse file extension might not write partial
+blocks of zeros which was found in testing.  This required using
+truncate to extend files past file sizes that end in partial blocks
+along with the right transaction commit and memory reclaim patterns.
+This never affected regular non-sparse files nor files prepopulated with
+fallocate.
+
+---
+v1.9
+\
+*Oct 29, 2022*
+
+Fix VFS cached directory entry consistency verification that could cause
+spurious "no such file or directory" (ENOENT) errors from rename over
+NFS under certain conditions.  The problem was only every with the
+consistency of in-memory cached dentry objects, persistent data was
+correct and eventual eviction of the bad cached objects would stop
+generating the errors.
+
+---
+v1.8
+\
+*Oct 18, 2022*
+
+Add support for Linux POSIX Access Control Lists, as described in
+acl(5).  Mount options are added to enable ("acl") and disable ("noacl")
+support.  The default is to support ACLs.  ACLs are stored in the
+existing extended attribute scheme so adding support is does not require
+a format change.
+
+Add options to control data extent preallocation.  The default behavior
+does not change.  The options can relax the limits on preallocation
+which will then trigger under more write patterns and increase the risk
+of preallocated space which is never used.  The options are described in
+scoutfs(5).
+
+---
+v1.7
+\
+*Aug 26, 2022*
+
+* **Fixed possible persistent errors moving freed data extents**
+\
+  Fixed a case where the server could hit persistent errors trying to
+  move a client's freed extents in one commit.  The client had to free
+  a large number of extents that occupied distant positions in the
+  global free extent btree.  Very large fragmented files could cause
+  this.  The server now moves the freed extents in multiple commits and
+  can always ensure forward progress.
+
+* **Fixed possible persistent errors from freed duplicate extents**
+\
+  Background orphan deletion wasn't properly synchronizing with
+  foreground tasks deleting very large files.  If a deletion took long
+  enough then background deletion could also attempt to delete inode items
+  while the deletion was making progress.  This could create duplicate
+  deletions of data extent items which causes the server to abort when
+  it later discovers the duplicate extents as it merges free lists.
+
+---
+v1.6
+\
+*Jul 7, 2022*
+
+* **Fix memory leaks in rare corner cases**
+\
+  Analysis tools found a few corner cases that leaked small structures,
+  generally around error handling or startup and shutdown.
+
+* **Add --skip-likely-huge scoutfs print command option**
+\
+  Add an option to scoutfs print to reduce the size of the output
+  so that it can be used to see system-wide metadata without being
+  overwhelmed by file-level details.
+
+---
+v1.5
+\
+*Jun 21, 2022*
+
+* **Fix persistent error during server startup**
+\
+  Fixed a case where the server would always hit a consistent error on
+  seartup, preventing the system from mounting.  This required a rare
+  but valid state across the clients.
+
+* **Fix a client hang that would lead to fencing**
+\
+  The client module's use of in-kernel networking was missing annotation
+  that could lead to communication hanging.  The server would fence the
+  client when it stopped communicating.  This could be identified by the
+  server fencing a client after it disconnected with no attempt by the
+  client to reconnect.
+
+---
 v1.4
 \
 *May 6, 2022*

@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fs.h>
+#include <linux/blkdev.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
 #include <linux/magic.h>
@@ -47,6 +48,9 @@
 #include "omap.h"
 #include "volopt.h"
 #include "fence.h"
+#include "xattr.h"
+#include "wkic.h"
+#include "quota.h"
 #include "scoutfs_trace.h"
 
 static struct dentry *scoutfs_debugfs_root;
@@ -156,7 +160,17 @@ static void scoutfs_metadev_close(struct super_block *sb)
 		 * from kill_sb->put_super.
 		 */
 		lockdep_off();
+
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+		bdev_fput(sbi->meta_bdev_file);
+#else
+#ifdef KC_BLKDEV_PUT_HOLDER_ARG
+		blkdev_put(sbi->meta_bdev, sb);
+#else
 		blkdev_put(sbi->meta_bdev, SCOUTFS_META_BDEV_MODE);
+#endif
+#endif
+
 		lockdep_on();
 		sbi->meta_bdev = NULL;
 	}
@@ -177,7 +191,7 @@ static void scoutfs_put_super(struct super_block *sb)
 	/*
 	 * Wait for invalidation and iput to finish with any lingering
 	 * inode references that escaped the evict_inodes in
-	 * generic_shutdown_super.  MS_ACTIVE is clear so final iput
+	 * generic_shutdown_super.  SB_ACTIVE is clear so final iput
 	 * will always evict.
 	 */
 	scoutfs_lock_flush_invalidate(sb);
@@ -192,7 +206,9 @@ static void scoutfs_put_super(struct super_block *sb)
 	scoutfs_shutdown_trans(sb);
 	scoutfs_volopt_destroy(sb);
 	scoutfs_client_destroy(sb);
+	scoutfs_quota_destroy(sb);
 	scoutfs_inode_destroy(sb);
+	scoutfs_wkic_destroy(sb);
 	scoutfs_item_destroy(sb);
 	scoutfs_forest_destroy(sb);
 	scoutfs_data_destroy(sb);
@@ -460,9 +476,8 @@ static int scoutfs_read_supers(struct super_block *sb)
 		goto out;
 	}
 
-
+	sbi->fsid = le64_to_cpu(meta_super->hdr.fsid);
 	sbi->fmt_vers = le64_to_cpu(meta_super->fmt_vers);
-	sbi->super = *meta_super;
 out:
 	kfree(meta_super);
 	kfree(data_super);
@@ -472,7 +487,11 @@ out:
 static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct scoutfs_mount_options opts;
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+	struct file *meta_bdev_file;
+#else
 	struct block_device *meta_bdev;
+#endif
 	struct scoutfs_sb_info *sbi;
 	struct inode *inode;
 	int ret;
@@ -482,8 +501,11 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_magic = SCOUTFS_SUPER_MAGIC;
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_op = &scoutfs_super_ops;
+	sb->s_d_op = &scoutfs_dentry_ops;
 	sb->s_export_op = &scoutfs_export_ops;
-	sb->s_flags |= MS_I_VERSION;
+	sb->s_xattr = scoutfs_xattr_handlers;
+	sb->s_flags |= SB_I_VERSION | SB_POSIXACL;
+	sb->s_time_gran = 1;
 
 	/* btree blocks use long lived bh->b_data refs */
 	mapping_set_gfp_mask(sb->s_bdev->bd_inode->i_mapping, GFP_NOFS);
@@ -496,7 +518,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	ret = assign_random_id(sbi);
 	if (ret < 0)
-		return ret;
+		goto out;
 
 	spin_lock_init(&sbi->next_ino_lock);
 	spin_lock_init(&sbi->data_wait_root.lock);
@@ -505,7 +527,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	/* parse options early for use during setup */
 	ret = scoutfs_options_early_setup(sb, data);
 	if (ret < 0)
-		return ret;
+		goto out;
 	scoutfs_options_read(sb, &opts);
 
 	ret = sb_set_blocksize(sb, SCOUTFS_BLOCK_SM_SIZE);
@@ -515,7 +537,27 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 
+#ifdef KC_BDEV_FILE_OPEN_BY_PATH
+	/*
+	 * pass sbi as holder, since dev_mount already passes sb, which triggers a
+	 * WARN_ON because dev_mount also passes non-NULL hops. By passing sbi
+	 * here we just get a simple error in our test cases.
+	 */
+	meta_bdev_file = bdev_file_open_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sbi, NULL);
+	if (IS_ERR(meta_bdev_file)) {
+		scoutfs_err(sb, "could not open metadev: error %ld",
+			    PTR_ERR(meta_bdev_file));
+		ret = PTR_ERR(meta_bdev_file);
+		goto out;
+	}
+	sbi->meta_bdev_file = meta_bdev_file;
+	sbi->meta_bdev = file_bdev(meta_bdev_file);
+#else
+#ifdef KC_BLKDEV_PUT_HOLDER_ARG
+	meta_bdev = blkdev_get_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sb, NULL);
+#else
 	meta_bdev = blkdev_get_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sb);
+#endif
 	if (IS_ERR(meta_bdev)) {
 		scoutfs_err(sb, "could not open metadev: error %ld",
 			    PTR_ERR(meta_bdev));
@@ -523,6 +565,8 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out;
 	}
 	sbi->meta_bdev = meta_bdev;
+#endif
+
 	ret = set_blocksize(sbi->meta_bdev, SCOUTFS_BLOCK_SM_SIZE);
 	if (ret != 0) {
 		scoutfs_err(sb, "failed to set metadev blocksize, returned %d",
@@ -540,7 +584,9 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	      scoutfs_block_setup(sb) ?:
 	      scoutfs_forest_setup(sb) ?:
 	      scoutfs_item_setup(sb) ?:
+	      scoutfs_wkic_setup(sb) ?:
 	      scoutfs_inode_setup(sb) ?:
+	      scoutfs_quota_setup(sb) ?:
 	      scoutfs_data_setup(sb) ?:
 	      scoutfs_setup_trans(sb) ?:
 	      scoutfs_omap_setup(sb) ?:
@@ -628,7 +674,6 @@ MODULE_ALIAS_FS("scoutfs");
 static void teardown_module(void)
 {
 	debugfs_remove(scoutfs_debugfs_root);
-	scoutfs_dir_exit();
 	scoutfs_inode_exit();
 	scoutfs_sysfs_exit();
 }
@@ -666,21 +711,20 @@ static int __init scoutfs_module_init(void)
 		goto out;
 	}
 	ret = scoutfs_inode_init() ?:
-	      scoutfs_dir_init() ?:
 	      register_filesystem(&scoutfs_fs_type);
 out:
 	if (ret)
 		teardown_module();
 	return ret;
 }
-module_init(scoutfs_module_init)
+module_init(scoutfs_module_init);
 
 static void __exit scoutfs_module_exit(void)
 {
 	unregister_filesystem(&scoutfs_fs_type);
 	teardown_module();
 }
-module_exit(scoutfs_module_exit)
+module_exit(scoutfs_module_exit);
 
 MODULE_AUTHOR("Zach Brown <zab@versity.com>");
 MODULE_LICENSE("GPL");

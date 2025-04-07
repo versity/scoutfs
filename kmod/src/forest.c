@@ -78,11 +78,6 @@ struct forest_refs {
 	struct scoutfs_block_ref logs_ref;
 };
 
-/* initialize some refs that initially aren't equal */
-#define DECLARE_STALE_TRACKING_SUPER_REFS(a, b)		\
-	struct forest_refs a = {{cpu_to_le64(0),}};	\
-	struct forest_refs b = {{cpu_to_le64(1),}}
-
 struct forest_bloom_nrs {
 	unsigned int nrs[SCOUTFS_FOREST_BLOOM_NRS];
 };
@@ -136,11 +131,11 @@ static struct scoutfs_block *read_bloom_ref(struct super_block *sb, struct scout
 int scoutfs_forest_next_hint(struct super_block *sb, struct scoutfs_key *key,
 			     struct scoutfs_key *next)
 {
-	DECLARE_STALE_TRACKING_SUPER_REFS(prev_refs, refs);
 	struct scoutfs_net_roots roots;
 	struct scoutfs_btree_root item_root;
 	struct scoutfs_log_trees *lt;
 	SCOUTFS_BTREE_ITEM_REF(iref);
+	DECLARE_SAVED_REFS(saved);
 	struct scoutfs_key found;
 	struct scoutfs_key ltk;
 	bool checked_fs;
@@ -155,8 +150,6 @@ retry:
 		goto out;
 
 	trace_scoutfs_forest_using_roots(sb, &roots.fs_root, &roots.logs_root);
-	refs.fs_ref = roots.fs_root.ref;
-	refs.logs_ref = roots.logs_root.ref;
 
 	scoutfs_key_init_log_trees(&ltk, 0, 0);
 	checked_fs = false;
@@ -212,14 +205,10 @@ retry:
 		}
 	}
 
-	if (ret == -ESTALE) {
-		if (memcmp(&prev_refs, &refs, sizeof(refs)) == 0)
-			return -EIO;
-		prev_refs = refs;
+	ret = scoutfs_block_check_stale(sb, ret, &saved, &roots.fs_root.ref, &roots.logs_root.ref);
+	if (ret == -ESTALE)
 		goto retry;
-	}
 out:
-
 	return ret;
 }
 
@@ -249,19 +238,16 @@ static int forest_read_items(struct super_block *sb, struct scoutfs_key *key, u6
  * We return -ESTALE if we hit stale blocks to give the caller a chance
  * to reset their state and retry with a newer version of the btrees.
  */
-int scoutfs_forest_read_items(struct super_block *sb,
-			      struct scoutfs_key *key,
-			      struct scoutfs_key *bloom_key,
-			      struct scoutfs_key *start,
-			      struct scoutfs_key *end,
-			      scoutfs_forest_item_cb cb, void *arg)
+int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_roots *roots,
+				    struct scoutfs_key *key, struct scoutfs_key *bloom_key,
+				    struct scoutfs_key *start, struct scoutfs_key *end,
+				    scoutfs_forest_item_cb cb, void *arg)
 {
 	struct forest_read_items_data rid = {
 		.cb = cb,
 		.cb_arg = arg,
 	};
 	struct scoutfs_log_trees lt;
-	struct scoutfs_net_roots roots;
 	struct scoutfs_bloom_block *bb;
 	struct forest_bloom_nrs bloom;
 	SCOUTFS_BTREE_ITEM_REF(iref);
@@ -275,18 +261,14 @@ int scoutfs_forest_read_items(struct super_block *sb,
 	scoutfs_inc_counter(sb, forest_read_items);
 	calc_bloom_nrs(&bloom, bloom_key);
 
-	ret = scoutfs_client_get_roots(sb, &roots);
-	if (ret)
-		goto out;
-
-	trace_scoutfs_forest_using_roots(sb, &roots.fs_root, &roots.logs_root);
+	trace_scoutfs_forest_using_roots(sb, &roots->fs_root, &roots->logs_root);
 
 	*start = orig_start;
 	*end = orig_end;
 
 	/* start with fs root items */
 	rid.fic |= FIC_FS_ROOT;
-	ret = scoutfs_btree_read_items(sb, &roots.fs_root, key, start, end,
+	ret = scoutfs_btree_read_items(sb, &roots->fs_root, key, start, end,
 				       forest_read_items, &rid);
 	if (ret < 0)
 		goto out;
@@ -294,7 +276,7 @@ int scoutfs_forest_read_items(struct super_block *sb,
 
 	scoutfs_key_init_log_trees(&ltk, 0, 0);
 	for (;; scoutfs_key_inc(&ltk)) {
-		ret = scoutfs_btree_next(sb, &roots.logs_root, &ltk, &iref);
+		ret = scoutfs_btree_next(sb, &roots->logs_root, &ltk, &iref);
 		if (ret == 0) {
 			if (iref.val_len == sizeof(lt)) {
 				ltk = *iref.key;
@@ -348,6 +330,23 @@ int scoutfs_forest_read_items(struct super_block *sb,
 
 	ret = 0;
 out:
+	return ret;
+}
+
+int scoutfs_forest_read_items(struct super_block *sb,
+			      struct scoutfs_key *key,
+			      struct scoutfs_key *bloom_key,
+			      struct scoutfs_key *start,
+			      struct scoutfs_key *end,
+			      scoutfs_forest_item_cb cb, void *arg)
+{
+	struct scoutfs_net_roots roots;
+	int ret;
+
+	ret = scoutfs_client_get_roots(sb, &roots);
+	if (ret == 0)
+		ret = scoutfs_forest_read_items_roots(sb, &roots, key, bloom_key, start, end,
+						      cb, arg);
 	return ret;
 }
 
@@ -541,9 +540,8 @@ void scoutfs_forest_dec_inode_count(struct super_block *sb)
 
 /*
  * Return the total inode count from the super block and all the
- * log_btrees it references.   This assumes it's working with a block
- * reference hierarchy that should be fully consistent.   If we see
- * ESTALE we've hit persistent corruption.
+ * log_btrees it references.  ESTALE from read blocks is returned to the
+ * caller who is expected to retry or return hard errors.
  */
 int scoutfs_forest_inode_count(struct super_block *sb, struct scoutfs_super_block *super,
 			       u64 *inode_count)
@@ -572,8 +570,6 @@ int scoutfs_forest_inode_count(struct super_block *sb, struct scoutfs_super_bloc
 		if (ret < 0) {
 			if (ret == -ENOENT)
 				ret = 0;
-			else if (ret == -ESTALE)
-				ret = -EIO;
 			break;
 		}
 	}
@@ -735,7 +731,8 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 	ret = scoutfs_btree_merge(sb, &alloc, &wri, &req.start, &req.end,
 				  &next, &comp.root, &inputs,
 				  !!(req.flags & cpu_to_le64(SCOUTFS_LOG_MERGE_REQUEST_SUBTREE)),
-				  SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT, 10);
+				  SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT, 10,
+				  (2 * 1024 * 1024));
 	if (ret == -ERANGE) {
 		comp.remain = next;
 		le64_add_cpu(&comp.flags, SCOUTFS_LOG_MERGE_COMP_REMAIN);

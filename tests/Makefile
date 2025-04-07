@@ -10,7 +10,12 @@ BIN := src/createmany			\
 	src/bulk_create_paths		\
 	src/stage_tmpfile		\
 	src/find_xattrs			\
-	src/create_xattr_loop
+	src/create_xattr_loop		\
+	src/fragmented_data_extents	\
+	src/o_tmpfile_umask		\
+	src/o_tmpfile_linkat		\
+	src/mmap_stress			\
+	src/mmap_validate
 
 DEPS := $(wildcard src/*.d)
 
@@ -20,8 +25,10 @@ ifneq ($(DEPS),)
 -include $(DEPS)
 endif
 
+src/mmap_stress: LIBS+=-lpthread
+
 $(BIN): %: %.c Makefile
-	gcc $(CFLAGS) -MD -MP -MF $*.d $< -o $@
+	gcc $(CFLAGS) -MD -MP -MF $*.d $< -o $@ $(LIBS)
 
 .PHONY: clean
 clean:

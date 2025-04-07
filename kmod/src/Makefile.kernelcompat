@@ -7,23 +7,13 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v3.10-rc6-21-gbb6f619b3a49
+# v3.18-rc2-19-gb5ae6b15bd73
+# 
+# Folds d_materialise_unique into d_splice_alias. Note reversal
+# of arguments (Also note Documentation/filesystems/porting.rst)
 #
-# _readdir changes from fop->readdir() to fop->iterate() and from
-# filldir(dirent) to dir_emit(ctx).
-#
-ifneq (,$(shell grep 'iterate.*dir_context' include/linux/fs.h))
-ccflags-y += -DKC_ITERATE_DIR_CONTEXT
-endif
-
-#
-# v3.10-rc6-23-g5f99f4e79abc
-#
-# Helpers including dir_emit_dots() are added in the process of
-# switching dcache_readdir() from fop->readdir() to fop->iterate()
-#
-ifneq (,$(shell grep 'dir_emit_dots' include/linux/fs.h))
-ccflags-y += -DKC_DIR_EMIT_DOTS
+ifneq (,$(shell grep 'd_materialise_unique' include/linux/dcache.h))
+ccflags-y += -DKC_D_MATERIALISE_UNIQUE=1
 endif
 
 #
@@ -33,4 +23,414 @@ endif
 #
 ifneq (,$(shell grep 'FMODE_KABI_ITERATE' include/linux/fs.h))
 ccflags-y += -DKC_FMODE_KABI_ITERATE
+endif
+
+#
+# v4.7-rc2-23-g0d4d717f2583
+#
+# Added user_ns argument to posix_acl_valid
+#
+ifneq (,$(shell grep 'posix_acl_valid.*user_namespace' include/linux/posix_acl.h))
+ccflags-y += -DKC_POSIX_ACL_VALID_USER_NS
+endif
+
+#
+# v5.3-12296-g6d2052d188d9
+#
+# The RBCOMPUTE function is now passed an extra flag, and should return a bool
+# to indicate whether the propagated callback should stop or not.
+#
+ifneq (,$(shell grep 'static inline bool RBNAME.*_compute_max' include/linux/rbtree_augmented.h))
+ccflags-y += -DKC_RB_TREE_AUGMENTED_COMPUTE_MAX
+endif
+
+#
+# v3.13-25-g37bc15392a23
+#
+# Renames posix_acl_create to __posix_acl_create and provide some
+# new interfaces for creating ACLs
+#
+ifneq (,$(shell grep '__posix_acl_create' include/linux/posix_acl.h))
+ccflags-y += -DKC___POSIX_ACL_CREATE
+endif
+
+#
+# v4.8-rc1-29-g31051c85b5e2
+#
+# inode_change_ok() removed - replace with setattr_prepare()
+# v5.11-rc4-7-g2f221d6f7b88 removes extern attribute
+#
+ifneq (,$(shell grep 'int setattr_prepare' include/linux/fs.h))
+ccflags-y += -DKC_SETATTR_PREPARE
+endif
+
+#
+# v4.15-rc3-4-gae5e165d855d
+#
+# linux/iversion.h needs to manually be included for code that
+# manipulates this field.
+#
+ifneq (,$(shell grep -s 'define _LINUX_IVERSION_H' include/linux/iversion.h))
+ccflags-y += -DKC_NEED_LINUX_IVERSION_H=1
+endif
+
+# v4.11-12447-g104b4e5139fe
+#
+# Renamed __percpu_counter_add to percpu_counter_add_batch to clarify
+# that the __ wasn't less safe, just took an extra parameter.
+#
+ifneq (,$(shell grep 'percpu_counter_add_batch' include/linux/percpu_counter.h))
+ccflags-y += -DKC_PERCPU_COUNTER_ADD_BATCH
+endif
+
+#
+# v4.11-4550-g7dea19f9ee63
+#
+# Introduced memalloc_nofs_{save,restore} preferred instead of _noio_.
+#
+ifneq (,$(shell grep 'memalloc_nofs_save' include/linux/sched/mm.h))
+ccflags-y += -DKC_MEMALLOC_NOFS_SAVE
+endif
+
+#
+# v4.7-12414-g1eff9d322a44
+#
+# Renamed bi_rw to bi_opf to force old code to catch up.  We use it as a
+# single switch between old and new bio structures.
+#
+ifneq (,$(shell grep 'bi_opf' include/linux/blk_types.h))
+ccflags-y += -DKC_BIO_BI_OPF
+endif
+
+#
+# v4.12-rc2-201-g4e4cbee93d56
+#
+# Moves to bi_status BLK_STS_ API instead of having a mix of error
+# end_io args or bi_error.
+#
+ifneq (,$(shell grep 'bi_status' include/linux/blk_types.h))
+ccflags-y += -DKC_BIO_BI_STATUS
+endif
+
+#
+# v3.11-8765-ga0b02131c5fc
+#
+# Remove the old ->shrink() API, ->{scan,count}_objects is preferred.
+#
+ifneq (,$(shell grep '(*shrink)' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_SHRINK
+endif
+
+#
+# v3.19-4777-g6bec00352861
+#
+# backing_dev_info is removed from address_space. Instead we need to use
+# inode_to_bdi() inline from <backing-dev.h>.
+#
+ifneq (,$(shell grep 'struct backing_dev_info.*backing_dev_info' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_BACKING_DEV_INFO=1
+endif
+
+#
+# v4.3-9290-ge409de992e3e
+#
+# xattr handlers are now passed a struct that contains `flags`
+#
+ifneq (,$(shell grep 'int...get..const struct xattr_handler.*struct dentry.*dentry,' include/linux/xattr.h))
+ccflags-y += -DKC_XATTR_STRUCT_XATTR_HANDLER=1
+endif
+
+#
+# v4.16-rc1-1-g9b2c45d479d0
+#
+# kernel_getsockname() and kernel_getpeername dropped addrlen arg
+#
+ifneq (,$(shell grep 'kernel_getsockname.*,$$' include/linux/net.h))
+ccflags-y += -DKC_KERNEL_GETSOCKNAME_ADDRLEN=1
+endif
+
+#
+# v4.1-rc1-410-geeb1bd5c40ed
+#
+# Adds a struct net parameter to sock_create_kern
+#
+ifneq (,$(shell grep 'sock_create_kern.*struct net' include/linux/net.h))
+ccflags-y += -DKC_SOCK_CREATE_KERN_NET=1
+endif
+
+#
+# v3.18-rc6-1619-gc0371da6047a
+#
+# iov_iter is now part of struct msghdr
+#
+ifneq (,$(shell grep 'struct iov_iter.*msg_iter' include/linux/socket.h))
+ccflags-y += -DKC_MSGHDR_STRUCT_IOV_ITER=1
+endif
+
+#
+# v4.17-rc6-7-g95582b008388
+#
+# Kernel has current_time(inode) to uniformly retreive timespec in the right unit
+#
+ifneq (,$(shell grep 'struct timespec64 current_time' include/linux/fs.h))
+ccflags-y += -DKC_CURRENT_TIME_INODE=1
+endif
+
+#
+# v4.9-12228-g530e9b76ae8f
+#
+# register_cpu_notifier and family were all removed and to be
+# replaced with cpuhp_* API calls.
+#
+ifneq (,$(shell grep 'define register_hotcpu_notifier' include/linux/cpu.h))
+ccflags-y += -DKC_CPU_NOTIFIER
+endif
+
+#
+# v3.14-rc8-130-gccad2365668f
+#
+# generic_file_buffered_write is removed, backport it
+#
+ifneq (,$(shell grep 'extern ssize_t generic_file_buffered_write' include/linux/fs.h))
+ccflags-y += -DKC_GENERIC_FILE_BUFFERED_WRITE=1
+endif
+
+#
+# v5.7-438-g8151b4c8bee4
+#
+# struct address_space_operations switches away from .readpages to .readahead
+#
+# RHEL has backported this feature all the way to RHEL8, as part of RHEL_KABI,
+# which means we need to detect this very precisely
+#
+ifneq (,$(shell grep 'readahead.*struct readahead_control' include/linux/fs.h))
+ccflags-y += -DKC_FILE_AOPS_READAHEAD
+endif
+
+#
+# v4.0-rc7-1743-g8436318205b9
+#
+# .aio_read and .aio_write no longer exist. All reads and writes now use the
+# .read_iter and .write_iter methods, or must implement .read and .write (which
+# we don't).
+#
+ifneq (,$(shell grep 'ssize_t.*aio_read' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_HAVE_FOP_AIO_READ=1
+endif
+
+#
+# rhel7 has a custom inode_operations_wrapper struct that is discarded
+# entirely in favor of upstream structure since rhel8.
+#
+ifneq (,$(shell grep 'void.*follow_link.*struct dentry' include/linux/fs.h))
+ccflags-y += -DKC_LINUX_HAVE_RHEL_IOPS_WRAPPER=1
+endif
+
+ifneq (,$(shell grep 'size_t.*ki_left;' include/linux/aio.h))
+ccflags-y += -DKC_LINUX_AIO_KI_LEFT=1
+endif
+
+#
+# v4.4-rc4-4-g98e9cb5711c6
+#
+# Introduces a new xattr_handler .name member that can be used to match the
+# entire field, instead of just a prefix. For these kernels, we must use
+# the new .name field instead.
+ifneq (,$(shell grep 'static inline const char .xattr_prefix' include/linux/xattr.h))
+ccflags-y += -DKC_XATTR_HANDLER_NAME=1
+endif
+
+#
+# v5.19-rc4-96-g342a72a33407
+#
+# Adds `typedef __u32 __bitwise blk_opf_t` to aid flag checking
+ifneq (,$(shell grep 'typedef __u32 __bitwise blk_opf_t' include/linux/blk_types.h))
+ccflags-y += -DKC_HAVE_BLK_OPF_T=1
+endif
+
+#
+# v5.12-rc6-9-g4f0f586bf0c8
+#
+# list_sort cmp function takes const list_head args
+ifneq (,$(shell grep 'const struct list_head ., const struct list_head .' include/linux/list_sort.h))
+ccflags-y += -DKC_LIST_CMP_CONST_ARG_LIST_HEAD
+endif
+
+# v5.7-523-g88dca4ca5a93
+#
+# The pgprot argument to vmalloc is always PAGE_KERNEL, so it is removed.
+ifneq (,$(shell grep 'extern void .__vmalloc.unsigned long size, gfp_t gfp_mask, pgprot_t prot' include/linux/vmalloc.h))
+ccflags-y += -DKC_VMALLOC_PGPROT_T
+endif
+
+# v6.2-rc1-18-g01beba7957a2
+#
+# fs: port inode_owner_or_capable() to mnt_idmap
+ifneq (,$(shell grep 'bool inode_owner_or_capable.struct user_namespace .mnt_userns' include/linux/fs.h))
+ccflags-y += -DKC_INODE_OWNER_OR_CAPABLE_USERNS
+endif
+
+#
+# v5.11-rc4-5-g47291baa8ddf
+#
+# namei: make permission helpers idmapped mount aware
+ifneq (,$(shell grep 'int inode_permission.struct user_namespace' include/linux/fs.h))
+ccflags-y += -DKC_INODE_PERMISSION_USERNS
+endif
+
+#
+# v5.11-rc4-24-g549c7297717c
+#
+# fs: make helpers idmap mount aware
+# Enlarges the VFS API methods to include user namespace argument.
+ifneq (,$(shell grep 'int ..mknod. .struct user_namespace' include/linux/fs.h))
+ccflags-y += -DKC_VFS_METHOD_USER_NAMESPACE_ARG
+endif
+
+#
+# v5.17-rc2-21-g07888c665b40
+#
+# Detect new style bio_alloc - pass bdev and opf.
+ifneq (,$(shell grep 'struct bio .bio_alloc.struct block_device .bdev' include/linux/bio.h))
+ccflags-y += -DKC_BIO_ALLOC_DEV_OPF_ARGS
+endif
+
+#
+# v5.7-rc4-53-gcddf8a2c4a82
+#
+# fiemap_prep() replaces fiemap_check_flags()
+ifneq (,$(shell grep -s 'int fiemap_prep.struct inode' include/linux/fiemap.h))
+ccflags-y += -DKC_FIEMAP_PREP
+endif
+
+#
+# v5.17-13043-g800ba29547e1
+#
+# generic_perform_write args use kiocb for passing filp and pos
+ifneq (,$(shell grep 'ssize_t generic_perform_write.struct kiocb ., struct iov_iter' include/linux/fs.h))
+ccflags-y += -DKC_GENERIC_PERFORM_WRITE_KIOCB_IOV_ITER
+endif
+
+#
+# v5.7-rc6-2496-g76ee0785f42a
+#
+# net: add sock_set_sndtimeo
+ifneq (,$(shell grep 'void sock_set_sndtimeo.struct sock' include/net/sock.h))
+ccflags-y += -DKC_SOCK_SET_SNDTIMEO
+endif
+
+#
+# v5.8-rc4-1931-gba423fdaa589
+#
+# setsockopt functions are now passed a sockptr_t value instead of char*
+ifneq (,$(shell grep -s 'include .linux/sockptr.h.' include/linux/net.h))
+ccflags-y += -DKC_SETSOCKOPT_SOCKPTR_T
+endif
+
+#
+# v5.7-rc6-2507-g71c48eb81c9e
+#
+# Adds a bunch of low level TCP sock parameter functions that we want to use.
+ifneq (,$(shell grep 'int tcp_sock_set_keepintvl' include/linux/tcp.h))
+ccflags-y += -DKC_HAVE_TCP_SET_SOCKFN
+endif
+
+#
+# v4.16-rc3-13-ga84d1169164b
+#
+# Fixes y2038 issues with struct timeval.
+ifneq (,$(shell grep -s '^struct __kernel_old_timeval .' include/uapi/linux/time_types.h))
+ccflags-y += -DKC_KERNEL_OLD_TIMEVAL_STRUCT
+endif
+
+#
+# v5.19-rc4-52-ge33c267ab70d
+#
+# register_shrinker now requires a name, used for debug stats etc.
+ifneq (,$(shell grep 'int __printf.*register_shrinker.struct shrinker .shrinker,' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_NAME
+endif
+
+#
+# v5.18-rc5-246-gf132ab7d3ab0
+#
+# mpage_readpage() is now replaced with mpage_read_folio.
+ifneq (,$(shell grep 'int mpage_read_folio.struct folio .folio' include/linux/mpage.h))
+ccflags-y += -DKC_MPAGE_READ_FOLIO
+endif
+
+#
+# v5.18-rc5-219-gb3992d1e2ebc
+#
+# block_write_begin() no longer is being passed aop_flags
+ifneq (,$(shell grep -C1 'int block_write_begin' include/linux/buffer_head.h | tail -n 2 | grep 'unsigned flags'))
+ccflags-y += -DKC_BLOCK_WRITE_BEGIN_AOP_FLAGS
+endif
+
+#
+# v6.0-rc6-9-g863f144f12ad
+#
+# the .tmpfile() vfs method calling convention changed and now a struct
+# file* is passed to this metiond instead of a dentry. The function also
+# should open the created file and call finish_open_simple() before returning.
+ifneq (,$(shell grep 'extern void d_tmpfile.struct dentry' include/linux/dcache.h))
+ccflags-y += -DKC_D_TMPFILE_DENTRY
+endif
+
+#
+# v6.4-rc2-201-g0733ad800291
+#
+# New blk_mode_t replaces abuse of fmode_t
+ifneq (,$(shell grep 'typedef unsigned int __bitwise blk_mode_t' include/linux/blkdev.h))
+ccflags-y += -DKC_HAVE_BLK_MODE_T
+endif
+
+#
+# v6.4-rc2-186-g2736e8eeb0cc
+#
+# Reworks FMODE_EXCL kludge and instead modifies the blkdev_put() call to pass in
+# the (exclusive) holder to implement FMODE_EXCL handling.
+ifneq (,$(shell grep 'blkdev_put.struct block_device .bdev, void .holder' include/linux/blkdev.h))
+ccflags-y += -DKC_BLKDEV_PUT_HOLDER_ARG
+endif
+
+#
+# v6.4-rc4-163-g0d625446d0a4
+#
+# Entirely removes current->backing_dev_info to ultimately remove buffer_head
+# completely at some point.
+ifneq (,$(shell grep 'struct backing_dev_info.*backing_dev_info;' include/linux/sched.h))
+ccflags-y += -DKC_CURRENT_BACKING_DEV_INFO
+endif
+
+#
+# v6.8-rc1-4-gf3a608827d1f
+#
+# adds bdev_file_open_by_path() and later in v6.8-rc1-30-ge97d06a46526 removes bdev_open_by_path()
+# which requires us to use the file method from now on.
+ifneq (,$(shell grep 'struct file.*bdev_file_open_by_path.const char.*path' include/linux/blkdev.h))
+ccflags-y += -DKC_BDEV_FILE_OPEN_BY_PATH
+endif
+
+# v4.0-rc7-1796-gfe0f07d08ee3
+#
+# direct-io changes modify inode_dio_done to now be called inode_dio_end
+ifneq (,$(shell grep 'void inode_dio_end.struct inode' include/linux/fs.h))
+ccflags-y += -DKC_INODE_DIO_END
+endif
+
+#
+# v5.0-6476-g3d3539018d2c
+#
+# page fault handlers return a bitmask vm_fault_t instead
+# Note: el8's header has a slightly modified prefix here
+ifneq (,$(shell grep 'typedef.*__bitwise unsigned.*int vm_fault_t' include/linux/mm_types.h))
+ccflags-y += -DKC_MM_VM_FAULT_T
+endif
+
+# v3.19-499-gd83a08db5ba6
+#
+# .remap pages becomes obsolete
+ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
+ccflags-y += -DKC_MM_REMAP_PAGES
 endif

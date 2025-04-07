@@ -7,7 +7,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <wordexp.h>
 
 #include "util.h"
 #include "format.h"
@@ -18,25 +17,14 @@
 
 static int open_path(char *path, int flags)
 {
-	wordexp_t exp_result;
 	int ret;
 
-	ret = wordexp(path, &exp_result, WRDE_NOCMD | WRDE_SHOWERR | WRDE_UNDEF);
-	if (ret) {
-		fprintf(stderr, "wordexp() failure for \"%s\": %d\n", path, ret);
-		ret = -EINVAL;
-		goto out;
-	}
-
-	ret = open(exp_result.we_wordv[0], flags);
+	ret = open(path, flags);
 	if (ret < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
 			path, strerror(errno), errno);
 	}
-
-out:
-	wordfree(&exp_result);
 
 	return ret;
 }
@@ -145,7 +133,7 @@ int read_block_verify(int fd, u32 magic, u64 fsid, u64 blkno, int shift, void **
 		else if (fsid != 0 && le64_to_cpu(hdr->fsid) != fsid)
 			fprintf(stderr, "read blkno %llu has bad fsid %016llx != expected %016llx\n",
 				blkno, le64_to_cpu(hdr->fsid), fsid);
-		else if (le32_to_cpu(hdr->blkno) != blkno)
+		else if (le64_to_cpu(hdr->blkno) != blkno)
 			fprintf(stderr, "read blkno %llu has bad blkno %llu != expected %llu\n",
 				blkno, le64_to_cpu(hdr->blkno), blkno);
 		else
