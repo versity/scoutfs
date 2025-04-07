@@ -676,6 +676,7 @@ static int find_or_alloc_lock(struct super_block *sb, struct scoutfs_key *start,
 			lock_free(linfo, ins);
 			if (ret != -EEXIST)
 				break;
+			ret = 0;
 		}
 
 		cpu_relax();
