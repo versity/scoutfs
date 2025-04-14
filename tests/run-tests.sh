@@ -512,6 +512,11 @@ msg "running tests"
 > "$T_RESULTS/skip.log"
 > "$T_RESULTS/fail.log"
 
+# generate a test ID to make sure we can de-duplicate TAP results in aggregation
+. funcs/tap.sh
+t_tap_header $(uuidgen)
+
+testcount=0
 passed=0
 skipped=0
 failed=0
@@ -637,6 +642,11 @@ for t in $tests; do
 
 		test -n "$T_ABORT" && die "aborting after first failure"
 	fi
+
+	# record results for TAP format output
+	t_tap_progress $test_name $sts
+	((testcount++))
+
 done
 
 msg "all tests run: $passed passed, $skipped skipped, $skipped_permitted skipped (permitted), $failed failed"
