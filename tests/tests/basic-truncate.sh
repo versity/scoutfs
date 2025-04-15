@@ -11,7 +11,7 @@ FILE="$T_D0/file"
 # final block as we truncated past it.
 #
 echo "== truncate writes zeroed partial end of file block"
-yes | dd of="$FILE" bs=8K count=1 status=none iflag=fullblock
+yes 2>/dev/null | dd of="$FILE" bs=8K count=1 status=none iflag=fullblock
 sync
 
 # not passing iflag=fullblock causes the file occasionally to just be
