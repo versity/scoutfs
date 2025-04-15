@@ -509,7 +509,7 @@ static const struct rhashtable_params lock_ht_params = {
 
 /*
  * Insert a lock into the lookup hash table, keyed by its start key.  If
- * another lock is already present then we return eexist and the caller
+ * another lock is already present then we return EEXIST and the caller
  * will retry.  The locks are inserted with a 0 refcount so that they
  * won't be used until they've been inserted into the range tree without
  * overlaps.
@@ -571,7 +571,6 @@ static void lock_remove(struct lock_info *linfo, struct scoutfs_lock *lock)
 	spin_unlock(&linfo->lock);
 
 	scoutfs_tseq_del(&linfo->tseq_tree, &lock->tseq_entry);
-
 }
 
 /* should be in the core */
@@ -613,7 +612,7 @@ static struct scoutfs_lock *get_lock(struct scoutfs_lock *lock)
  * insertions need to be careful.
  *
  * This nests the global linfo spinlock under the per-lock spinlock only
- * to keep caller's from having to free on the other side of dropping
+ * to keep callers from having to free on the other side of dropping
  * the refs and unlocking the lock's spinlock.
  */
 static bool try_remove_null_lock(struct lock_info *linfo, struct scoutfs_lock *lock)
@@ -727,7 +726,7 @@ static void bug_on_inconsistent_grant_cache(struct super_block *sb,
 	if (dirty ||
 	    (cached && (!lock_mode_can_read(old_mode) ||
 			!lock_mode_can_read(new_mode)))) {
-		scoutfs_err(sb, "granted lock item cache inconsistency, cached %u dirty %u old_mode %d new_mode %d: start "SK_FMT" end "SK_FMT" refresh_gen %llu mode %u waiters: rd %u wr %u wo %u users: rd %u wr %u wo %u",
+		scoutfs_err(sb, "granted lock item cache inconsistency, cached %u dirty %u old_mode %d new_mode %d: start "SK_FMT" end "SK_FMT" refresh_gen %llu mode %u waiters: rd %u wr %u wo %u users: rd %u wr %u wo %u refcnt %d",
 			   cached, dirty, old_mode, new_mode, SK_ARG(&lock->start),
 			   SK_ARG(&lock->end), lock->refresh_gen, lock->mode,
 			   lock->waiters[SCOUTFS_LOCK_READ],
@@ -735,7 +734,8 @@ static void bug_on_inconsistent_grant_cache(struct super_block *sb,
 			   lock->waiters[SCOUTFS_LOCK_WRITE_ONLY],
 			   lock->users[SCOUTFS_LOCK_READ],
 			   lock->users[SCOUTFS_LOCK_WRITE],
-			   lock->users[SCOUTFS_LOCK_WRITE_ONLY]);
+			   lock->users[SCOUTFS_LOCK_WRITE_ONLY],
+			   atomic_read(&lock->refcount));
 		BUG();
 	}
 }
@@ -1007,7 +1007,7 @@ int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
 
 	pos = *key;
 
-	for (i = 0; lock && i < SCOUTFS_NET_LOCK_MAX_RECOVER_NR; i++) {
+	for (i = 0; i < SCOUTFS_NET_LOCK_MAX_RECOVER_NR; i++) {
 
 		spin_lock(&linfo->lock);
 		found = next_lock_range(sb, &pos);
@@ -1543,7 +1543,7 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
  * with the access mode and the access key must be in the lock's key
  * range.
  *
- * This is called by lock holders who's use of the lock must be preventing
+ * This is called by lock holders whose use of the lock must be preventing
  * the mode and keys from changing.
  */
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
@@ -1757,18 +1757,12 @@ static u64 get_held_lock_refresh_gen(struct super_block *sb, struct scoutfs_key 
 	if (!linfo)
 		return 0;
 
-#if 0 /*@@@*/
-	spin_lock(&linfo->lock);
-#endif
 	lock = find_lock(sb, start);
 	if (lock) {
 		if (lock_mode_can_read(lock->mode))
 			refresh_gen = lock->refresh_gen;
 		put_lock(linfo, lock);
 	}
-#if 0 /*@@@*/
-	spin_unlock(&linfo->lock);
-#endif
 
 	return refresh_gen;
 }
