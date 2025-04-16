@@ -160,6 +160,9 @@ t_filter_dmesg()
 	re="$re|Pipe handler or fully qualified core dump path required.*"
 	re="$re|Set kernel.core_pattern before fs.suid_dumpable.*"
 
+	# perf warning that it adjusted sample rate
+	re="$re|perf: interrupt took too long.*lowering kernel.perf_event_max_sample_rate.*"
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob
 }
