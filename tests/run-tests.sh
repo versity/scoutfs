@@ -464,6 +464,7 @@ for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 	if [ "$i" -lt "$T_QUORUM" ]; then
 		opts="$opts,quorum_slot_nr=$i"
 	fi
+	opts="$opts,meta_reserve_blocks=0"
 	opts="${opts}${T_MNT_OPTIONS}"
 
 	msg "mounting $meta_dev|$data_dev on $dir"

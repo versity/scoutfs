@@ -772,10 +772,13 @@ static int alloc_move_empty(struct super_block *sb,
 u64 scoutfs_server_reserved_meta_blocks(struct super_block *sb)
 {
 	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_mount_options opts;
 	u64 server_blocks;
 	u64 client_blocks;
 	u64 log_blocks;
 	u64 nr_clients;
+
+	scoutfs_options_read(sb, &opts);
 
 	/* server has two meta_avail lists it swaps between */
 	server_blocks = SCOUTFS_SERVER_META_FILL_TARGET * 2;
@@ -801,7 +804,7 @@ u64 scoutfs_server_reserved_meta_blocks(struct super_block *sb)
 	nr_clients = server->nr_clients;
 	spin_unlock(&server->lock);
 
-	return server_blocks + (max(1ULL, nr_clients) * client_blocks);
+	return server_blocks + (max(1ULL, nr_clients) * client_blocks) + opts.meta_reserve_blocks;
 }
 
 /*

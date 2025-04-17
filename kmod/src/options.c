@@ -39,6 +39,7 @@ enum {
 	Opt_orphan_scan_delay_ms,
 	Opt_quorum_heartbeat_timeout_ms,
 	Opt_quorum_slot_nr,
+	Opt_meta_reserve_blocks,
 	Opt_err,
 };
 
@@ -52,6 +53,7 @@ static const match_table_t tokens = {
 	{Opt_orphan_scan_delay_ms, "orphan_scan_delay_ms=%s"},
 	{Opt_quorum_heartbeat_timeout_ms, "quorum_heartbeat_timeout_ms=%s"},
 	{Opt_quorum_slot_nr, "quorum_slot_nr=%s"},
+	{Opt_meta_reserve_blocks, "meta_reserve_blocks=%s"},
 	{Opt_err, NULL}
 };
 
@@ -126,6 +128,9 @@ static void free_options(struct scoutfs_mount_options *opts)
 #define MIN_DATA_PREALLOC_BLOCKS	1ULL
 #define MAX_DATA_PREALLOC_BLOCKS	((unsigned long long)SCOUTFS_BLOCK_SM_MAX)
 
+#define SCOUTFS_META_RESERVE_DEFAULT_BLOCKS 16384
+
+
 static void init_default_options(struct scoutfs_mount_options *opts)
 {
 	memset(opts, 0, sizeof(*opts));
@@ -136,6 +141,7 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 	opts->orphan_scan_delay_ms = -1;
 	opts->quorum_heartbeat_timeout_ms = SCOUTFS_QUORUM_DEF_HB_TIMEO_MS;
 	opts->quorum_slot_nr = -1;
+	opts->meta_reserve_blocks = SCOUTFS_META_RESERVE_DEFAULT_BLOCKS;
 }
 
 static int verify_log_merge_wait_timeout_ms(struct super_block *sb, int ret, int val)
@@ -162,6 +168,24 @@ static int verify_quorum_heartbeat_timeout_ms(struct super_block *sb, int ret, u
 	if (val < SCOUTFS_QUORUM_MIN_HB_TIMEO_MS || val > SCOUTFS_QUORUM_MAX_HB_TIMEO_MS) {
 		scoutfs_err(sb, "invalid quorum_heartbeat_timeout_ms value %llu, must be between %lu and %lu",
 			    val, SCOUTFS_QUORUM_MIN_HB_TIMEO_MS, SCOUTFS_QUORUM_MAX_HB_TIMEO_MS);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+static int verify_meta_reserve_blocks(struct super_block *sb, int ret, int val)
+{
+	/*
+	 *  Ideally we set a limit to something reasonable like 1/2 the actual
+	 * total_meta_blocks, but we can't yet get this info when mount is called
+	 */
+	if (ret < 0) {
+		scoutfs_err(sb, "failed to parse meta_reserve_blocks value");
+		return -EINVAL;
+	}
+	if (val < 0 || val > INT_MAX) {
+		scoutfs_err(sb, "invalid meta_reserve_blocks value %d, must be between 0 and %d",
+			    val, INT_MAX);
 		return -EINVAL;
 	}
 
@@ -279,6 +303,14 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 			opts->quorum_slot_nr = nr;
 			break;
 
+		case Opt_meta_reserve_blocks:
+			ret = match_int(args, &nr);
+			ret = verify_meta_reserve_blocks(sb, ret, nr);
+			if (ret < 0)
+				return ret;
+			opts->meta_reserve_blocks = nr;
+			break;
+
 		default:
 			scoutfs_err(sb, "Unknown or malformed option, \"%s\"", p);
 			return -EINVAL;
@@ -371,6 +403,7 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 	seq_printf(seq, ",orphan_scan_delay_ms=%u", opts.orphan_scan_delay_ms);
 	if (opts.quorum_slot_nr >= 0)
 		seq_printf(seq, ",quorum_slot_nr=%d", opts.quorum_slot_nr);
+	seq_printf(seq, ".meta_reserve_blocks=%llu", opts.meta_reserve_blocks);
 
 	return 0;
 }
@@ -589,6 +622,17 @@ static ssize_t quorum_slot_nr_show(struct kobject *kobj, struct kobj_attribute *
 }
 SCOUTFS_ATTR_RO(quorum_slot_nr);
 
+static ssize_t meta_reserve_blocks_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%lld\n", opts.meta_reserve_blocks);
+}
+SCOUTFS_ATTR_RO(meta_reserve_blocks);
+
 static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(data_prealloc_blocks),
 	SCOUTFS_ATTR_PTR(data_prealloc_contig_only),
@@ -597,6 +641,7 @@ static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(orphan_scan_delay_ms),
 	SCOUTFS_ATTR_PTR(quorum_heartbeat_timeout_ms),
 	SCOUTFS_ATTR_PTR(quorum_slot_nr),
+	SCOUTFS_ATTR_PTR(meta_reserve_blocks),
 	NULL,
 };
 
