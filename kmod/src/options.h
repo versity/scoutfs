@@ -13,6 +13,7 @@ struct scoutfs_mount_options {
 	unsigned int orphan_scan_delay_ms;
 	int quorum_slot_nr;
 	u64 quorum_heartbeat_timeout_ms;
+	u64 meta_reserve_blocks;
 };
 
 void scoutfs_options_read(struct super_block *sb, struct scoutfs_mount_options *opts);
