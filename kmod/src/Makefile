@@ -14,6 +14,7 @@ scoutfs-y +=			\
 	alloc.o			\
 	block.o			\
 	btree.o			\
+	check.o			\
 	client.o		\
 	counters.o		\
 	data.o			\
