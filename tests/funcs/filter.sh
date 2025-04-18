@@ -224,7 +224,7 @@ t_filter_dmesg()
 	# lockdep or kasan warnings can cause this
 	re="$re|Disabling lock debugging due to kernel taint"
 
-	egrep -v "($re)" | \
+	grep -v -E "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob | \
 		ignore_harmless_xfs_lockdep_warning
 }
