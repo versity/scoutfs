@@ -236,7 +236,7 @@ t_filter_dmesg()
 	re="$re|File: /mnt/test.* PID:.* Comm: dd"
 	re="$re|dio_warn_stale_pagecache*"
 
-	egrep -v "($re)" | \
+	grep -v -E "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob | \
 		ignore_harmless_xfs_lockdep_warning
 }
