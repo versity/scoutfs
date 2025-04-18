@@ -66,7 +66,7 @@ else
 	m64=""
 fi
 
-sparse $m64 $include $search/include "$@" 2>&1 | egrep -v "($RE)" | tee .sparse.output
+sparse $m64 $include $search/include "$@" 2>&1 | grep -v -E "($RE)" | tee .sparse.output
 
 rm -f $defines
 

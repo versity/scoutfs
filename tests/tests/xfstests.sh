@@ -139,9 +139,9 @@ awk '
 	}' < results/check.log  > "$T_TMPDIR/results"
 
 # put a test per line so diff shows tests that differ
-egrep "^(Ran|Not run|Failures):" "$T_TMPDIR/results" | \
+grep -E "^(Ran|Not run|Failures):" "$T_TMPDIR/results" | \
 	fmt -w 1 > "$T_TMPDIR/results.fmt"
-egrep "^(Passed|Failed).*tests$" "$T_TMPDIR/results" >> "$T_TMPDIR/results.fmt"
+grep -E "^(Passed|Failed).*tests$" "$T_TMPDIR/results" >> "$T_TMPDIR/results.fmt"
 
 t_compare_output cat "$T_TMPDIR/results.fmt"
 

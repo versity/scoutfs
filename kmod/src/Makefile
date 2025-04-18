@@ -60,11 +60,11 @@ scoutfs-y +=			\
 #
 .PHONY: $(src)/check_exported_types
 $(src)/check_exported_types:
-	@if egrep '\<[us](8|16|32|64\>)' $(src)/format.h $(src)/ioctl.h; then \
+	@if grep -E '\<[us](8|16|32|64\>)' $(src)/format.h $(src)/ioctl.h; then \
 		echo "no raw types in exported headers, preface with __";     \
 		exit 1;							      \
 	fi
-	@if egrep '\<__packed\>' $(src)/format.h $(src)/ioctl.h; then \
+	@if grep -E '\<__packed\>' $(src)/format.h $(src)/ioctl.h; then \
 		echo "no __packed allowed in exported headers";     \
 		exit 1;							      \
 	fi
