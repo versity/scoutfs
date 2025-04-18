@@ -160,6 +160,6 @@ t_filter_dmesg()
 	re="$re|Pipe handler or fully qualified core dump path required.*"
 	re="$re|Set kernel.core_pattern before fs.suid_dumpable.*"
 
-	egrep -v "($re)" | \
+	grep -v -E "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob
 }

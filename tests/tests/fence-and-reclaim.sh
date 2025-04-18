@@ -84,7 +84,7 @@ for cl in $(t_fs_nrs); do
 done
 
 # wait for all client reconnections to timeout
-while egrep -q "($pattern)" $(t_debugfs_path $sv)/connections; do
+while grep -q -E "($pattern)" $(t_debugfs_path $sv)/connections; do
 	sleep .5
 done
 # wait for all fence requests to complete
