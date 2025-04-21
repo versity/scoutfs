@@ -1483,12 +1483,14 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 
 		cur_time = current_time(from);
 		if (!is_stage) {
-			to->i_ctime = to->i_mtime = cur_time;
+			inode_set_ctime_to_ts(to, cur_time);
+			inode_set_mtime_to_ts(to, cur_time);
 			inode_inc_iversion(to);
 			scoutfs_inode_inc_data_version(to);
 			scoutfs_inode_set_data_seq(to);
 		}
-		from->i_ctime = from->i_mtime = cur_time;
+		inode_set_ctime_to_ts(from, cur_time);
+		inode_set_mtime_to_ts(from, cur_time);
 		inode_inc_iversion(from);
 		scoutfs_inode_inc_data_version(from);
 		scoutfs_inode_set_data_seq(from);
