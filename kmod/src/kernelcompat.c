@@ -81,3 +81,13 @@ kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *iov,
 	return written ? written : status;
 }
 #endif
+
+#ifndef KC_FS_INODE_C_TIME_ACCESSOR
+struct timespec64 inode_set_ctime_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+
+	inode_set_ctime(inode, now.tv_sec, now.tv_nsec);
+	return now;
+}
+#endif
