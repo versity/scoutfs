@@ -410,4 +410,8 @@ static inline vm_fault_t vmf_error(int err)
 }
 #endif
 
+#ifndef KC_HAVE_GET_RANDOM_U32_BELOW
+#define get_random_u32_below prandom_u32_max
+#endif
+
 #endif

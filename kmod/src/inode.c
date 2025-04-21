@@ -2020,7 +2020,7 @@ void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb)
 
 		low = (opts.orphan_scan_delay_ms * 80) / 100;
 		high = (opts.orphan_scan_delay_ms * 120) / 100;
-		delay = msecs_to_jiffies(low + prandom_u32_max(high - low)) ?: 1;
+		delay = msecs_to_jiffies(low + get_random_u32_below(high - low)) ?: 1;
 
 		mod_delayed_work(system_wq, &inf->orphan_scan_dwork, delay);
 	}
