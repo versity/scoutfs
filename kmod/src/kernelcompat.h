@@ -493,4 +493,99 @@ static inline void stack_trace_print(unsigned long *entries, unsigned int nr_ent
 #define get_random_u32_below prandom_u32_max
 #endif
 
+#ifndef KC_FS_INODE_C_TIME_ACCESSOR
+struct timespec64 inode_set_ctime_current(struct inode *inode);
+static inline struct timespec64 inode_set_ctime_to_ts(struct inode *inode,
+						      struct timespec64 ts)
+{
+	inode->i_ctime.tv_sec = ts.tv_sec;
+	inode->i_ctime.tv_nsec = ts.tv_nsec;
+	return ts;
+}
+
+static inline struct timespec64 inode_set_ctime(struct inode *inode,
+						time64_t sec, long nsec)
+{
+	struct timespec64 ts = { .tv_sec  = sec,
+				 .tv_nsec = nsec };
+
+	return inode_set_ctime_to_ts(inode, ts);
+}
+
+static inline struct timespec64 inode_get_ctime(const struct inode *inode)
+{
+	struct timespec64 ts = { .tv_sec  = inode->i_ctime.tv_sec,
+				 .tv_nsec = inode->i_ctime.tv_nsec };
+	return ts;
+}
+#endif
+
+#ifndef KC_FS_INODE_AM_TIME_ACCESSOR
+static inline struct timespec64 inode_get_mtime(const struct inode *inode)
+{
+	struct timespec64 ts = { .tv_sec  = inode->i_mtime.tv_sec,
+				 .tv_nsec = inode->i_mtime.tv_nsec };
+	return ts;
+}
+
+static inline struct timespec64 inode_set_mtime_to_ts(struct inode *inode,
+						      struct timespec64 ts)
+{
+	inode->i_mtime.tv_sec = ts.tv_sec;
+	inode->i_mtime.tv_nsec = ts.tv_nsec;
+	return ts;
+}
+
+static inline struct timespec64 inode_set_mtime(struct inode *inode,
+						time64_t sec, long nsec)
+{
+	struct timespec64 ts = { .tv_sec  = sec,
+				 .tv_nsec = nsec };
+
+	return inode_set_mtime_to_ts(inode, ts);
+}
+
+static inline struct timespec64 inode_set_atime_to_ts(struct inode *inode,
+						      struct timespec64 ts)
+{
+	inode->i_atime.tv_sec = ts.tv_sec;
+	inode->i_atime.tv_nsec = ts.tv_nsec;
+	return ts;
+}
+
+static inline struct timespec64 inode_set_atime(struct inode *inode,
+						time64_t sec, long nsec)
+{
+	struct timespec64 ts = { .tv_sec  = sec,
+				 .tv_nsec = nsec };
+
+	return inode_set_atime_to_ts(inode, ts);
+}
+
+static inline time64_t inode_get_ctime_sec(const struct inode *inode)
+{
+	return inode->i_ctime.tv_sec;
+}
+static inline long inode_get_ctime_nsec(const struct inode *inode)
+{
+	return inode->i_ctime.tv_nsec;
+}
+static inline time64_t inode_get_mtime_sec(const struct inode *inode)
+{
+	return inode->i_mtime.tv_sec;
+}
+static inline long inode_get_mtime_nsec(const struct inode *inode)
+{
+	return inode->i_mtime.tv_nsec;
+}
+static inline time64_t inode_get_atime_sec(const struct inode *inode)
+{
+	return inode->i_atime.tv_sec;
+}
+static inline long inode_get_atime_nsec(const struct inode *inode)
+{
+	return inode->i_atime.tv_nsec;
+}
+#endif
+
 #endif
