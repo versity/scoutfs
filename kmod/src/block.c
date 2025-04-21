@@ -900,7 +900,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 	hdr->magic = cpu_to_le32(magic);
 	hdr->fsid = cpu_to_le64(sbi->fsid);
 	hdr->blkno = cpu_to_le64(bl->blkno);
-	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
+	get_random_bytes(&hdr->seq, sizeof(hdr->seq));
 
 	trace_scoutfs_block_dirty_ref(sb, le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq),
 				      le64_to_cpu(hdr->blkno), le64_to_cpu(hdr->seq));
@@ -1129,7 +1129,7 @@ static unsigned long block_scan_objects(struct shrinker *shrink, struct shrink_c
 	 * _nexts per shrink.
 	 */
 	if (iter.walker.tbl)
-		iter.slot = prandom_u32_max(iter.walker.tbl->size);
+		iter.slot = get_random_u32_below(iter.walker.tbl->size);
 
 	while (nr > 0) {
 		bp = rhashtable_walk_next(&iter);

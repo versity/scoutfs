@@ -434,3 +434,11 @@ endif
 ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
 ccflags-y += -DKC_MM_REMAP_PAGES
 endif
+
+#
+# v6.1-rc5-2-ge9a688bcb193
+#
+# get_random_u32_below() implementation
+ifneq (,$(shell grep -q 'u32 get_random_u32_below' include/linux/random.h))
+ccflags-y += -DKC_HAVE_GET_RANDOM_U32_BELOW
+endif
