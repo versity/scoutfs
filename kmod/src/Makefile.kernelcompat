@@ -496,3 +496,11 @@ endif
 ifneq (,$(shell grep 'struct posix_acl.*get_inode_acl' include/linux/fs.h))
 ccflags-y += -DKC_GET_INODE_ACL
 endif
+
+#
+# v6.1-rc5-2-ge9a688bcb193
+#
+# get_random_u32_below() implementation
+ifneq (,$(shell grep 'u32 get_random_u32_below' include/linux/random.h))
+ccflags-y += -DKC_HAVE_GET_RANDOM_U32_BELOW
+endif

@@ -489,4 +489,8 @@ static inline void stack_trace_print(unsigned long *entries, unsigned int nr_ent
 }
 #endif
 
+#ifndef KC_HAVE_GET_RANDOM_U32_BELOW
+#define get_random_u32_below prandom_u32_max
+#endif
+
 #endif
