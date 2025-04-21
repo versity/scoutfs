@@ -1136,6 +1136,69 @@ static int do_finalize_ours(struct super_block *sb,
 }
 
 /*
+ * The caller has decided that they want to finalize their log_trees.
+ * The finalized version of the log_trees is updated in place, but
+ * doesn't reference everything that the next log_trees with the
+ * increased nr will reference.  We have to write them in one commit to
+ * keep persistent references consistent.
+ *
+ * If this returns an error then nothing was updated.  If it succeeds
+ * then the nr it the caller's lt has been advanced to reflect the
+ * update of its item.
+ */
+static int update_finalized_and_inc_nr(struct super_block *sb, struct scoutfs_log_trees *lt)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
+	struct scoutfs_log_trees fin;
+	struct scoutfs_log_trees open;
+	struct scoutfs_key fin_key;
+	struct scoutfs_key open_key;
+	int ret;
+	int err;
+
+	fin = *lt;
+	memset(&fin.meta_avail, 0, sizeof(fin.meta_avail));
+	memset(&fin.meta_freed, 0, sizeof(fin.meta_freed));
+	memset(&fin.data_avail, 0, sizeof(fin.data_avail));
+	memset(&fin.data_freed, 0, sizeof(fin.data_freed));
+	memset(&fin.srch_file, 0, sizeof(fin.srch_file));
+	le64_add_cpu(&fin.flags, SCOUTFS_LOG_TREES_FINALIZED);
+	fin.finalize_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
+
+	open = *lt;
+	memset(&open.item_root, 0, sizeof(open.item_root));
+	memset(&open.bloom_ref, 0, sizeof(open.bloom_ref));
+	open.inode_count_delta = 0;
+	open.max_item_seq = 0;
+	open.finalize_seq = 0;
+	le64_add_cpu(&open.nr, 1);
+	open.flags = 0;
+
+	scoutfs_key_init_log_trees(&fin_key, le64_to_cpu(fin.rid), le64_to_cpu(fin.nr));
+	scoutfs_key_init_log_trees(&open_key, le64_to_cpu(open.rid), le64_to_cpu(open.nr));
+
+	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri, &super->logs_root,
+				   &fin_key, &fin, sizeof(struct scoutfs_log_trees));
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_btree_insert(sb, &server->alloc, &server->wri, &super->logs_root,
+				   &open_key, &open, sizeof(struct scoutfs_log_trees));
+	if (ret < 0) {
+		err = scoutfs_btree_update(sb, &server->alloc, &server->wri, &super->logs_root,
+					   &fin_key, lt, sizeof(struct scoutfs_log_trees));
+		BUG_ON(err < 0); /* dirty must have ensured success */
+		goto out;
+	}
+
+	*lt = open;
+	ret = 0;
+out:
+	return ret;
+}
+
+/*
  * Finalizing the log btrees for merging needs to be done carefully so
  * that items don't appear to go backwards in time.
  *
