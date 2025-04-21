@@ -147,3 +147,13 @@ unsigned long kc_list_lru_shrink_walk(struct list_lru *lru, struct shrink_contro
 }
 
 #endif
+
+#ifndef KC_FS_INODE_C_TIME_ACCESSOR
+struct timespec64 inode_set_ctime_current(struct inode *inode)
+{
+	struct timespec64 now = current_time(inode);
+
+	inode_set_ctime(inode, now.tv_sec, now.tv_nsec);
+	return now;
+}
+#endif

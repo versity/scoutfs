@@ -907,7 +907,7 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 
 	/* XXX do these want i_mutex or anything? */
 	inode_inc_iversion(inode);
-	inode->i_ctime = current_time(inode);
+	inode_set_ctime_to_ts(inode, current_time(inode));
 	ret = 0;
 
 out:

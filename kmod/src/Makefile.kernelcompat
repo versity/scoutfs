@@ -504,3 +504,18 @@ endif
 ifneq (,$(shell grep 'u32 get_random_u32_below' include/linux/random.h))
 ccflags-y += -DKC_HAVE_GET_RANDOM_U32_BELOW
 endif
+
+# v6.5-rc1-7-g9b6304c1d537
+#
+# ctime accessor methods
+ifneq (,$(shell grep 'timespec64 inode_set_ctime_current' include/linux/fs.h))
+ccflags-y += -DKC_FS_INODE_C_TIME_ACCESSOR
+endif
+
+#
+# v6.6-rc5-1-g077c212f0344
+#
+# Must use access methods from fs.h to get to inode ctime/mtime/atime
+ifneq (,$(shell grep 'inline time64_t inode_get_atime_sec' include/linux/fs.h))
+ccflags-y += -DKC_FS_INODE_AM_TIME_ACCESSOR
+endif
