@@ -204,7 +204,7 @@ static struct squota_check *lookup_random_check(struct rhashtable *rht)
 
 	tbl = rht_dereference_rcu(rht->tbl, rht);
 	do {
-		for (s = 0, i = prandom_u32_max(tbl->size);
+		for (s = 0, i = get_random_u32_below(tbl->size);
 		     s < tbl->size;
 		     s++, i = (i + 1) % tbl->size) {
 			rht_for_each_entry_rcu(chk, pos, tbl, i, head) {
