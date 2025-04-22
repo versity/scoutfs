@@ -146,7 +146,7 @@ struct cached_item {
 	unsigned int val_len;
 	struct scoutfs_key key;
 	u64 seq;
-	char val[0];
+	char val[];
 };
 
 #define CACHED_ITEM_ALIGN 8
@@ -424,7 +424,7 @@ static struct cached_item *alloc_item(struct cached_page *pg,
 	item->seq = seq;
 
 	if (val_len)
-		memcpy(item->val, val, val_len);
+		memcpy(&item->val[0], val, val_len);
 
 	update_pg_max_seq(pg, item);
 
@@ -1999,7 +1999,7 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 
 	if (val_len <= found->val_len) {
 		if (val_len)
-			memcpy(found->val, val, val_len);
+			memcpy(&found->val[0], val, val_len);
 		if (val_len < found->val_len)
 			pg->erased_bytes += item_val_bytes(found->val_len) -
 					    item_val_bytes(val_len);
@@ -2316,7 +2316,7 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 			lst->seq = item->seq;
 			lst->flags = item->deletion ? SCOUTFS_ITEM_FLAG_DELETION : 0;
 			lst->val_len = item->val_len;
-			memcpy(lst->val, item->val, item->val_len);
+			memcpy(&lst->val[0], item->val, item->val_len);
 		}
 
 		spin_lock(&cinf->dirty_lock);
