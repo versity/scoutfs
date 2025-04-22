@@ -596,4 +596,10 @@ static inline long inode_get_atime_nsec(const struct inode *inode)
 #define KC_BDEV_MAPPING(b) (b)->bd_mapping
 #endif
 
+#ifdef KC_HAVE_ASSIGN_STR_PARMS
+#define kc__assign_str(a, b) __assign_str(a, b)
+#else
+#define kc__assign_str(a, b) __assign_str(a)
+#endif
+
 #endif
