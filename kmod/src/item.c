@@ -2607,10 +2607,10 @@ int scoutfs_item_setup(struct super_block *sb)
 
 	for_each_possible_cpu(cpu)
 		init_pcpu_pages(cinf, cpu);
-
-	KC_INIT_SHRINKER_FUNCS(&cinf->shrinker, item_cache_count_objects,
-			       item_cache_scan_objects);
-	KC_REGISTER_SHRINKER(&cinf->shrinker, "scoutfs-item:" SCSBF, SCSB_ARGS(sb));
+	KC_SETUP_SHRINKER(cinf->shrinker, cinf, 0, item_cache_count_objects,
+			  item_cache_scan_objects, "scoutfs-item:" SCSBF, SCSB_ARGS(sb));
+	if (KC_SHRINKER_IS_NULL(cinf->shrinker))
+		return -ENOMEM;
 
 	sbi->item_cache_info = cinf;
 	return 0;
@@ -2628,7 +2628,7 @@ void scoutfs_item_destroy(struct super_block *sb)
 	int cpu;
 
 	if (cinf) {
-		KC_UNREGISTER_SHRINKER(&cinf->shrinker);
+		KC_UNREGISTER_SHRINKER(cinf->shrinker);
 
 		for_each_possible_cpu(cpu)
 			drop_pcpu_pages(sb, cinf, cpu);

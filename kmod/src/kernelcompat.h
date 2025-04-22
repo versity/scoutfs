@@ -4,22 +4,53 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 
-#define KC_DEFINE_SHRINKER(name) struct shrinker name
-#define KC_INIT_SHRINKER_FUNCS(name, countfn, scanfn) do {	\
-	__typeof__(name) _shrink = (name);			\
-	_shrink->count_objects = (countfn);			\
-	_shrink->scan_objects = (scanfn);			\
-	_shrink->seeks = DEFAULT_SEEKS;			\
-} while (0)
+#ifdef KC_SHRINKER_ALLOC
+// el10+
 
+#define KC_DEFINE_SHRINKER(name) struct shrinker *(name)
+#define KC_SHRINKER_CONTAINER_OF(ptr, type) ptr->private_data
+#define KC_SETUP_SHRINKER(ptr, priv, flags, countfn, scanfn, fmt, args)	\
+do {								\
+	ptr = shrinker_alloc(flags, fmt, args);			\
+	if (ptr) {						\
+		ptr->private_data = (priv);			\
+		ptr->seeks = DEFAULT_SEEKS;			\
+		ptr->count_objects = countfn;			\
+		ptr->scan_objects = scanfn;			\
+		shrinker_register(ptr);				\
+	}							\
+} while (0)
+#define KC_UNREGISTER_SHRINKER(ptr) shrinker_free(ptr)
+#define KC_SHRINKER_FN(ptr) (ptr)
+#define KC_SHRINKER_IS_NULL(ptr) (!(ptr))
+
+#else /* KC_SHRINKER_ALLOC */
+// el9, el8
+
+#define KC_DEFINE_SHRINKER(name) struct shrinker (name)
 #define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(ptr, type, shrinker)
 #ifdef KC_SHRINKER_NAME
-#define KC_REGISTER_SHRINKER register_shrinker
+#define KC_SETUP_SHRINKER(ptr, priv, flags, countfn, scanfn, fmt, args)	\
+do {								\
+	(ptr).count_objects = (countfn);			\
+	(ptr).scan_objects = (scanfn);				\
+	(ptr).seeks = DEFAULT_SEEKS;				\
+	register_shrinker(&(ptr), fmt, args);			\
+} while (0)
 #else
-#define KC_REGISTER_SHRINKER(ptr, fmt, ...) (register_shrinker(ptr))
+#define KC_SETUP_SHRINKER(ptr, priv, flags, countfn, scanfn, fmt, args)	\
+do {								\
+	(ptr).count_objects = (countfn);			\
+	(ptr).scan_objects = (scanfn);				\
+	(ptr).seeks = DEFAULT_SEEKS;				\
+	register_shrinker(&(ptr));				\
+} while (0)
 #endif /* KC_SHRINKER_NAME */
-#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr))
-#define KC_SHRINKER_FN(ptr) (ptr)
+#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(&(ptr)))
+#define KC_SHRINKER_FN(ptr) (&ptr)
+#define KC_SHRINKER_IS_NULL(ptr) (0)
+
+#endif /* KC_SHRINKER_ALLOC */
 
 #ifdef KC_GENERIC_PERFORM_WRITE_KIOCB_IOV_ITER
 static inline int kc_generic_perform_write(struct kiocb *iocb, struct iov_iter *iter, loff_t pos)

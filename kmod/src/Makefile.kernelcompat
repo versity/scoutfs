@@ -266,6 +266,15 @@ ccflags-y += -DKC_HAVE_ASSIGN_STR_PARMS
 endif
 
 #
+# v6.6-rc4-53-gc42d50aefd17
+#
+# el10 yet again modifies the shrinker API significantly, breaking our current
+# implementation.
+ifneq (,$(shell grep 'struct shrinker .shrinker_alloc' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_ALLOC
+endif
+
+#
 # v6.15-13744-g41cb08555c41
 #
 # from_timer renamed to timer_container_of.
