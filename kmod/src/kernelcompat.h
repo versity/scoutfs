@@ -142,25 +142,53 @@ struct timespec64 kc_current_time(struct inode *inode);
 #define kc_timespec timespec64
 #endif
 
-#ifndef KC_SHRINKER_SHRINK
+#ifdef KC_SHRINKER_ALLOC
+// el10+
 
-#define KC_DEFINE_SHRINKER(name) struct shrinker name
+#define KC_DEFINE_SHRINKER(name) struct shrinker *(name)
+#define KC_SHRINKER_CONTAINER_OF(ptr, type) ptr->private_data
+#define KC_ALLOC_SHRINKER(ptr, priv, flags, fmt, args)		\
+do {								\
+	ptr = shrinker_alloc(flags, fmt, args);			\
+	if (ptr) {						\
+		ptr->private_data = (priv);			\
+		ptr->seeks = 0;					\
+	}							\
+} while (0)
+#define KC_INIT_SHRINKER_FUNCS(ptr, countfn, scanfn)		\
+do {								\
+	(ptr)->count_objects = countfn;				\
+	(ptr)->scan_objects = scanfn;				\
+} while (0)
+#define KC_REGISTER_SHRINKER(ptr) shrinker_register(ptr)
+#define KC_UNREGISTER_SHRINKER(ptr) shrinker_free(ptr);
+#define KC_SHRINKER_FN(ptr) (ptr)
+
+#else /* KC_SHRINKER_ALLOC */
+#ifndef KC_SHRINKER_SHRINK
+// el9, el8
+
+#define KC_DEFINE_SHRINKER(name) struct shrinker (name)
 #define KC_INIT_SHRINKER_FUNCS(name, countfn, scanfn) do {	\
-	__typeof__(name) _shrink = (name);			\
+	__typeof__(name) *_shrink = &(name);			\
 	_shrink->count_objects = (countfn);			\
 	_shrink->scan_objects = (scanfn);			\
-	_shrink->seeks = DEFAULT_SEEKS;			\
+	_shrink->seeks = DEFAULT_SEEKS;				\
 } while (0)
 
 #define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(ptr, type, shrinker)
 #ifdef KC_SHRINKER_NAME
-#define KC_REGISTER_SHRINKER register_shrinker
+#define KC_ALLOC_SHRINKER(ptr, priv, flags, fmt, args) register_shrinker(&ptr, fmt, args)
+#define KC_REGISTER_SHRINKER(ptr) do {} while(0)
 #else
-#define KC_REGISTER_SHRINKER(ptr, fmt, ...) (register_shrinker(ptr))
+#define KC_ALLOC_SHRINKER(ptr, priv, flags, fmt, args) do {} while(0)
+#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(&ptr))
 #endif /* KC_SHRINKER_NAME */
-#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr))
-#define KC_SHRINKER_FN(ptr) (ptr)
-#else
+#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(&(ptr)))
+#define KC_SHRINKER_FN(ptr) (&ptr)
+
+#else /* KC_SHRINKER_SHRINK */
+// el7
 
 #include <linux/shrinker.h>
 #ifndef SHRINK_STOP
@@ -177,18 +205,20 @@ struct kc_shrinker_wrapper {
 
 #define KC_DEFINE_SHRINKER(name) struct kc_shrinker_wrapper name;
 #define KC_INIT_SHRINKER_FUNCS(name, countfn, scanfn) do {	\
-	struct kc_shrinker_wrapper *_wrap = (name);		\
+	struct kc_shrinker_wrapper *_wrap = &(name);		\
 	_wrap->count_objects = (countfn);			\
 	_wrap->scan_objects = (scanfn);				\
 	_wrap->shrink.shrink = kc_shrink_wrapper_fn;		\
 	_wrap->shrink.seeks = DEFAULT_SEEKS;			\
 } while (0)
 #define KC_SHRINKER_CONTAINER_OF(ptr, type) container_of(container_of(ptr, struct kc_shrinker_wrapper, shrink), type, shrinker)
-#define KC_REGISTER_SHRINKER(ptr, fmt, ...) (register_shrinker(ptr.shrink))
-#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr.shrink))
-#define KC_SHRINKER_FN(ptr) (ptr.shrink)
+#define KC_ALLOC_SHRINKER(ptr, priv, flags, fmt, args) do {} while(0)
+#define KC_REGISTER_SHRINKER(ptr) (register_shrinker(&(ptr).shrink))
+#define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(&(ptr).shrink))
+#define KC_SHRINKER_FN(ptr) (&(ptr).shrink)
 
 #endif /* KC_SHRINKER_SHRINK */
+#endif /* KC_SHRINKER_ALLOC */
 
 #ifdef KC_KERNEL_GETSOCKNAME_ADDRLEN
 #include <linux/net.h>

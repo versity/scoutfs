@@ -1112,8 +1112,9 @@ int scoutfs_wkic_setup(struct super_block *sb)
 	}
 
 	winf->sb = sb;
-	KC_INIT_SHRINKER_FUNCS(&winf->shrinker, wkic_shrink_count, wkic_shrink_scan);
-	KC_REGISTER_SHRINKER(&winf->shrinker, "scoutfs-weak_item:" SCSBF, SCSB_ARGS(sb));
+	KC_ALLOC_SHRINKER(winf->shrinker, winf, 0, "scoutfs-weak_item:" SCSBF, SCSB_ARGS(sb));
+	KC_INIT_SHRINKER_FUNCS(winf->shrinker, wkic_shrink_count, wkic_shrink_scan);
+	KC_REGISTER_SHRINKER(winf->shrinker);
 
 	sbi->wkic_info = winf;
 	return 0;
@@ -1141,7 +1142,7 @@ void scoutfs_wkic_destroy(struct super_block *sb)
 
 	if (winf) {
 		debugfs_remove(winf->drop_dentry);
-		KC_UNREGISTER_SHRINKER(&winf->shrinker);
+		KC_UNREGISTER_SHRINKER(winf->shrinker);
 
 		/* trees are in sync so tearing down one frees all pages */
 		rbtree_postorder_for_each_entry_safe(wpage, tmp, &winf->wpage_roots[0], nodes[0]) {

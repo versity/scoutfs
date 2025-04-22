@@ -1300,9 +1300,9 @@ int scoutfs_block_setup(struct super_block *sb)
 	atomic_set(&binf->total_inserted, 0);
 	atomic64_set(&binf->access_counter, 0);
 	init_waitqueue_head(&binf->waitq);
-	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
-			       block_scan_objects);
-	KC_REGISTER_SHRINKER(&binf->shrinker, "scoutfs-block:" SCSBF, SCSB_ARGS(sb));
+	KC_ALLOC_SHRINKER(binf->shrinker, binf, 0, "scoutfs-block:" SCSBF, SCSB_ARGS(sb));
+	KC_INIT_SHRINKER_FUNCS(binf->shrinker, block_count_objects, block_scan_objects);
+	KC_REGISTER_SHRINKER(binf->shrinker);
 	INIT_WORK(&binf->free_work, block_free_work);
 	init_llist_head(&binf->free_llist);
 
@@ -1322,7 +1322,7 @@ void scoutfs_block_destroy(struct super_block *sb)
 	struct block_info *binf = SCOUTFS_SB(sb)->block_info;
 
 	if (binf) {
-		KC_UNREGISTER_SHRINKER(&binf->shrinker);
+		KC_UNREGISTER_SHRINKER(binf->shrinker);
 		block_remove_all(sb);
 		flush_work(&binf->free_work);
 		rhashtable_destroy(&binf->ht);

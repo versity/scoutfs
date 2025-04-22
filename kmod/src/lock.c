@@ -1505,7 +1505,7 @@ void scoutfs_free_unused_locks(struct super_block *sb)
 		.nr_to_scan = INT_MAX,
 	};
 
-	lock_scan_objects(KC_SHRINKER_FN(&linfo->shrinker), &sc);
+	lock_scan_objects(KC_SHRINKER_FN(linfo->shrinker), &sc);
 }
 
 static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
@@ -1612,7 +1612,7 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 	trace_scoutfs_lock_shutdown(sb, linfo);
 
 	/* stop the shrinker from queueing work */
-	KC_UNREGISTER_SHRINKER(&linfo->shrinker);
+	KC_UNREGISTER_SHRINKER(linfo->shrinker);
 	flush_work(&linfo->shrink_work);
 
 	/* cause current and future lock calls to return errors */
@@ -1731,9 +1731,9 @@ int scoutfs_lock_setup(struct super_block *sb)
 	spin_lock_init(&linfo->lock);
 	linfo->lock_tree = RB_ROOT;
 	linfo->lock_range_tree = RB_ROOT;
-	KC_INIT_SHRINKER_FUNCS(&linfo->shrinker, lock_count_objects,
-			       lock_scan_objects);
-	KC_REGISTER_SHRINKER(&linfo->shrinker, "scoutfs-lock:" SCSBF, SCSB_ARGS(sb));
+	KC_ALLOC_SHRINKER(linfo->shrinker, linfo, 0, "scoutfs-lock:" SCSBF, SCSB_ARGS(sb));
+	KC_INIT_SHRINKER_FUNCS(linfo->shrinker, lock_count_objects, lock_scan_objects);
+	KC_REGISTER_SHRINKER(linfo->shrinker);
 	INIT_LIST_HEAD(&linfo->lru_list);
 	INIT_WORK(&linfo->inv_work, lock_invalidate_worker);
 	INIT_LIST_HEAD(&linfo->inv_list);
