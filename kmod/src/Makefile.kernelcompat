@@ -519,3 +519,11 @@ endif
 ifneq (,$(shell grep 'inline time64_t inode_get_atime_sec' include/linux/fs.h))
 ccflags-y += -DKC_FS_INODE_AM_TIME_ACCESSOR
 endif
+
+#
+# v6.12-rc1-3-g5f60d5f6bbc1
+#
+# asm/unaligned.h replaced with linux/unaligned.h
+ifneq (,$(shell grep -s 'define __LINUX_UNALIGNED_H' include/linux/unaligned.h))
+ccflags-y += -DKC_HAVE__LINUX_UNALIGNED_H
+endif
