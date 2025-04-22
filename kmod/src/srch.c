@@ -18,7 +18,11 @@
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
 #include <linux/sort.h>
+#ifdef KC_HAVE__LINUX_UNALIGNED_H
+#include <linux/unaligned.h>
+#else
 #include <asm/unaligned.h>
+#endif
 
 #include "super.h"
 #include "format.h"
