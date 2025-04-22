@@ -1229,7 +1229,12 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_op
 	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
-	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
+	ret = bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
+	if (ret != SCOUTFS_BLOCK_SM_SIZE) {
+		bio_put(bio);
+		ret = -EFAULT;
+		goto out;
+	}
 
 	init_completion(&sbc.comp);
 	sbc.err = 0;
