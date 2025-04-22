@@ -255,6 +255,17 @@ ccflags-y += -DKC_HAVE_BD_INODE
 endif
 
 #
+# v6.8-9146-gc759e609030c
+#
+# Removes __assign_str_len() and removes the 2nd param of __assign_str().
+ifneq (,$(shell grep -s 'define __assign_str.dst, src' \
+				include/trace/trace_events.h \
+				include/trace/ftrace.h \
+				include/trace/stages/stage6_event_callback.h))
+ccflags-y += -DKC_HAVE_ASSIGN_STR_PARMS
+endif
+
+#
 # v6.15-13744-g41cb08555c41
 #
 # from_timer renamed to timer_container_of.
