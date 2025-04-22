@@ -283,7 +283,7 @@ int scoutfs_write_super(struct super_block *sb,
 static bool small_bdev(struct super_block *sb, char *which, u64 blocks,
 		       struct block_device *bdev, int shift)
 {
-	u64 size = (u64)i_size_read(bdev->bd_inode);
+	u64 size = (u64)i_size_read(KC_BDEV_INODE(bdev));
 	u64 count = size >> shift;
 
 	if (blocks > count) {
@@ -508,7 +508,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_time_gran = 1;
 
 	/* btree blocks use long lived bh->b_data refs */
-	mapping_set_gfp_mask(sb->s_bdev->bd_inode->i_mapping, GFP_NOFS);
+	mapping_set_gfp_mask(KC_BDEV_MAPPING(sb->s_bdev), GFP_NOFS);
 
 	sbi = kzalloc(sizeof(struct scoutfs_sb_info), GFP_KERNEL);
 	sb->s_fs_info = sbi;

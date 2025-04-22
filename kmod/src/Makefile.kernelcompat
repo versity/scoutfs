@@ -247,6 +247,14 @@ ccflags-y += -DKC_HAVE__LINUX_UNALIGNED_H
 endif
 
 #
+# v6.9-rc4-29-g203c1ce0bb06
+#
+# RIP bd_inode. (note, struct moved between headers!)
+ifneq (,$(shell grep -s 'struct inode.*bd_inode' include/linux/blk_types.h include/linux/fs.h))
+ccflags-y += -DKC_HAVE_BD_INODE
+endif
+
+#
 # v6.15-13744-g41cb08555c41
 #
 # from_timer renamed to timer_container_of.
