@@ -2042,7 +2042,7 @@ struct merged_item {
 	u64 seq;
 	u8 flags;
 	unsigned int val_len;
-	u8 val[0];
+	u8 val[];
 };
 
 static inline struct merged_item *mitem_container(struct rb_node *node)
@@ -2208,7 +2208,7 @@ static int merge_read_item(struct super_block *sb, struct scoutfs_key *key, u64 
 	mitem->flags = flags;
 	mitem->val_len = val_len;
 	if (val_len)
-		memcpy(mitem->val, val, val_len);
+		memcpy(&mitem->val[0], val, val_len);
 
 	if (found) {
 		replace_mitem(rng, found, mitem);

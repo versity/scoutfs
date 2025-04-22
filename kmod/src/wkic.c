@@ -171,7 +171,7 @@ struct wkic_item {
 	u64 seq;
 	unsigned int val_len;
 	u8 flags;
-	u8 val[0] __aligned(ARCH_KMALLOC_MINALIGN); /* totls have native structs */
+	u8 val[] __aligned(ARCH_KMALLOC_MINALIGN); /* totls have native structs */
 };
 
 static struct wkic_item *witem_container(struct rb_node *node)
@@ -763,7 +763,7 @@ static void fill_page_items(struct super_block *sb, struct wkic_page *wpage, str
 		pg_item->val_len = witem->val_len;
 		pg_item->flags = witem->flags;
 		if (witem->val_len)
-			memcpy(pg_item->val, witem->val, witem->val_len);
+			memcpy(&pg_item->val[0], witem->val, witem->val_len);
 
 		/* always inserting greatest item into page */
 		rb_link_node(&pg_item->node, parent, node);
