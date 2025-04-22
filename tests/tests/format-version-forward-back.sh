@@ -11,8 +11,8 @@
 # format version.
 #
 
-# not supported on el9!
-if [ $(source /etc/os-release ; echo ${VERSION_ID:0:1}) -gt 8 ]; then
+# not supported on el9, or higher versions.
+if [ $(source /etc/os-release ; echo ${VERSION_ID} | cut -d. -f1) -gt 8 ]; then
 	t_skip_permitted "Unsupported OS version"
 fi
 
