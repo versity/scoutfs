@@ -527,3 +527,11 @@ endif
 ifneq (,$(shell grep -s 'define __LINUX_UNALIGNED_H' include/linux/unaligned.h))
 ccflags-y += -DKC_HAVE__LINUX_UNALIGNED_H
 endif
+
+#
+# v6.9-rc4-29-g203c1ce0bb06
+#
+# RIP bd_inode. (note, struct moved between headers!)
+ifneq (,$(shell grep -s 'struct inode.*bd_inode' include/linux/blk_types.h include/linux/fs.h))
+ccflags-y += -DKC_HAVE_BD_INODE
+endif
