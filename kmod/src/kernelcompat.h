@@ -306,6 +306,14 @@ static inline long inode_get_atime_nsec(const struct inode *inode)
 }
 #endif
 
+#ifdef KC_HAVE_BD_INODE
+#define KC_BDEV_INODE(b) (b)->bd_inode
+#define KC_BDEV_MAPPING(b) (b)->bd_inode->i_mapping
+#else
+#define KC_BDEV_INODE(b) (b)->bd_mapping->host
+#define KC_BDEV_MAPPING(b) (b)->bd_mapping
+#endif
+
 #ifndef KC_TIMER_CONTAINER_OF
 #define timer_container_of(var, callback_timer, timer_fieldname) \
 	from_timer(var, callback_timer, timer_fieldname)

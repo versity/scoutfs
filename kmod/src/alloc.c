@@ -308,14 +308,14 @@ static bool invalid_extent(u64 start, u64 end, u64 first, u64 last)
 static bool invalid_meta_blkno(struct super_block *sb, u64 blkno)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	u64 last_meta = (i_size_read(sbi->meta_bdev->bd_inode) >> SCOUTFS_BLOCK_LG_SHIFT) - 1;
+	u64 last_meta = (i_size_read(KC_BDEV_INODE(sbi->meta_bdev)) >> SCOUTFS_BLOCK_LG_SHIFT) - 1;
 
 	return invalid_extent(blkno, blkno, SCOUTFS_META_DEV_START_BLKNO, last_meta);
 }
 
 static bool invalid_data_extent(struct super_block *sb, u64 start, u64 len)
 {
-	u64 last_data = (i_size_read(sb->s_bdev->bd_inode) >> SCOUTFS_BLOCK_SM_SHIFT) - 1;
+	u64 last_data = (i_size_read(KC_BDEV_INODE(sb->s_bdev)) >> SCOUTFS_BLOCK_SM_SHIFT) - 1;
 
 	return invalid_extent(start, start + len - 1, SCOUTFS_DATA_DEV_START_BLKNO, last_data);
 }
