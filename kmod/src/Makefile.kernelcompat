@@ -546,3 +546,12 @@ ifneq (,$(shell grep -s 'define __assign_str.dst, src' \
 				include/trace/stages/stage6_event_callback.h))
 ccflags-y += -DKC_HAVE_ASSIGN_STR_PARMS
 endif
+
+#
+# v6.6-rc4-53-gc42d50aefd17
+#
+# el10 yet again modifies the shrinker API significantly, breaking our current
+# implementation.
+ifneq (,$(shell grep 'struct shrinker .shrinker_alloc' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_ALLOC
+endif

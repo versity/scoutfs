@@ -269,7 +269,7 @@ static void shrink_all_cached_checks(struct squota_info *qtinf)
 {
 	struct shrink_control sc = { .nr_to_scan = LONG_MAX, };
 
-	scan_cached_checks(KC_SHRINKER_FN(&qtinf->shrinker), &sc);
+	scan_cached_checks(KC_SHRINKER_FN(qtinf->shrinker), &sc);
 }
 
 static u8 ns_is_attr(u8 ns)
@@ -1225,8 +1225,12 @@ int scoutfs_quota_setup(struct super_block *sb)
 	spin_lock_init(&qtinf->lock);
 	init_waitqueue_head(&qtinf->waitq);
 
-	KC_INIT_SHRINKER_FUNCS(&qtinf->shrinker, count_cached_checks, scan_cached_checks);
-	KC_REGISTER_SHRINKER(&qtinf->shrinker, "scoutfs-quota:" SCSBF, SCSB_ARGS(sb));
+	KC_SETUP_SHRINKER(qtinf->shrinker, qtinf, 0, count_cached_checks,
+			  scan_cached_checks, "scoutfs-quota:" SCSBF, SCSB_ARGS(sb));
+	if (KC_SHRINKER_IS_NULL(qtinf->shrinker)) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	sbi->squota_info = qtinf;
 
@@ -1250,7 +1254,7 @@ void scoutfs_quota_destroy(struct super_block *sb)
 
 	if (qtinf) {
 		debugfs_remove(qtinf->drop_dentry);
-		KC_UNREGISTER_SHRINKER(&qtinf->shrinker);
+		KC_UNREGISTER_SHRINKER(qtinf->shrinker);
 
 		spin_lock(&qtinf->lock);
 		rs = rcu_dereference_protected(qtinf->ruleset, lockdep_is_held(&qtinf->lock));
