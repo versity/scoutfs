@@ -562,3 +562,11 @@ endif
 ifneq (,$(shell grep 'struct shrinker .shrinker_alloc' include/linux/shrinker.h))
 ccflags-y += -DKC_SHRINKER_ALLOC
 endif
+
+#
+# v6.9-rc4-8-gead083aeeed9
+#
+# set_blocksize() now has a struct file arg.
+ifneq (,$(shell grep -s 'int set_blocksize.struct file' include/linux/blkdev.h))
+ccflags-y += -DKC_BLKDEV_SET_BLOCKSIZE_FILE
+endif
