@@ -548,6 +548,13 @@ ccflags-y += -DKC_HAVE_ASSIGN_STR_PARMS
 endif
 
 #
+# v6.5-113-g615e95831ec3
+#
+ifneq (,$(shell grep 'generic_fillattr..*,.u32,' include/linux/fs.h))
+ccflags-y += -DKC_GENERIC_FILLATTR_REQUEST_MASK
+endif
+
+#
 # v6.6-rc4-53-gc42d50aefd17
 #
 # el10 yet again modifies the shrinker API significantly, breaking our current

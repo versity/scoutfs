@@ -398,6 +398,7 @@ int scoutfs_getattr(KC_VFS_NS_DEF
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret == 0) {
 		generic_fillattr(KC_VFS_INIT_NS
+				 KC_FILLATTR_REQUEST_MASK
 				 inode, stat);
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	}
