@@ -288,6 +288,14 @@ ccflags-y += -DKC_VFS_METHOD_USER_NAMESPACE_ARG
 endif
 
 #
+# v6.2-rc1-2-gabf08576afe3
+#
+# fs: vfs methods use struct mnt_idmap instead of struct user_namespace
+ifneq (,$(shell grep 'int vfs_mknod.struct mnt_idmap' include/linux/fs.h))
+ccflags-y += -DKC_VFS_METHOD_MNT_IDMAP_ARG
+endif
+
+#
 # v5.17-rc2-21-g07888c665b40
 #
 # Detect new style bio_alloc - pass bdev and opf.
