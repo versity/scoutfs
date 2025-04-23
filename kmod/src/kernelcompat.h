@@ -310,6 +310,12 @@ typedef unsigned int blk_opf_t;
 #endif
 #endif /* KC_VFS_METHOD_MNT_IDMAP_ARG */
 
+#ifdef KC_GENERIC_FILLATTR_REQUEST_MASK
+#define KC_FILLATTR_REQUEST_MASK request_mask,
+#else
+#define KC_FILLATTR_REQUEST_MASK
+#endif
+
 #ifdef KC_BIO_ALLOC_DEV_OPF_ARGS
 #define kc_bio_alloc bio_alloc
 #else
