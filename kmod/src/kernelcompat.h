@@ -297,15 +297,18 @@ typedef unsigned int blk_opf_t;
 #define KC_VFS_NS_DEF struct mnt_idmap *mnt_idmap,
 #define KC_VFS_NS mnt_idmap,
 #define KC_VFS_INIT_NS &nop_mnt_idmap,
+#define KC_FILLATTR_REQUEST_MASK request_mask,
 #else
 #ifdef KC_VFS_METHOD_USER_NAMESPACE_ARG
 #define KC_VFS_NS_DEF struct user_namespace *mnt_user_ns,
 #define KC_VFS_NS mnt_user_ns,
 #define KC_VFS_INIT_NS &init_user_ns,
+#define KC_FILLATTR_REQUEST_MASK
 #else
 #define KC_VFS_NS_DEF
 #define KC_VFS_NS
 #define KC_VFS_INIT_NS
+#define KC_FILLATTR_REQUEST_MASK
 #endif
 #endif /* KC_VFS_METHOD_MNT_IDMAP_ARG */
 
