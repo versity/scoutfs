@@ -442,3 +442,12 @@ endif
 ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
 ccflags-y += -DKC_MM_REMAP_PAGES
 endif
+
+#
+# v6.1-rc1-4-g7420332a6ff4
+#
+# .get_acl() method now has dentry arg (and mnt_idmap). The old get_acl has been renamed
+# to get_inode_acl() and is still available as well, but has an extra rcu param.
+ifneq (,$(shell grep 'struct posix_acl ...get_acl..struct mnt_idmap ., struct dentry' include/linux/fs.h))
+ccflags-y += -DKC_GET_ACL_DENTRY
+endif

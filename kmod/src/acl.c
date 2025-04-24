@@ -107,8 +107,15 @@ struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct s
 	return acl;
 }
 
+#ifdef KC_GET_ACL_DENTRY
+struct posix_acl *scoutfs_get_acl(KC_VFS_NS_DEF
+				  struct dentry *dentry, int type)
+{
+	struct inode *inode = dentry->d_inode;
+#else
 struct posix_acl *scoutfs_get_acl(struct inode *inode, int type)
 {
+#endif
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
 	struct posix_acl *acl;
@@ -201,8 +208,15 @@ out:
 	return ret;
 }
 
+#ifdef KC_GET_ACL_DENTRY
+int scoutfs_set_acl(KC_VFS_NS_DEF
+		    struct dentry *dentry, struct posix_acl *acl, int type)
+{
+	struct inode *inode = dentry->d_inode;
+#else
 int scoutfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 {
+#endif
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
 	LIST_HEAD(ind_locks);
@@ -240,7 +254,12 @@ int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, 
 	if (!IS_POSIXACL(dentry->d_inode))
 		return -EOPNOTSUPP;
 
+#ifdef KC_GET_ACL_DENTRY
+	acl = scoutfs_get_acl(KC_VFS_INIT_NS
+			      dentry, type);
+#else
 	acl = scoutfs_get_acl(dentry->d_inode, type);
+#endif
 	if (IS_ERR(acl))
 		return PTR_ERR(acl);
 	if (acl == NULL)
@@ -286,7 +305,11 @@ int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *v
 		}
 	}
 
+#ifdef KC_GET_ACL_DENTRY
+	ret = scoutfs_set_acl(KC_VFS_INIT_NS dentry, acl, type);
+#else
 	ret = scoutfs_set_acl(dentry->d_inode, acl, type);
+#endif
 out:
 	posix_acl_release(acl);
 
