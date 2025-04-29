@@ -518,3 +518,11 @@ endif
 ifneq (,$(shell grep 'struct posix_acl ...get_acl..struct mnt_idmap ., struct dentry' include/linux/fs.h))
 ccflags-y += -DKC_GET_ACL_DENTRY
 endif
+
+#
+# v5.1-rc3-29-gaa30f47cf666
+#
+# struct kobj_type now has member `default_groups`
+ifneq (,$(shell grep 'const struct attribute_group ..default_groups;' include/linux/kobject.h))
+ccflags-y += -DKC_KOBJECT_DEFAULT_GROUPS
+endif
