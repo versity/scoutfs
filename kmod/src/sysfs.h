@@ -39,10 +39,15 @@ void scoutfs_sysfs_init_attrs(struct super_block *sb,
 int scoutfs_sysfs_create_attrs_parent(struct super_block *sb,
 				      struct kobject *parent,
 				      struct scoutfs_sysfs_attrs *ssa,
-				      struct attribute **attrs, char *fmt, ...);
-#define scoutfs_sysfs_create_attrs(sb, ssa, attrs, fmt, args...)	\
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+				      const struct attribute_group **groups,
+#else
+				      struct attribute **attrs,
+#endif
+				      char *fmt, ...);
+#define scoutfs_sysfs_create_attrs(sb, ssa, group_or_attrs, fmt, args...)	\
 	scoutfs_sysfs_create_attrs_parent(sb, scoutfs_sysfs_sb_dir(sb),	\
-					  ssa, attrs, fmt, ##args)
+					  ssa, group_or_attrs, fmt, ##args)
 
 void scoutfs_sysfs_destroy_attrs(struct super_block *sb,
 				 struct scoutfs_sysfs_attrs *ssa);

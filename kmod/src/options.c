@@ -752,13 +752,18 @@ static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(quorum_slot_nr),
 	NULL,
 };
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+ATTRIBUTE_GROUPS(options);
+#endif
 
 int scoutfs_options_setup(struct super_block *sb)
 {
 	DECLARE_OPTIONS_INFO(sb, optinf);
 	int ret;
 
-	ret = scoutfs_sysfs_create_attrs(sb, &optinf->sysfs_attrs, options_attrs, "mount_options");
+	ret = scoutfs_sysfs_create_attrs(sb, &optinf->sysfs_attrs,
+					 KC_KOBJ_DEFAULT_PICK(options_groups, options_attrs),
+					 "mount_options");
 	if (ret < 0)
 		scoutfs_options_destroy(sb);
 	return ret;
