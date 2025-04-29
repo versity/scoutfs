@@ -570,3 +570,11 @@ endif
 ifneq (,$(shell grep -s 'int set_blocksize.struct file' include/linux/blkdev.h))
 ccflags-y += -DKC_BLKDEV_SET_BLOCKSIZE_FILE
 endif
+
+#
+# v5.1-rc3-29-gaa30f47cf666
+#
+# struct kobj_type now has member `default_groups`
+ifneq (,$(shell grep 'const struct attribute_group ..default_groups;' include/linux/kobject.h))
+ccflags-y += -DKC_KOBJECT_DEFAULT_GROUPS
+endif
