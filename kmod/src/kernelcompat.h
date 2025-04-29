@@ -639,4 +639,14 @@ static inline long inode_get_atime_nsec(const struct inode *inode)
 #define kc__assign_str(a, b) __assign_str(a)
 #endif
 
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+#define KC_KOBJ_DEFAULT_OP default_groups
+#define KC_KOBJ_DEFAULT(name) (name##_groups)
+#define KC_KOBJ_DEFAULT_PICK(group, attrs) (group)
+#else
+#define KC_KOBJ_DEFAULT_OP default_attrs
+#define KC_KOBJ_DEFAULT(name) (name##_attrs)
+#define KC_KOBJ_DEFAULT_PICK(group, attrs) (attrs)
+#endif
+
 #endif

@@ -1192,6 +1192,9 @@ static struct attribute *quorum_attrs[] = {
 	SCOUTFS_ATTR_PTR(is_leader),
 	NULL,
 };
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+ATTRIBUTE_GROUPS(quorum);
+#endif
 
 static inline bool valid_ipv4_unicast(__be32 addr)
 {
@@ -1352,7 +1355,7 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_sysfs_create_attrs(sb, &qinf->ssa, quorum_attrs,
+	ret = scoutfs_sysfs_create_attrs(sb, &qinf->ssa, KC_KOBJ_DEFAULT(quorum),
 					 "quorum");
 	if (ret < 0)
 		goto out;
