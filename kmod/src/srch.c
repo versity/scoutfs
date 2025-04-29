@@ -2350,6 +2350,9 @@ static struct attribute *srch_attrs[] = {
 	SCOUTFS_ATTR_PTR(compact_delay_ms),
 	NULL,
 };
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+ATTRIBUTE_GROUPS(srch);
+#endif
 
 void scoutfs_srch_destroy(struct super_block *sb)
 {
@@ -2391,7 +2394,8 @@ int scoutfs_srch_setup(struct super_block *sb)
 
 	sbi->srch_info = srinf;
 
-	ret = scoutfs_sysfs_create_attrs(sb, &srinf->ssa, srch_attrs, "srch");
+	ret = scoutfs_sysfs_create_attrs(sb, &srinf->ssa, KC_KOBJ_DEFAULT(srch),
+					 "srch");
 	if (ret < 0)
 		goto out;
 
