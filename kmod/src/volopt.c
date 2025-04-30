@@ -174,7 +174,7 @@ int scoutfs_volopt_setup(struct super_block *sb)
 	volopt_attr_ptrs[i] = NULL;
 
 	ret = scoutfs_sysfs_create_attrs(sb, &vinf->ssa,
-					 KC_KOBJ_DEFAULT(volopt),
+					 KC_KOBJ_DEFAULT_PICK(volopt_groups, volopt_attr_ptrs),
 					 "volume_options");
 	if (ret < 0)
 		goto out;

@@ -2400,8 +2400,7 @@ int scoutfs_srch_setup(struct super_block *sb)
 
 	sbi->srch_info = srinf;
 
-	ret = scoutfs_sysfs_create_attrs(sb, &srinf->ssa,
-					 KC_KOBJ_DEFAULT(srch),
+	ret = scoutfs_sysfs_create_attrs(sb, &srinf->ssa, KC_KOBJ_DEFAULT(srch),
 					 "srch");
 	if (ret < 0)
 		goto out;

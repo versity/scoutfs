@@ -1364,8 +1364,7 @@ int scoutfs_quorum_setup(struct super_block *sb)
 	if (ret < 0)
 		goto out;
 
-	ret = scoutfs_sysfs_create_attrs(sb, &qinf->ssa,
-					 KC_KOBJ_DEFAULT(quorum),
+	ret = scoutfs_sysfs_create_attrs(sb, &qinf->ssa, KC_KOBJ_DEFAULT(quorum),
 					 "quorum");
 	if (ret < 0)
 		goto out;

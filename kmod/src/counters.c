@@ -83,11 +83,7 @@ static const struct sysfs_ops scoutfs_counter_attr_ops = {
 };
 
 static struct kobj_type scoutfs_counters_ktype = {
-#ifdef KC_KOBJECT_DEFAULT_GROUPS
-	.default_groups = scoutfs_counter_groups,
-#else
-	.default_attrs  = scoutfs_counter_attr_ptrs,
-#endif
+	.KC_KOBJ_DEFAULT_OP = KC_KOBJ_DEFAULT_PICK(scoutfs_counter_groups, scoutfs_counter_attr_ptrs),
 	.sysfs_ops      = &scoutfs_counter_attr_ops,
 	.release        = scoutfs_counters_kobj_release,
 };

@@ -609,7 +609,7 @@ int scoutfs_options_setup(struct super_block *sb)
 	int ret;
 
 	ret = scoutfs_sysfs_create_attrs(sb, &optinf->sysfs_attrs,
-					 KC_KOBJ_DEFAULT(options),
+					 KC_KOBJ_DEFAULT_PICK(options_groups, options_attrs),
 					 "mount_options");
 	if (ret < 0)
 		scoutfs_options_destroy(sb);

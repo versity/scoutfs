@@ -45,9 +45,9 @@ int scoutfs_sysfs_create_attrs_parent(struct super_block *sb,
 				      struct attribute **attrs,
 #endif
 				      char *fmt, ...);
-#define scoutfs_sysfs_create_attrs(sb, ssa, attrs_or_group, fmt, args...)	\
+#define scoutfs_sysfs_create_attrs(sb, ssa, group_or_attrs, fmt, args...)	\
 	scoutfs_sysfs_create_attrs_parent(sb, scoutfs_sysfs_sb_dir(sb),	\
-					  ssa, attrs_or_group, fmt, ##args)
+					  ssa, group_or_attrs, fmt, ##args)
 
 void scoutfs_sysfs_destroy_attrs(struct super_block *sb,
 				 struct scoutfs_sysfs_attrs *ssa);
