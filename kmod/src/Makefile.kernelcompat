@@ -578,3 +578,14 @@ endif
 ifneq (,$(shell grep 'const struct attribute_group ..default_groups;' include/linux/kobject.h))
 ccflags-y += -DKC_KOBJECT_DEFAULT_GROUPS
 endif
+
+#
+# v6.7-rc4-307-g17bf23a981be
+#
+# block_write_full_page() is replaced with block_write_full_folio(),
+# but that isn't exported as it used to be (and the only users now
+# are builtin). However, the kernel will fall back to using the
+# .writepages method instead, so we can drop this method.
+ifneq (,$(shell grep 'int block_write_full_page.struct page' include/linux/buffer_head.h))
+ccflags-y += -DKC_HAVE_BLOCK_WRITE_FULL_PAGE
+endif
