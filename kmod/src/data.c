@@ -716,24 +716,24 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 		return ret;
 	}
 
-	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
-		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_SIZE, SEF_OFFLINE,
-					      SCOUTFS_IOC_DWO_READ, &dw,
-					      inode_lock);
-		if (ret != 0) {
-			unlock_page(page);
-			scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
-			scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
-		}
-		if (ret > 0) {
-			ret = scoutfs_data_wait(inode, &dw);
-			if (ret == 0)
-				ret = AOP_TRUNCATED_PAGE;
-		}
-		if (ret != 0)
-			return ret;
+	scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock);
+
+	ret = scoutfs_data_wait_check(inode, page_offset(page),
+				      PAGE_SIZE, SEF_OFFLINE,
+				      SCOUTFS_IOC_DWO_READ, &dw,
+				      inode_lock);
+	if (ret != 0) {
+		unlock_page(page);
+		scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+		scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	}
+	if (ret > 0) {
+		ret = scoutfs_data_wait(inode, &dw);
+		if (ret == 0)
+			ret = AOP_TRUNCATED_PAGE;
+	}
+	if (ret != 0)
+		return ret;
 
 #ifdef KC_MPAGE_READ_FOLIO
 	ret = mpage_read_folio(folio, scoutfs_get_block_read);
@@ -741,8 +741,8 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	ret = mpage_readpage(page, scoutfs_get_block_read);
 #endif
 
-	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 
 	return ret;
 }
@@ -760,8 +760,10 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 			     struct list_head *pages, unsigned nr_pages)
 {
 	struct inode *inode = file->f_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	struct page *page;
 	struct page *tmp;
 	int ret;
@@ -770,6 +772,8 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
 	if (ret)
 		goto out;
+
+	scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock);
 
 	list_for_each_entry_safe(page, tmp, pages, lru) {
 		ret = scoutfs_data_wait_check(inode, page_offset(page),
@@ -790,6 +794,7 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 
 	ret = mpage_readpages(mapping, pages, nr_pages, scoutfs_get_block_read);
 out:
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	BUG_ON(!list_empty(pages));
 	return ret;
@@ -798,14 +803,18 @@ out:
 static void scoutfs_readahead(struct readahead_control *rac)
 {
 	struct inode *inode = rac->file->f_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	int ret;
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
 	if (ret)
 		return;
+
+	scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock);
 
 	ret = scoutfs_data_wait_check(inode, readahead_pos(rac),
 				      readahead_length(rac), SEF_OFFLINE,
@@ -814,6 +823,7 @@ static void scoutfs_readahead(struct readahead_control *rac)
 	if (ret == 0)
 		mpage_readahead(rac, scoutfs_get_block_read);
 
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 }
 #endif
