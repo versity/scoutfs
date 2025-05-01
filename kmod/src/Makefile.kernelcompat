@@ -589,3 +589,12 @@ endif
 ifneq (,$(shell grep 'int block_write_full_page.struct page' include/linux/buffer_head.h))
 ccflags-y += -DKC_HAVE_BLOCK_WRITE_FULL_PAGE
 endif
+
+#
+# v6.4-rc2-29-gc6585011bc1d
+#
+# generic_file_splice_read is removed. It can be replaced with filemap_splice_read
+# or copy_splice_read.
+ifneq (,$(shell grep 'ssize_t generic_file_splice_read.struct file' include/linux/fs.h))
+ccflags-y += -DKC_HAVE_GENERIC_FILE_SPLICE_READ
+endif
