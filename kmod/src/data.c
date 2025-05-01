@@ -760,8 +760,10 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 			     struct list_head *pages, unsigned nr_pages)
 {
 	struct inode *inode = file->f_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	struct page *page;
 	struct page *tmp;
 	int ret;
@@ -771,26 +773,29 @@ static int scoutfs_readpages(struct file *file, struct address_space *mapping,
 	if (ret)
 		goto out;
 
-	list_for_each_entry_safe(page, tmp, pages, lru) {
-		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_SIZE, SEF_OFFLINE,
-					      SCOUTFS_IOC_DWO_READ, NULL,
-					      inode_lock);
-		if (ret < 0)
-			goto out;
-		if (ret > 0) {
-			list_del(&page->lru);
-			put_page(page);
-			if (--nr_pages == 0) {
-				ret = 0;
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
+		list_for_each_entry_safe(page, tmp, pages, lru) {
+			ret = scoutfs_data_wait_check(inode, page_offset(page),
+						      PAGE_SIZE, SEF_OFFLINE,
+						      SCOUTFS_IOC_DWO_READ, NULL,
+						      inode_lock);
+			if (ret < 0)
 				goto out;
+			if (ret > 0) {
+				list_del(&page->lru);
+				put_page(page);
+				if (--nr_pages == 0) {
+					ret = 0;
+					goto out;
+				}
 			}
 		}
-	}
 
-	ret = mpage_readpages(mapping, pages, nr_pages, scoutfs_get_block_read);
+		ret = mpage_readpages(mapping, pages, nr_pages, scoutfs_get_block_read);
+	}
 out:
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	BUG_ON(!list_empty(pages));
 	return ret;
 }
@@ -798,8 +803,10 @@ out:
 static void scoutfs_readahead(struct readahead_control *rac)
 {
 	struct inode *inode = rac->file->f_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	int ret;
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
@@ -807,14 +814,17 @@ static void scoutfs_readahead(struct readahead_control *rac)
 	if (ret)
 		return;
 
-	ret = scoutfs_data_wait_check(inode, readahead_pos(rac),
-				      readahead_length(rac), SEF_OFFLINE,
-				      SCOUTFS_IOC_DWO_READ, NULL,
-				      inode_lock);
-	if (ret == 0)
-		mpage_readahead(rac, scoutfs_get_block_read);
+	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
+		ret = scoutfs_data_wait_check(inode, readahead_pos(rac),
+					      readahead_length(rac), SEF_OFFLINE,
+					      SCOUTFS_IOC_DWO_READ, NULL,
+					      inode_lock);
+		if (ret == 0)
+			mpage_readahead(rac, scoutfs_get_block_read);
+	}
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 }
 #endif
 
