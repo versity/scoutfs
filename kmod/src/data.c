@@ -2259,8 +2259,12 @@ const struct address_space_operations scoutfs_file_aops = {
 const struct file_operations scoutfs_file_fops = {
 	.read_iter	= scoutfs_file_read_iter,
 	.write_iter	= scoutfs_file_write_iter,
-	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
+#ifdef KC_HAVE_GENERIC_FILE_SPLICE_READ
+	.splice_read	= generic_file_splice_read,
+#else
+	.splice_read	= copy_splice_read,
+#endif
 	.mmap		= scoutfs_file_mmap,
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
