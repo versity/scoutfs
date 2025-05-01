@@ -785,10 +785,12 @@ static void scoutfs_readahead(struct readahead_control *rac)
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 }
 
+#ifdef KC_HAVE_BLOCK_WRITE_FULL_PAGE
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
 {
 	return block_write_full_page(page, scoutfs_get_block_write, wbc);
 }
+#endif
 
 static int scoutfs_writepages(struct address_space *mapping,
 			      struct writeback_control *wbc)
@@ -2246,7 +2248,9 @@ const struct address_space_operations scoutfs_file_aops = {
 	.readpage		= scoutfs_readpage,
 #endif
 	.readahead		= scoutfs_readahead,
+#ifdef KC_HAVE_BLOCK_WRITE_FULL_PAGE
 	.writepage		= scoutfs_writepage,
+#endif
 	.writepages		= scoutfs_writepages,
 	.write_begin		= scoutfs_write_begin,
 	.write_end		= scoutfs_write_end,
