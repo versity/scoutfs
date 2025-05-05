@@ -2039,7 +2039,11 @@ const struct inode_operations scoutfs_symlink_iops = {
 };
 
 const struct file_operations scoutfs_dir_fops = {
+#ifdef KC_HAVE_ITERATE_SHARED
+	.iterate_shared	= scoutfs_readdir,
+#else
 	.iterate	= scoutfs_readdir,
+#endif
 #ifdef KC_FMODE_KABI_ITERATE
 	.open		= scoutfs_dir_open,
 #endif

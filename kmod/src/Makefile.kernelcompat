@@ -607,3 +607,11 @@ endif
 ifneq (,$(shell grep 'int buffer_migrate_folio.struct address_space' include/linux/buffer_head.h))
 ccflags-y += -DKC_HAVE_BUFFER_MIGRATE_FOLIO
 endif
+
+#
+# v4.6-rc3-29-g6192269444eb
+#
+# Adds .iterate_shared readdir() iterator vfs method.
+ifneq (,$(shell grep 'iterate_shared...struct file.., struct dir_context' include/linux/fs.h))
+ccflags-y += -DKC_HAVE_ITERATE_SHARED
+endif
