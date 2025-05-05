@@ -1971,7 +1971,11 @@ const struct inode_operations scoutfs_symlink_iops = {
 };
 
 const struct file_operations scoutfs_dir_fops = {
+#ifdef KC_HAVE_ITERATE_SHARED
+	.iterate_shared	= scoutfs_readdir,
+#else
 	.iterate	= scoutfs_readdir,
+#endif
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= generic_file_llseek,
