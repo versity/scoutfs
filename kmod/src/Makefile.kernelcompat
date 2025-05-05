@@ -607,3 +607,11 @@ endif
 ifneq (,$(shell grep 'ssize_t generic_file_splice_read.struct file' include/linux/fs.h))
 ccflags-y += -DKC_HAVE_GENERIC_FILE_SPLICE_READ
 endif
+
+#
+# v4.6-rc3-29-g6192269444eb
+#
+# Adds .iterate_shared readdir() iterator vfs method.
+ifneq (,$(shell grep 'iterate_shared...struct file.., struct dir_context' include/linux/fs.h))
+ccflags-y += -DKC_HAVE_ITERATE_SHARED
+endif
