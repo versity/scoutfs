@@ -598,3 +598,12 @@ endif
 ifneq (,$(shell grep 'ssize_t generic_file_splice_read.struct file' include/linux/fs.h))
 ccflags-y += -DKC_HAVE_GENERIC_FILE_SPLICE_READ
 endif
+
+#
+# v5.19-rc3-395-g67235182a41c
+#
+# Adds buffer_migrate_folio(), similar to other fss. Quote willy: "If the filesystem
+# implements migrate_folio and writepages, there is no need for a writepage implementation."
+ifneq (,$(shell grep 'int buffer_migrate_folio.struct address_space' include/linux/buffer_head.h))
+ccflags-y += -DKC_HAVE_BUFFER_MIGRATE_FOLIO
+endif

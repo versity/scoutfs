@@ -2207,6 +2207,9 @@ const struct address_space_operations scoutfs_file_aops = {
 	.dirty_folio		= block_dirty_folio,
 	.invalidate_folio	= block_invalidate_folio,
 	.read_folio		= scoutfs_read_folio,
+#ifdef KC_HAVE_BUFFER_MIGRATE_FOLIO
+	.migrate_folio		= buffer_migrate_folio,
+#endif
 #else
 	.readpage		= scoutfs_readpage,
 #endif
