@@ -1278,6 +1278,17 @@ restart:
 			set_conn_fl(acc, reconn_freeing);
 			spin_unlock(&conn->lock);
 			if (!test_conn_fl(conn, shutting_down)) {
+				/*
+				 * If we haven't seen a vg for this connection, don't bother fencing
+				 * it - instead just drop it. If this was a real client, it will try
+				 * again to connect.
+				 */
+				if (!test_conn_fl(acc, valid_greeting)) {
+					/* delete the conn */
+					list_del_init(&acc->accepted_head);
+					goto restart;
+				}
+
 				scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
 					     SIN_ARG(&acc->last_peername));
 				ret = scoutfs_fence_start(sb, acc->rid,
