@@ -532,12 +532,15 @@ for t in $tests; do
 	cmd rm -rf "$T_TMPDIR"
 	cmd mkdir -p "$T_TMPDIR"
 
-	# create a test name dir in the fs
+	# create a test name dir in the fs, clean up old data as needed
 	T_DS=""
 	for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
 		dir="${T_M[$i]}/test/$test_name"
 
-		test $i == 0 && cmd mkdir -p "$dir"
+		test $i == 0 && (
+			test -d "$dir" && cmd rm -rf "$dir"
+			cmd mkdir -p "$dir"
+		)
 
 		eval T_D$i=$dir
 		T_D[$i]=$dir
