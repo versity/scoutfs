@@ -38,6 +38,6 @@ while [ "$SECONDS" -lt "$END" ]; do
 done
 
 echo "== stopping background load"
-kill $load_pids
+t_silent_kill $load_pids
 
 t_pass

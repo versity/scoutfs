@@ -6,18 +6,6 @@ t_require_commands sleep touch sync stat handle_cat kill rm
 t_require_mounts 2
 
 #
-# usually bash prints an annoying output message when jobs
-# are killed.  We can avoid that by redirecting stderr for
-# the bash process when it reaps the jobs that are killed.
-#
-silent_kill() {
-	exec {ERR}>&2 2>/dev/null
-	kill "$@"
-	wait "$@"
-	exec 2>&$ERR {ERR}>&-
-}
-
-#
 # We don't have a great way to test that inode items still exist.   We
 # don't prevent opening handles with nlink 0 today, so we'll use that.
 # This would have to change to some other method.
@@ -52,7 +40,7 @@ inode_exists $ino || echo "$ino didn't exist"
 
 echo "== orphan from failed evict deletion is picked up"
 # pending kill signal stops evict from getting locks and deleting
-silent_kill $pid
+t_silent_kill $pid
 t_set_sysfs_mount_option 0 orphan_scan_delay_ms 1000
 sleep 5
 inode_exists $ino && echo "$ino still exists"
@@ -70,7 +58,7 @@ for nr in $(t_fs_nrs); do
 	rm -f "$path"
 done
 sync
-silent_kill $pids
+t_silent_kill $pids
 for nr in $(t_fs_nrs); do
 	t_force_umount $nr
 done
@@ -131,7 +119,7 @@ while [ $SECONDS -lt $END ]; do
 	done
 
 	# trigger eviction deletion of each file in each mount
-	silent_kill $pids
+	t_silent_kill $pids
 
 	wait || t_fail "handle_fsetxattr failed"
 

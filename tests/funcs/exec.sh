@@ -80,3 +80,15 @@ t_compare_output()
 {
 	"$@" >&7 2>&1
 }
+
+#
+# usually bash prints an annoying output message when jobs
+# are killed.  We can avoid that by redirecting stderr for
+# the bash process when it reaps the jobs that are killed.
+#
+t_silent_kill() {
+	exec {ERR}>&2 2>/dev/null
+	kill "$@"
+	wait "$@"
+	exec 2>&$ERR {ERR}>&-
+}
