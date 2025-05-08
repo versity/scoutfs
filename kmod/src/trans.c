@@ -159,6 +159,58 @@ static bool drained_holders(struct trans_info *tri)
 	return holders == 0;
 }
 
+static int commit_current_log_trees(struct super_block *sb, char **str)
+{
+	DECLARE_TRANS_INFO(sb, tri);
+
+	return (*str = "data submit", scoutfs_inode_walk_writeback(sb, true)) ?:
+	       (*str = "item dirty", scoutfs_item_write_dirty(sb))  ?:
+	       (*str = "data prepare", scoutfs_data_prepare_commit(sb))  ?:
+	       (*str = "alloc prepare", scoutfs_alloc_prepare_commit(sb, &tri->alloc, &tri->wri)) ?:
+	       (*str = "meta write", scoutfs_block_writer_write(sb, &tri->wri))  ?:
+	       (*str = "data wait", scoutfs_inode_walk_writeback(sb, false)) ?:
+	       (*str = "commit log trees", commit_btrees(sb)) ?:
+	       scoutfs_item_write_done(sb);
+}
+
+static int get_next_log_trees(struct super_block *sb, char **str)
+{
+	return (*str = "get log trees", scoutfs_trans_get_log_trees(sb));
+}
+
+static int retry_forever(struct super_block *sb, int (*func)(struct super_block *sb, char **str))
+{
+	bool retrying = false;
+	char *str;
+	int ret;
+
+	do {
+		str = NULL;
+
+		ret = func(sb, &str);
+		if (ret < 0) {
+			if (!retrying) {
+				scoutfs_warn(sb, "critical transaction commit failure: %s = %d, retrying",
+					    str, ret);
+				retrying = true;
+			}
+
+			if (scoutfs_forcing_unmount(sb)) {
+				ret = -EIO;
+				break;
+			}
+
+			msleep(2 * MSEC_PER_SEC);
+
+		} else if (retrying) {
+			scoutfs_info(sb, "retried transaction commit succeeded");
+		}
+
+	} while (ret < 0);
+
+	return ret;
+}
+
 /*
  * This work func is responsible for writing out all the dirty blocks
  * that make up the current dirty transaction.  It prevents writers from
@@ -184,8 +236,6 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	struct trans_info *tri = container_of(work, struct trans_info, write_work.work);
 	struct super_block *sb = tri->sb;
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	bool retrying = false;
-	char *s = NULL;
 	int ret = 0;
 
 	tri->task = current;
@@ -214,37 +264,9 @@ void scoutfs_trans_write_func(struct work_struct *work)
 
 	scoutfs_inc_counter(sb, trans_commit_written);
 
-	do {
-		ret = (s = "data submit", scoutfs_inode_walk_writeback(sb, true)) ?:
-		      (s = "item dirty", scoutfs_item_write_dirty(sb))  ?:
-		      (s = "data prepare", scoutfs_data_prepare_commit(sb))  ?:
-		      (s = "alloc prepare", scoutfs_alloc_prepare_commit(sb, &tri->alloc,
-									 &tri->wri))  ?:
-		      (s = "meta write", scoutfs_block_writer_write(sb, &tri->wri))  ?:
-		      (s = "data wait", scoutfs_inode_walk_writeback(sb, false)) ?:
-		      (s = "commit log trees", commit_btrees(sb)) ?:
-		      scoutfs_item_write_done(sb) ?:
-		      (s = "get log trees", scoutfs_trans_get_log_trees(sb));
-		if (ret < 0) {
-			if (!retrying) {
-				scoutfs_warn(sb, "critical transaction commit failure: %s = %d, retrying",
-					    s, ret);
-				retrying = true;
-			}
-
-			if (scoutfs_forcing_unmount(sb)) {
-				ret = -EIO;
-				break;
-			}
-
-			msleep(2 * MSEC_PER_SEC);
-
-		} else if (retrying) {
-			scoutfs_info(sb, "retried transaction commit succeeded");
-		}
-
-	} while (ret < 0);
-
+	/* retry {commit,get}_log_trees until they succeeed, can only fail when forcing unmount */
+	ret = retry_forever(sb, commit_current_log_trees) ?:
+	      retry_forever(sb, get_next_log_trees);
 out:
 	spin_lock(&tri->write_lock);
 	tri->write_count++;
