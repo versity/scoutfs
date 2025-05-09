@@ -1,6 +1,8 @@
 #ifndef _SCOUTFS_LOCK_H_
 #define _SCOUTFS_LOCK_H_
 
+#include <linux/rhashtable.h>
+
 #include "key.h"
 #include "tseq.h"
 
@@ -19,20 +21,24 @@ struct inode_deletion_lock_data;
  */
 struct scoutfs_lock {
 	struct super_block *sb;
+	atomic_t refcount;
+	spinlock_t lock;
+	struct rcu_head rcu_head;
 	struct scoutfs_key start;
 	struct scoutfs_key end;
-	struct rb_node node;
+	struct rhash_head ht_head;
 	struct rb_node range_node;
 	u64 refresh_gen;
 	u64 write_seq;
 	u64 dirty_trans_seq;
 	struct list_head lru_head;
+	int lru_on_list;
 	wait_queue_head_t waitq;
 	unsigned long request_pending:1,
 		      invalidate_pending:1;
 
 	struct list_head inv_head;  /* entry in linfo's list of locks with invalidations */
-	struct list_head inv_list;  /* list of lock's invalidation requests */
+	struct list_head inv_req_list;  /* list of lock's invalidation requests */
 	struct list_head shrink_head;
 
 	spinlock_t cov_list_lock;
