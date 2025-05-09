@@ -88,6 +88,11 @@ rm -rf "$SCR/xattrs"
 
 echo "== make sure we can create again"
 file="$SCR/file-after"
+C=120
+while (( C-- )); do
+	touch $file 2> /dev/null && break
+	sleep 1
+done
 touch $file
 setfattr -n user.scoutfs-enospc -v 1 "$file"
 sync
