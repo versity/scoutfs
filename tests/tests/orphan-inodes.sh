@@ -70,7 +70,15 @@ done
 # wait for orphan scans to run
 t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
 # also have to wait for delayed log merge work from mount
-sleep 15
+C=120
+while (( C-- )); do
+	brk=1
+	for ino in $inos; do
+		inode_exists $ino && brk=0
+	done
+	test $brk -eq 1 && break
+	sleep 1
+done
 for ino in $inos; do
 	inode_exists $ino && echo "$ino still exists"
 done
