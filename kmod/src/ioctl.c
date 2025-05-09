@@ -954,6 +954,9 @@ static int copy_alloc_detail_to_user(struct super_block *sb, void *arg,
 	if (args->copied == args->nr)
 		return -EOVERFLOW;
 
+	/* .type and .pad need clearing */
+	memset(&ade, 0, sizeof(struct scoutfs_ioctl_alloc_detail_entry));
+
 	ade.blocks = blocks;
 	ade.id = id;
 	ade.meta = !!meta;
@@ -1361,6 +1364,9 @@ static long scoutfs_ioc_get_referring_entries(struct file *file, unsigned long a
 				goto out;
 			}
 
+			/* zero padding in ent.name[0/1/2] so it's automatically 0-terminated */
+			memset(&ent, 0, sizeof(struct scoutfs_ioctl_dirent));
+
 			ent.dir_ino = bref->dir_ino;
 			ent.dir_pos = bref->dir_pos;
 			ent.ino = gre.ino;
@@ -1370,8 +1376,7 @@ static long scoutfs_ioc_get_referring_entries(struct file *file, unsigned long a
 			ent.name_len = name_len;
 
 			if (copy_to_user(uent, &ent, sizeof(struct scoutfs_ioctl_dirent)) ||
-			    copy_to_user(&uent->name[0], bref->dent.name, name_len) ||
-			    put_user('\0', &uent->name[name_len])) {
+			    copy_to_user(&uent->name[0], bref->dent.name, name_len)) {
 				ret = -EFAULT;
 				goto out;
 			}
