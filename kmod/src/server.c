@@ -4153,7 +4153,7 @@ static void fence_pending_recov_worker(struct work_struct *work)
 	struct server_info *server = container_of(work, struct server_info,
 						  fence_pending_recov_work);
 	struct super_block *sb = server->sb;
-	union scoutfs_inet_addr addr;
+	union scoutfs_inet_addr addr = {{0,}};
 	u64 rid = 0;
 	int ret = 0;
 
