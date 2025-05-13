@@ -1277,7 +1277,11 @@ restart:
 		     time_after_eq(now, acc->reconn_deadline))) {
 			set_conn_fl(acc, reconn_freeing);
 			spin_unlock(&conn->lock);
-			if (!test_conn_fl(conn, shutting_down)) {
+			/*
+			 * By checking whether we saw a vg here we can avoid fencing, but
+			 * we'll still end up restarting the server.
+			 */
+			if (!test_conn_fl(conn, shutting_down) && test_conn_fl(acc, valid_greeting)) {
 				scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
 					     SIN_ARG(&acc->last_peername));
 				ret = scoutfs_fence_start(sb, acc->rid,
