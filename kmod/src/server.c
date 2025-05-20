@@ -1318,9 +1318,11 @@ static int try_drain_data_freed(struct super_block *sb, struct scoutfs_log_trees
 	scoutfs_key_init_log_trees(&key, rid, nr);
 
 	while (lt->data_freed.total_len != 0) {
-		server_hold_commit(sb, &hold);
-		mutex_lock(&server->logs_mutex);
-		apply = true;
+		if (!apply) {
+			server_hold_commit(sb, &hold);
+			mutex_lock(&server->logs_mutex);
+			apply = true;
+		}
 
 		ret = find_log_trees_item(sb, &super->logs_root, false, rid, U64_MAX, &drain);
 		if (ret < 0) {
@@ -1345,7 +1347,7 @@ static int try_drain_data_freed(struct super_block *sb, struct scoutfs_log_trees
 		/* moving can modify and return errors, always update caller and item */
 		mutex_lock(&server->alloc_mutex);
 		ret = alloc_move_empty(sb, &super->data_alloc, &drain.data_freed,
-				       COMMIT_HOLD_ALLOC_BUDGET / 2);
+				       COMMIT_HOLD_ALLOC_BUDGET / 8);
 		mutex_unlock(&server->alloc_mutex);
 		if (ret == -EINPROGRESS)
 			ret = 0;
@@ -1355,12 +1357,14 @@ static int try_drain_data_freed(struct super_block *sb, struct scoutfs_log_trees
 					  &super->logs_root, &key, &drain, sizeof(drain));
 		BUG_ON(err < 0); /* dirtying must guarantee success */
 
-		mutex_unlock(&server->logs_mutex);
-		ret = server_apply_commit(sb, &hold, ret);
-		apply = false;
+		if (server_hold_alloc_used_since(sb, &hold) >= (COMMIT_HOLD_ALLOC_BUDGET * 3) / 4) {
+			mutex_unlock(&server->logs_mutex);
+			ret = server_apply_commit(sb, &hold, ret);
+			apply = false;
 
-		if (ret < 0)
-			break;
+			if (ret < 0)
+				break;
+		}
 	}
 
 	if (apply) {
@@ -2531,7 +2535,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 
 		ret = scoutfs_btree_free_blocks(sb, &server->alloc,
 						&server->wri, &fr.key,
-						&fr.root, COMMIT_HOLD_ALLOC_BUDGET / 2);
+						&fr.root, COMMIT_HOLD_ALLOC_BUDGET / 8);
 		if (ret < 0) {
 			err_str = "freeing log btree";
 			break;
@@ -2550,7 +2554,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 		/* freed blocks are in allocator, we *have* to update fr */
 		BUG_ON(ret < 0);
 
-		if (server_hold_alloc_used_since(sb, &hold) >= COMMIT_HOLD_ALLOC_BUDGET / 2) {
+		if (server_hold_alloc_used_since(sb, &hold) >= (COMMIT_HOLD_ALLOC_BUDGET * 3) / 4) {
 			mutex_unlock(&server->logs_mutex);
 			ret = server_apply_commit(sb, &hold, ret);
 			commit = false;
