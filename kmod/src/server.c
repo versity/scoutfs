@@ -2531,7 +2531,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 
 		ret = scoutfs_btree_free_blocks(sb, &server->alloc,
 						&server->wri, &fr.key,
-						&fr.root, COMMIT_HOLD_ALLOC_BUDGET / 2);
+						&fr.root, COMMIT_HOLD_ALLOC_BUDGET / 8);
 		if (ret < 0) {
 			err_str = "freeing log btree";
 			break;
@@ -2550,7 +2550,7 @@ static void server_log_merge_free_work(struct work_struct *work)
 		/* freed blocks are in allocator, we *have* to update fr */
 		BUG_ON(ret < 0);
 
-		if (server_hold_alloc_used_since(sb, &hold) >= COMMIT_HOLD_ALLOC_BUDGET / 2) {
+		if (server_hold_alloc_used_since(sb, &hold) >= (COMMIT_HOLD_ALLOC_BUDGET * 3) / 4) {
 			mutex_unlock(&server->logs_mutex);
 			ret = server_apply_commit(sb, &hold, ret);
 			commit = false;
