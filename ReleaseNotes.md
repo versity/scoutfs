@@ -2,6 +2,27 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.25
+\
+*Jun 3, 2025*
+
+Fix a bug that could cause indefinite retries of failed client commits.
+Under specific error conditions the client and server's understanding of
+the current client commit could get out of sync.  The client would retry
+commits indefinitely that could never succeed.  This manifested as
+infinite "critical transaction commit failure" messages in the kernel
+log on the client and matching "error <nr> committing client logs" on
+the server.
+
+Fix a bug in a specific case of server error handling that could result
+in sending references to unwritten blocks to the client.  The client
+would try to read blocks that hadn't been written and return spurious
+errors.  This was seen under low free space conditions on the server and
+resulted in error messages with error code 116 (The errno enum for
+ESTALE, the client's indication that it couldn't read the blocks that it
+expected.)
+
+---
 v1.24
 \
 *Mar 14, 2025*
