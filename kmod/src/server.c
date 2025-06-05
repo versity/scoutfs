@@ -65,6 +65,7 @@ struct commit_users {
 	struct list_head holding;
 	struct list_head applying;
 	unsigned int nr_holders;
+	u32 budget;
 	u32 avail_before;
 	u32 freed_before;
 	bool committing;
@@ -84,8 +85,9 @@ static void init_commit_users(struct commit_users *cusers)
 do {												\
 	__typeof__(cusers) _cusers = (cusers);							\
 	trace_scoutfs_server_commit_##which(sb, !list_empty(&_cusers->holding),			\
-		!list_empty(&_cusers->applying), _cusers->nr_holders, _cusers->avail_before,	\
-		_cusers->freed_before, _cusers->committing, _cusers->exceeded);			\
+		!list_empty(&_cusers->applying), _cusers->nr_holders, _cusers->budget,		\
+		_cusers->avail_before, _cusers->freed_before, _cusers->committing,		\
+		_cusers->exceeded);								\
 } while (0)
 
 struct server_info {
@@ -303,7 +305,6 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 	u32 freed_used;
 	u32 avail_now;
 	u32 freed_now;
-	u32 budget;
 
 	assert_spin_locked(&cusers->lock);
 
@@ -318,15 +319,14 @@ static void check_holder_budget(struct super_block *sb, struct server_info *serv
 	else
 		freed_used = SCOUTFS_ALLOC_LIST_MAX_BLOCKS - freed_now;
 
-	budget = cusers->nr_holders * COMMIT_HOLD_ALLOC_BUDGET;
-	if (avail_used <= budget && freed_used <= budget)
+	if (avail_used <= cusers->budget && freed_used <= cusers->budget)
 		return;
 
 	exceeded_once = true;
 	cusers->exceeded = cusers->nr_holders;
 
-	scoutfs_err(sb, "%u holders exceeded alloc budget av: bef %u now %u, fr: bef %u now %u",
-		    cusers->nr_holders, cusers->avail_before, avail_now,
+	scoutfs_err(sb, "holders exceeded alloc budget %u av: bef %u now %u, fr: bef %u now %u",
+		    cusers->budget, cusers->avail_before, avail_now,
 		    cusers->freed_before, freed_now);
 
 	list_for_each_entry(hold, &cusers->holding, entry) {
@@ -349,7 +349,7 @@ static bool hold_commit(struct super_block *sb, struct server_info *server,
 {
 	bool has_room;
 	bool held;
-	u32 budget;
+	u32 new_budget;
 	u32 av;
 	u32 fr;
 
@@ -367,8 +367,8 @@ static bool hold_commit(struct super_block *sb, struct server_info *server,
 	}
 
 	/* +2 for our additional hold and then for the final commit work the server does */
-	budget = (cusers->nr_holders + 2) * COMMIT_HOLD_ALLOC_BUDGET;
-	has_room = av >= budget && fr >= budget;
+	new_budget = max(cusers->budget, (cusers->nr_holders + 2) * COMMIT_HOLD_ALLOC_BUDGET);
+	has_room = av >= new_budget && fr >= new_budget;
 	/* checking applying so holders drain once an apply caller starts waiting */
 	held = !cusers->committing && has_room && list_empty(&cusers->applying);
 
@@ -388,6 +388,7 @@ static bool hold_commit(struct super_block *sb, struct server_info *server,
 		list_add_tail(&hold->entry, &cusers->holding);
 
 		cusers->nr_holders++;
+		cusers->budget = new_budget;
 
 	} else if (!has_room && cusers->nr_holders == 0 && !cusers->committing) {
 		cusers->committing = true;
@@ -516,6 +517,7 @@ static void commit_end(struct super_block *sb, struct commit_users *cusers, int 
 	list_for_each_entry_safe(hold, tmp, &cusers->applying, entry)
 		list_del_init(&hold->entry);
 	cusers->committing = false;
+	cusers->budget = 0;
 	spin_unlock(&cusers->lock);
 
 	wake_up(&cusers->waitq);
