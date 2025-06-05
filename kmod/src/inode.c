@@ -1854,6 +1854,9 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 		goto out;
 
 	ret = delete_inode_items(sb, ino, &sinode, lock, orph_lock);
+	if (ret == 0)
+		scoutfs_inc_counter(sb, inode_deleted);
+
 out:
 	if (clear_trying)
 		clear_bit(bit_nr, ldata->trying);
