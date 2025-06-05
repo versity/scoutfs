@@ -86,18 +86,47 @@ static u64 smallest_order_length(u64 len)
 }
 
 /*
- * An extent modification dirties three distinct leaves of an allocator
- * btree as it adds and removes the blkno and size sorted items for the
- * old and new lengths of the extent.  Dirtying the paths to these
- * leaves can grow the tree and grow/shrink neighbours at each level.
- * We over-estimate the number of blocks allocated and freed (the paths
- * share a root, growth doesn't free) to err on the simpler and safer
- * side.  The overhead is minimal given the relatively large list blocks
- * and relatively short allocator trees.
+ * Moving an extent between trees can dirty blocks in several ways. This
+ * function calculates worst case number of blocks across these scenarions.
+ * We treat the alloc and free counts independently, so the values below are
+ * max(allocated, freed), not the sum.
+ *
+ * We track extents with two separate btree items: by block number and by size.
+ *
+ * If we're removing an extent from the btree (allocating), we can dirty
+ * two blocks if the keys are in different leaves. If we wind up merging
+ * leaves because we fall below the low water mark, we can wind up freeing
+ * three leaves.
+ *
+ * That sequence is as follows, assuming the original keys are removed from
+ * blocks A and B:
+ *
+ * Allocate new dirty A' and B'
+ * Free old stable A and B
+ * B' has fallen below the low water mark, so copy B' into A'
+ * Free B'
+ *
+ * An extent insertion (freeing an extent) can dirty up to five distinct items
+ * in the btree as it adds and removes the blkno and size sorted items for the
+ * old and new lengths of the extent:
+ *
+ * In the by-blkno portion of the btree, we can dirty (allocate for COW) up
+ * to two blocks- either by merging adjacent extents, which can cause us to
+ * join leaf blocks; or by an insertion that causes a split.
+ *
+ * In the by-size portion, we never merge extents, so normally we just dirty
+ * a single item with a size insertion. But if we merged adjacent extents in
+ * the by-blkno portion of the tree, we might be working with three by-sizex
+ * items: removing the two old ones that were combined in the merge; and
+ * adding the new one for the larger, merged size.
+ *
+ * Finally, dirtying the paths to these leaves can grow the tree and grow/shrink
+ * neighbours at each level, so we multiply by the height of the tree after
+ * accounting for a possible new level.
  */
 static u32 extent_mod_blocks(u32 height)
 {
-	return ((1 + height) * 2) * 3;
+	return ((1 + height) * 3) * 5;
 }
 
 /*
