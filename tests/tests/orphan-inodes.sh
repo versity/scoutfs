@@ -69,8 +69,32 @@ while test -d $(echo /sys/fs/scoutfs/*/fence/* | cut -d " " -f 1); do
 done
 # wait for orphan scans to run
 t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
-# also have to wait for delayed log merge work from mount
-sleep 15
+# wait until we see two consecutive orphan scan attempts without
+# any inode deletion forward progress in each mount
+for nr in $(t_fs_nrs); do
+	C=0
+	LOSA=$(t_counter orphan_scan_attempts $nr)
+	LDOP=$(t_counter inode_deleted $nr)
+
+	while [ $C -lt 2 ]; do
+		sleep 1
+
+		OSA=$(t_counter orphan_scan_attempts $nr)
+		DOP=$(t_counter inode_deleted $nr)
+
+		if [ $OSA != $LOSA ]; then
+			if [ $DOP == $LDOP ]; then
+				(( C++ ))
+			else
+				C=0
+			fi
+		fi
+
+		LOSA=$OSA
+		LDOP=$DOP
+	done
+done
+
 for ino in $inos; do
 	inode_exists $ino && echo "$ino still exists"
 done

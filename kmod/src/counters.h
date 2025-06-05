@@ -90,6 +90,7 @@
 	EXPAND_COUNTER(forest_read_items)			\
 	EXPAND_COUNTER(forest_roots_next_hint)			\
 	EXPAND_COUNTER(forest_set_bloom_bits)			\
+	EXPAND_COUNTER(inode_deleted)				\
 	EXPAND_COUNTER(item_cache_count_objects)		\
 	EXPAND_COUNTER(item_cache_scan_objects)			\
 	EXPAND_COUNTER(item_clear_dirty)			\
