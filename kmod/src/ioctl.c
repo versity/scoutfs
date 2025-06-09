@@ -372,9 +372,9 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	sblock = args.offset >> SCOUTFS_BLOCK_SM_SHIFT;
 	eblock = (args.offset + args.length - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
 	ret = scoutfs_data_truncate_items(sb, inode, scoutfs_ino(inode),
-					  sblock,
+					  &sblock,
 					  eblock, true,
-					  lock);
+					  lock, false);
 	if (ret == 0) {
 		scoutfs_inode_get_onoff(inode, &online, &offline);
 		isize = i_size_read(inode);
@@ -383,8 +383,8 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 					>> SCOUTFS_BLOCK_SM_SHIFT;
 			ret = scoutfs_data_truncate_items(sb, inode,
 							  scoutfs_ino(inode),
-							  sblock, U64_MAX,
-							  false, lock);
+							  &sblock, U64_MAX,
+							  false, lock, false);
 		}
 	}
 

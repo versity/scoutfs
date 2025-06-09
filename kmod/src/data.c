@@ -296,28 +296,39 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
  * and offline blocks.  If it's not provided then the inode is being
  * destroyed and isn't reachable, we don't need to update it.
  *
+ * If 'pause' is set, then we are destroying the inode and we should take
+ * breaks occasionally to allow other nodes access to this inode lock shard.
+ *
  * The caller is in charge of locking the inode and data, but we may
  * have to modify far more items than fit in a transaction so we're in
  * charge of batching updates into transactions.  If the inode is
  * provided then we're responsible for updating its item as we go.
  */
 int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
-				u64 ino, u64 iblock, u64 last, bool offline,
-				struct scoutfs_lock *lock)
+				u64 ino, u64 *iblock, u64 last, bool offline,
+				struct scoutfs_lock *lock, bool pause)
 {
 	struct scoutfs_inode_info *si = NULL;
 	LIST_HEAD(ind_locks);
+	u64 cur_seq;
 	s64 ret = 0;
 
 	WARN_ON_ONCE(inode && !inode_is_locked(inode));
+
+	/*
+	 * If the inode is provided, then we aren't destroying it. So it's not
+	 * safe to pause while removing items- it needs to be done in one chunk.
+	 */
+	if (WARN_ON_ONCE(pause && inode))
+		return -EINVAL;
 
 	/* clamp last to the last possible block? */
 	if (last > SCOUTFS_BLOCK_SM_MAX)
 		last = SCOUTFS_BLOCK_SM_MAX;
 
-	trace_scoutfs_data_truncate_items(sb, iblock, last, offline);
+	trace_scoutfs_data_truncate_items(sb, *iblock, last, offline, pause);
 
-	if (WARN_ON_ONCE(last < iblock))
+	if (WARN_ON_ONCE(last < *iblock))
 		return -EINVAL;
 
 	if (inode) {
@@ -325,7 +336,9 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		down_write(&si->extent_sem);
 	}
 
-	while (iblock <= last) {
+	cur_seq = scoutfs_trans_sample_seq(sb);
+
+	while (*iblock <= last) {
 		if (inode)
 			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true, false);
 		else
@@ -339,7 +352,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 			ret = 0;
 
 		if (ret == 0)
-			ret = truncate_extents(sb, inode, ino, iblock, last,
+			ret = truncate_extents(sb, inode, ino, *iblock, last,
 					       offline, lock);
 
 		if (inode)
@@ -351,8 +364,19 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		if (ret <= 0)
 			break;
 
-		iblock = ret;
+		*iblock = ret;
 		ret = 0;
+
+		/*
+		 * We know there's more to do because truncate_extents()
+		 * pauses every EXTENTS_PER_HOLD extents and it returned the
+		 * next starting block. Our caller might also want us to pause,
+		 * which we will do whenever we cross a transaction boundary.
+		 */
+		if (pause && (cur_seq != scoutfs_trans_sample_seq(sb))) {
+			ret = -EINPROGRESS;
+			break;
+		}
 	}
 
 	if (si)
