@@ -378,15 +378,16 @@ DEFINE_EVENT(scoutfs_data_file_extent_class, scoutfs_data_fiemap_extent,
 );
 
 TRACE_EVENT(scoutfs_data_truncate_items,
-	TP_PROTO(struct super_block *sb, __u64 iblock, __u64 last, int offline),
+	TP_PROTO(struct super_block *sb, __u64 iblock, __u64 last, int offline, bool pause),
 
-	TP_ARGS(sb, iblock, last, offline),
+	TP_ARGS(sb, iblock, last, offline, pause),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, iblock)
 		__field(__u64, last)
 		__field(int, offline)
+		__field(bool, pause)
 	),
 
 	TP_fast_assign(
@@ -394,10 +395,12 @@ TRACE_EVENT(scoutfs_data_truncate_items,
 		__entry->iblock = iblock;
 		__entry->last = last;
 		__entry->offline = offline;
+		__entry->pause = pause;
 	),
 
-	TP_printk(SCSBF" iblock %llu last %llu offline %u", SCSB_TRACE_ARGS,
-		  __entry->iblock, __entry->last, __entry->offline)
+	TP_printk(SCSBF" iblock %llu last %llu offline %u pause %d",
+		  SCSB_TRACE_ARGS, __entry->iblock, __entry->last,
+		  __entry->offline, __entry->pause)
 );
 
 TRACE_EVENT(scoutfs_data_wait_check,

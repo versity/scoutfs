@@ -468,8 +468,8 @@ int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock)
 	start = (i_size_read(inode) + SCOUTFS_BLOCK_SM_SIZE - 1) >>
 		SCOUTFS_BLOCK_SM_SHIFT;
 	ret = scoutfs_data_truncate_items(inode->i_sb, inode,
-					  scoutfs_ino(inode), start, ~0ULL,
-					  false, lock);
+					  scoutfs_ino(inode), &start, ~0ULL,
+					  false, lock, false);
 	err = clear_truncate_flag(inode, lock);
 
 	return ret ? ret : err;
@@ -1635,7 +1635,8 @@ int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_
  * partial deletion until all deletion is complete and the orphan item
  * is removed.
  */
-static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_inode *sinode,
+static int delete_inode_items(struct super_block *sb, u64 ino,
+			      struct scoutfs_inode *sinode, u64 *start,
 			      struct scoutfs_lock *lock, struct scoutfs_lock *orph_lock)
 {
 	struct scoutfs_key key;
@@ -1654,8 +1655,8 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_in
 
 	/* remove data items in their own transactions */
 	if (S_ISREG(mode)) {
-		ret = scoutfs_data_truncate_items(sb, NULL, ino, 0, ~0ULL,
-						  false, lock);
+		ret = scoutfs_data_truncate_items(sb, NULL, ino, start, ~0ULL,
+						  false, lock, true);
 		if (ret)
 			goto out;
 	}
@@ -1803,15 +1804,22 @@ out:
  */
 static int try_delete_inode_items(struct super_block *sb, u64 ino)
 {
-	struct inode_deletion_lock_data *ldata = NULL;
-	struct scoutfs_lock *orph_lock = NULL;
-	struct scoutfs_lock *lock = NULL;
+	struct inode_deletion_lock_data *ldata;
+	struct scoutfs_lock *orph_lock;
+	struct scoutfs_lock *lock;
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
 	bool clear_trying = false;
+	bool more = false;
 	u64 group_nr;
+	u64 start = 0;
 	int bit_nr;
 	int ret;
+
+again:
+	ldata = NULL;
+	orph_lock = NULL;
+	lock = NULL;
 
 	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino, &lock);
 	if (ret < 0)
@@ -1824,11 +1832,12 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 		goto out;
 
 	/* only one local attempt per inode at a time */
-	if (test_and_set_bit(bit_nr, ldata->trying)) {
+	if (!more && test_and_set_bit(bit_nr, ldata->trying)) {
 		ret = 0;
 		goto out;
 	}
 	clear_trying = true;
+	more = false;
 
 	/* can't delete if it's cached in local or remote mounts */
 	if (scoutfs_omap_test(sb, ino) || test_bit_le(bit_nr, ldata->map.bits)) {
@@ -1853,13 +1862,24 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	if (ret < 0)
 		goto out;
 
-	ret = delete_inode_items(sb, ino, &sinode, lock, orph_lock);
+	ret = delete_inode_items(sb, ino, &sinode, &start, lock, orph_lock);
+
+	if (ret == -EINPROGRESS) {
+		more = true;
+		clear_trying = false;
+	} else {
+		more = false;
+	}
+
 out:
 	if (clear_trying)
 		clear_bit(bit_nr, ldata->trying);
 
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 	scoutfs_unlock(sb, orph_lock, SCOUTFS_LOCK_WRITE_ONLY);
+
+	if (more)
+		goto again;
 
 	return ret;
 }
