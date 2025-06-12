@@ -68,6 +68,7 @@ for vers in $(seq $MIN $((MAX - 1))); do
 		git archive --format=tar "$commit" | tar -C "$dir/building" -xf - &&
 		cd -								&&
 		find $dir							&&
+		echo ":" > "$dir/building/utils/sparse.sh"			&&
 		make -C "$dir/building"						&&
 		mv $dir/building/utils/src/scoutfs $dir				&&
 		mv $dir/building/kmod/src/scoutfs.ko $dir			&&
