@@ -22,6 +22,11 @@ RE="$RE|warning: memset with byte count of 4194304"
 # some sparse versions don't know about some builtins
 RE="$RE|error: undefined identifier '__builtin_fpclassify'"
 
+# on el8, sparse can't handle __has_include for some reason when _GNU_SOURCE
+# is defined, and we need that for O_DIRECT.
+RE="$RE|note: in included file .through /usr/include/sys/stat.h.:"
+RE="$RE|/usr/include/bits/statx.h:30:6: error: "
+
 #
 # don't filter out 'too many errors' here, it can signify that
 # sparse doesn't understand something and is throwing a *ton*
