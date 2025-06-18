@@ -49,7 +49,7 @@ offline wating should be empty:
 0
 == truncating does wait
 truncate should be waiting for first block:
-trunate should no longer be waiting:
+truncate should no longer be waiting:
 0
 == writing waits
 should be waiting for write
