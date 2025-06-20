@@ -77,6 +77,41 @@ run when the file system will not be mounted.
 .PD
 
 .TP
+.BI "check META-DEVICE DATA-DEVICE [-d|--debug FILE]"
+.sp
+Performs an offline file system check. The program iterates through all the
+data structures on disk directly - the filesystem must not be mounted while
+this operation is running.
+.RS 1.0i
+.PD 0
+.sp
+.TP
+.B "-d, --debug FILE"
+An output file where the program can output debug information about the
+state of the filesystem as it performs the check. If
+.B FILE
+is "-", the debug output is written to the Standard Error output.
+.TP
+.RE
+.sp
+.B RETURN VALUE
+The check function can return the following exit codes:
+.RS
+.TP
+\fB 0 \fR - no filesystem issues detected
+.TP
+\fB 1 \fR - file system issues were detected
+.TP
+\fB 8 \fR - operational error
+.TP
+\fB 16 \fR - usage error
+.TP
+\fB 32 \fR - cancelled by user (SIGINT)
+.TP
+.RE
+.PD
+
+.TP
 .BI "counters [-t|--table] SYSFS-DIR"
 .sp
 Display the counters and their values for a mounted ScoutFS filesystem.
