@@ -712,8 +712,8 @@ retry:
 
 	ret = 0;
 out:
-	if ((ret == -ESTALE || scoutfs_trigger(sb, BLOCK_REMOVE_STALE)) &&
-	    !retried && !block_is_dirty(bp)) {
+	if (!retried && !IS_ERR_OR_NULL(bp) && !block_is_dirty(bp) &&
+	    (ret == -ESTALE || scoutfs_trigger(sb, BLOCK_REMOVE_STALE))) {
 		retried = true;
 		scoutfs_inc_counter(sb, block_cache_remove_stale);
 		block_remove(sb, bp);
