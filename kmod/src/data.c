@@ -1516,6 +1516,93 @@ out:
 }
 
 /*
+ * Punch holes in offline extents.  This is a very specific tool that
+ * only does one job: it converts extents from offline to sparse.  It
+ * returns an error if it encounters an extent that isn't offline or has
+ * a block mapping.  It ignores i_size completely; it does not test it,
+ * and does not update it.
+ *
+ * The caller has the inode locked in the vfs and performed basic sanity
+ * checks.  We manage transactions and the extent_sem which is ordered
+ * inside the transaction.
+ */
+int scoutfs_data_punch_offline(struct inode *inode, u64 iblock, u64 last, u64 data_version,
+			       struct scoutfs_lock *lock)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	struct data_ext_args args = {
+		.ino = scoutfs_ino(inode),
+		.inode = inode,
+		.lock = lock,
+	};
+	struct scoutfs_extent ext;
+	LIST_HEAD(ind_locks);
+	int ret;
+	int i;
+
+	if (WARN_ON_ONCE(iblock > last)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* idiomatic to call start,last with 0,~0, clamp last to last possible */
+	last = min(last, SCOUTFS_BLOCK_SM_MAX);
+
+	ret = 0;
+	while (iblock <= last) {
+		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true, false) ?:
+		      scoutfs_dirty_inode_item(inode, lock);
+		if (ret < 0)
+			break;
+
+		down_write(&si->extent_sem);
+
+		for (i = 0; i < 32 && (iblock <= last); i++) {
+			ret = scoutfs_ext_next(sb, &data_ext_ops, &args, iblock, 1, &ext);
+			if (ret == -ENOENT || ext.start > iblock) {
+				iblock = last + 1;
+				ret = 0;
+				break;
+			}
+
+			if (ext.map) {
+				ret = -EINVAL;
+				break;
+			}
+
+			if (ext.flags & SEF_OFFLINE) {
+				if (iblock > ext.start) {
+					ext.len -= iblock - ext.start;
+					ext.start = iblock;
+				}
+				ext.len = min(ext.len, last - ext.start + 1);
+				ext.flags &= ~SEF_OFFLINE;
+
+				ret = scoutfs_ext_set(sb, &data_ext_ops, &args,
+						      ext.start, ext.len, ext.map, ext.flags);
+				if (ret < 0)
+					break;
+			}
+
+			iblock = ext.start + ext.len;
+		}
+
+		up_write(&si->extent_sem);
+
+		scoutfs_update_inode_item(inode, lock, &ind_locks);
+		scoutfs_release_trans(sb);
+		scoutfs_inode_index_unlock(sb, &ind_locks);
+
+		if (ret < 0)
+			break;
+	}
+
+out:
+	return ret;
+}
+
+/*
  * This copies to userspace :/
  */
 static int fill_extent(struct fiemap_extent_info *fieinfo,
