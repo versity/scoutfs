@@ -843,4 +843,32 @@ struct scoutfs_ioctl_read_xattr_index {
 #define SCOUTFS_IOC_READ_XATTR_INDEX \
 	_IOR(SCOUTFS_IOCTL_MAGIC, 23, struct scoutfs_ioctl_read_xattr_index)
 
+/*
+ * This is a limited and specific version of hole punching.  It's an
+ * archive layer operation that only converts unmapped offline extents
+ * into sparse extents.  It is intended to be used when restoring sparse
+ * files after the initial creation set the entire file size offline.
+ *
+ * The offset and len fields are in units of bytes and must be aligned
+ * to the small (4KiB) block size.  All regions of offline extents
+ * covered by the region will be converted into sparse online extents,
+ * including regions that straddle the boundaries of the region.  Any
+ * existing sparse extents in the region are ignored.
+ *
+ * The data_version must match the inode or EINVAL is returned.  The
+ * data_version is not modified by this operation.
+ *
+ * EINVAL is returned if any mapped extents are found in the region.  If
+ * an error is returned then partial progress may have been made.
+ */
+struct scoutfs_ioctl_punch_offline {
+	__u64 offset;
+	__u64 len;
+	__u64 data_version;
+	__u64 flags;
+};
+
+#define SCOUTFS_IOC_PUNCH_OFFLINE \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 24, struct scoutfs_ioctl_punch_offline)
+
 #endif

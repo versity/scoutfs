@@ -1668,6 +1668,78 @@ out:
 	return ret;
 }
 
+static long scoutfs_ioc_punch_offline(struct file *file, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+	struct super_block *sb = inode->i_sb;
+	struct scoutfs_ioctl_punch_offline __user *upo = (void __user *)arg;
+	struct scoutfs_ioctl_punch_offline po;
+	struct scoutfs_lock *lock = NULL;
+	u64 iblock;
+	u64 last;
+	u64 tmp;
+	int ret;
+
+	if (copy_from_user(&po, upo, sizeof(po)))
+		return -EFAULT;
+
+	if (po.len == 0)
+		return 0;
+
+	if (check_add_overflow(po.offset, po.len - 1, &tmp) ||
+	    (po.offset & SCOUTFS_BLOCK_SM_MASK) ||
+	    (po.len & SCOUTFS_BLOCK_SM_MASK))
+		return -EOVERFLOW;
+
+	if (po.flags)
+		return -EINVAL;
+
+	ret = mnt_want_write_file(file);
+	if (ret < 0)
+		return ret;
+
+	inode_lock(inode);
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
+				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
+	if (ret)
+		goto out;
+
+	if (!S_ISREG(inode->i_mode)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (!(file->f_mode & FMODE_WRITE)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = inode_permission(KC_VFS_INIT_NS inode, MAY_WRITE);
+	if (ret < 0)
+		goto out;
+
+	if (scoutfs_inode_data_version(inode) != po.data_version) {
+		ret = -ESTALE;
+		goto out;
+	}
+
+	if ((ret = scoutfs_inode_check_retention(inode)))
+		goto out;
+
+	iblock = po.offset >> SCOUTFS_BLOCK_SM_SHIFT;
+	last = (po.offset + po.len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
+
+	ret = scoutfs_data_punch_offline(inode, iblock, last, po.data_version, lock);
+
+out:
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	inode_unlock(inode);
+	mnt_drop_write_file(file);
+
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1717,6 +1789,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_mod_quota_rule(file, arg, false);
 	case SCOUTFS_IOC_READ_XATTR_INDEX:
 		return scoutfs_ioc_read_xattr_index(file, arg);
+	case SCOUTFS_IOC_PUNCH_OFFLINE:
+		return scoutfs_ioc_punch_offline(file, arg);
 	}
 
 	return -ENOTTY;
