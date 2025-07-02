@@ -1560,7 +1560,7 @@ int scoutfs_data_punch_offline(struct inode *inode, u64 iblock, u64 last, u64 da
 
 		for (i = 0; i < 32 && (iblock <= last); i++) {
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &args, iblock, 1, &ext);
-			if (ret == -ENOENT || ext.start > iblock) {
+			if (ret == -ENOENT || ext.start > last) {
 				iblock = last + 1;
 				ret = 0;
 				break;
