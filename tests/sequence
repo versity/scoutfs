@@ -11,6 +11,7 @@ simple-readdir.sh
 get-referring-entries.sh
 fallocate.sh
 basic-truncate.sh
+punch-offline.sh
 data-prealloc.sh
 setattr_more.sh
 offline-extent-waiting.sh
