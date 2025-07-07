@@ -1040,6 +1040,101 @@ static int next_log_merge_item(struct super_block *sb,
 	return next_log_merge_item_key(sb, root, zone, &key, val, val_len);
 }
 
+static int do_finalize_ours(struct super_block *sb,
+			    struct scoutfs_log_trees *lt,
+			    struct commit_hold *hold)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
+	struct scoutfs_key key;
+	char *err_str = NULL;
+	u64 rid = le64_to_cpu(lt->rid);
+	bool more;
+	int ret;
+	int err;
+
+	mutex_lock(&server->srch_mutex);
+	ret = scoutfs_srch_rotate_log(sb, &server->alloc, &server->wri,
+				      &super->srch_root, &lt->srch_file, true);
+	mutex_unlock(&server->srch_mutex);
+	if (ret < 0) {
+		scoutfs_err(sb, "error rotating srch log for rid %016llx: %d",
+			    rid, ret);
+		return ret;
+        }
+
+	do {
+		more = false;
+
+		/*
+		 * All of these can return errors, perhaps indicating successful
+		 * partial progress, after having modified the allocator trees.
+		 * We always have to update the roots in the log item.
+		 */
+		mutex_lock(&server->alloc_mutex);
+		ret = (err_str = "splice meta_freed to other_freed",
+				scoutfs_alloc_splice_list(sb, &server->alloc,
+					&server->wri, server->other_freed,
+					&lt->meta_freed)) ?:
+			(err_str = "splice meta_avail",
+			 scoutfs_alloc_splice_list(sb, &server->alloc,
+					&server->wri, server->other_freed,
+					&lt->meta_avail)) ?:
+			(err_str = "empty data_avail",
+			 alloc_move_empty(sb, &super->data_alloc,
+					  &lt->data_avail,
+					  COMMIT_HOLD_ALLOC_BUDGET / 2)) ?:
+			(err_str = "empty data_freed",
+			 alloc_move_empty(sb, &super->data_alloc,
+					  &lt->data_freed,
+					  COMMIT_HOLD_ALLOC_BUDGET / 2));
+		mutex_unlock(&server->alloc_mutex);
+
+		/*
+		 * only finalize, allowing merging, once the allocators are
+		 * fully freed
+		 */
+		if (ret == 0) {
+			/* the transaction is no longer open */
+			le64_add_cpu(&lt->flags, SCOUTFS_LOG_TREES_FINALIZED);
+			lt->finalize_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
+		}
+
+		scoutfs_key_init_log_trees(&key, rid, le64_to_cpu(lt->nr));
+
+		err = scoutfs_btree_update(sb, &server->alloc, &server->wri,
+					   &super->logs_root, &key, lt,
+					   sizeof(*lt));
+		BUG_ON(err != 0); /* alloc, log, srch items out of sync */
+
+		if (ret == -EINPROGRESS) {
+			more = true;
+			mutex_unlock(&server->logs_mutex);
+			ret = server_apply_commit(sb, hold, 0);
+			if (ret < 0)
+				WARN_ON_ONCE(ret < 0);
+			server_hold_commit(sb, hold);
+			mutex_lock(&server->logs_mutex);
+		} else if (ret == 0) {
+			memset(&lt->item_root, 0, sizeof(lt->item_root));
+			memset(&lt->bloom_ref, 0, sizeof(lt->bloom_ref));
+			lt->inode_count_delta = 0;
+			lt->max_item_seq = 0;
+			lt->finalize_seq = 0;
+			le64_add_cpu(&lt->nr, 1);
+			lt->flags = 0;
+		}
+	} while (more);
+
+	if (ret < 0) {
+		scoutfs_err(sb,
+			    "error %d finalizing log trees for rid %016llx: %s",
+			    ret, rid, err_str);
+	}
+
+	return ret;
+}
+
 /*
  * Finalizing the log btrees for merging needs to be done carefully so
  * that items don't appear to go backwards in time.
@@ -1091,7 +1186,6 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 	struct scoutfs_log_merge_range rng;
 	struct scoutfs_mount_options opts;
 	struct scoutfs_log_trees each_lt;
-	struct scoutfs_log_trees fin;
 	unsigned int delay_ms;
 	unsigned long timeo;
 	bool saw_finalized;
@@ -1196,32 +1290,11 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 
 		/* Finalize ours if it's visible to others */
 		if (ours_visible) {
-			fin = *lt;
-			memset(&fin.meta_avail, 0, sizeof(fin.meta_avail));
-			memset(&fin.meta_freed, 0, sizeof(fin.meta_freed));
-			memset(&fin.data_avail, 0, sizeof(fin.data_avail));
-			memset(&fin.data_freed, 0, sizeof(fin.data_freed));
-			memset(&fin.srch_file, 0, sizeof(fin.srch_file));
-			le64_add_cpu(&fin.flags, SCOUTFS_LOG_TREES_FINALIZED);
-			fin.finalize_seq = cpu_to_le64(scoutfs_server_next_seq(sb));
-
-			scoutfs_key_init_log_trees(&key, le64_to_cpu(fin.rid),
-						   le64_to_cpu(fin.nr));
-			ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
-						   &super->logs_root, &key, &fin,
-						   sizeof(fin));
+			ret = do_finalize_ours(sb, lt, hold);
 			if (ret < 0) {
-				err_str = "updating finalized log_trees";
+				err_str = "finalizing ours";
 				break;
 			}
-
-			memset(&lt->item_root, 0, sizeof(lt->item_root));
-			memset(&lt->bloom_ref, 0, sizeof(lt->bloom_ref));
-			lt->inode_count_delta = 0;
-			lt->max_item_seq = 0;
-			lt->finalize_seq = 0;
-			le64_add_cpu(&lt->nr, 1);
-			lt->flags = 0;
 		}
 
 		/* wait a bit for mounts to arrive */
@@ -1680,8 +1753,8 @@ unlock:
 
 	ret = server_apply_commit(sb, &hold, ret);
 	if (ret < 0)
-		scoutfs_err(sb, "server error %d committing client logs for rid %016llx: %s",
-			    ret, rid, err_str);
+		scoutfs_err(sb, "server error %d committing client logs for rid %016llx, nr %llu: %s",
+			    ret, rid, le64_to_cpu(lt.nr), err_str);
 out:
 	WARN_ON_ONCE(ret < 0);
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
