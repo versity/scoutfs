@@ -60,6 +60,8 @@ $(basename $0) options:
               | the file system to be tested.  Will be clobbered by -m mkfs.
     -m        | Run mkfs on the device before mounting and running
               | tests.  Implies unmounting existing mounts first.
+    -l        | Enable kmemleak scan during each test. Requires "kmemleak=on" in
+              | kernel cmdline boot args.
     -n <nr>   | The number of devices and mounts to test.
     -o <opts> | Add option string to all mounts during all tests.
     -P        | Enable trace_printk.
@@ -128,6 +130,12 @@ while true; do
 		;;
 	-i)
 		T_INSMOD="1"
+		;;
+	-l)
+		echo "stack=off" > /sys/kernel/debug/kmemleak &&
+		echo "scan=off" > /sys/kernel/debug/kmemleak ||
+		die "kmemleak disabled or missing"
+		T_KMEMLEAK="1"
 		;;
 	-M)
 	        test -n "$2" || die "-z must have meta device file argument"
@@ -569,6 +577,11 @@ for t in $tests; do
 	# mark in dmesg as to what test we are running
 	echo "run scoutfs test $test_name" > /dev/kmsg
 
+	# clean kmemleak scan
+	if [ -n "$T_KMEMLEAK" ]; then
+		echo "clear" > /sys/kernel/debug/kmemleak
+	fi
+
 	# record dmesg before
 	dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.before"
 
@@ -613,6 +626,17 @@ for t in $tests; do
 			message="unexpected messages in dmesg"
 			sts=$T_FAIL_STATUS
 			cat "$T_TMPDIR/dmesg.new" >> "$T_RESULTS/fail.log"
+		fi
+	fi
+
+	# record kmemleak scan
+	if [ -n "$T_KMEMLEAK" ]; then
+		echo scan > /sys/kernel/debug/kmemleak
+		cp /sys/kernel/debug/kmemleak "$T_TMPDIR/kmemleak.scan"
+		if [ -s "$T_TMPDIR/kmemleak.scan" ]; then
+			message="kmemleak detected memory leak"
+			sts=$T_FAIL_STATUS
+			cat "$T_TMPDIR/kmemleak.scan" >> "$T_RESULTS/fail.log"
 		fi
 	fi
 
