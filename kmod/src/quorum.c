@@ -822,6 +822,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 		/* followers and candidates start new election on timeout */
 		if (qst.role != LEADER &&
+		    msg.type == SCOUTFS_QUORUM_MSG_INVALID &&
 		    ktime_after(ktime_get(), qst.timeout)) {
 			/* .. but only if their server has stopped */
 			if (!scoutfs_server_is_down(sb)) {
