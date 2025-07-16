@@ -713,6 +713,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	struct quorum_status qst = {0,};
 	struct hb_recording hbr;
 	bool record_hb;
+	bool recv_failed;
 	int ret;
 	int err;
 
@@ -753,7 +754,10 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				goto out;
 			}
 			msg.type = SCOUTFS_QUORUM_MSG_INVALID;
+			recv_failed = true;
 			ret = 0;
+		} else {
+			recv_failed = false;
 		}
 
 		scoutfs_options_read(sb, &opts);
@@ -808,7 +812,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		}
 
 		/* followers and candidates start new election on timeout */
-		if (qst.role != LEADER &&
+		if (qst.role != LEADER && recv_failed &&
 		    ktime_after(ktime_get(), qst.timeout)) {
 			/* .. but only if their server has stopped */
 			if (!scoutfs_server_is_down(sb)) {
