@@ -18,6 +18,19 @@ do {							\
 #define scoutfs_err(sb, fmt, args...) \
 	scoutfs_msg_check(sb, KERN_ERR, " error", fmt, ##args)
 
+/*
+ * This can be used to suppress the expected -EIO error messages that are
+ * generated during forced unmount.
+ */
+#define ignore_err(sb, error) \
+	((error) == -EIO && unlikely(scoutfs_forcing_unmount(sb)))
+
+#define scoutfs_err_maybe(sb, error, fmt, args...)	\
+do {							\
+	if (!ignore_err(sb, error))			\
+		scoutfs_err(sb, fmt, args);		\
+} while (0)
+
 #define scoutfs_warn(sb, fmt, args...) \
 	scoutfs_msg_check(sb, KERN_WARNING, " warning", fmt, ##args)
 

@@ -1647,9 +1647,11 @@ unlock:
 
 	ret = server_apply_commit(sb, &hold, ret);
 out:
-	if (ret < 0)
-		scoutfs_err(sb, "error %d getting log trees for rid %016llx: %s",
-			    ret, rid, err_str);
+	if (ret < 0) {
+		scoutfs_err_maybe(sb, ret,
+			"error %d getting log trees for rid %016llx: %s",
+			ret, rid, err_str);
+	}
 
 	/* try to drain excessive data_freed with additional commits, if needed */
 	if (ret == 0)
@@ -1752,11 +1754,14 @@ unlock:
 	mutex_unlock(&server->logs_mutex);
 
 	ret = server_apply_commit(sb, &hold, ret);
-	if (ret < 0)
-		scoutfs_err(sb, "server error %d committing client logs for rid %016llx, nr %llu: %s",
-			    ret, rid, le64_to_cpu(lt.nr), err_str);
+	if (ret < 0) {
+		scoutfs_err_maybe(sb, ret,
+				  "server error %d committing client logs for rid %016llx, nr %llu: %s",
+				  ret, rid, le64_to_cpu(lt.nr), err_str);
+	}
+
 out:
-	WARN_ON_ONCE(ret < 0);
+	WARN_ON_ONCE((ret < 0) && !ignore_err(sb, ret));
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 
@@ -2090,7 +2095,9 @@ static int server_srch_get_compact(struct super_block *sb,
 
 apply:
 	ret = server_apply_commit(sb, &hold, ret);
-	WARN_ON_ONCE(ret < 0 && ret != -ENOENT); /* XXX leaked busy item */
+
+	/* XXX leaked busy item */
+	WARN_ON_ONCE(ret < 0 && ret != -ENOENT && !ignore_err(sb, ret));
 out:
 	ret = scoutfs_net_response(sb, conn, cmd, id, ret,
 				   sc, sizeof(struct scoutfs_srch_compact));
@@ -2934,9 +2941,10 @@ out:
 		mutex_unlock(&server->alloc_mutex);
 		BUG_ON(err); /* inconsistent */
 
-		if (ret < 0 && ret != -ENOENT)
-			scoutfs_err(sb, "error %d getting merge req rid %016llx: %s",
-				    ret, rid, err_str);
+		if (ret < 0 && ret != -ENOENT) {
+			scoutfs_err_maybe(sb, ret, "error %d getting merge req rid %016llx: %s",
+					  ret, rid, err_str);
+		}
 	}
 
 	mutex_unlock(&server->logs_mutex);
