@@ -856,14 +856,14 @@ static int search_sorted_file(struct super_block *sb,
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
 			ret = -EIO;
-			break;
+			goto out;
 		}
 
 		ret = decode_entry(srb->entries + pos, &sre, &prev);
 		if (ret <= 0) {
 			/* can only be inconsistency :/ */
 			ret = -EIO;
-			break;
+			goto out;
 		}
 		pos += ret;
 		prev = sre;
