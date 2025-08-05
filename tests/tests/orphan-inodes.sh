@@ -59,6 +59,10 @@ for nr in $(t_fs_nrs); do
 done
 sync
 t_silent_kill $pids
+
+LLMS=$(t_counter log_merges_started $sv)
+LLMC=$(t_counter log_merges_completed $sv)
+
 for nr in $(t_fs_nrs); do
 	t_force_umount $nr
 done
@@ -67,6 +71,36 @@ t_mount_all
 while test -d $(echo /sys/fs/scoutfs/*/fence/* | cut -d " " -f 1); do
 	sleep .5
 done
+
+# wait for the orphan inode cleanup changes to be merged
+S=0
+C=0
+sv=$(t_server_nr)
+
+while sleep 1; do
+	LMS=$(t_counter log_merges_started $sv)
+	LMC=$(t_counter log_merges_completed $sv)
+
+	if [ $LMS != $LLMS ]; then
+		(( S++ ))
+		LLMS=$LMS
+	fi
+	if [ $LMC != $LLMC ]; then
+		(( C++ ))
+		LLMC=$LMC
+	fi
+
+	# If we've completed more than one merge, we're done
+	if [ $C -gt 1 ]; then
+		break
+	fi
+
+	# If we've started more than one merge, we're done
+	if [ $S -gt 1 ]; then
+		break
+	fi
+done
+
 # wait for orphan scans to run
 t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
 # wait until we see two consecutive orphan scan attempts without

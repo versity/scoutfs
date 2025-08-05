@@ -2126,8 +2126,8 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		}
 
 		/* seemingly orphaned and unused, get locks and check for sure */
-		scoutfs_inc_counter(sb, orphan_scan_attempts);
 		ret = try_delete_inode_items(sb, ino);
+		scoutfs_inc_counter(sb, orphan_scan_attempts);
 	}
 
 	ret = 0;
