@@ -1214,6 +1214,8 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			break;
 		}
 
+		scoutfs_inc_counter(sb, log_merges_started);
+
 		/* look for finalized and other active log btrees */
 		saw_finalized = false;
 		others_active = false;
@@ -1356,6 +1358,7 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		}
 
 		/* we're done, caller can make forward progress */
+		scoutfs_inc_counter(sb, log_merges_completed);
 		break;
 	}
 
@@ -1796,7 +1799,7 @@ static int server_get_roots(struct super_block *sb,
  * all the allocator items.
  *
  * The caller holds the commit rwsem which means we have to do our work
- * in one commit.  The alocator btrees can be very large and very
+ * in one commit.  The allocator btrees can be very large and very
  * fragmented.  We return -EINPROGRESS if we couldn't fully reclaim the
  * allocators in one commit.   The caller should apply the current
  * commit and call again in a new commit.
@@ -1821,6 +1824,8 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	int err;
 
 	mutex_lock(&server->logs_mutex);
+
+	scoutfs_inc_counter(sb, log_merges_started);
 
 	/* find the client's last open log_tree */
 	scoutfs_key_init_log_trees(&key, rid, U64_MAX);
@@ -1891,6 +1896,7 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 				  &super->logs_root, &key, &lt, sizeof(lt));
 	BUG_ON(err != 0); /* alloc, log, srch items out of sync */
 
+	scoutfs_inc_counter(sb, log_merges_completed);
 out:
 	mutex_unlock(&server->logs_mutex);
 
