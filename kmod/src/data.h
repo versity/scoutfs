@@ -29,6 +29,7 @@ struct scoutfs_data_wait {
 	u64 ino;
 	u64 iblock;
 	long err;
+	pid_t pid;
 	u8 op;
 };
 

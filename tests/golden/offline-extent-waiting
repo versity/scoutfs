@@ -7,6 +7,9 @@ offline waiting should now have one known entry:
 offline waiting still has one known entry:
 == different blocks show up
 offline waiting now has two known entries:
+== verify PIDs match
+ pid <MATCHPID1> ops read
+ pid <MATCHPID2> ops read
 == staging wakes everyone
 offline waiting should be empty again:
 0

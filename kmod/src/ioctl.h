@@ -234,7 +234,8 @@ struct scoutfs_ioctl_data_waiting_entry {
 	__u64 ino;
 	__u64 iblock;
 	__u8 op;
-	__u8 _pad[7];
+	__u8 _pad[3]; /* hole for backwards compat */
+	__s32 pid; /* pid_t */
 };
 
 #define SCOUTFS_IOC_DWO_READ		(1 << 0)

@@ -9,6 +9,11 @@ BLOCKS=256
 BS=4096
 BYTES=$(($BLOCKS * $BS))
 
+filter_pid()
+{
+	sed 's/ pid [0-9]* / /'
+}
+
 expect_wait()
 {
 	local file=$1
@@ -24,7 +29,7 @@ expect_wait()
 		shift
 	done
 
-	scoutfs data-waiting -B 0 -I 0 -p "$file" > $T_TMP.wait.output
+	scoutfs data-waiting -B 0 -I 0 -p "$file" | filter_pid > $T_TMP.wait.output
 	diff -u $T_TMP.wait.expected $T_TMP.wait.output
 }
 
@@ -41,6 +46,7 @@ echo "offline waiting should be empty:"
 scoutfs data-waiting -B 0 -I 0 -p "$DIR" | wc -l
 scoutfs release "$DIR/file" -V "$vers" -o 0 -l $BYTES
 cat "$DIR/file" > /dev/null &
+P1=$!
 sleep .1
 echo "offline waiting should now have one known entry:"
 expect_wait "$DIR/file" "read" $ino 0
@@ -51,11 +57,16 @@ sleep .1
 echo "offline waiting still has one known entry:"
 expect_wait "$DIR/file" "read" $ino 0
 
+
 echo "== different blocks show up"
 dd if="$DIR/file" of=/dev/null bs=$BS count=1 skip=1 2> /dev/null &
+P2=$!
 sleep .1
 echo "offline waiting now has two known entries:"
 expect_wait "$DIR/file" "read" $ino 0 $ino 1
+
+echo "== verify PIDs match"
+scoutfs data-waiting -B 0 -I 0 -p "$DIR/file" | sed "s/.* pid ${P1} / pid <MATCHPID1> /;s/.* pid ${P2} / pid <MATCHPID2> /"
 
 echo "== staging wakes everyone"
 scoutfs stage "$DIR/golden" "$DIR/file" -V "$vers" -o 0 -l $BYTES

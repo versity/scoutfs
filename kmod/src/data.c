@@ -1821,6 +1821,7 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 				dw->ino = ino;
 				dw->iblock = max(iblock, ext.start);
 				dw->op = op;
+				dw->pid = task_pid_nr(current);
 
 				spin_lock(&rt->lock);
 				insert_offline_waiting(&rt->root, dw);
@@ -1943,6 +1944,7 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 		dwe->ino = dw->ino;
 		dwe->iblock = dw->iblock;
 		dwe->op = dw->op;
+		dwe->pid = dw->pid;
 
 		while ((dw = dw_next(dw)) &&
 		       (dw->ino == dwe->ino && dw->iblock == dwe->iblock)) {

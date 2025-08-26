@@ -72,9 +72,9 @@ static int do_waiting(struct waiting_args *args)
 		}
 
 		for (i = 0; i < ret; i++)
-			printf("ino %llu iblock %llu ops "
+			printf("ino %llu iblock %llu pid %i ops "
 			       OP_FMT OP_FMT OP_FMT"\n",
-			       dwe[i].ino, dwe[i].iblock,
+			       dwe[i].ino, dwe[i].iblock, dwe[i].pid,
 			       op_str(dwe[i].op, SCOUTFS_IOC_DWO_READ,
 				      "read"),
 			       op_str(dwe[i].op, SCOUTFS_IOC_DWO_WRITE,
