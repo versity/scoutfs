@@ -742,7 +742,7 @@ int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_
 	int ret;
 	int err;
 
-	trace_scoutfs_xattr_set(sb, name_len, value, size, flags);
+	trace_scoutfs_xattr_set(sb, ino, name_len, value, size, flags);
 
 	if (WARN_ON_ONCE(tgs->totl && tgs->indx) ||
 	    WARN_ON_ONCE((tgs->totl | tgs->indx) && !tag_lock))
