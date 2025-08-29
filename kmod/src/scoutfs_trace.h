@@ -823,13 +823,14 @@ DEFINE_EVENT(scoutfs_lock_info_class, scoutfs_lock_destroy,
 );
 
 TRACE_EVENT(scoutfs_xattr_set,
-	TP_PROTO(struct super_block *sb, size_t name_len, const void *value,
-		 size_t size, int flags),
+	TP_PROTO(struct super_block *sb, __u64 ino, size_t name_len,
+		 const void *value, size_t size, int flags),
 
-	TP_ARGS(sb, name_len, value, size, flags),
+	TP_ARGS(sb, ino, name_len, value, size, flags),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
 		__field(size_t, name_len)
 		__field(const void *, value)
 		__field(size_t, size)
@@ -838,15 +839,16 @@ TRACE_EVENT(scoutfs_xattr_set,
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
 		__entry->name_len = name_len;
 		__entry->value = value;
 		__entry->size = size;
 		__entry->flags = flags;
 	),
 
-	TP_printk(SCSBF" name_len %zu value %p size %zu flags 0x%x",
-		  SCSB_TRACE_ARGS, __entry->name_len, __entry->value,
-		  __entry->size, __entry->flags)
+	TP_printk(SCSBF" ino %llu name_len %zu value %p size %zu flags 0x%x",
+		  SCSB_TRACE_ARGS, __entry->ino,  __entry->name_len,
+		  __entry->value, __entry->size, __entry->flags)
 );
 
 TRACE_EVENT(scoutfs_advance_dirty_super,
