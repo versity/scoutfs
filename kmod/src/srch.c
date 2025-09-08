@@ -62,7 +62,7 @@
  * re-allocated and re-written.  Search can restart by checking the
  * btree for the current set of files.  Compaction reads log files which
  * are protected from other compactions by the persistent busy items
- * created by the server.  Compaction won't see it's blocks reused out
+ * created by the server.  Compaction won't see its blocks reused out
  * from under it, but it can encounter stale cached blocks that need to
  * be invalidated.
  */
@@ -749,14 +749,14 @@ static int search_log_file(struct super_block *sb,
 		for (i = 0; i < le32_to_cpu(srb->entry_nr); i++) {
 			if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 				/* can only be inconsistency :/ */
-				ret = EIO;
+				ret = -EIO;
 				break;
 			}
 
 			ret = decode_entry(srb->entries + pos, &sre, &prev);
 			if (ret <= 0) {
 				/* can only be inconsistency :/ */
-				ret = EIO;
+				ret = -EIO;
 				break;
 			}
 			pos += ret;
@@ -859,14 +859,14 @@ static int search_sorted_file(struct super_block *sb,
 
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
-			ret = EIO;
+			ret = -EIO;
 			break;
 		}
 
 		ret = decode_entry(srb->entries + pos, &sre, &prev);
 		if (ret <= 0) {
 			/* can only be inconsistency :/ */
-			ret = EIO;
+			ret = -EIO;
 			break;
 		}
 		pos += ret;
@@ -1802,7 +1802,7 @@ static void swap_page_sre(void *A, void *B, int size)
  * typically, ~10x worst case).
  *
  * Because we read and sort all the input files we must perform the full
- * compaction in one operation.  The server must have given us a
+ * compaction in one operation.  The server must have given us
  * sufficiently large avail/freed lists, otherwise we'll return ENOSPC.
  */
 static int compact_logs(struct super_block *sb,
@@ -1866,14 +1866,14 @@ static int compact_logs(struct super_block *sb,
 
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
-			ret = EIO;
+			ret = -EIO;
 			break;
 		}
 
 		ret = decode_entry(srb->entries + pos, sre, &prev);
 		if (ret <= 0) {
 			/* can only be inconsistency :/ */
-			ret = EIO;
+			ret = -EIO;
 			goto out;
 		}
 		prev = *sre;
