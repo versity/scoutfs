@@ -117,10 +117,11 @@
 	EXPAND_COUNTER(item_pcpu_page_hit)			\
 	EXPAND_COUNTER(item_pcpu_page_miss)			\
 	EXPAND_COUNTER(item_pcpu_page_miss_keys)		\
+	EXPAND_COUNTER(item_read_pages_barrier)			\
+	EXPAND_COUNTER(item_read_pages_retry)			\
 	EXPAND_COUNTER(item_read_pages_split)			\
 	EXPAND_COUNTER(item_shrink_page)			\
 	EXPAND_COUNTER(item_shrink_page_dirty)			\
-	EXPAND_COUNTER(item_shrink_page_reader)			\
 	EXPAND_COUNTER(item_shrink_page_trylock)		\
 	EXPAND_COUNTER(item_update)				\
 	EXPAND_COUNTER(item_write_dirty)			\
