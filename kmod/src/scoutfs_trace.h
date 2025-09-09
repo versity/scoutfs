@@ -2465,6 +2465,27 @@ TRACE_EVENT(scoutfs_block_dirty_ref,
 		  __entry->block_blkno, __entry->block_seq)
 );
 
+TRACE_EVENT(scoutfs_get_file_block,
+	TP_PROTO(struct super_block *sb, u64 blkno, int flags),
+
+	TP_ARGS(sb, blkno, flags),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, blkno)
+		__field(int, flags)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->blkno = blkno;
+		__entry->flags = flags;
+	),
+
+	TP_printk(SCSBF" blkno %llu flags 0x%x",
+		  SCSB_TRACE_ARGS, __entry->blkno, __entry->flags)
+);
+
 TRACE_EVENT(scoutfs_block_stale,
 	TP_PROTO(struct super_block *sb, struct scoutfs_block_ref *ref,
 		 struct scoutfs_block_header *hdr, u32 magic, u32 crc),
@@ -3053,6 +3074,27 @@ DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_send,
 DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_recv,
 	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
 	TP_ARGS(sb, sc)
+);
+
+TRACE_EVENT(scoutfs_ioc_search_xattrs,
+	TP_PROTO(struct super_block *sb, u64 ino, u64 last_ino),
+
+	TP_ARGS(sb, ino, last_ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(u64, ino)
+		__field(u64, last_ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->last_ino = last_ino;
+	),
+
+	TP_printk(SCSBF" ino %llu last_ino %llu", SCSB_TRACE_ARGS,
+		  __entry->ino, __entry->last_ino)
 );
 
 #endif /* _TRACE_SCOUTFS_H */
