@@ -130,6 +130,23 @@ the server for the filesystem if it is elected leader.
 The assigned number must match one of the slots defined with \-Q options
 when the filesystem was created with mkfs.  If the number assigned
 doesn't match a number created during mkfs then the mount will fail.
+.TP
+.B tcp_keepalive_timeout_ms=<number>
+This option sets the amount of time, in milliseconds, that a client
+connection will wait for active TCP packets, before deciding that
+the connection is dead. This setting is per-mount and only changes
+the behavior of that mount.
+.sp
+The default value of this setting is 60000msec (60s). Any precision
+beyond a whole second is likely unrealistic due to the nature of
+TCP keepalive mechanisms in the Linux kernel. Valid values are any
+value higher than 3000 (3s).
+.sp
+The TCP keepalive mechanism is complex and observing a lost connection
+quickly is important to maintain cluster stability. If the local
+network suffers from intermittent outages this option may provide
+some respite to overcome these outages without the cluster becoming
+desynchronized.
 .SH VOLUME OPTIONS
 Volume options are persistent options which are stored in the super
 block in the metadata device and which apply to all mounts of the volume.
