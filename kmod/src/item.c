@@ -97,9 +97,8 @@ struct item_cache_info {
 	struct list_head lru_list;
 	unsigned long lru_pages;
 
-	/* written by page readers, read by shrink */
-	spinlock_t active_lock;
-	struct list_head active_list;
+	/* stop readers from caching stale items behind reclaimed cleaned written items */
+	atomic64_t read_dirty_barrier;
 };
 
 #define DECLARE_ITEM_CACHE_INFO(sb, name) \
@@ -1286,78 +1285,6 @@ static int cache_empty_page(struct super_block *sb,
 }
 
 /*
- * Readers operate independently from dirty items and transactions.
- * They read a set of persistent items and insert them into the cache
- * when there aren't already pages whose key range contains the items.
- * This naturally prefers cached dirty items over stale read items.
- *
- * We have to deal with the case where dirty items are written and
- * invalidated while a read is in flight.   The reader won't have seen
- * the items that were dirty in their persistent roots as they started
- * reading.  By the time they insert their read pages the previously
- * dirty items have been reclaimed and are not in the cache.  The old
- * stale items will be inserted in their place, effectively corrupting
- * by having the dirty items disappear.
- *
- * We fix this by tracking the max seq of items in pages.  As readers
- * start they record the current transaction seq.  Invalidation skips
- * pages with a max seq greater than the first reader seq because the
- * items in the page have to stick around to prevent the readers stale
- * items from being inserted.
- *
- * This naturally only affects a small set of pages with items that were
- * written relatively recently.  If we're in memory pressure then we
- * probably have a lot of pages and they'll naturally have items that
- * were visible to any raders.  We don't bother with the complicated and
- * expensive further refinement of tracking the ranges that are being
- * read and comparing those with pages to invalidate.
- */
-struct active_reader {
-	struct list_head head;
-	u64 seq;
-};
-
-#define INIT_ACTIVE_READER(rdr) \
-	struct active_reader rdr = { .head = LIST_HEAD_INIT(rdr.head) }
-
-static void add_active_reader(struct super_block *sb, struct active_reader *active)
-{
-	DECLARE_ITEM_CACHE_INFO(sb, cinf);
-
-	BUG_ON(!list_empty(&active->head));
-
-	active->seq = scoutfs_trans_sample_seq(sb);
-
-	spin_lock(&cinf->active_lock);
-	list_add_tail(&active->head, &cinf->active_list);
-	spin_unlock(&cinf->active_lock);
-}
-
-static u64 first_active_reader_seq(struct item_cache_info *cinf)
-{
-	struct active_reader *active;
-	u64 first;
-
-	/* only the calling task adds or deletes this active */
-	spin_lock(&cinf->active_lock);
-	active = list_first_entry_or_null(&cinf->active_list, struct active_reader, head);
-	first = active ? active->seq : U64_MAX;
-	spin_unlock(&cinf->active_lock);
-
-	return first;
-}
-
-static void del_active_reader(struct item_cache_info *cinf, struct active_reader *active)
-{
-	/* only the calling task adds or deletes this active */
-	if (!list_empty(&active->head)) {
-		spin_lock(&cinf->active_lock);
-		list_del_init(&active->head);
-		spin_unlock(&cinf->active_lock);
-	}
-}
-
-/*
  * Add a newly read item to the pages that we're assembling for
  * insertion into the cache.   These pages are private, they only exist
  * on our root and aren't in dirty or lru lists.
@@ -1450,24 +1377,34 @@ static int read_page_item(struct super_block *sb, struct scoutfs_key *key, u64 s
  * and duplicates, we insert any resulting pages which don't overlap
  * with existing cached pages.
  *
- * We only insert uncached regions because this is called with cluster
- * locks held, but without locking the cache.  The regions we read can
- * be stale with respect to the current cache, which can be read and
- * dirtied by other cluster lock holders on our node, but the cluster
- * locks protect the stable items we read.  Invalidation is careful not
- * to drop pages that have items that we couldn't see because they were
- * dirty when we started reading.
- *
  * The forest item reader is reading stable trees that could be
  * overwritten.  It can return -ESTALE which we return to the caller who
  * will retry the operation and work with a new set of more recent
  * btrees.
+ *
+ * We only insert uncached regions because this is called with cluster
+ * locks held, but without locking the cache.  The regions we read can
+ * be stale with respect to the current cache, which can be read and
+ * dirtied by other cluster lock holders on our node, but the cluster
+ * locks protect the stable items we read.
+ *
+ * Using the presence of locally written dirty pages to override stale
+ * read pages only works if, well, the more recent locally written pages
+ * are still present.  Readers are totally decoupled from writers and
+ * can have a set of items that is very old indeed.  In the mean time
+ * more recent items would have been dirtied locally, committed,
+ * cleaned, and reclaimed.  We have a coarse barrier which ensures that
+ * readers can't insert items read from old roots from before local data
+ * was written.  If a write completes while a read is in progress the
+ * read will have to retry.  The retried read can use cached blocks so
+ * we're relying on reads being much faster than writes to reduce the
+ * overhead to mostly cpu work of recollecting the items from cached
+ * blocks via a more recent root from the server.
  */
 static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 		      struct scoutfs_key *key, struct scoutfs_lock *lock)
 {
 	struct rb_root root = RB_ROOT;
-	INIT_ACTIVE_READER(active);
 	struct cached_page *right = NULL;
 	struct cached_page *pg;
 	struct cached_page *rd;
@@ -1480,6 +1417,7 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 	struct rb_node *par;
 	struct rb_node *pg_tmp;
 	struct rb_node *item_tmp;
+	u64 rdbar;
 	int pgi;
 	int ret;
 
@@ -1493,8 +1431,7 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 	pg->end = lock->end;
 	rbtree_insert(&pg->node, NULL, &root.rb_node, &root);
 
-	/* set active reader seq before reading persistent roots */
-	add_active_reader(sb, &active);
+	rdbar = atomic64_read(&cinf->read_dirty_barrier);
 
 	start = lock->start;
 	end = lock->end;
@@ -1533,11 +1470,19 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 retry:
 	write_lock(&cinf->rwlock);
 
+	ret = 0;
 	while ((rd = first_page(&root))) {
 
 		pg = page_rbtree_walk(sb, &cinf->pg_root, &rd->start, &rd->end,
 				      NULL, NULL, &par, &pnode);
 		if (!pg) {
+			/* can't insert if write is cleaning (write_lock is read barrier) */
+			if (atomic64_read(&cinf->read_dirty_barrier) != rdbar) {
+				scoutfs_inc_counter(sb, item_read_pages_barrier);
+				ret = -ESTALE;
+				break;
+			}
+
 			/* insert read pages that don't intersect */
 			rbtree_erase(&rd->node, &root);
 			rbtree_insert(&rd->node, par, pnode, &cinf->pg_root);
@@ -1572,10 +1517,7 @@ retry:
 
 	write_unlock(&cinf->rwlock);
 
-	ret = 0;
 out:
-	del_active_reader(cinf, &active);
-
 	/* free any pages we left dangling on error */
 	for_each_page_safe(&root, rd, pg_tmp) {
 		rbtree_erase(&rd->node, &root);
@@ -1635,6 +1577,7 @@ retry:
 			ret = read_pages(sb, cinf, key, lock);
 		if (ret < 0 && ret != -ESTALE)
 			goto out;
+		scoutfs_inc_counter(sb, item_read_pages_retry);
 		goto retry;
 	}
 
@@ -2415,6 +2358,11 @@ int scoutfs_item_write_done(struct super_block *sb)
 	struct cached_item *tmp;
 	struct cached_page *pg;
 
+	/* don't let read_pages insert possibly stale items */
+	atomic64_inc(&cinf->read_dirty_barrier);
+	smp_mb__after_atomic();
+
+retry:
 	spin_lock(&cinf->dirty_lock);
 	while ((pg = list_first_entry_or_null(&cinf->dirty_list, struct cached_page, dirty_head))) {
 		if (write_trylock(&pg->rwlock)) {
@@ -2593,23 +2541,14 @@ static unsigned long item_cache_scan_objects(struct shrinker *shrink,
 	struct cached_page *tmp;
 	struct cached_page *pg;
 	unsigned long freed = 0;
-	u64 first_reader_seq;
 	int nr = sc->nr_to_scan;
 
 	scoutfs_inc_counter(sb, item_cache_scan_objects);
-
-	/* can't invalidate pages with items that weren't visible to first reader */
-	first_reader_seq = first_active_reader_seq(cinf);
 
 	write_lock(&cinf->rwlock);
 	spin_lock(&cinf->lru_lock);
 
 	list_for_each_entry_safe(pg, tmp, &cinf->lru_list, lru_head) {
-
-		if (first_reader_seq <= pg->max_seq) {
-			scoutfs_inc_counter(sb, item_shrink_page_reader);
-			continue;
-		}
 
 		if (!write_trylock(&pg->rwlock)) {
 			scoutfs_inc_counter(sb, item_shrink_page_trylock);
@@ -2677,8 +2616,7 @@ int scoutfs_item_setup(struct super_block *sb)
 	atomic_set(&cinf->dirty_pages, 0);
 	spin_lock_init(&cinf->lru_lock);
 	INIT_LIST_HEAD(&cinf->lru_list);
-	spin_lock_init(&cinf->active_lock);
-	INIT_LIST_HEAD(&cinf->active_list);
+	atomic64_set(&cinf->read_dirty_barrier, 0);
 
 	cinf->pcpu_pages = alloc_percpu(struct item_percpu_pages);
 	if (!cinf->pcpu_pages)
@@ -2711,8 +2649,6 @@ void scoutfs_item_destroy(struct super_block *sb)
 	int cpu;
 
 	if (cinf) {
-		BUG_ON(!list_empty(&cinf->active_list));
-
 #ifdef KC_CPU_NOTIFIER
 		unregister_hotcpu_notifier(&cinf->notifier);
 #endif
