@@ -39,6 +39,7 @@ enum {
 	Opt_orphan_scan_delay_ms,
 	Opt_quorum_heartbeat_timeout_ms,
 	Opt_quorum_slot_nr,
+	Opt_tcp_keepalive_timeout_ms,
 	Opt_err,
 };
 
@@ -52,6 +53,7 @@ static const match_table_t tokens = {
 	{Opt_orphan_scan_delay_ms, "orphan_scan_delay_ms=%s"},
 	{Opt_quorum_heartbeat_timeout_ms, "quorum_heartbeat_timeout_ms=%s"},
 	{Opt_quorum_slot_nr, "quorum_slot_nr=%s"},
+	{Opt_tcp_keepalive_timeout_ms, "tcp_keepalive_timeout_ms=%s"},
 	{Opt_err, NULL}
 };
 
@@ -126,6 +128,8 @@ static void free_options(struct scoutfs_mount_options *opts)
 #define MIN_DATA_PREALLOC_BLOCKS	1ULL
 #define MAX_DATA_PREALLOC_BLOCKS	((unsigned long long)SCOUTFS_BLOCK_SM_MAX)
 
+#define DEFAULT_TCP_KEEPALIVE_TIMEOUT_MS	(10 * MSEC_PER_SEC)
+
 static void init_default_options(struct scoutfs_mount_options *opts)
 {
 	memset(opts, 0, sizeof(*opts));
@@ -136,6 +140,7 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 	opts->orphan_scan_delay_ms = -1;
 	opts->quorum_heartbeat_timeout_ms = SCOUTFS_QUORUM_DEF_HB_TIMEO_MS;
 	opts->quorum_slot_nr = -1;
+	opts->tcp_keepalive_timeout_ms = DEFAULT_TCP_KEEPALIVE_TIMEOUT_MS;
 }
 
 static int verify_log_merge_wait_timeout_ms(struct super_block *sb, int ret, int val)
@@ -162,6 +167,21 @@ static int verify_quorum_heartbeat_timeout_ms(struct super_block *sb, int ret, u
 	if (val < SCOUTFS_QUORUM_MIN_HB_TIMEO_MS || val > SCOUTFS_QUORUM_MAX_HB_TIMEO_MS) {
 		scoutfs_err(sb, "invalid quorum_heartbeat_timeout_ms value %llu, must be between %lu and %lu",
 			    val, SCOUTFS_QUORUM_MIN_HB_TIMEO_MS, SCOUTFS_QUORUM_MAX_HB_TIMEO_MS);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int verify_tcp_keepalive_timeout_ms(struct super_block *sb, int ret, int val)
+{
+	if (ret < 0) {
+		scoutfs_err(sb, "failed to parse tcp_keepalive_timeout_ms value");
+		return -EINVAL;
+	}
+	if (val <= (UNRESPONSIVE_PROBES * MSEC_PER_SEC)) {
+		scoutfs_err(sb, "invalid tcp_keepalive_timeout_ms value %d, must be larger than %lu",
+			    val, (UNRESPONSIVE_PROBES * MSEC_PER_SEC));
 		return -EINVAL;
 	}
 
@@ -216,6 +236,14 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 				return ret;
 			}
 			opts->data_prealloc_contig_only = nr;
+			break;
+
+		case Opt_tcp_keepalive_timeout_ms:
+			ret = match_int(args, &nr);
+			ret = verify_tcp_keepalive_timeout_ms(sb, ret, nr);
+			if (ret < 0)
+				return ret;
+			opts->tcp_keepalive_timeout_ms = nr;
 			break;
 
 		case Opt_log_merge_wait_timeout_ms:
@@ -371,6 +399,7 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 	seq_printf(seq, ",orphan_scan_delay_ms=%u", opts.orphan_scan_delay_ms);
 	if (opts.quorum_slot_nr >= 0)
 		seq_printf(seq, ",quorum_slot_nr=%d", opts.quorum_slot_nr);
+	seq_printf(seq, ",tcp_keepalive_timeout_ms=%d", opts.tcp_keepalive_timeout_ms);
 
 	return 0;
 }
