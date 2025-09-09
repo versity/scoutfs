@@ -442,6 +442,10 @@ out:
 	if (ret == 0 && (flags & GFB_INSERT) && blk >= le64_to_cpu(sfl->blocks))
 		sfl->blocks = cpu_to_le64(blk + 1);
 
+	if (bl) {
+		trace_scoutfs_get_file_block(sb, bl->blkno, flags);
+	}
+
 	*bl_ret = bl;
 	return ret;
 }
@@ -971,6 +975,8 @@ int scoutfs_srch_search_xattrs(struct super_block *sb,
 	int ret;
 
 	scoutfs_inc_counter(sb, srch_search_xattrs);
+
+	trace_scoutfs_ioc_search_xattrs(sb, ino, last_ino);
 
 	*done = false;
 	srch_init_rb_root(sroot);
