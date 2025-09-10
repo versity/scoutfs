@@ -425,3 +425,40 @@ endif
 ifneq (,$(shell grep 'int ..remap_pages..struct vm_area_struct' include/linux/mm.h))
 ccflags-y += -DKC_MM_REMAP_PAGES
 endif
+
+#
+# v3.19-4742-g503c358cf192
+#
+# list_lru_shrink_count() and list_lru_shrink_walk() introduced
+#
+ifneq (,$(shell grep 'list_lru_shrink_count.*struct list_lru' include/linux/list_lru.h))
+ccflags-y += -DKC_LIST_LRU_SHRINK_COUNT_WALK
+endif
+
+#
+# v3.19-4757-g3f97b163207c
+#
+# lru_list_walk_cb lru arg added
+#
+ifneq (,$(shell grep 'struct list_head \*item, spinlock_t \*lock, void \*cb_arg' include/linux/list_lru.h))
+ccflags-y += -DKC_LIST_LRU_WALK_CB_ITEM_LOCK
+endif
+
+#
+# v6.7-rc4-153-g0a97c01cd20b
+#
+# list_lru_{add,del} -> list_lru_{add,del}_obj
+#
+ifneq (,$(shell grep '^bool list_lru_add_obj' include/linux/list_lru.h))
+ccflags-y += -DKC_LIST_LRU_ADD_OBJ
+endif
+
+#
+# v6.12-rc6-227-gda0c02516c50
+#
+# lru_list_walk_cb lock arg removed
+#
+ifneq (,$(shell grep 'struct list_lru_one \*list, spinlock_t \*lock, void \*cb_arg' include/linux/list_lru.h))
+ccflags-y += -DKC_LIST_LRU_WALK_CB_LIST_LOCK
+endif
+
