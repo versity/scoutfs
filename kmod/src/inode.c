@@ -1965,6 +1965,8 @@ static void iput_worker(struct work_struct *work)
 		while (count-- > 0)
 			iput(inode);
 
+		cond_resched();
+
 		/* can't touch inode after final iput */
 
 		spin_lock(&inf->iput_lock);
