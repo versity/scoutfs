@@ -410,4 +410,51 @@ static inline vm_fault_t vmf_error(int err)
 }
 #endif
 
+#include <linux/list_lru.h>
+
+#ifndef KC_LIST_LRU_SHRINK_COUNT_WALK
+/* we don't bother with sc->{nid,memcg} (which doesn't exist in oldest kernels) */
+static inline unsigned long list_lru_shrink_count(struct list_lru *lru,
+                                                  struct shrink_control *sc)
+{
+        return list_lru_count(lru);
+}
+static inline unsigned long
+list_lru_shrink_walk(struct list_lru *lru, struct shrink_control *sc,
+		     list_lru_walk_cb isolate, void *cb_arg)
+{
+	return list_lru_walk(lru, isolate, cb_arg, sc->nr_to_scan);
+}
+#endif
+
+#ifndef KC_LIST_LRU_ADD_OBJ
+#define list_lru_add_obj list_lru_add
+#define list_lru_del_obj list_lru_del
+#endif
+
+#if defined(KC_LIST_LRU_WALK_CB_LIST_LOCK) || defined(KC_LIST_LRU_WALK_CB_ITEM_LOCK)
+struct list_lru_one;
+typedef enum lru_status (*kc_list_lru_walk_cb_t)(struct list_head *item, struct list_lru_one *list,
+						 void *cb_arg);
+struct kc_isolate_args {
+	kc_list_lru_walk_cb_t isolate;
+	void *cb_arg;
+};
+unsigned long kc_list_lru_walk(struct list_lru *lru, kc_list_lru_walk_cb_t isolate, void *cb_arg,
+			       unsigned long nr_to_walk);
+unsigned long kc_list_lru_shrink_walk(struct list_lru *lru, struct shrink_control *sc,
+				      kc_list_lru_walk_cb_t isolate, void *cb_arg);
+#else
+#define kc_list_lru_shrink_walk list_lru_shrink_walk
+#endif
+
+#if defined(KC_LIST_LRU_WALK_CB_ITEM_LOCK)
+/* isolate moved by hand, nr_items updated in walk as _REMOVE returned */
+static inline void list_lru_isolate_move(struct list_lru_one *list, struct list_head *item,
+					 struct list_head *head)
+{
+        list_move(item, head);
+}
+#endif
+
 #endif
