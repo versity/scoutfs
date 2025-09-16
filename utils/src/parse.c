@@ -160,15 +160,16 @@ int parse_timespec(char *str, struct timespec *ts)
  * Parse a quorum slot specification string "NR,ADDR,PORT" into its
  * component parts.  We use sscanf to both parse the leading NR and
  * trailing PORT integers, and to pull out the inner ADDR string which
- * is then parsed to make sure that it's a valid unicast ipv4 address.
+ * is then parsed to make sure that it's a valid unicast ip address.
  * We require that all components be specified, and sccanf will check
  * this by the number of matches it returns.
  */
 int parse_quorum_slot(struct scoutfs_quorum_slot *slot, char *arg)
 {
-#define ADDR_CHARS 45 /* max ipv6 */
-	char addr[ADDR_CHARS + 1] = {'\0',};
+#define ADDR_CHARS 45 /* (INET6_ADDRSTRLEN - 1) */
+	char addr[INET6_ADDRSTRLEN] = {'\0',};
 	struct in_addr in;
+	struct in6_addr in6;
 	int port;
 	int parsed;
 	int nr;
@@ -206,15 +207,25 @@ int parse_quorum_slot(struct scoutfs_quorum_slot *slot, char *arg)
 		return -EINVAL;
 	}
 
-	if (inet_aton(addr, &in) == 0 || htonl(in.s_addr) == 0 ||
-	    htonl(in.s_addr) == UINT_MAX) {
-		printf("invalid ipv4 address '%s' in quorum slot '%s'\n",
-		       addr, arg);
-		return -EINVAL;
+	if (inet_pton(AF_INET, addr, &in) == 1) {
+		if (htonl(in.s_addr) == 0 || htonl(in.s_addr) == UINT_MAX) {
+			printf("invalid ipv4 address '%s' in quorum slot '%s'\n",
+			       addr, arg);
+			return -EINVAL;
+		}
+		slot->addr.v4.family = cpu_to_le16(SCOUTFS_AF_IPV4);
+		slot->addr.v4.addr = cpu_to_le32(htonl(in.s_addr));
+		slot->addr.v4.port = cpu_to_le16(port);
+	} else if (inet_pton(AF_INET6, addr, &in6) == 1) {
+		if (IN6_IS_ADDR_UNSPECIFIED(&in6) || IN6_IS_ADDR_MULTICAST(&in6)) {
+			printf("invalid ipv6 address '%s' in quorum slot '%s'\n",
+			       addr, arg);
+			return -EINVAL;
+		}
+		slot->addr.v6.family = cpu_to_le16(SCOUTFS_AF_IPV6);
+		memcpy(slot->addr.v6.addr, &in6, 16);
+		slot->addr.v6.port = cpu_to_le16(port);
 	}
 
-	slot->addr.v4.family = cpu_to_le16(SCOUTFS_AF_IPV4);
-	slot->addr.v4.addr = cpu_to_le32(htonl(in.s_addr));
-	slot->addr.v4.port = cpu_to_le16(port);
 	return nr;
 }
