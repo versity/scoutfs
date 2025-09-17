@@ -479,7 +479,7 @@ static void scoutfs_client_connect_worker(struct work_struct *work)
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_mount_options opts;
 	struct scoutfs_net_greeting greet;
-	struct sockaddr_in sin;
+	struct sockaddr_storage sin;
 	bool am_quorum;
 	int ret;
 
