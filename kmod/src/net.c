@@ -808,7 +808,7 @@ static int sendmsg_full(struct socket *sock, void *buf, unsigned len)
 		msg.msg_iov = (struct iovec *)&kv;
 		msg.msg_iovlen = 1;
 #else
-		iov_iter_init(&msg.msg_iter, WRITE, (struct iovec *)&kv, len, 1);
+		iov_iter_init(&msg.msg_iter, WRITE, (struct iovec *)&kv, 1, len);
 #endif
 		ret = kernel_sendmsg(sock, &msg, &kv, 1, len);
 		if (ret <= 0)
