@@ -269,7 +269,7 @@ static int send_msg_members(struct super_block *sb, int type, u64 term, int only
 		scoutfs_quorum_slot_sin(&qinf->qconf, i, &sin);
 		now = ktime_get();
 #ifdef KC_MSGHDR_STRUCT_IOV_ITER
-		iov_iter_init(&mh.msg_iter, WRITE, (struct iovec *)&kv, sizeof(qmes), 1);
+		iov_iter_init(&mh.msg_iter, WRITE, (struct iovec *)&kv, 1, sizeof(qmes));
 #endif
 		ret = kernel_sendmsg(qinf->sock, &mh, &kv, 1, kv.iov_len);
 		if (ret != kv.iov_len)
@@ -334,7 +334,7 @@ static int recv_msg(struct super_block *sb, struct quorum_host_msg *msg,
 	}
 
 #ifdef KC_MSGHDR_STRUCT_IOV_ITER
-	iov_iter_init(&mh.msg_iter, READ, (struct iovec *)&kv, sizeof(struct scoutfs_quorum_message), 1);
+	iov_iter_init(&mh.msg_iter, READ, (struct iovec *)&kv, 1, sizeof(struct scoutfs_quorum_message));
 #endif
 	ret = kernel_recvmsg(qinf->sock, &mh, &kv, 1, kv.iov_len, mh.msg_flags);
 	if (ret < 0)
