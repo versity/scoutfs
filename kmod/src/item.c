@@ -2401,6 +2401,12 @@ out:
  * The caller has successfully committed all the dirty btree blocks that
  * contained the currently dirty items.  Clear all the dirty items and
  * pages.
+ *
+ * This strange lock/trylock loop comes from sparse issuing spurious
+ * mismatched context warnings if we do anything (like unlock and relax)
+ * in the else branch of the failed trylock.  We're jumping through
+ * hoops to not use the else but still drop and reacquire the dirty_lock
+ * if the trylock fails.  Got me, man.
  */
 int scoutfs_item_write_done(struct super_block *sb)
 {
@@ -2409,41 +2415,28 @@ int scoutfs_item_write_done(struct super_block *sb)
 	struct cached_item *tmp;
 	struct cached_page *pg;
 
-retry:
-	spin_lock(&cinf->dirty_lock);
-
-	while ((pg = list_first_entry_or_null(&cinf->dirty_list,
-					      struct cached_page,
-					      dirty_head))) {
-
-		if (!write_trylock(&pg->rwlock)) {
-			spin_unlock(&cinf->dirty_lock);
-			cpu_relax();
-			goto retry;
-		}
-
-		spin_unlock(&cinf->dirty_lock);
-
-		list_for_each_entry_safe(item, tmp, &pg->dirty_list,
-					 dirty_head) {
-			clear_item_dirty(sb, cinf, pg, item);
-
-			if (item->delta)
-				scoutfs_inc_counter(sb, item_delta_written);
-
-			/* free deletion items */
-			if (item->deletion || item->delta)
-				erase_item(pg, item);
-			else
-				item->persistent = 1;
-		}
-
-		write_unlock(&pg->rwlock);
-
+	do {
 		spin_lock(&cinf->dirty_lock);
-	}
+		pg = list_first_entry_or_null(&cinf->dirty_list, struct cached_page, dirty_head);
+		if (pg && write_trylock(&pg->rwlock)) {
+			list_for_each_entry_safe(item, tmp, &pg->dirty_list,
+						 dirty_head) {
+				clear_item_dirty(sb, cinf, pg, item);
 
-	spin_unlock(&cinf->dirty_lock);
+				if (item->delta)
+					scoutfs_inc_counter(sb, item_delta_written);
+
+				/* free deletion items */
+				if (item->deletion || item->delta)
+					erase_item(pg, item);
+				else
+					item->persistent = 1;
+			}
+
+			write_unlock(&pg->rwlock);
+		}
+		spin_unlock(&cinf->dirty_lock);
+	} while (pg);
 
 	return 0;
 }
