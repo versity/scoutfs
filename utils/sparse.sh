@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# can we find sparse?  If not, we're done.
-which sparse > /dev/null 2>&1 || exit 0
+# must have sparse.  Fail with error message, mask success path.
+which sparse > /dev/null || exit 1
 
 # 
 # one of the problems with using sparse in userspace is that it picks up
