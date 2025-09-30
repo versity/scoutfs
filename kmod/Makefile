@@ -5,13 +5,6 @@ ifeq ($(SK_KSRC),)
 SK_KSRC := $(shell echo /lib/modules/`uname -r`/build)
 endif
 
-# fail if sparse fails if we find it
-ifeq ($(shell sparse && echo found),found)
-SP =
-else
-SP = @:
-endif
-
 SCOUTFS_GIT_DESCRIBE ?= \
 	$(shell git describe --all --abbrev=6 --long 2>/dev/null || \
 		echo no-git)
@@ -36,9 +29,7 @@ TARFILE = scoutfs-kmod-$(RPM_VERSION).tar
 all: module
 
 module:
-	$(MAKE) $(SCOUTFS_ARGS)
-	$(SP) $(MAKE) C=2 CF="-D__CHECK_ENDIAN__" $(SCOUTFS_ARGS)
-
+	$(MAKE) CHECK=$(CURDIR)/src/sparse-filtered.sh C=1 CF="-D__CHECK_ENDIAN__" $(SCOUTFS_ARGS)
 
 modules_install:
 	$(MAKE) $(SCOUTFS_ARGS) modules_install
