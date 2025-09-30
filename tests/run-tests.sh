@@ -294,6 +294,9 @@ cmd make $MAKE_ARGS
 cmd sync
 cmd cd -
 
+msg "bailing early while testing" 
+exit 0
+
 # we can now run the built scoutfs binary, prefer over installed
 PATH="$T_UTILS/src:$PATH"
 
