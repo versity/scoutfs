@@ -168,7 +168,6 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 			   enum scoutfs_lock_mode prev, enum scoutfs_lock_mode mode)
 {
 	struct scoutfs_lock_coverage *cov;
-	struct scoutfs_lock_coverage *tmp;
 	u64 ino, last;
 	int ret = 0;
 
@@ -192,19 +191,22 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
-retry:
-		/* remove cov items to tell users that their cache is stale */
+		/*
+		 * Remove cov items to tell users that their cache is
+		 * stale.  The unlock pattern comes from avoiding bad
+		 * sparse warnings when taking else in a failed trylock.
+		 */
 		spin_lock(&lock->cov_list_lock);
-		list_for_each_entry_safe(cov, tmp, &lock->cov_list, head) {
-			if (!spin_trylock(&cov->cov_lock)) {
-				spin_unlock(&lock->cov_list_lock);
-				cpu_relax();
-				goto retry;
+		while ((cov = list_first_entry_or_null(&lock->cov_list,
+						       struct scoutfs_lock_coverage, head))) {
+			if (spin_trylock(&cov->cov_lock)) {
+				list_del_init(&cov->head);
+				cov->lock = NULL;
+				spin_unlock(&cov->cov_lock);
+				scoutfs_inc_counter(sb, lock_invalidate_coverage);
 			}
-			list_del_init(&cov->head);
-			cov->lock = NULL;
-			spin_unlock(&cov->cov_lock);
-			scoutfs_inc_counter(sb, lock_invalidate_coverage);
+			spin_unlock(&lock->cov_list_lock);
+			spin_lock(&lock->cov_list_lock);
 		}
 		spin_unlock(&lock->cov_list_lock);
 
