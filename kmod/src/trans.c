@@ -196,7 +196,7 @@ static int retry_forever(struct super_block *sb, int (*func)(struct super_block 
 			}
 
 			if (scoutfs_forcing_unmount(sb)) {
-				ret = -EIO;
+				ret = -ENOLINK;
 				break;
 			}
 
@@ -252,7 +252,7 @@ void scoutfs_trans_write_func(struct work_struct *work)
 	}
 
 	if (scoutfs_forcing_unmount(sb)) {
-		ret = -EIO;
+		ret = -ENOLINK;
 		goto out;
 	}
 

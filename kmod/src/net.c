@@ -335,7 +335,7 @@ static int submit_send(struct super_block *sb,
 		return -EINVAL;
 
 	if (scoutfs_forcing_unmount(sb))
-		return -EIO;
+		return -ENOLINK;
 
 	msend = kmalloc(offsetof(struct message_send,
 				 nh.data[data_len]), GFP_NOFS);
