@@ -69,6 +69,7 @@ $(basename $0) options:
     -r <dir>  | Specify the directory in which to store results of
               | test runs.  The directory will be created if it doesn't
               | exist.  Previous results will be deleted as each test runs.
+    -R        | shuffle the test order randomly using shuf
     -s        | Skip git repo checkouts.
     -t        | Enabled trace events that match the given glob argument.
               | Multiple options enable multiple globbed events.
@@ -163,6 +164,9 @@ while true; do
 		test -n "$2" || die "-r must have results dir argument"
 		T_RESULTS="$2"
 		shift
+		;;
+	-R)
+		T_SHUF="1"
 		;;
 	-s)
 	        T_SKIP_CHECKOUT="1"
@@ -261,13 +265,26 @@ for e in T_META_DEVICE T_DATA_DEVICE T_EX_META_DEV T_EX_DATA_DEV T_KMOD T_RESULT
 	eval $e=\"$(readlink -f "${!e}")\"
 done
 
+# permute sequence?
+T_SEQUENCE=sequence
+if [ -n "$T_SHUF" ]; then
+	msg "shuffling test order"
+	shuf sequence -o sequence.shuf
+	# keep xfstests at the end
+	if grep -q 'xfstests.sh' sequence.shuf ; then
+		sed -i '/xfstests.sh/d' sequence.shuf
+		echo "xfstests.sh" >> sequence.shuf
+	fi
+	T_SEQUENCE=sequence.shuf
+fi
+
 # include everything by default
 test -z "$T_INCLUDE" && T_INCLUDE="-e '.*'"
 # (quickly) exclude nothing by default
 test -z "$T_EXCLUDE" && T_EXCLUDE="-e '\Zx'"
 
 # eval to strip re ticks but not expand
-tests=$(grep -v "^#" sequence |
+tests=$(grep -v "^#" $T_SEQUENCE |
 	eval grep "$T_INCLUDE" | eval grep -v "$T_EXCLUDE")
 test -z "$tests" && \
 	die "no tests found by including $T_INCLUDE and excluding $T_EXCLUDE"
