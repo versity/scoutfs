@@ -140,6 +140,9 @@ t_filter_dmesg()
 	re="$re|scoutfs .* error.*server failed to bind to.*"
 	re="$re|scoutfs .* critical transaction commit failure.*"
 
+	# ENOLINK (-67) indicates an expected forced unmount error
+	re="$re|scoutfs .* error -67 .*"
+
 	# change-devices causes loop device resizing
 	re="$re|loop: module loaded"
 	re="$re|loop[0-9].* detected capacity change from.*"
