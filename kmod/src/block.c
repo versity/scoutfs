@@ -488,7 +488,7 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 	int ret = 0;
 
 	if (scoutfs_forcing_unmount(sb))
-		return -EIO;
+		return -ENOLINK;
 
 	sector = bp->bl.blkno << (SCOUTFS_BLOCK_LG_SHIFT - 9);
 
@@ -1210,7 +1210,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_op
 	BUILD_BUG_ON(PAGE_SIZE < SCOUTFS_BLOCK_SM_SIZE);
 
 	if (scoutfs_forcing_unmount(sb))
-		return -EIO;
+		return -ENOLINK;
 
 	if (WARN_ON_ONCE(len > SCOUTFS_BLOCK_SM_SIZE) ||
 	    WARN_ON_ONCE(!op_is_write(opf) && !blk_crc))

@@ -610,7 +610,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 		goto out;
 
 	if (scoutfs_forcing_unmount(sb)) {
-		ret = -EIO;
+		ret = -ENOLINK;
 		goto out;
 	}
 
