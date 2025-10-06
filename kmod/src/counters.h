@@ -146,6 +146,7 @@
 	EXPAND_COUNTER(lock_shrink_work)			\
 	EXPAND_COUNTER(lock_unlock)				\
 	EXPAND_COUNTER(lock_wait)				\
+	EXPAND_COUNTER(log_merge_no_finalized)			\
 	EXPAND_COUNTER(log_merge_wait_timeout)			\
 	EXPAND_COUNTER(net_dropped_response)			\
 	EXPAND_COUNTER(net_send_bytes)				\
@@ -182,6 +183,7 @@
 	EXPAND_COUNTER(quorum_send_vote)			\
 	EXPAND_COUNTER(quorum_server_shutdown)			\
 	EXPAND_COUNTER(quorum_term_follower)			\
+	EXPAND_COUNTER(reclaimed_open_logs)			\
 	EXPAND_COUNTER(server_commit_hold)			\
 	EXPAND_COUNTER(server_commit_queue)			\
 	EXPAND_COUNTER(server_commit_worker)			\
