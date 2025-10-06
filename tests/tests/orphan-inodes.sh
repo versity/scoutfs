@@ -67,6 +67,21 @@ t_mount_all
 while test -d $(echo /sys/fs/scoutfs/*/fence/* | cut -d " " -f 1); do
 	sleep .5
 done
+
+
+sv=$(t_server_nr)
+
+# wait for reclaim_open_log_tree() to complete for each mount
+while [ $(t_counter reclaimed_open_logs $sv) -lt $T_NR_MOUNTS ]; do
+	sleep 1
+done
+
+# wait for finalize_and_start_log_merge() to find no active merges in flight
+# and not find any finalized trees
+while [ $(t_counter log_merge_no_finalized $sv) -lt 1 ]; do
+	sleep 1
+done
+
 # wait for orphan scans to run
 t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
 # wait until we see two consecutive orphan scan attempts without

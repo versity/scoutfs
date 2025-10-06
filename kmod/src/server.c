@@ -1256,6 +1256,7 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		/* done if we're not finalizing and there's no finalized */
 		if (!finalize_ours && !saw_finalized) {
 			ret = 0;
+			scoutfs_inc_counter(sb, log_merge_no_finalized);
 			break;
 		}
 
@@ -1888,6 +1889,9 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 
 out:
 	mutex_unlock(&server->logs_mutex);
+
+	if (ret == 0)
+		scoutfs_inc_counter(sb, reclaimed_open_logs);
 
 	if (ret < 0 && ret != -EINPROGRESS)
 		scoutfs_err(sb, "server error %d reclaiming log trees for rid %016llx: %s",
