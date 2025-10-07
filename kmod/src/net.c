@@ -533,7 +533,7 @@ static void queue_ordered_proc(struct scoutfs_net_connection *conn, struct messa
 	u32 h;
 
 	if (WARN_ON_ONCE(mrecv->nh.cmd != SCOUTFS_NET_CMD_LOCK ||
-		         mrecv->nh.data_len != sizeof(struct scoutfs_net_lock)))
+		         le16_to_cpu(mrecv->nh.data_len) != sizeof(struct scoutfs_net_lock)))
 		return scoutfs_net_proc_worker(&mrecv->proc_work);
 
 	nl = (void *)mrecv->nh.data;
