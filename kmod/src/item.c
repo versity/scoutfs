@@ -2362,7 +2362,6 @@ int scoutfs_item_write_done(struct super_block *sb)
 	atomic64_inc(&cinf->read_dirty_barrier);
 	smp_mb__after_atomic();
 
-retry:
 	spin_lock(&cinf->dirty_lock);
 	while ((pg = list_first_entry_or_null(&cinf->dirty_list, struct cached_page, dirty_head))) {
 		if (write_trylock(&pg->rwlock)) {
