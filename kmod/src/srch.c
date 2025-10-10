@@ -537,23 +537,35 @@ out:
  * the pairs cancel each other out by all readers (the second encoding
  * looks like deletion) so they aren't visible to the first/last bounds of
  * the block or file.
+ *
+ * We use the same entry repeatedly, so the diff between them will be empty.
+ * This lets us just emit the two-byte count word, leaving the other bytes
+ * as zero.
+ *
+ * Split the desired total len into two pieces, adding any remainder to the
+ * first four-bit value.
  */
-static int append_padded_entry(struct scoutfs_srch_file *sfl, u64 blk,
-			       struct scoutfs_srch_block *srb, struct scoutfs_srch_entry *sre)
+static void append_padded_entry(struct scoutfs_srch_file *sfl,
+				struct scoutfs_srch_block *srb,
+				int len)
 {
-	int ret;
+	int each;
+	int rem;
+	u16 lengths = 0;
+	u8 *buf = srb->entries + le32_to_cpu(srb->entry_bytes);
 
-	ret = encode_entry(srb->entries + le32_to_cpu(srb->entry_bytes),
-			   sre, &srb->tail);
-	if (ret > 0) {
-		srb->tail = *sre;
-		le32_add_cpu(&srb->entry_nr, 1);
-		le32_add_cpu(&srb->entry_bytes, ret);
-		le64_add_cpu(&sfl->entries, 1);
-		ret = 0;
-	}
+	each = (len - 2) >> 1;
+	rem = (len - 2) & 1;
 
-	return ret;
+	lengths |= each + rem;
+	lengths |= each << 4;
+
+	memset(buf, 0, len);
+	put_unaligned_le16(lengths, buf);
+
+	le32_add_cpu(&srb->entry_nr, 1);
+	le32_add_cpu(&srb->entry_bytes, len);
+	le64_add_cpu(&sfl->entries, 1);
 }
 
 /*
@@ -564,61 +576,41 @@ static int append_padded_entry(struct scoutfs_srch_file *sfl, u64 blk,
  * This is called when there is a single existing entry in the block.
  * We have the entire block to work with.  We encode pairs of matching
  * entries.  This hides them from readers (both searches and merging) as
- * they're interpreted as creation and deletion and are deleted.  We use
- * the existing hash value of the first entry in the block but then set
- * the inode to an impossibly large number so it doesn't interfere with
- * anything.
+ * they're interpreted as creation and deletion and are deleted.
  *
- * To hit the specific offset we very carefully manage the amount of
- * bytes of change between fields in the entry.  We know that if we
- * change all the byte of the ino and id we end up with a 20 byte
- * (2+8+8,2) encoding of the pair of entries.  To have the last entry
- * start at the _SAFE_POS offset we know that the final 20 byte pair
- * encoding needs to end at 2 bytes (second entry encoding) after the
- * _SAFE_POS offset.
+ * For simplicity and to maintain sort ordering within the block, we reuse
+ * the existing entry. This lets us skip the encoding step, because we know
+ * the diff will be zero. We can zero-pad the resulting entries to hit the
+ * target offset exactly.
  *
- * So as we encode pairs we watch the delta of our current offset from
- * that desired final offset of 2 past _SAFE_POS.  If we're a multiple
- * of 20 away then we encode the full 20 byte pairs.  If we're not, then
- * we drop a byte to encode 19 bytes.  That'll slowly change the offset
- * to be a multiple of 20 again while encoding large entries.
+ * Because we can't predict the exact number of entry_bytes when we start,
+ * we adjust the byte count of subsequent entries until we wind up at a
+ * multiple of 20 bytes away from our goal and then use that length for
+ * the remaining entries.
+ *
+ * We could just use a single pair of unnaturally large entries to consume
+ * the needed space, adjusting for an odd number of entry_bytes if necessary.
+ * The use of 19 or 20 bytes for the entry pair matches what we would see with
+ * real (non-zero) entries that vary from the existing entry.
  */
-static void pad_entries_at_safe(struct scoutfs_srch_file *sfl, u64 blk,
+static void pad_entries_at_safe(struct scoutfs_srch_file *sfl,
 				struct scoutfs_srch_block *srb)
 {
-	struct scoutfs_srch_entry sre;
 	u32 target;
 	s32 diff;
-	u64 hash;
-	u64 ino;
-	u64 id;
-	int ret;
-
-	hash = le64_to_cpu(srb->tail.hash);
-	ino = le64_to_cpu(srb->tail.ino) | (1ULL << 62);
-	id = le64_to_cpu(srb->tail.id);
 
 	target = SCOUTFS_SRCH_BLOCK_SAFE_BYTES + 2;
 
 	while ((diff = target - le32_to_cpu(srb->entry_bytes)) > 0) {
-		ino ^= 1ULL << (7 * 8);
+		append_padded_entry(sfl, srb, 10);
 		if (diff % 20 == 0) {
-			id ^= 1ULL << (7 * 8);
+			append_padded_entry(sfl, srb, 10);
 		} else {
-			id ^= 1ULL << (6 * 8);
+			append_padded_entry(sfl, srb, 9);
 		}
-
-		sre.hash = cpu_to_le64(hash);
-		sre.ino = cpu_to_le64(ino);
-		sre.id = cpu_to_le64(id);
-
-		ret = append_padded_entry(sfl, blk, srb, &sre);
-		if (ret == 0)
-			ret = append_padded_entry(sfl, blk, srb, &sre);
-		BUG_ON(ret != 0);
-
-		diff = target - le32_to_cpu(srb->entry_bytes);
 	}
+
+	WARN_ON_ONCE(diff != 0);
 }
 
 /*
@@ -1675,7 +1667,7 @@ static int kway_merge(struct super_block *sb,
 			/* end sorted block on _SAFE offset for testing */
 			if (bl && le32_to_cpu(srb->entry_nr) == 1 && logs_input &&
 			    scoutfs_trigger(sb, SRCH_COMPACT_LOGS_PAD_SAFE)) {
-				pad_entries_at_safe(sfl, blk, srb);
+				pad_entries_at_safe(sfl, srb);
 				scoutfs_block_put(sb, bl);
 				bl = NULL;
 				blk++;
