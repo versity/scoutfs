@@ -157,7 +157,7 @@ echo "truncate should be waiting for first block:"
 expect_wait "$DIR/file" "change_size" $ino 0
 scoutfs stage "$DIR/golden" "$DIR/file" -V "$vers" -o 0 -l $BYTES
 sleep .1
-echo "trunate should no longer be waiting:"
+echo "truncate should no longer be waiting:"
 scoutfs data-waiting -B 0 -I 0 -p "$DIR" | wc -l
 cat "$DIR/golden" > "$DIR/file"
 vers=$(scoutfs stat -s data_version "$DIR/file")
@@ -168,10 +168,13 @@ scoutfs release "$DIR/file" -V "$vers" -o 0 -l $BYTES
 # overwrite, not truncate+write
 dd if="$DIR/other" of="$DIR/file" \
 	bs=$BS count=$BLOCKS conv=notrunc status=none &
+pid="$!"
 sleep .1
 echo "should be waiting for write"
 expect_wait "$DIR/file" "write" $ino 0
 scoutfs stage "$DIR/golden" "$DIR/file" -V "$vers" -o 0 -l $BYTES
+# wait for the background dd to complete
+wait "$pid" 2> /dev/null
 cmp "$DIR/file" "$DIR/other"
 
 echo "== cleanup"

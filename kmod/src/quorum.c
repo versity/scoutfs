@@ -520,10 +520,10 @@ static int update_quorum_block(struct super_block *sb, int event, u64 term, bool
 		set_quorum_block_event(sb, &blk, event, term);
 		ret = write_quorum_block(sb, blkno, &blk);
 		if (ret < 0)
-			scoutfs_err(sb, "error %d reading quorum block %llu to update event %d term %llu",
+			scoutfs_err(sb, "error %d writing quorum block %llu after updating event %d term %llu",
 				    ret, blkno, event, term);
 	} else {
-		scoutfs_err(sb, "error %d writing quorum block %llu after updating event %d term %llu",
+		scoutfs_err(sb, "error %d reading quorum block %llu to update event %d term %llu",
 			    ret, blkno, event, term);
 	}
 
@@ -822,6 +822,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 		/* followers and candidates start new election on timeout */
 		if (qst.role != LEADER &&
+		    msg.type == SCOUTFS_QUORUM_MSG_INVALID &&
 		    ktime_after(ktime_get(), qst.timeout)) {
 			/* .. but only if their server has stopped */
 			if (!scoutfs_server_is_down(sb)) {
@@ -982,7 +983,10 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	}
 
 	/* record that this slot no longer has an active quorum */
-	update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_END, qst.term, true);
+	err = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_END, qst.term, true);
+	if (err < 0 && ret == 0)
+		ret = err;
+
 out:
 	if (ret < 0) {
 		scoutfs_err(sb, "quorum service saw error %d, shutting down.  This mount is no longer participating in quorum.  It should be remounted to restore service.",

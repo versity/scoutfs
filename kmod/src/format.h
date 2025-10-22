@@ -470,7 +470,7 @@ struct scoutfs_srch_compact {
  * @get_trans_seq, @commit_trans_seq: These pair of sequence numbers
  * determine if a transaction is currently open for the mount that owns
  * the log_trees struct.  get_trans_seq is advanced by the server as the
- * transaction is opened.   The server sets comimt_trans_seq equal to
+ * transaction is opened.   The server sets commit_trans_seq equal to
  * get_ as the transaction is committed.
  */
 struct scoutfs_log_trees {
@@ -1091,7 +1091,8 @@ enum scoutfs_net_cmd {
 	EXPAND_NET_ERRNO(ENOMEM)	\
 	EXPAND_NET_ERRNO(EIO)		\
 	EXPAND_NET_ERRNO(ENOSPC)	\
-	EXPAND_NET_ERRNO(EINVAL)
+	EXPAND_NET_ERRNO(EINVAL)	\
+	EXPAND_NET_ERRNO(ENOLINK)
 
 #undef EXPAND_NET_ERRNO
 #define EXPAND_NET_ERRNO(which) SCOUTFS_NET_ERR_##which,

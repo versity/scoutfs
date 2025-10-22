@@ -67,18 +67,49 @@ t_mount_all
 while test -d $(echo /sys/fs/scoutfs/*/fence/* | cut -d " " -f 1); do
 	sleep .5
 done
-# wait for orphan scans to run
-t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
-# also have to wait for delayed log merge work from mount
-C=120
-while (( C-- )); do
-	brk=1
-	for ino in $inos; do
-		inode_exists $ino && brk=0
-	done
-	test $brk -eq 1 && break
+
+
+sv=$(t_server_nr)
+
+# wait for reclaim_open_log_tree() to complete for each mount
+while [ $(t_counter reclaimed_open_logs $sv) -lt $T_NR_MOUNTS ]; do
 	sleep 1
 done
+
+# wait for finalize_and_start_log_merge() to find no active merges in flight
+# and not find any finalized trees
+while [ $(t_counter log_merge_no_finalized $sv) -lt 1 ]; do
+	sleep 1
+done
+
+# wait for orphan scans to run
+t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
+# wait until we see two consecutive orphan scan attempts without
+# any inode deletion forward progress in each mount
+for nr in $(t_fs_nrs); do
+	C=0
+	LOSA=$(t_counter orphan_scan_attempts $nr)
+	LDOP=$(t_counter inode_deleted $nr)
+
+	while [ $C -lt 2 ]; do
+		sleep 1
+
+		OSA=$(t_counter orphan_scan_attempts $nr)
+		DOP=$(t_counter inode_deleted $nr)
+
+		if [ $OSA != $LOSA ]; then
+			if [ $DOP == $LDOP ]; then
+				(( C++ ))
+			else
+				C=0
+			fi
+		fi
+
+		LOSA=$OSA
+		LDOP=$DOP
+	done
+done
+
 for ino in $inos; do
 	inode_exists $ino && echo "$ino still exists"
 done

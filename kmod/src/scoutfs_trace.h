@@ -823,13 +823,14 @@ DEFINE_EVENT(scoutfs_lock_info_class, scoutfs_lock_destroy,
 );
 
 TRACE_EVENT(scoutfs_xattr_set,
-	TP_PROTO(struct super_block *sb, size_t name_len, const void *value,
-		 size_t size, int flags),
+	TP_PROTO(struct super_block *sb, __u64 ino, size_t name_len,
+		 const void *value, size_t size, int flags),
 
-	TP_ARGS(sb, name_len, value, size, flags),
+	TP_ARGS(sb, ino, name_len, value, size, flags),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
 		__field(size_t, name_len)
 		__field(const void *, value)
 		__field(size_t, size)
@@ -838,15 +839,16 @@ TRACE_EVENT(scoutfs_xattr_set,
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
 		__entry->name_len = name_len;
 		__entry->value = value;
 		__entry->size = size;
 		__entry->flags = flags;
 	),
 
-	TP_printk(SCSBF" name_len %zu value %p size %zu flags 0x%x",
-		  SCSB_TRACE_ARGS, __entry->name_len, __entry->value,
-		  __entry->size, __entry->flags)
+	TP_printk(SCSBF" ino %llu name_len %zu value %p size %zu flags 0x%x",
+		  SCSB_TRACE_ARGS, __entry->ino,  __entry->name_len,
+		  __entry->value, __entry->size, __entry->flags)
 );
 
 TRACE_EVENT(scoutfs_advance_dirty_super,
@@ -1966,15 +1968,17 @@ DEFINE_EVENT(scoutfs_server_client_count_class, scoutfs_server_client_down,
 );
 
 DECLARE_EVENT_CLASS(scoutfs_server_commit_users_class,
-        TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int committing, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing,
-		exceeded),
+        TP_PROTO(struct super_block *sb, int holding, int applying,
+		 int nr_holders, u32 budget,
+		 u32 avail_before, u32 freed_before,
+		 int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, budget, avail_before, freed_before, committing, exceeded),
         TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(int, holding)
 		__field(int, applying)
 		__field(int, nr_holders)
+		__field(u32, budget)
 		__field(__u32, avail_before)
 		__field(__u32, freed_before)
 		__field(int, committing)
@@ -1985,35 +1989,45 @@ DECLARE_EVENT_CLASS(scoutfs_server_commit_users_class,
 		__entry->holding = !!holding;
 		__entry->applying = !!applying;
 		__entry->nr_holders = nr_holders;
+		__entry->budget = budget;
 		__entry->avail_before = avail_before;
 		__entry->freed_before = freed_before;
 		__entry->committing = !!committing;
 		__entry->exceeded = !!exceeded;
         ),
-	TP_printk(SCSBF" holding %u applying %u nr %u avail_before %u freed_before %u committing %u exceeded %u",
-		  SCSB_TRACE_ARGS, __entry->holding, __entry->applying, __entry->nr_holders,
-		  __entry->avail_before, __entry->freed_before, __entry->committing,
-		  __entry->exceeded)
+	TP_printk(SCSBF" holding %u applying %u nr %u budget %u avail_before %u freed_before %u committing %u exceeded %u",
+		  SCSB_TRACE_ARGS, __entry->holding, __entry->applying,
+		  __entry->nr_holders, __entry->budget,
+		  __entry->avail_before, __entry->freed_before,
+		  __entry->committing, __entry->exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_hold,
-        TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int committing, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
+        TP_PROTO(struct super_block *sb, int holding, int applying,
+		 int nr_holders, u32 budget,
+		 u32 avail_before, u32 freed_before,
+		 int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, budget, avail_before, freed_before, committing, exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_apply,
-        TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int committing, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
+        TP_PROTO(struct super_block *sb, int holding, int applying,
+		 int nr_holders, u32 budget,
+		 u32 avail_before, u32 freed_before,
+		 int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, budget, avail_before, freed_before, committing, exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_start,
-        TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int committing, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
+        TP_PROTO(struct super_block *sb, int holding, int applying,
+		 int nr_holders, u32 budget,
+		 u32 avail_before, u32 freed_before,
+		 int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, budget, avail_before, freed_before, committing, exceeded)
 );
 DEFINE_EVENT(scoutfs_server_commit_users_class, scoutfs_server_commit_end,
-        TP_PROTO(struct super_block *sb, int holding, int applying, int nr_holders,
-		 u32 avail_before, u32 freed_before, int committing, int exceeded),
-        TP_ARGS(sb, holding, applying, nr_holders, avail_before, freed_before, committing, exceeded)
+        TP_PROTO(struct super_block *sb, int holding, int applying,
+		 int nr_holders, u32 budget,
+		 u32 avail_before, u32 freed_before,
+		 int committing, int exceeded),
+        TP_ARGS(sb, holding, applying, nr_holders, budget, avail_before, freed_before, committing, exceeded)
 );
 
 #define slt_symbolic(mode)						\
@@ -2449,6 +2463,27 @@ TRACE_EVENT(scoutfs_block_dirty_ref,
 	TP_printk(SCSBF" ref_blkno %llu ref_seq %llu block_blkno %llu block_seq %llu",
 		  SCSB_TRACE_ARGS, __entry->ref_blkno, __entry->ref_seq,
 		  __entry->block_blkno, __entry->block_seq)
+);
+
+TRACE_EVENT(scoutfs_get_file_block,
+	TP_PROTO(struct super_block *sb, u64 blkno, int flags),
+
+	TP_ARGS(sb, blkno, flags),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, blkno)
+		__field(int, flags)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->blkno = blkno;
+		__entry->flags = flags;
+	),
+
+	TP_printk(SCSBF" blkno %llu flags 0x%x",
+		  SCSB_TRACE_ARGS, __entry->blkno, __entry->flags)
 );
 
 TRACE_EVENT(scoutfs_block_stale,
@@ -3046,6 +3081,27 @@ DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_send,
 DEFINE_EVENT(scoutfs_srch_compact_class, scoutfs_srch_compact_client_recv,
 	TP_PROTO(struct super_block *sb, struct scoutfs_srch_compact *sc),
 	TP_ARGS(sb, sc)
+);
+
+TRACE_EVENT(scoutfs_ioc_search_xattrs,
+	TP_PROTO(struct super_block *sb, u64 ino, u64 last_ino),
+
+	TP_ARGS(sb, ino, last_ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(u64, ino)
+		__field(u64, last_ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->last_ino = last_ino;
+	),
+
+	TP_printk(SCSBF" ino %llu last_ino %llu", SCSB_TRACE_ARGS,
+		  __entry->ino, __entry->last_ino)
 );
 
 #endif /* _TRACE_SCOUTFS_H */
