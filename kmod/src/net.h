@@ -1,9 +1,17 @@
 #ifndef _SCOUTFS_NET_H_
 #define _SCOUTFS_NET_H_
 
+#include <linux/spinlock.h>
+#include <linux/list.h>
 #include <linux/in.h>
 #include "endian_swap.h"
 #include "tseq.h"
+
+struct scoutfs_work_list {
+	struct work_struct work;
+	spinlock_t lock;
+	struct list_head list;
+};
 
 struct scoutfs_net_connection;
 
@@ -61,6 +69,8 @@ struct scoutfs_net_connection {
 	struct list_head resend_queue;
 
 	atomic64_t recv_seq;
+	unsigned int ordered_proc_nr;
+	struct scoutfs_work_list *ordered_proc_wlists;
 
 	struct workqueue_struct *workq;
 	struct work_struct listen_work;
