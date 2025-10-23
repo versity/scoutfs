@@ -32,6 +32,7 @@
 #include "endian_swap.h"
 #include "tseq.h"
 #include "fence.h"
+#include "options.h"
 
 /*
  * scoutfs networking delivers requests and responses between nodes.
@@ -998,7 +999,7 @@ static void destroy_conn(struct scoutfs_net_connection *conn)
  * The TCP_KEEP* and TCP_USER_TIMEOUT option interaction is subtle.
  * TCP_USER_TIMEOUT only applies if there is unacked written data in the
  * send queue.  It doesn't work if the connection is idle.  Adding
- * keepalice probes with user_timeout set changes how the keepalive
+ * keepalive probes with user_timeout set changes how the keepalive
  * timeout is calculated.   CNT no longer matters.   Each time
  * additional probes (not the first) are sent the user timeout is
  * checked against the last time data was received.  If none of the
@@ -1010,13 +1011,15 @@ static void destroy_conn(struct scoutfs_net_connection *conn)
  * elapses during the probe timer processing after the unsuccessful
  * probes.
  */
-#define UNRESPONSIVE_TIMEOUT_SECS 10
-#define UNRESPONSIVE_PROBES 3
-static int sock_opts_and_names(struct scoutfs_net_connection *conn,
+static int sock_opts_and_names(struct super_block *sb,
+			       struct scoutfs_net_connection *conn,
 			       struct socket *sock)
 {
+	struct scoutfs_mount_options opts;
 	int optval;
 	int ret;
+
+	scoutfs_options_read(sb, &opts);
 
 	/* we use a keepalive timeout instead of send timeout */
 	ret = kc_sock_set_sndtimeo(sock, 0);
@@ -1030,8 +1033,7 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 	if (ret)
 		goto out;
 
-	BUILD_BUG_ON(UNRESPONSIVE_PROBES >= UNRESPONSIVE_TIMEOUT_SECS);
-	optval = UNRESPONSIVE_TIMEOUT_SECS - (UNRESPONSIVE_PROBES);
+	optval = (opts.tcp_keepalive_timeout_ms / MSEC_PER_SEC) - UNRESPONSIVE_PROBES;
 	ret = kc_tcp_sock_set_keepidle(sock, optval);
 	if (ret)
 		goto out;
@@ -1041,7 +1043,7 @@ static int sock_opts_and_names(struct scoutfs_net_connection *conn,
 	if (ret)
 		goto out;
 
-	optval = UNRESPONSIVE_TIMEOUT_SECS * MSEC_PER_SEC;
+	optval = opts.tcp_keepalive_timeout_ms;
 	ret = kc_tcp_sock_set_user_timeout(sock, optval);
 	if (ret)
 		goto out;
@@ -1109,7 +1111,7 @@ static void scoutfs_net_listen_worker(struct work_struct *work)
 			continue;
 		}
 
-		ret = sock_opts_and_names(acc_conn, acc_sock);
+		ret = sock_opts_and_names(sb, acc_conn, acc_sock);
 		if (ret) {
 			sock_release(acc_sock);
 			destroy_conn(acc_conn);
@@ -1180,7 +1182,7 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 	if (ret)
 		goto out;
 
-	ret = sock_opts_and_names(conn, sock);
+	ret = sock_opts_and_names(sb, conn, sock);
 	if (ret)
 		goto out;
 
