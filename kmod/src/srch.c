@@ -1406,7 +1406,7 @@ int scoutfs_srch_commit_compact(struct super_block *sb,
 			ret = -EIO;
 		scoutfs_btree_put_iref(&iref);
 	}
-	if (ret < 0) /* XXX leaks allocators */
+	if (ret < 0)
 		goto out;
 
 	/* restore busy to pending if the operation failed */
@@ -1426,10 +1426,8 @@ int scoutfs_srch_commit_compact(struct super_block *sb,
 	/* update file references if we finished compaction (!deleting) */
 	if (!(res->flags & SCOUTFS_SRCH_COMPACT_FLAG_DELETE)) {
 		ret = commit_files(sb, alloc, wri, root, res);
-		if (ret < 0) {
-			/* XXX we can't commit, shutdown? */
+		if (ret < 0)
 			goto out;
-		}
 
 		/* transition flags for deleting input files */
 		for (i = 0; i < res->nr; i++) {
@@ -1456,7 +1454,7 @@ update:
 			      le64_to_cpu(pending->id), 0);
 		ret = scoutfs_btree_insert(sb, alloc, wri, root, &key,
 					   pending, sizeof(*pending));
-		if (ret < 0)
+		if (WARN_ON_ONCE(ret < 0)) /* XXX inconsistency */
 			goto out;
 	}
 
@@ -1469,7 +1467,6 @@ update:
 		BUG_ON(err); /* both busy and pending present */
 	}
 out:
-	WARN_ON_ONCE(ret < 0); /* XXX inconsistency */
 	kfree(busy);
 	return ret;
 }
