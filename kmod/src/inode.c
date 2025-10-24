@@ -2188,7 +2188,7 @@ int scoutfs_inode_walk_writeback(struct super_block *sb, bool write)
 	struct scoutfs_inode_info *si;
 	struct scoutfs_inode_info *tmp;
 	struct inode *inode;
-	int ret;
+	int ret = 0;
 
 	spin_lock(&inf->writeback_lock);
 

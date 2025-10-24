@@ -856,14 +856,14 @@ static int search_sorted_file(struct super_block *sb,
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
 			ret = -EIO;
-			break;
+			goto out;
 		}
 
 		ret = decode_entry(srb->entries + pos, &sre, &prev);
 		if (ret <= 0) {
 			/* can only be inconsistency :/ */
 			ret = -EIO;
-			break;
+			goto out;
 		}
 		pos += ret;
 		prev = sre;
@@ -1865,7 +1865,7 @@ static int compact_logs(struct super_block *sb,
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
 			ret = -EIO;
-			break;
+			goto out;
 		}
 
 		ret = decode_entry(srb->entries + pos, sre, &prev);
@@ -2301,7 +2301,7 @@ out:
 		scoutfs_inc_counter(sb, srch_compact_error);
 
 	scoutfs_block_writer_forget_all(sb, &wri);
-	queue_compact_work(srinf, sc->nr > 0 && ret == 0);
+	queue_compact_work(srinf, sc != NULL && sc->nr > 0 && ret == 0);
 
 	kfree(sc);
 }

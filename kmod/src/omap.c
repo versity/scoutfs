@@ -592,7 +592,7 @@ static int handle_request(struct super_block *sb, struct omap_request *req)
 	ret = 0;
 out:
 	free_rids(&priv_rids);
-	if (ret < 0) {
+	if ((ret < 0) && (req != NULL)) {
 		ret = scoutfs_server_send_omap_response(sb, req->client_rid, req->client_id,
 							NULL, ret);
 		free_req(req);

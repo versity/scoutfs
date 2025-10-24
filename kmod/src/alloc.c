@@ -857,7 +857,7 @@ static int find_zone_extent(struct super_block *sb, struct scoutfs_alloc_root *r
 		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
 	};
 	struct scoutfs_extent found;
-	struct scoutfs_extent ext;
+	struct scoutfs_extent ext = {0,};
 	u64 start;
 	u64 len;
 	int nr;

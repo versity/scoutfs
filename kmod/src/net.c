@@ -1103,9 +1103,15 @@ static void scoutfs_net_listen_worker(struct work_struct *work)
 						  conn->notify_down,
 						  conn->info_size,
 						  conn->req_funcs, "accepted");
+		/*
+		 * scoutfs_net_alloc_conn() can fail due to ENOMEM. If this
+		 * is the only thing that does so, there's no harm in trying
+		 * to see if kernel_accept() can get enough memory to try accepting
+		 * a new connection again. If that then fails with ENOMEM, it'll
+		 * shut down the conn anyway. So just retry here.
+		 */
 		if (!acc_conn) {
 			sock_release(acc_sock);
-			ret = -ENOMEM;
 			continue;
 		}
 
