@@ -2134,7 +2134,7 @@ static int server_srch_commit_compact(struct super_block *sb,
 					  &super->srch_root, rid, sc,
 					  &av, &fr);
 	mutex_unlock(&server->srch_mutex);
-	if (ret < 0) /* XXX very bad, leaks allocators */
+	if (ret < 0)
 		goto apply;
 
 	/* reclaim allocators if they were set by _srch_commit_ */
@@ -2144,10 +2144,10 @@ static int server_srch_commit_compact(struct super_block *sb,
 	      scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri,
 					server->other_freed, &fr);
 	mutex_unlock(&server->alloc_mutex);
+	WARN_ON(ret < 0); /* XXX leaks allocators */
 apply:
 	ret = server_apply_commit(sb, &hold, ret);
 out:
-	WARN_ON(ret < 0); /* XXX leaks allocators */
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 

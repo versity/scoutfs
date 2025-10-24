@@ -2526,8 +2526,8 @@ TRACE_EVENT(scoutfs_block_stale,
 
 DECLARE_EVENT_CLASS(scoutfs_block_class,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno, int refcount, int io_count,
-		 unsigned long bits, __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed),
+		 unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits),
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(void *, bp)
@@ -2535,7 +2535,6 @@ DECLARE_EVENT_CLASS(scoutfs_block_class,
 		__field(int, refcount)
 		__field(int, io_count)
 		__field(long, bits)
-		__field(__u64, accessed)
 	),
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
@@ -2544,71 +2543,65 @@ DECLARE_EVENT_CLASS(scoutfs_block_class,
 		__entry->refcount = refcount;
 		__entry->io_count = io_count;
 		__entry->bits = bits;
-		__entry->accessed = accessed;
 	),
-	TP_printk(SCSBF" bp %p blkno %llu refcount %d io_count %d bits 0x%lx accessed %llu",
+	TP_printk(SCSBF" bp %p blkno %llu refcount %x io_count %d bits 0x%lx",
 		  SCSB_TRACE_ARGS, __entry->bp, __entry->blkno, __entry->refcount,
-		  __entry->io_count, __entry->bits, __entry->accessed)
+		  __entry->io_count, __entry->bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_allocate,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_free,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_insert,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_remove,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_end_io,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_submit,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_invalidate,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_mark_dirty,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_forget,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 DEFINE_EVENT(scoutfs_block_class, scoutfs_block_shrink,
 	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
-		 int refcount, int io_count, unsigned long bits,
-		 __u64 accessed),
-	TP_ARGS(sb, bp, blkno, refcount, io_count, bits, accessed)
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
+);
+DEFINE_EVENT(scoutfs_block_class, scoutfs_block_isolate,
+	TP_PROTO(struct super_block *sb, void *bp, u64 blkno,
+		 int refcount, int io_count, unsigned long bits),
+	TP_ARGS(sb, bp, blkno, refcount, io_count, bits)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_ext_next_class,
