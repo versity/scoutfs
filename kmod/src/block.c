@@ -23,6 +23,7 @@
 #include <linux/random.h>
 #include <linux/sched/mm.h>
 #include <linux/list_lru.h>
+#include <linux/stacktrace.h>
 
 #include "format.h"
 #include "super.h"
@@ -80,6 +81,8 @@ struct block_private {
 		struct page *page;
 		void *virt;
 	};
+	unsigned int stack_len;
+	unsigned long stack[10];
 };
 
 #define TRACE_BLOCK(which, bp)									\
@@ -100,7 +103,17 @@ static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 	return cpu_to_le32(calc);
 }
 
-static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
+static noinline void save_block_stack(struct block_private *bp)
+{
+	bp->stack_len = stack_trace_save(bp->stack, ARRAY_SIZE(bp->stack), 2);
+}
+
+static void print_block_stack(struct block_private *bp)
+{
+	stack_trace_print(bp->stack, bp->stack_len, 1);
+}
+
+static noinline struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 {
 	struct block_private *bp;
 	unsigned int nofs_flags;
@@ -156,6 +169,7 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 	atomic_set(&bp->io_count, 0);
 
 	TRACE_BLOCK(allocate, bp);
+	save_block_stack(bp);
 
 out:
 	if (!bp)
@@ -1113,6 +1127,19 @@ static unsigned long block_scan_objects(struct shrinker *shrink, struct shrink_c
 	return freed;
 }
 
+static enum lru_status dump_lru_block(struct list_head *item, struct list_lru_one *list,
+					 void *cb_arg)
+{
+	struct block_private *bp = container_of(item, struct block_private, lru_head);
+
+	printk("blkno %llu refcount 0x%x io_count %d bits 0x%lx\n",
+		bp->bl.blkno, atomic_read(&bp->refcount), atomic_read(&bp->io_count),
+		bp->bits);
+	print_block_stack(bp);
+
+	return LRU_SKIP;
+}
+
 /*
  * Called during shutdown with no other users.  The isolating walk must
  * find blocks on the lru that only have references for presence on the
@@ -1122,11 +1149,19 @@ static void block_shrink_all(struct super_block *sb)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
 	DECLARE_ISOLATE_ARGS(sb, ia);
+	long count;
 
+	count = DIV_ROUND_UP(list_lru_count(&binf->lru), 128) * 2;
 	do {
 		kc_list_lru_walk(&binf->lru, isolate_lru_block, &ia, 128);
 		shrink_dispose_blocks(sb, &ia.dispose);
-        } while (list_lru_count(&binf->lru) > 0);
+	} while (list_lru_count(&binf->lru) > 0 && --count > 0);
+
+	count = list_lru_count(&binf->lru);
+	if (count > 0) {
+		scoutfs_err(sb, "failed to isolate/dispose %ld blocks", count);
+		kc_list_lru_walk(&binf->lru, dump_lru_block, sb, count);
+	}
 }
 
 struct sm_block_completion {
