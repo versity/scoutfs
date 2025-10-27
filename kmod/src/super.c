@@ -512,9 +512,9 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	sbi = kzalloc(sizeof(struct scoutfs_sb_info), GFP_KERNEL);
 	sb->s_fs_info = sbi;
-	sbi->sb = sb;
 	if (!sbi)
 		return -ENOMEM;
+	sbi->sb = sb;
 
 	ret = assign_random_id(sbi);
 	if (ret < 0)

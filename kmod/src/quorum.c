@@ -1062,7 +1062,7 @@ static char *role_str(int role)
 		[LEADER] = "leader",
 	};
 
-	if (role < 0 || role > ARRAY_SIZE(roles) || !roles[role])
+	if (role < 0 || role >= ARRAY_SIZE(roles) || !roles[role])
 		return "invalid";
 
 	return roles[role];
