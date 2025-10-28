@@ -11,7 +11,7 @@ truncate -s $sz "$T_TMP.equal"
 truncate -s $large_sz "$T_TMP.large"
 
 echo "== make scratch fs"
-t_quiet scoutfs mkfs -f -Q 0,127.0.0.1,53000 "$T_EX_META_DEV" "$T_EX_DATA_DEV"
+t_quiet scoutfs mkfs -f -Q 0,127.0.0.1,$T_SCRATCH_PORT "$T_EX_META_DEV" "$T_EX_DATA_DEV"
 SCR="$T_TMPDIR/mnt.scratch"
 mkdir -p "$SCR"
 

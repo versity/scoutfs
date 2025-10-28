@@ -72,7 +72,7 @@ quarter_data=$(echo "$size_data / 4" | bc)
 
 # XXX this is all pretty manual, would be nice to have helpers
 echo "== make initial small fs"
-scoutfs mkfs -A -f -Q 0,127.0.0.1,53000 -m $quarter_meta -d $quarter_data \
+scoutfs mkfs -A -f -Q 0,127.0.0.1,$T_SCRATCH_PORT -m $quarter_meta -d $quarter_data \
 	"$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
 		t_fail "mkfs failed"
 SCR="$T_TMPDIR/mnt.scratch"

@@ -57,7 +57,7 @@ test "$before" == "$after" || \
 # XXX this is all pretty manual, would be nice to have helpers
 echo "== make small meta fs"
 # meta device just big enough for reserves and the metadata we'll fill
-scoutfs mkfs -A -f -Q 0,127.0.0.1,53000 -m 10G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
+scoutfs mkfs -A -f -Q 0,127.0.0.1,$T_SCRATCH_PORT -m 10G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
 	t_fail "mkfs failed"
 SCR="$T_TMPDIR/mnt.scratch"
 mkdir -p "$SCR"

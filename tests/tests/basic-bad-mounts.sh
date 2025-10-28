@@ -15,7 +15,7 @@ echo "== prepare devices, mount point, and logs"
 SCR="$T_TMPDIR/mnt.scratch"
 mkdir -p "$SCR"
 > $T_TMP.mount.out
-scoutfs mkfs -f -Q 0,127.0.0.1,53000 "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 \
+scoutfs mkfs -f -Q 0,127.0.0.1,$T_SCRATCH_PORT "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 \
 	|| t_fail "mkfs failed"
 
 echo "== bad devices, bad options"
