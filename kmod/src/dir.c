@@ -2053,6 +2053,9 @@ const struct inode_operations scoutfs_dir_iops = {
 #endif
 	.listxattr	= scoutfs_listxattr,
 	.get_acl	= scoutfs_get_acl,
+#ifdef KC_GET_ACL_DENTRY
+	.set_acl	= scoutfs_set_acl,
+#endif
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
 #ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER

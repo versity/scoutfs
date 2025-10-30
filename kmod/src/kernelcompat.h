@@ -263,6 +263,11 @@ typedef unsigned int blk_opf_t;
 #define kc__vmalloc __vmalloc
 #endif
 
+#ifdef KC_VFS_METHOD_MNT_IDMAP_ARG
+#define KC_VFS_NS_DEF struct mnt_idmap *mnt_idmap,
+#define KC_VFS_NS mnt_idmap,
+#define KC_VFS_INIT_NS &nop_mnt_idmap,
+#else
 #ifdef KC_VFS_METHOD_USER_NAMESPACE_ARG
 #define KC_VFS_NS_DEF struct user_namespace *mnt_user_ns,
 #define KC_VFS_NS mnt_user_ns,
@@ -272,6 +277,7 @@ typedef unsigned int blk_opf_t;
 #define KC_VFS_NS
 #define KC_VFS_INIT_NS
 #endif
+#endif /* KC_VFS_METHOD_MNT_IDMAP_ARG */
 
 #ifdef KC_BIO_ALLOC_DEV_OPF_ARGS
 #define kc_bio_alloc bio_alloc
