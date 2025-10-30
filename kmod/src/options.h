@@ -13,7 +13,10 @@ struct scoutfs_mount_options {
 	unsigned int orphan_scan_delay_ms;
 	int quorum_slot_nr;
 	u64 quorum_heartbeat_timeout_ms;
+	int tcp_keepalive_timeout_ms;
 };
+
+#define UNRESPONSIVE_PROBES	3
 
 void scoutfs_options_read(struct super_block *sb, struct scoutfs_mount_options *opts);
 int scoutfs_options_show(struct seq_file *seq, struct dentry *root);
