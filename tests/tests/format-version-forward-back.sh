@@ -89,7 +89,7 @@ for vers in $(seq $MIN $((MAX - 1))); do
 	old_module="$builds/$vers/scoutfs.ko"
 
 	echo "mkfs $vers" >> "$T_TMP.log"
-	t_quiet $old_scoutfs mkfs -f -Q 0,127.0.0.1,53000 "$T_EX_META_DEV" "$T_EX_DATA_DEV" \
+	t_quiet $old_scoutfs mkfs -f -Q 0,127.0.0.1,$T_SCRATCH_PORT "$T_EX_META_DEV" "$T_EX_DATA_DEV" \
 		|| t_fail "mkfs $vers failed"
 
 	echo "mount $vers with $vers" >> "$T_TMP.log"

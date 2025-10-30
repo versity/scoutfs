@@ -90,6 +90,7 @@ done
 # set some T_ defaults
 T_TRACE_DUMP="0"
 T_TRACE_PRINTK="0"
+T_PORT_START="19700"
 
 # array declarations to be able to use array ops
 declare -a T_TRACE_GLOB
@@ -265,6 +266,17 @@ for e in T_META_DEVICE T_DATA_DEVICE T_EX_META_DEV T_EX_DATA_DEV T_KMOD T_RESULT
 	eval $e=\"$(readlink -f "${!e}")\"
 done
 
+# try and check ports, but not necessary
+T_TEST_PORT="$T_PORT_START"
+T_SCRATCH_PORT="$((T_PORT_START + 100))"
+T_DEV_PORT="$((T_PORT_START + 200))"
+read local_start local_end < /proc/sys/net/ipv4/ip_local_port_range
+if [ -n "$local_start" -a -n "$local_end" -a "$local_start" -lt "$local_end" ]; then
+	if [ ! "$T_DEV_PORT" -lt "$local_start" -a ! "$T_TEST_PORT" -gt "$local_end" ]; then
+		die "listening port range $T_TEST_PORT - $T_DEV_PORT is within local dynamic port range $local_start - $local_end in /proc/sys/net/ipv4/ip_local_port_range"
+	fi
+fi
+
 # permute sequence?
 T_SEQUENCE=sequence
 if [ -n "$T_SHUF" ]; then
@@ -363,7 +375,7 @@ fi
 quo=""
 if [ -n "$T_MKFS" ]; then
 	for i in $(seq -0 $((T_QUORUM - 1))); do
-		quo="$quo -Q $i,127.0.0.1,$((42000 + i))"
+		quo="$quo -Q $i,127.0.0.1,$((T_TEST_PORT + i))"
 	done
 
 	msg "making new filesystem with $T_QUORUM quorum members"

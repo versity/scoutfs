@@ -26,17 +26,15 @@
 	EXPAND_COUNTER(block_cache_alloc_page_order)		\
 	EXPAND_COUNTER(block_cache_alloc_virt)			\
 	EXPAND_COUNTER(block_cache_end_io_error)		\
+	EXPAND_COUNTER(block_cache_isolate_removed)		\
+	EXPAND_COUNTER(block_cache_isolate_rotate)		\
+	EXPAND_COUNTER(block_cache_isolate_skip)		\
 	EXPAND_COUNTER(block_cache_forget)			\
 	EXPAND_COUNTER(block_cache_free)			\
 	EXPAND_COUNTER(block_cache_free_work)			\
 	EXPAND_COUNTER(block_cache_remove_stale)		\
 	EXPAND_COUNTER(block_cache_count_objects)		\
 	EXPAND_COUNTER(block_cache_scan_objects)		\
-	EXPAND_COUNTER(block_cache_shrink)			\
-	EXPAND_COUNTER(block_cache_shrink_next)			\
-	EXPAND_COUNTER(block_cache_shrink_recent)		\
-	EXPAND_COUNTER(block_cache_shrink_remove)		\
-	EXPAND_COUNTER(block_cache_shrink_stop)			\
 	EXPAND_COUNTER(btree_compact_values)			\
 	EXPAND_COUNTER(btree_compact_values_enomem)		\
 	EXPAND_COUNTER(btree_delete)				\
@@ -118,10 +116,11 @@
 	EXPAND_COUNTER(item_pcpu_page_hit)			\
 	EXPAND_COUNTER(item_pcpu_page_miss)			\
 	EXPAND_COUNTER(item_pcpu_page_miss_keys)		\
+	EXPAND_COUNTER(item_read_pages_barrier)			\
+	EXPAND_COUNTER(item_read_pages_retry)			\
 	EXPAND_COUNTER(item_read_pages_split)			\
 	EXPAND_COUNTER(item_shrink_page)			\
 	EXPAND_COUNTER(item_shrink_page_dirty)			\
-	EXPAND_COUNTER(item_shrink_page_reader)			\
 	EXPAND_COUNTER(item_shrink_page_trylock)		\
 	EXPAND_COUNTER(item_update)				\
 	EXPAND_COUNTER(item_write_dirty)			\

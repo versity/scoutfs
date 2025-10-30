@@ -22,6 +22,8 @@
 #include <linux/rhashtable.h>
 #include <linux/random.h>
 #include <linux/sched/mm.h>
+#include <linux/list_lru.h>
+#include <linux/stacktrace.h>
 
 #include "format.h"
 #include "super.h"
@@ -38,26 +40,12 @@
  * than the page size.  Callers can have their own contexts for tracking
  * dirty blocks that are written together.  We pin dirty blocks in
  * memory and only checksum them all as they're all written.
- *
- * Memory reclaim is driven by maintaining two very coarse groups of
- * blocks.  As we access blocks we mark them with an increasing counter
- * to discourage them from being reclaimed.  We then define a threshold
- * at the current counter minus half the population.  Recent blocks have
- * a counter greater than the threshold, and all other blocks with
- * counters less than it are considered older and are candidates for
- * reclaim.  This results in access updates rarely modifying an atomic
- * counter as blocks need to be moved into the recent group, and shrink
- * can randomly scan blocks looking for the half of the population that
- * will be in the old group.  It's reasonably effective, but is
- * particularly efficient and avoids contention between concurrent
- * accesses and shrinking.
  */
 
 struct block_info {
 	struct super_block *sb;
-	atomic_t total_inserted;
-	atomic64_t access_counter;
 	struct rhashtable ht;
+	struct list_lru lru;
 	wait_queue_head_t waitq;
 	KC_DEFINE_SHRINKER(shrinker);
 	struct work_struct free_work;
@@ -76,28 +64,15 @@ enum block_status_bits {
 	BLOCK_BIT_PAGE_ALLOC,	/* page (possibly high order) allocation */
 	BLOCK_BIT_VIRT,		/* mapped virt allocation */
 	BLOCK_BIT_CRC_VALID,	/* crc has been verified */
+	BLOCK_BIT_ACCESSED,	/* seen by lookup since last lru add/walk */
 };
-
-/*
- * We want to tie atomic changes in refcounts to whether or not the
- * block is still visible in the hash table, so we store the hash
- * table's reference up at a known high bit.  We could naturally set the
- * inserted bit through excessive refcount increments.  We don't do
- * anything about that but at least warn if we get close.
- *
- * We're avoiding the high byte for no real good reason, just out of a
- * historical fear of implementations that don't provide the full
- * precision.
- */
-#define BLOCK_REF_INSERTED	(1U << 23)
-#define BLOCK_REF_FULL		(BLOCK_REF_INSERTED >> 1)
 
 struct block_private {
 	struct scoutfs_block bl;
 	struct super_block *sb;
 	atomic_t refcount;
-	u64 accessed;
 	struct rhash_head ht_head;
+	struct list_head lru_head;
 	struct list_head dirty_entry;
 	struct llist_node free_node;
 	unsigned long bits;
@@ -106,13 +81,15 @@ struct block_private {
 		struct page *page;
 		void *virt;
 	};
+	unsigned int stack_len;
+	unsigned long stack[10];
 };
 
 #define TRACE_BLOCK(which, bp)									\
 do {												\
 	__typeof__(bp) _bp = (bp);								\
 	trace_scoutfs_block_##which(_bp->sb, _bp, _bp->bl.blkno, atomic_read(&_bp->refcount),	\
-				    atomic_read(&_bp->io_count), _bp->bits, _bp->accessed);	\
+				    atomic_read(&_bp->io_count), _bp->bits);	\
 } while (0)
 
 #define BLOCK_PRIVATE(_bl) \
@@ -126,7 +103,17 @@ static __le32 block_calc_crc(struct scoutfs_block_header *hdr, u32 size)
 	return cpu_to_le32(calc);
 }
 
-static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
+static noinline void save_block_stack(struct block_private *bp)
+{
+	bp->stack_len = stack_trace_save(bp->stack, ARRAY_SIZE(bp->stack), 2);
+}
+
+static void print_block_stack(struct block_private *bp)
+{
+	stack_trace_print(bp->stack, bp->stack_len, 1);
+}
+
+static noinline struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 {
 	struct block_private *bp;
 	unsigned int nofs_flags;
@@ -176,11 +163,13 @@ static struct block_private *block_alloc(struct super_block *sb, u64 blkno)
 	bp->bl.blkno = blkno;
 	bp->sb = sb;
 	atomic_set(&bp->refcount, 1);
+	INIT_LIST_HEAD(&bp->lru_head);
 	INIT_LIST_HEAD(&bp->dirty_entry);
 	set_bit(BLOCK_BIT_NEW, &bp->bits);
 	atomic_set(&bp->io_count, 0);
 
 	TRACE_BLOCK(allocate, bp);
+	save_block_stack(bp);
 
 out:
 	if (!bp)
@@ -233,32 +222,85 @@ static void block_free_work(struct work_struct *work)
 }
 
 /*
- * Get a reference to a block while holding an existing reference.
+ * Users of blocks hold a refcount.  If putting a refcount drops to zero
+ * then the block is freed.
+ *
+ * Acquiring new references and claiming the exclusive right to tear
+ * down a block is built around this LIVE_REFCOUNT_BASE refcount value.
+ * As blocks are initially cached they have the live base added to their
+ * refcount.  Lookups will only increment the refcount and return blocks
+ * for reference holders while the refcount is >= than the base.
+ *
+ * To remove a block from the cache and eventually free it, either by
+ * the lru walk in the shrinker, or by reference holders, the live base
+ * is removed and turned into a normal refcount increment that will be
+ * put by the caller.  This can only be done once for a block, and once
+ * its done lookup will not return any more references.
+ */
+#define LIVE_REFCOUNT_BASE (INT_MAX ^ (INT_MAX >> 1))
+
+/*
+ * Inc the refcount while holding an incremented refcount.  We can't
+ * have so many individual reference holders that they pass the live
+ * base.
  */
 static void block_get(struct block_private *bp)
 {
-	WARN_ON_ONCE((atomic_read(&bp->refcount) & ~BLOCK_REF_INSERTED) <= 0);
+	int now = atomic_inc_return(&bp->refcount);
 
-	atomic_inc(&bp->refcount);
+	BUG_ON(now <= 1);
+	BUG_ON(now == LIVE_REFCOUNT_BASE);
 }
 
 /*
- * Get a reference to a block as long as it's been inserted in the hash
- * table and hasn't been removed.
- */ 
-static struct block_private *block_get_if_inserted(struct block_private *bp)
+ * if (*v >= u) {
+ * 	*v += a;
+ * 	return true;
+ * }
+ */
+static bool atomic_add_unless_less(atomic_t *v, int a, int u)
 {
-	int cnt;
+	int c;
 
 	do {
-		cnt = atomic_read(&bp->refcount);
-		WARN_ON_ONCE(cnt & BLOCK_REF_FULL);
-		if (!(cnt & BLOCK_REF_INSERTED))
-			return NULL;
+		c = atomic_read(v);
+		if (c < u)
+			return false;
+	} while (atomic_cmpxchg(v, c, c + a) != c);
 
-	} while (atomic_cmpxchg(&bp->refcount, cnt, cnt + 1) != cnt);
+	return true;
+}
 
-	return bp;
+static bool block_get_if_live(struct block_private *bp)
+{
+	return atomic_add_unless_less(&bp->refcount, 1, LIVE_REFCOUNT_BASE);
+}
+
+/*
+ * If the refcount still has the live base, subtract it and increment
+ * the callers refcount that they'll put.
+ */
+static bool block_get_remove_live(struct block_private *bp)
+{
+	return atomic_add_unless_less(&bp->refcount, (1 - LIVE_REFCOUNT_BASE), LIVE_REFCOUNT_BASE);
+}
+
+/*
+ * Only get the live base refcount if it is the only refcount remaining.
+ * This means that there are no active refcount holders and the block
+ * can't be dirty or under IO, which both hold references.
+ */
+static bool block_get_remove_live_only(struct block_private *bp)
+{
+	int c;
+
+	do {
+		c = atomic_read(&bp->refcount);
+		if (c != LIVE_REFCOUNT_BASE)
+			return false;
+	} while (atomic_cmpxchg(&bp->refcount, c, c - LIVE_REFCOUNT_BASE + 1) != c);
+
+	return true;
 }
 
 /*
@@ -290,104 +332,73 @@ static const struct rhashtable_params block_ht_params = {
 };
 
 /*
- * Insert a new block into the hash table.  Once it is inserted in the
- * hash table readers can start getting references.  The caller may have
- * multiple refs but the block can't already be inserted.
+ * Insert the block into the cache so that it's visible for lookups.
+ * The caller can hold references (including for a dirty block).
+ *
+ * We make sure the base is added and the block is in the lru once it's
+ * in the hash.  If hash table insertion fails it'll be briefly visible
+ * in the lru, but won't be isolated/evicted because we hold an
+ * incremented refcount in addition to the live base.
  */
 static int block_insert(struct super_block *sb, struct block_private *bp)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
 	int ret;
 
-	WARN_ON_ONCE(atomic_read(&bp->refcount) & BLOCK_REF_INSERTED);
-
+	BUG_ON(atomic_read(&bp->refcount) >= LIVE_REFCOUNT_BASE);
+	atomic_add(LIVE_REFCOUNT_BASE, &bp->refcount);
+	smp_mb__after_atomic(); /* make sure live base is visible to list_lru walk */
+	list_lru_add_obj(&binf->lru, &bp->lru_head);
 retry:
-	atomic_add(BLOCK_REF_INSERTED, &bp->refcount);
 	ret = rhashtable_lookup_insert_fast(&binf->ht, &bp->ht_head, block_ht_params);
 	if (ret < 0) {
-		atomic_sub(BLOCK_REF_INSERTED, &bp->refcount);
 		if (ret == -EBUSY) {
 			/* wait for pending rebalance to finish */
 			synchronize_rcu();
 			goto retry;
+		} else {
+			atomic_sub(LIVE_REFCOUNT_BASE, &bp->refcount);
+			BUG_ON(atomic_read(&bp->refcount) >= LIVE_REFCOUNT_BASE);
+			list_lru_del_obj(&binf->lru, &bp->lru_head);
 		}
 	} else {
-		atomic_inc(&binf->total_inserted);
 		TRACE_BLOCK(insert, bp);
 	}
 
 	return ret;
 }
 
-static u64 accessed_recently(struct block_info *binf)
-{
-	return atomic64_read(&binf->access_counter) - (atomic_read(&binf->total_inserted) >> 1);
-}
-
 /*
- * Make sure that a block that is being accessed is less likely to be
- * reclaimed if it is seen by the shrinker.   If the block hasn't been
- * accessed recently we update its accessed value.
+ * Indicate to the lru walker that this block has been accessed since it
+ * was added or last walked.
  */
 static void block_accessed(struct super_block *sb, struct block_private *bp)
 {
-	DECLARE_BLOCK_INFO(sb, binf);
-
-	if (bp->accessed == 0 || bp->accessed < accessed_recently(binf)) {
+	if (!test_and_set_bit(BLOCK_BIT_ACCESSED, &bp->bits))
 		scoutfs_inc_counter(sb, block_cache_access_update);
-		bp->accessed = atomic64_inc_return(&binf->access_counter);
-	}
 }
 
 /*
- * The caller wants to remove the block from the hash table and has an
- * idea what the refcount should be.  If the refcount does still
- * indicate that the block is hashed, and we're able to clear that bit,
- * then we can remove it from the hash table.
+ * Remove the block from the cache.  When this returns the block won't
+ * be visible for additional references from lookup.
  *
- * The caller makes sure that it's safe to be referencing this block,
- * either with their own held reference (most everything) or by being in
- * an rcu grace period (shrink).
- */
-static bool block_remove_cnt(struct super_block *sb, struct block_private *bp, int cnt)
-{
-	DECLARE_BLOCK_INFO(sb, binf);
-	int ret;
-
-	if ((cnt & BLOCK_REF_INSERTED) &&
-	    (atomic_cmpxchg(&bp->refcount, cnt, cnt & ~BLOCK_REF_INSERTED) == cnt)) {
-
-		TRACE_BLOCK(remove, bp);
-		ret = rhashtable_remove_fast(&binf->ht, &bp->ht_head, block_ht_params);
-		WARN_ON_ONCE(ret); /* must have been inserted */
-		atomic_dec(&binf->total_inserted);
-		return true;
-	}
-
-	return false;
-}
-
-/*
- * Try to remove the block from the hash table as long as the refcount
- * indicates that it is still in the hash table.  This can be racing
- * with normal refcount changes so it might have to retry.
+ * We always try and remove from the hash table.  It's safe to remove a
+ * block that isn't hashed, it just returns -ENOENT.
+ *
+ * This is racing with the lru walk in the shrinker also trying to
+ * remove idle blocks from the cache.  They both try to remove the live
+ * refcount base and perform their removal and put if they get it.
  */
 static void block_remove(struct super_block *sb, struct block_private *bp)
 {
-	int cnt;
+	DECLARE_BLOCK_INFO(sb, binf);
 
-	do {
-		cnt = atomic_read(&bp->refcount);
-	} while ((cnt & BLOCK_REF_INSERTED) && !block_remove_cnt(sb, bp, cnt));
-}
+	rhashtable_remove_fast(&binf->ht, &bp->ht_head, block_ht_params);
 
-/*
- * Take one shot at removing the block from the hash table if it's still
- * in the hash table and the caller has the only other reference.
- */
-static bool block_remove_solo(struct super_block *sb, struct block_private *bp)
-{
-	return block_remove_cnt(sb, bp, BLOCK_REF_INSERTED | 1);
+	if (block_get_remove_live(bp)) {
+		list_lru_del_obj(&binf->lru, &bp->lru_head);
+		block_put(sb, bp);
+	}
 }
 
 static bool io_busy(struct block_private *bp)
@@ -396,37 +407,6 @@ static bool io_busy(struct block_private *bp)
 	return test_bit(BLOCK_BIT_IO_BUSY, &bp->bits);
 }
 
-/*
- * Called during shutdown with no other users.
- */
-static void block_remove_all(struct super_block *sb)
-{
-	DECLARE_BLOCK_INFO(sb, binf);
-	struct rhashtable_iter iter;
-	struct block_private *bp;
-
-	rhashtable_walk_enter(&binf->ht, &iter);
-	rhashtable_walk_start(&iter);
-
-	for (;;) {
-		bp = rhashtable_walk_next(&iter);
-		if (bp == NULL)
-			break;
-		if (bp == ERR_PTR(-EAGAIN))
-			continue;
-
-		if (block_get_if_inserted(bp)) {
-			block_remove(sb, bp);
-			WARN_ON_ONCE(atomic_read(&bp->refcount) != 1);
-			block_put(sb, bp);
-		}
-	}
-
-	rhashtable_walk_stop(&iter);
-	rhashtable_walk_exit(&iter);
-
-	WARN_ON_ONCE(atomic_read(&binf->total_inserted) != 0);
-}
 
 /*
  * XXX The io_count and sb fields in the block_private are only used
@@ -543,6 +523,10 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 	return ret;
 }
 
+/*
+ * Return a block with an elevated refcount if it was present in the
+ * hash table and its refcount didn't indicate that it was being freed.
+ */
 static struct block_private *block_lookup(struct super_block *sb, u64 blkno)
 {
 	DECLARE_BLOCK_INFO(sb, binf);
@@ -550,8 +534,8 @@ static struct block_private *block_lookup(struct super_block *sb, u64 blkno)
 
 	rcu_read_lock();
 	bp = rhashtable_lookup(&binf->ht, &blkno, block_ht_params);
-	if (bp)
-		bp = block_get_if_inserted(bp);
+	if (bp && !block_get_if_live(bp))
+		bp = NULL;
 	rcu_read_unlock();
 
 	return bp;
@@ -1078,100 +1062,106 @@ static unsigned long block_count_objects(struct shrinker *shrink, struct shrink_
 	struct super_block *sb = binf->sb;
 
 	scoutfs_inc_counter(sb, block_cache_count_objects);
-
-	return shrinker_min_long(atomic_read(&binf->total_inserted));
+	return list_lru_shrink_count(&binf->lru, sc);
 }
 
-/*
- * Remove a number of cached blocks that haven't been used recently.
- *
- * We don't maintain a strictly ordered LRU to avoid the contention of
- * accesses always moving blocks around in some precise global
- * structure.
- *
- * Instead we use counters to divide the blocks into two roughly equal
- * groups by how recently they were accessed.  We randomly walk all
- * inserted blocks looking for any blocks in the older half to remove
- * and free.  The random walk and there being two groups means that we
- * typically only walk a small multiple of the number we're looking for
- * before we find them all.
- *
- * Our rcu walk of blocks can see blocks in all stages of their life
- * cycle, from dirty blocks to those with 0 references that are queued
- * for freeing.  We only want to free idle inserted blocks so we
- * atomically remove blocks when the only references are ours and the
- * hash table.
- */
+struct isolate_args {
+	struct super_block *sb;
+	struct list_head dispose;
+};
+
+#define DECLARE_ISOLATE_ARGS(sb_, name_) \
+	struct isolate_args name_ = { \
+		.sb = sb_, \
+		.dispose = LIST_HEAD_INIT(name_.dispose), \
+	}
+
+static enum lru_status isolate_lru_block(struct list_head *item, struct list_lru_one *list,
+					 void *cb_arg)
+{
+	struct block_private *bp = container_of(item, struct block_private, lru_head);
+	struct isolate_args *ia = cb_arg;
+
+	TRACE_BLOCK(isolate, bp);
+
+	/* rotate accessed blocks to the tail of the list (lazy promotion) */
+	if (test_and_clear_bit(BLOCK_BIT_ACCESSED, &bp->bits)) {
+		scoutfs_inc_counter(ia->sb, block_cache_isolate_rotate);
+		return LRU_ROTATE;
+	}
+
+	/* any refs, including dirty/io, stop us from acquiring lru refcount */
+	if (!block_get_remove_live_only(bp)) {
+		scoutfs_inc_counter(ia->sb, block_cache_isolate_skip);
+		return LRU_SKIP;
+	}
+
+	scoutfs_inc_counter(ia->sb, block_cache_isolate_removed);
+	list_lru_isolate_move(list, &bp->lru_head, &ia->dispose);
+	return LRU_REMOVED;
+}
+
+static void shrink_dispose_blocks(struct super_block *sb, struct list_head *dispose)
+{
+	struct block_private *bp;
+	struct block_private *bp__;
+
+	list_for_each_entry_safe(bp, bp__, dispose, lru_head) {
+		list_del_init(&bp->lru_head);
+		block_remove(sb, bp);
+		block_put(sb, bp);
+	}
+}
+
 static unsigned long block_scan_objects(struct shrinker *shrink, struct shrink_control *sc)
 {
 	struct block_info *binf = KC_SHRINKER_CONTAINER_OF(shrink, struct block_info);
 	struct super_block *sb = binf->sb;
-	struct rhashtable_iter iter;
-	struct block_private *bp;
-	bool stop = false;
-	unsigned long freed = 0;
-	unsigned long nr = sc->nr_to_scan;
-	u64 recently;
+	DECLARE_ISOLATE_ARGS(sb, ia);
+	unsigned long freed;
 
 	scoutfs_inc_counter(sb, block_cache_scan_objects);
 
-	recently = accessed_recently(binf);
-	rhashtable_walk_enter(&binf->ht, &iter);
-	rhashtable_walk_start(&iter);
+	freed = kc_list_lru_shrink_walk(&binf->lru, sc, isolate_lru_block, &ia);
+	shrink_dispose_blocks(sb, &ia.dispose);
+	return freed;
+}
 
-	/*
-	 * This isn't great but I don't see a better way.  We want to
-	 * walk the hash from a random point so that we're not
-	 * constantly walking over the same region that we've already
-	 * freed old blocks within.  The interface doesn't let us do
-	 * this explicitly, but this seems to work?  The difference this
-	 * makes is enormous, around a few orders of magnitude fewer
-	 * _nexts per shrink.
-	 */
-	if (iter.walker.tbl)
-		iter.slot = prandom_u32_max(iter.walker.tbl->size);
+static enum lru_status dump_lru_block(struct list_head *item, struct list_lru_one *list,
+					 void *cb_arg)
+{
+	struct block_private *bp = container_of(item, struct block_private, lru_head);
 
-	while (nr > 0) {
-		bp = rhashtable_walk_next(&iter);
-		if (bp == NULL)
-			break;
-		if (bp == ERR_PTR(-EAGAIN)) {
-			/*
-			 * We can be called from reclaim in the allocation
-			 * to resize the hash table itself.  We have to
-			 * return so that the caller can proceed and
-			 * enable hash table iteration again.
-			 */
-			scoutfs_inc_counter(sb, block_cache_shrink_stop);
-			stop = true;
-			break;
-		}
+	printk("blkno %llu refcount 0x%x io_count %d bits 0x%lx\n",
+		bp->bl.blkno, atomic_read(&bp->refcount), atomic_read(&bp->io_count),
+		bp->bits);
+	print_block_stack(bp);
 
-		scoutfs_inc_counter(sb, block_cache_shrink_next);
+	return LRU_SKIP;
+}
 
-		if (bp->accessed >= recently) {
-			scoutfs_inc_counter(sb, block_cache_shrink_recent);
-			continue;
-		}
+/*
+ * Called during shutdown with no other users.  The isolating walk must
+ * find blocks on the lru that only have references for presence on the
+ * lru and in the hash table.
+ */
+static void block_shrink_all(struct super_block *sb)
+{
+	DECLARE_BLOCK_INFO(sb, binf);
+	DECLARE_ISOLATE_ARGS(sb, ia);
+	long count;
 
-		if (block_get_if_inserted(bp)) {
-			if (block_remove_solo(sb, bp)) {
-				scoutfs_inc_counter(sb, block_cache_shrink_remove);
-				TRACE_BLOCK(shrink, bp);
-				freed++;
-				nr--;
-			}
-			block_put(sb, bp);
-		}
+	count = DIV_ROUND_UP(list_lru_count(&binf->lru), 128) * 2;
+	do {
+		kc_list_lru_walk(&binf->lru, isolate_lru_block, &ia, 128);
+		shrink_dispose_blocks(sb, &ia.dispose);
+	} while (list_lru_count(&binf->lru) > 0 && --count > 0);
+
+	count = list_lru_count(&binf->lru);
+	if (count > 0) {
+		scoutfs_err(sb, "failed to isolate/dispose %ld blocks", count);
+		kc_list_lru_walk(&binf->lru, dump_lru_block, sb, count);
 	}
-
-	rhashtable_walk_stop(&iter);
-	rhashtable_walk_exit(&iter);
-
-	if (stop)
-		return SHRINK_STOP;
-	else
-		return freed;
 }
 
 struct sm_block_completion {
@@ -1276,7 +1266,7 @@ int scoutfs_block_write_sm(struct super_block *sb,
 int scoutfs_block_setup(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
-	struct block_info *binf;
+	struct block_info *binf = NULL;
 	int ret;
 
 	binf = kzalloc(sizeof(struct block_info), GFP_KERNEL);
@@ -1285,15 +1275,15 @@ int scoutfs_block_setup(struct super_block *sb)
 		goto out;
 	}
 
-	ret = rhashtable_init(&binf->ht, &block_ht_params);
-	if (ret < 0) {
-		kfree(binf);
+	ret = list_lru_init(&binf->lru);
+	if (ret < 0)
 		goto out;
-	}
+
+	ret = rhashtable_init(&binf->ht, &block_ht_params);
+	if (ret < 0)
+		goto out;
 
 	binf->sb = sb;
-	atomic_set(&binf->total_inserted, 0);
-	atomic64_set(&binf->access_counter, 0);
 	init_waitqueue_head(&binf->waitq);
 	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
 			       block_scan_objects);
@@ -1305,8 +1295,10 @@ int scoutfs_block_setup(struct super_block *sb)
 
 	ret = 0;
 out:
-	if (ret)
-		scoutfs_block_destroy(sb);
+	if (ret < 0 && binf) {
+		list_lru_destroy(&binf->lru);
+		kfree(binf);
+	}
 
 	return ret;
 }
@@ -1318,9 +1310,10 @@ void scoutfs_block_destroy(struct super_block *sb)
 
 	if (binf) {
 		KC_UNREGISTER_SHRINKER(&binf->shrinker);
-		block_remove_all(sb);
+		block_shrink_all(sb);
 		flush_work(&binf->free_work);
 		rhashtable_destroy(&binf->ht);
+		list_lru_destroy(&binf->lru);
 
 		kfree(binf);
 		sbi->block_info = NULL;

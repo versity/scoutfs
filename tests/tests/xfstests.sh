@@ -50,9 +50,9 @@ t_quiet sync
 cat << EOF > local.config
 export FSTYP=scoutfs
 export MKFS_OPTIONS="-f"
-export MKFS_TEST_OPTIONS="-Q 0,127.0.0.1,42000"
-export MKFS_SCRATCH_OPTIONS="-Q 0,127.0.0.1,43000"
-export MKFS_DEV_OPTIONS="-Q 0,127.0.0.1,44000"
+export MKFS_TEST_OPTIONS="-Q 0,127.0.0.1,$T_TEST_PORT"
+export MKFS_SCRATCH_OPTIONS="-Q 0,127.0.0.1,$T_SCRATCH_PORT"
+export MKFS_DEV_OPTIONS="-Q 0,127.0.0.1,$T_DEV_PORT"
 export TEST_DEV=$T_DB0
 export TEST_DIR=$T_M0
 export SCRATCH_META_DEV=$T_EX_META_DEV
