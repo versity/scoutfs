@@ -366,10 +366,15 @@ struct scoutfs_ioctl_statfs_more {
  *
  * Find current waiters that match the inode, op, and block range to wake
  * up and return an error.
+ *
+ * (*) ca. v1.25 and earlier required that the data_version passed match
+ * that of the waiter, but this check is removed. It was never needed
+ * because no data is modified during this ioctl. Any data_version value
+ * here is thus since then ignored.
  */
 struct scoutfs_ioctl_data_wait_err {
 	__u64 ino;
-	__u64 data_version;
+	__u64 data_version; /* Ignored, see above (*) */
 	__u64 offset;
 	__u64 count;
 	__u64 op;

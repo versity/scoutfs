@@ -441,8 +441,6 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 
 	if (!S_ISREG(inode->i_mode)) {
 		ret = -EINVAL;
-	} else if (scoutfs_inode_data_version(inode) != args.data_version) {
-		ret = -ESTALE;
 	} else {
 		ret = scoutfs_data_wait_err(inode, sblock, eblock, args.op,
 					    args.err);
