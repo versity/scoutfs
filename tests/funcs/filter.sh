@@ -166,6 +166,9 @@ t_filter_dmesg()
 	# perf warning that it adjusted sample rate
 	re="$re|perf: interrupt took too long.*lowering kernel.perf_event_max_sample_rate.*"
 
+	# some ci test guests are unresponsive
+	re="$re|longest quorum heartbeat .* delay"
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob
 }
