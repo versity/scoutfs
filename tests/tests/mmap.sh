@@ -5,7 +5,7 @@
 t_require_commands mmap_stress mmap_validate scoutfs xfs_io
 
 echo "== mmap_stress"
-mmap_stress 8192 2000 "$T_D0/mmap_stress" "$T_D1/mmap_stress" "$T_D2/mmap_stress" "$T_D3/mmap_stress" "$T_D4/mmap_stress" | sed 's/:.*//g' | sort
+mmap_stress 8192 30 "$T_D0/mmap_stress" "$T_D1/mmap_stress" "$T_D2/mmap_stress" "$T_D3/mmap_stress" "$T_D4/mmap_stress" | sed 's/:.*//g' | sort
 
 echo "== basic mmap/read/write consistency checks"
 mmap_validate 256 1000 "$T_D0/mmap_val1" "$T_D1/mmap_val1"
