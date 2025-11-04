@@ -542,7 +542,7 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 				 u64 term)
 {
 #define NR_OLD 2
-	struct scoutfs_quorum_block_event old[SCOUTFS_QUORUM_MAX_SLOTS][NR_OLD] = {{{0,}}};
+	struct scoutfs_quorum_block_event (*old)[NR_OLD];
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_quorum_block blk;
 	struct sockaddr_in sin;
@@ -558,13 +558,20 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 
 	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
 
+	old = kmalloc(NR_OLD * SCOUTFS_QUORUM_MAX_SLOTS * sizeof(struct scoutfs_quorum_block_event), GFP_KERNEL);
+	if (!old) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	memset(old, 0, NR_OLD * SCOUTFS_QUORUM_MAX_SLOTS * sizeof(struct scoutfs_quorum_block_event));
+
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(qconf, i))
 			continue;
 
 		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk, false);
 		if (ret < 0)
-			goto out;
+			goto out_free;
 
 		/* elected leader still running */
 		if (le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].term) >
@@ -601,11 +608,13 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 			ret = scoutfs_fence_start(sb, le64_to_cpu(fence_rid), sin.sin_addr.s_addr,
 						  SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
 			if (ret < 0)
-				goto out;
+				goto out_free;
 			fence_started = true;
 		}
 	}
 
+out_free:
+	kfree(old);
 out:
 	err = scoutfs_fence_wait_fenced(sb, msecs_to_jiffies(SCOUTFS_QUORUM_FENCE_TO_MS));
 	if (ret == 0)
