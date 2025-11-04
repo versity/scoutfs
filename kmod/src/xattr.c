@@ -1070,6 +1070,13 @@ static const struct xattr_handler scoutfs_xattr_security_handler = {
 	.set = scoutfs_xattr_set_handler,
 };
 
+static const struct xattr_handler scoutfs_xattr_system_handler = {
+	.prefix = XATTR_SYSTEM_PREFIX,
+	.flags = XATTR_SYSTEM_PREFIX_LEN,
+	.get = scoutfs_xattr_get_handler,
+	.set = scoutfs_xattr_set_handler,
+};
+
 static const struct xattr_handler scoutfs_xattr_acl_access_handler = {
 #ifdef KC_XATTR_HANDLER_NAME
 	.name   = XATTR_NAME_POSIX_ACL_ACCESS,
@@ -1097,6 +1104,7 @@ const struct xattr_handler *scoutfs_xattr_handlers[] = {
 	&scoutfs_xattr_scoutfs_handler,
 	&scoutfs_xattr_trusted_handler,
 	&scoutfs_xattr_security_handler,
+	&scoutfs_xattr_system_handler,
 	&scoutfs_xattr_acl_access_handler,
 	&scoutfs_xattr_acl_default_handler,
 	NULL
