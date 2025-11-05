@@ -24,12 +24,15 @@ for fs in /sys/fs/scoutfs/*; do
 	[ ! -d "$fs" ] && continue
 
 	fs_rid="$(cat $fs/rid)" || \
+		[ ! -d "$fs" ] && continue || \
 		echo_fail "failed to get rid in $fs"
+
 	if [ "$fs_rid" != "$rid" ]; then
 		continue
 	fi
 
 	nr="$(cat $fs/data_device_maj_min)" || \
+		[ ! -d "$fs" ] && continue || \
 		echo_fail "failed to get data device major:minor in $fs"
 
 	mnts=$(findmnt -l -n -t scoutfs -o TARGET -S $nr) || \
