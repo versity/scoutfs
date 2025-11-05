@@ -7,7 +7,7 @@ message_output()
 
 error_message()
 {
-	message_output "$@" >&2
+	message_output "$@" >> /dev/stderr
 }
 
 error_exit()

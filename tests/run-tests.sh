@@ -460,7 +460,7 @@ kill_fenced()
 	fi
 }
 trap kill_fenced EXIT
-$T_UTILS/fenced/scoutfs-fenced > "$T_FENCED_LOG" 2>&1 &
+$T_UTILS/fenced/scoutfs-fenced >> "$T_FENCED_LOG" 2>&1 &
 fenced_pid=$!
 fenced_log "started fenced pid $fenced_pid in the background"
 
