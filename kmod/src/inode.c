@@ -482,7 +482,7 @@ int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock)
 }
 
 /*
- * If we're changing the file size than the contents of the file are
+ * If we're changing the file size then the contents of the file are
  * changing and we increment the data_version.  This would prevent
  * staging because the data_version is per-inode today, not per-extent.
  * So if there are any offline extents within the new size then we need
