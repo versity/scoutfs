@@ -9,12 +9,12 @@
 echo "$0 running rid '$SCOUTFS_FENCED_REQ_RID' ip '$SCOUTFS_FENCED_REQ_IP' args '$@'"
 
 log() {
-	echo "$@" > /dev/stderr
+	echo "$@" >> /dev/stderr
 	exit 1
 }
 
 echo_fail() {
-	echo "$@" > /dev/stderr
+	echo "$@" >> /dev/stderr
 	exit 1
 }
 

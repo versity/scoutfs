@@ -469,7 +469,7 @@ EOF
 export SCOUTFS_FENCED_CONFIG_FILE="$conf"
 T_FENCED_LOG="$T_RESULTS/fenced.log"
 
-$T_UTILS/fenced/scoutfs-fenced > "$T_FENCED_LOG" 2>&1 &
+$T_UTILS/fenced/scoutfs-fenced >> "$T_FENCED_LOG" 2>&1 &
 fenced_pid=$!
 add_atexit_kill_pid $fenced_pid
 
