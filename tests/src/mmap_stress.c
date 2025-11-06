@@ -108,6 +108,8 @@ static void *run_test_func(void *ptr)
 			memcpy(addr, buf, size); /* noerr */
 			break;
 		}
+
+		usleep(10000);
 	}
 
 	munmap(addr, size);
