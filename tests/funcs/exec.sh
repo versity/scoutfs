@@ -64,21 +64,27 @@ t_rc()
 }
 
 #
-# redirect test output back to the output of the invoking script intead
-# of the compared output.
+# As run, stdout/err are redirected to a file that will be compared with
+# the stored expected golden output of the test.  This redirects
+# stdout/err in the script to stdout of the invoking run-test.  It's
+# intended to give visible output of tests without being included in the
+# golden output.
 #
-t_restore_output()
+# (see the goofy "exec" fd manipulation in the main run-tests as it runs
+# each test)
+#
+t_stdout_invoked()
 {
 	exec >&6 2>&1
 }
 
 #
-# redirect a command's output back to the compared output after the
-# test has restored its output
+# This undoes t_stdout_invokved, returning the test's stdout/err to the
+# output file as it was when it was launched.
 #
-t_compare_output()
+t_stdout_compare()
 {
-	"$@" >&7 2>&1
+	exec >&7 2>&1
 }
 
 #
