@@ -438,6 +438,30 @@ cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
 	    /sys/kernel/debug/tracing/buffer_size_kb \
 	    /proc/sys/kernel/ftrace_dump_on_oops
 
+# we can record pids to kill as we exit, we kill in reverse added order
+atexit_kill_pids=""
+add_atexit_kill_pid()
+{
+	atexit_kill_pids="$1 $atexit_kill_pids"
+}
+atexit_kill()
+{
+	local pid
+
+	# suppress bg function exited messages
+	exec {ERR}>&2 2>/dev/null
+
+	for pid in $atexit_kill_pids; do
+		if test -e "/proc/$pid/status" ; then
+			kill "$pid"
+			wait "$pid"
+		fi
+	done
+
+	exec 2>&$ERR {ERR}>&-
+}
+trap atexit_kill EXIT
+
 #
 # Build a fenced config that runs scripts out of the repository rather
 # than the default system directory
@@ -451,26 +475,43 @@ EOF
 export SCOUTFS_FENCED_CONFIG_FILE="$conf"
 T_FENCED_LOG="$T_RESULTS/fenced.log"
 
-#
-# Run the agent in the background, log its output, an kill it if we
-# exit
-#
-fenced_log()
-{
-	echo "[$(timestamp)] $*" >> "$T_FENCED_LOG"
-}
-fenced_pid=""
-kill_fenced()
-{
-	if test -n "$fenced_pid" -a -d "/proc/$fenced_pid" ; then
-		fenced_log "killing fenced pid $fenced_pid"
-		kill "$fenced_pid"
-	fi
-}
-trap kill_fenced EXIT
 $T_UTILS/fenced/scoutfs-fenced > "$T_FENCED_LOG" 2>&1 &
 fenced_pid=$!
-fenced_log "started fenced pid $fenced_pid in the background"
+add_atexit_kill_pid $fenced_pid
+
+#
+# some critical failures will cause fs operations to hang.  We can watch
+# for evidence of them and cause the system to crash, at least.
+#
+crash_monitor()
+{
+	local bad=0
+
+	while sleep 1; do
+		if dmesg | grep -q "inserting extent.*overlaps existing"; then
+			echo "run-tests monitor saw overlapping extent message"
+			bad=1
+		fi
+
+		if dmesg | grep -q "error indicated by fence action" ; then
+			echo "run-tests monitor saw fence agent error message"
+			bad=1
+		fi
+
+		if [ ! -e "/proc/${fenced_pid}/status" ]; then
+			echo "run-tests monitor didn't see fenced pid $fenced_pid /proc dir"
+			bad=1
+		fi
+
+		if [ "$bad" != 0 ]; then
+			echo "run-tests monitor triggering crash"
+			echo c > /proc/sysrq-trigger
+			exit 1
+		fi
+	done
+}
+crash_monitor &
+add_atexit_kill_pid $!
 
 # setup dm tables
 echo "0 $(blockdev --getsz $T_META_DEVICE) linear $T_META_DEVICE 0" > \
