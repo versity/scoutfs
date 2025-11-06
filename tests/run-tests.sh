@@ -607,6 +607,9 @@ for t in $tests; do
 	# mark in dmesg as to what test we are running
 	echo "run scoutfs test $test_name" > /dev/kmsg
 
+	# let the test get at its extra files
+	T_EXTRA="$T_TESTS/extra/$test_name"
+
 	for iter in $(seq 1 $T_LOOP_ITER); do
 
 		# create a temporary dir and file path for the test

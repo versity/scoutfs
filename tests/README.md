@@ -117,6 +117,7 @@ used during the test.
 | T\_NR\_MOUNTS    | number of mounts     | -n              | 3                 |
 | T\_O[0-9]        | mount options        | created per run | -o server\_addr=  |
 | T\_QUORUM        | quorum count         | -q              | 2                 |
+| T\_EXTRA         | per-test file dir    | revision ctled  | tests/extra/t     |
 | T\_TMP           | per-test tmp prefix  | made for test   | results/tmp/t/tmp |
 | T\_TMPDIR        | per-test tmp dir dir | made for test   | results/tmp/t     |
 
