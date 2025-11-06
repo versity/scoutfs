@@ -535,7 +535,7 @@ fi
 . funcs/filter.sh
 
 # give tests access to built binaries in src/, prefer over installed
-PATH="$PWD/src:$PATH"
+export PATH="$PWD/src:$PATH"
 
 msg "running tests"
 > "$T_RESULTS/skip.log"
@@ -580,7 +580,6 @@ for t in $tests; do
 	for v in ${!T_*}; do
 		eval export $v
 	done
-	export PATH # give test access to scoutfs binary
 
 	# prepare to compare output to golden output
 	test -e "$T_RESULTS/output" || cmd mkdir -p "$T_RESULTS/output"
