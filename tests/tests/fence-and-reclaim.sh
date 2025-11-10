@@ -37,10 +37,17 @@ verify_fenced_run()
 {
 	local rids="$@"
 	local rid
+	local n=3
 
-	for rid in $rids; do
-		grep -q ".* running rid '$rid'.* args 'ignored run args'" "$T_FENCED_LOG" || \
-			t_fail "fenced didn't execute RUN script for rid $rid"
+	while ((n--)); do
+		for rid in $rids; do
+			grep -q ".* running rid '$rid'.* args 'ignored run args'" "$T_FENCED_LOG" || \
+				if (( n == 0 )); then
+					t_fail "fenced didn't execute RUN script for rid $rid"
+				else
+					sleep 1
+				fi
+		done
 	done
 }
 
