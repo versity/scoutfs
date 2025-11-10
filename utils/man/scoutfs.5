@@ -55,6 +55,14 @@ with initial sparse regions (perhaps by multiple threads writing to
 different regions) and wasted space isn't an issue (perhaps because the
 file population contains few small files).
 .TP
+.B ino_alloc_per_lock=<number>
+This option determines how many inode numbers are allocated in the same
+cluster lock.  The default, and maximum, is 1024.  The minimum is 1.
+Allocating fewer inodes per lock can allow more parallelism between
+mounts because there are more locks that cover the same number of
+created files.  This can be helpful when working with smaller numbers of
+large files.
+.TP
 .B log_merge_wait_timeout_ms=<number>
 This option sets the amount of time, in milliseconds, that log merge
 creation can wait before timing out.  This setting is per-mount, only
