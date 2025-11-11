@@ -2140,7 +2140,7 @@ static int server_srch_get_compact(struct super_block *sb,
 
 apply:
 	ret = server_apply_commit(sb, &hold, ret);
-	WARN_ON_ONCE(ret < 0 && ret != -ENOENT); /* XXX leaked busy item */
+	WARN_ON_ONCE(ret < 0 && ret != -ENOENT && ret != -ENOLINK); /* XXX leaked busy item */
 out:
 	ret = scoutfs_net_response(sb, conn, cmd, id, ret,
 				   sc, sizeof(struct scoutfs_srch_compact));
