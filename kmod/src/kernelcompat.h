@@ -54,11 +54,6 @@ do {						\
 #define setattr_prepare(dentry, attr) inode_change_ok(d_inode(dentry), attr)
 #endif
 
-#ifndef KC___POSIX_ACL_CREATE
-#define __posix_acl_create posix_acl_create
-#define __posix_acl_chmod posix_acl_chmod
-#endif
-
 #ifndef KC_PERCPU_COUNTER_ADD_BATCH
 #define percpu_counter_add_batch __percpu_counter_add
 #endif

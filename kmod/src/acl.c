@@ -69,15 +69,6 @@ struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct s
 	char *name;
 	int ret;
 
-#ifndef KC___POSIX_ACL_CREATE
-	if (!IS_POSIXACL(inode))
-		return NULL;
-
-	acl = get_cached_acl(inode, type);
-	if (acl != ACL_NOT_CACHED)
-		return acl;
-#endif
-
 	ret = acl_xattr_name_len(type, &name, NULL);
 	if (ret < 0)
 		return ERR_PTR(ret);
@@ -121,11 +112,6 @@ struct posix_acl *scoutfs_get_acl(struct inode *inode, int type)
 #ifdef KC_GET_INODE_ACL
 	if (rcu)
 		return ERR_PTR(-ECHILD);
-#endif
-
-#ifndef KC___POSIX_ACL_CREATE
-	if (!IS_POSIXACL(inode))
-		return NULL;
 #endif
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
