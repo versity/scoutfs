@@ -2518,10 +2518,9 @@ out:
 		}
 	}
 
-	if (ret < 0)
-		scoutfs_err(sb, "server error %d splicing log merge completion: %s", ret, err_str);
-
-	BUG_ON(ret); /* inconsistent */
+	/* inconsistent */
+	scoutfs_bug_on_err(sb, ret,
+			   "server error %d splicing log merge completion: %s", ret, err_str);
 
 	return ret ?: einprogress;
 }

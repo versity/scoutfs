@@ -35,6 +35,12 @@ do {									\
 	}								\
 } while (0)								\
 
+#define scoutfs_bug_on_err(sb, err, fmt, args...) \
+do { \
+	__typeof__(err) _err = (err); \
+	scoutfs_bug_on(sb, _err < 0 && _err != -ENOLINK, fmt, ##args); \
+} while (0)
+
 /*
  * Each message is only generated once per volume.  Remounting resets
  * the messages.
