@@ -121,6 +121,7 @@ t_filter_dmesg()
 
 	# in debugging kernels we can slow things down a bit
 	re="$re|hrtimer: interrupt took .*"
+	re="$re|clocksource: Long readout interval"
 
 	# fencing tests force unmounts and trigger timeouts
 	re="$re|scoutfs .* forcing unmount"
