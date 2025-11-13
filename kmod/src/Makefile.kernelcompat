@@ -7,15 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# RHEL extended the fop struct so to use it we have to set
-# a flag to indicate that the struct is large enough and
-# contains the pointer.
-#
-ifneq (,$(shell grep 'FMODE_KABI_ITERATE' include/linux/fs.h))
-ccflags-y += -DKC_FMODE_KABI_ITERATE
-endif
-
-#
 # v4.7-rc2-23-g0d4d717f2583
 #
 # Added user_ns argument to posix_acl_valid

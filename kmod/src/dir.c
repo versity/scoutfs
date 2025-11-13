@@ -1903,14 +1903,6 @@ static int scoutfs_rename2(KC_VFS_NS_DEF
 				     old_dir, old_dentry, new_dir, new_dentry, flags);
 }
 
-#ifdef KC_FMODE_KABI_ITERATE
-/* we only need this to set the iterate flag for kabi :/ */
-static int scoutfs_dir_open(struct inode *inode, struct file *file)
-{
-        file->f_mode |= FMODE_KABI_ITERATE;
-        return 0;
-}
-#endif
 
 static int scoutfs_tmpfile(KC_VFS_NS_DEF
 			   struct inode *dir,
@@ -2016,9 +2008,6 @@ const struct inode_operations scoutfs_symlink_iops = {
 
 const struct file_operations scoutfs_dir_fops = {
 	.iterate	= scoutfs_readdir,
-#ifdef KC_FMODE_KABI_ITERATE
-	.open		= scoutfs_dir_open,
-#endif
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= generic_file_llseek,
