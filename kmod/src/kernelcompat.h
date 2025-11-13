@@ -14,9 +14,6 @@
 #define WQ_NON_REENTRANT 0
 #endif
 
-#ifndef KC_PERCPU_COUNTER_ADD_BATCH
-#define percpu_counter_add_batch __percpu_counter_add
-#endif
 
 #ifndef KC_MEMALLOC_NOFS_SAVE
 #define memalloc_nofs_save memalloc_noio_save
