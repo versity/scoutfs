@@ -4,17 +4,6 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 
-/*
- * v4.13-rc1-6-ge462ec50cb5f
- *
- * MS_* (mount) flags from <linux/mount.h> should not be used in the kernel
- * anymore from 4.x onwards. Instead, we need to use the SB_* (superblock) flags
- */
-#ifndef SB_POSIXACL
-#define SB_POSIXACL MS_POSIXACL
-#define SB_I_VERSION MS_I_VERSION
-#endif
-
 #define KC_DEFINE_SHRINKER(name) struct shrinker name
 #define KC_INIT_SHRINKER_FUNCS(name, countfn, scanfn) do {	\
 	__typeof__(name) _shrink = (name);			\
