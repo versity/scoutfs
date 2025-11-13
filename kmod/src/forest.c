@@ -783,7 +783,7 @@ int scoutfs_forest_setup(struct super_block *sb)
 			  scoutfs_forest_log_merge_worker);
 	sbi->forest_info = finf;
 
-	finf->workq = alloc_workqueue("scoutfs_log_merge", WQ_NON_REENTRANT |
+	finf->workq = alloc_workqueue("scoutfs_log_merge",
 				      WQ_UNBOUND | WQ_HIGHPRI, 0);
 	if (!finf->workq) {
 		ret = -ENOMEM;

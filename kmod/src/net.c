@@ -1517,8 +1517,7 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 		conn->ordered_proc_wlists = kmalloc_array(nr, sizeof(struct scoutfs_work_list),
 							  GFP_NOFS);
 		conn->workq = alloc_workqueue("scoutfs_net_%s",
-					      WQ_UNBOUND | WQ_NON_REENTRANT, 0,
-					      name_suffix);
+					      WQ_UNBOUND, 0, name_suffix);
 	}
 	if (!conn || (info_size && !conn->info) || !conn->workq || !conn->ordered_proc_wlists) {
 		if (conn) {
@@ -2099,11 +2098,9 @@ int scoutfs_net_setup(struct super_block *sb)
 	scoutfs_tseq_tree_init(&ninf->msg_tseq_tree, net_tseq_show_msg);
 
 	ninf->shutdown_workq = alloc_workqueue("scoutfs_net_shutdown",
-					       WQ_UNBOUND | WQ_NON_REENTRANT,
-					       0);
+					       WQ_UNBOUND, 0);
 	ninf->destroy_workq = alloc_workqueue("scoutfs_net_destroy",
-					       WQ_UNBOUND | WQ_NON_REENTRANT,
-					       0);
+					       WQ_UNBOUND, 0);
 	if (!ninf->shutdown_workq || !ninf->destroy_workq) {
 		ret = -ENOMEM;
 		goto out;

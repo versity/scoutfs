@@ -2392,8 +2392,7 @@ int scoutfs_srch_setup(struct super_block *sb)
 		goto out;
 
 	srinf->workq = alloc_workqueue("scoutfs_srch_compact",
-				       WQ_NON_REENTRANT | WQ_UNBOUND |
-				       WQ_HIGHPRI, 0);
+				       WQ_UNBOUND | WQ_HIGHPRI, 0);
 	if (!srinf->workq) {
 		ret = -ENOMEM;
 		goto out;

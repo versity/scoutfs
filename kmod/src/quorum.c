@@ -1332,8 +1332,7 @@ int scoutfs_quorum_setup(struct super_block *sb)
 
 	/* a high priority single threaded context without mem reclaim */
 	qinf->workq = alloc_workqueue("scoutfs_quorum_work",
-				       WQ_NON_REENTRANT | WQ_UNBOUND |
-				       WQ_HIGHPRI, 1);
+				       WQ_UNBOUND | WQ_HIGHPRI, 1);
 	if (!qinf->workq) {
 		ret = -ENOMEM;
 		goto out;

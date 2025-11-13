@@ -5,16 +5,6 @@
 #include <linux/fs.h>
 
 /*
- * v3.6-rc1-24-gdbf2576e37da
- *
- * All workqueues are now non-reentrant, and the bit flag is removed
- * shortly after its uses were removed.
- */
-#ifndef WQ_NON_REENTRANT
-#define WQ_NON_REENTRANT 0
-#endif
-
-/*
  * v4.13-rc1-6-ge462ec50cb5f
  *
  * MS_* (mount) flags from <linux/mount.h> should not be used in the kernel
