@@ -7,18 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# rhel7 has a custom inode_operations_wrapper struct that is discarded
-# entirely in favor of upstream structure since rhel8.
-#
-ifneq (,$(shell grep 'void.*follow_link.*struct dentry' include/linux/fs.h))
-ccflags-y += -DKC_LINUX_HAVE_RHEL_IOPS_WRAPPER=1
-endif
-
-ifneq (,$(shell grep 'size_t.*ki_left;' include/linux/aio.h))
-ccflags-y += -DKC_LINUX_AIO_KI_LEFT=1
-endif
-
-#
 # v4.4-rc4-4-g98e9cb5711c6
 #
 # Introduces a new xattr_handler .name member that can be used to match the
