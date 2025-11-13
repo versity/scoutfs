@@ -7,15 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v4.3-9290-ge409de992e3e
-#
-# xattr handlers are now passed a struct that contains `flags`
-#
-ifneq (,$(shell grep 'int...get..const struct xattr_handler.*struct dentry.*dentry,' include/linux/xattr.h))
-ccflags-y += -DKC_XATTR_STRUCT_XATTR_HANDLER=1
-endif
-
-#
 # v4.16-rc1-1-g9b2c45d479d0
 #
 # kernel_getsockname() and kernel_getpeername dropped addrlen arg
