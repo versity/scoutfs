@@ -7,15 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v4.17-rc6-7-g95582b008388
-#
-# Kernel has current_time(inode) to uniformly retreive timespec in the right unit
-#
-ifneq (,$(shell grep 'struct timespec64 current_time' include/linux/fs.h))
-ccflags-y += -DKC_CURRENT_TIME_INODE=1
-endif
-
-#
 # v4.9-12228-g530e9b76ae8f
 #
 # register_cpu_notifier and family were all removed and to be

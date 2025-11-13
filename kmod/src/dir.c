@@ -952,7 +952,7 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode = dentry->d_inode;
-	struct kc_timespec ts = current_time(inode);
+	struct timespec64 ts = current_time(inode);
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
@@ -1625,7 +1625,7 @@ static int scoutfs_rename_common(KC_VFS_NS_DEF
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_dirent new_dent;
 	struct scoutfs_dirent old_dent;
-	struct kc_timespec now;
+	struct timespec64 now;
 	bool ins_new = false;
 	bool del_new = false;
 	bool ins_old = false;

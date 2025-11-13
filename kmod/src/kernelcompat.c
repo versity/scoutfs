@@ -4,36 +4,6 @@
 #include "kernelcompat.h"
 
 
-#ifndef KC_CURRENT_TIME_INODE
-struct timespec64 kc_current_time(struct inode *inode)
-{
-	struct timespec64 now;
-	unsigned gran;
-
-	getnstimeofday64(&now);
-
-	if (unlikely(!inode->i_sb)) {
-		WARN(1, "current_time() called with uninitialized super_block in the inode");
-		return now;
-	}
-
-	gran = inode->i_sb->s_time_gran;
-
-	/* Avoid division in the common cases 1 ns and 1 s. */
-	if (gran == 1) {
-		/* nothing */
-	} else if (gran == NSEC_PER_SEC) {
-		now.tv_nsec = 0;
-	} else if (gran > 1 && gran < NSEC_PER_SEC) {
-		now.tv_nsec -= now.tv_nsec % gran;
-	} else {
-		WARN(1, "illegal file time granularity: %u", gran);
-	}
-
-	return now;
-}
-#endif
-
 #ifndef KC_GENERIC_FILE_BUFFERED_WRITE
 ssize_t
 kc_generic_file_buffered_write(struct kiocb *iocb, const struct iovec *iov,

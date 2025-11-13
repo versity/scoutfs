@@ -1268,7 +1268,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	struct data_ext_args from_args;
 	struct data_ext_args to_args;
 	struct scoutfs_extent ext;
-	struct kc_timespec cur_time;
+	struct timespec64 cur_time;
 	LIST_HEAD(locks);
 	bool done = false;
 	loff_t from_size;
