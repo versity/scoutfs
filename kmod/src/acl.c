@@ -16,6 +16,7 @@
 #include <linux/xattr.h>
 #include <linux/posix_acl.h>
 #include <linux/posix_acl_xattr.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "super.h"

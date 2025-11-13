@@ -6,16 +6,6 @@
 
 ccflags-y += -include $(src)/kernelcompat.h
 
-#
-# v4.15-rc3-4-gae5e165d855d
-#
-# linux/iversion.h needs to manually be included for code that
-# manipulates this field.
-#
-ifneq (,$(shell grep -s 'define _LINUX_IVERSION_H' include/linux/iversion.h))
-ccflags-y += -DKC_NEED_LINUX_IVERSION_H=1
-endif
-
 # v4.11-12447-g104b4e5139fe
 #
 # Renamed __percpu_counter_add to percpu_counter_add_batch to clarify

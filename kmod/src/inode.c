@@ -21,6 +21,7 @@
 #include <linux/list_sort.h>
 #include <linux/workqueue.h>
 #include <linux/buffer_head.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "super.h"

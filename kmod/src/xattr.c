@@ -16,6 +16,7 @@
 #include <linux/xattr.h>
 #include <linux/crc32c.h>
 #include <linux/posix_acl.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "inode.h"

@@ -18,6 +18,7 @@
 #include <linux/xattr.h>
 #include <linux/namei.h>
 #include <linux/mm.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "file.h"

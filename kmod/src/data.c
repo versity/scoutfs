@@ -23,6 +23,7 @@
 #include <linux/fiemap.h>
 #include <linux/writeback.h>
 #include <linux/overflow.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "super.h"

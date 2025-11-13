@@ -5,31 +5,6 @@
 #include <linux/fs.h>
 
 /*
- * v4.15-rc3-4-gae5e165d855d
- *
- * new API for handling inode->i_version. This forces us to
- * include this API where we need. We include it here for
- * convenience instead of where it's needed.
- */
-#ifdef KC_NEED_LINUX_IVERSION_H
-#include <linux/iversion.h>
-#else
-/*
- * Kernels before above version will need to fall back to
- * manipulating inode->i_version as previous with degraded
- * methods.
- */
-#define inode_set_iversion_queried(inode, val)	\
-do {						\
-	(inode)->i_version = val;		\
-} while (0)
-#define inode_peek_iversion(inode)		\
-({						\
-	(inode)->i_version;			\
-})
-#endif
-
-/*
  * v3.6-rc1-24-gdbf2576e37da
  *
  * All workqueues are now non-reentrant, and the bit flag is removed
