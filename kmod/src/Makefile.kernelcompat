@@ -7,17 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v4.0-rc7-1743-g8436318205b9
-#
-# .aio_read and .aio_write no longer exist. All reads and writes now use the
-# .read_iter and .write_iter methods, or must implement .read and .write (which
-# we don't).
-#
-ifneq (,$(shell grep 'ssize_t.*aio_read' include/linux/fs.h))
-ccflags-y += -DKC_LINUX_HAVE_FOP_AIO_READ=1
-endif
-
-#
 # rhel7 has a custom inode_operations_wrapper struct that is discarded
 # entirely in favor of upstream structure since rhel8.
 #

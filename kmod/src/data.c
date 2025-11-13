@@ -2261,17 +2261,10 @@ const struct address_space_operations scoutfs_file_aops = {
 };
 
 const struct file_operations scoutfs_file_fops = {
-#ifdef KC_LINUX_HAVE_FOP_AIO_READ
-	.read		= do_sync_read,
-	.write		= do_sync_write,
-	.aio_read	= scoutfs_file_aio_read,
-	.aio_write	= scoutfs_file_aio_write,
-#else
 	.read_iter	= scoutfs_file_read_iter,
 	.write_iter	= scoutfs_file_write_iter,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
-#endif
 	.mmap		= scoutfs_file_mmap,
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
