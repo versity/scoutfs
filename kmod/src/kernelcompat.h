@@ -15,10 +15,6 @@
 #endif
 
 
-#ifndef KC_MEMALLOC_NOFS_SAVE
-#define memalloc_nofs_save memalloc_noio_save
-#define memalloc_nofs_restore memalloc_noio_restore
-#endif
 
 #ifdef KC_BIO_BI_OPF
 #define kc_bio_get_opf(bio)		\
