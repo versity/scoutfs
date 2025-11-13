@@ -7,15 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v4.7-rc2-23-g0d4d717f2583
-#
-# Added user_ns argument to posix_acl_valid
-#
-ifneq (,$(shell grep 'posix_acl_valid.*user_namespace' include/linux/posix_acl.h))
-ccflags-y += -DKC_POSIX_ACL_VALID_USER_NS
-endif
-
-#
 # v5.3-12296-g6d2052d188d9
 #
 # The RBCOMPUTE function is now passed an extra flag, and should return a bool
