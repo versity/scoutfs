@@ -51,36 +51,6 @@ struct timespec64 kc_current_time(struct inode *inode);
 #define KC_UNREGISTER_SHRINKER(ptr) (unregister_shrinker(ptr))
 #define KC_SHRINKER_FN(ptr) (ptr)
 
-#ifdef KC_KERNEL_GETSOCKNAME_ADDRLEN
-#include <linux/net.h>
-#include <linux/inet.h>
-static inline int kc_kernel_getsockname(struct socket *sock, struct sockaddr *addr)
-{
-	int addrlen = sizeof(struct sockaddr_in);
-	int ret = kernel_getsockname(sock, addr, &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		return -EAFNOSUPPORT;
-	else if (ret < 0)
-		return ret;
-
-	return sizeof(struct sockaddr_in);
-}
-static inline int kc_kernel_getpeername(struct socket *sock, struct sockaddr *addr)
-{
-	int addrlen = sizeof(struct sockaddr_in);
-	int ret = kernel_getpeername(sock, addr, &addrlen);
-	if (ret == 0 && addrlen != sizeof(struct sockaddr_in))
-		return -EAFNOSUPPORT;
-	else if (ret < 0)
-		return ret;
-
-	return sizeof(struct sockaddr_in);
-}
-#else
-#define kc_kernel_getsockname(sock, addr) kernel_getsockname(sock, addr)
-#define kc_kernel_getpeername(sock, addr) kernel_getpeername(sock, addr)
-#endif
-
 #ifdef KC_SOCK_CREATE_KERN_NET
 #define kc_sock_create_kern(family, type, proto, res) sock_create_kern(&init_net, family, type, proto, res)
 #else

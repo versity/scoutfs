@@ -1113,11 +1113,11 @@ static int sock_opts_and_names(struct super_block *sb,
 	if (ret)
 		goto out;
 
-	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
 	if (ret < 0)
 		goto out;
 
-	ret = kc_kernel_getpeername(sock, (struct sockaddr *)&conn->peername);
+	ret = kernel_getpeername(sock, (struct sockaddr *)&conn->peername);
 	if (ret < 0)
 		goto out;
 
@@ -1651,7 +1651,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	if (ret < 0)
 		goto out;
 
-	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
 	if (ret < 0)
 		goto out;
 
