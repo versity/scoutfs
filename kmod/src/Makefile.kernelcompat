@@ -7,18 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v5.7-438-g8151b4c8bee4
-#
-# struct address_space_operations switches away from .readpages to .readahead
-#
-# RHEL has backported this feature all the way to RHEL8, as part of RHEL_KABI,
-# which means we need to detect this very precisely
-#
-ifneq (,$(shell grep 'readahead.*struct readahead_control' include/linux/fs.h))
-ccflags-y += -DKC_FILE_AOPS_READAHEAD
-endif
-
-#
 # v4.0-rc7-1743-g8436318205b9
 #
 # .aio_read and .aio_write no longer exist. All reads and writes now use the

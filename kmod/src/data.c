@@ -758,54 +758,6 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	return ret;
 }
 
-#ifndef KC_FILE_AOPS_READAHEAD
-/*
- * This is used for opportunistic read-ahead which can throw the pages
- * away if it needs to.  If the caller didn't deal with offline extents
- * then we drop those pages rather than trying to wait.  Whoever is
- * staging offline extents should be doing it in enormous chunks so that
- * read-ahead can ramp up within each staged region.  The check for
- * offline extents is cheap when the inode has no offline extents.
- */
-static int scoutfs_readpages(struct file *file, struct address_space *mapping,
-			     struct list_head *pages, unsigned nr_pages)
-{
-	struct inode *inode = file->f_inode;
-	struct super_block *sb = inode->i_sb;
-	struct scoutfs_lock *inode_lock = NULL;
-	struct page *page;
-	struct page *tmp;
-	int ret;
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
-	if (ret)
-		goto out;
-
-	list_for_each_entry_safe(page, tmp, pages, lru) {
-		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_SIZE, SEF_OFFLINE,
-					      SCOUTFS_IOC_DWO_READ, NULL,
-					      inode_lock);
-		if (ret < 0)
-			goto out;
-		if (ret > 0) {
-			list_del(&page->lru);
-			put_page(page);
-			if (--nr_pages == 0) {
-				ret = 0;
-				goto out;
-			}
-		}
-	}
-
-	ret = mpage_readpages(mapping, pages, nr_pages, scoutfs_get_block_read);
-out:
-	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
-	BUG_ON(!list_empty(pages));
-	return ret;
-}
-#else
 static void scoutfs_readahead(struct readahead_control *rac)
 {
 	struct inode *inode = rac->file->f_inode;
@@ -827,7 +779,6 @@ static void scoutfs_readahead(struct readahead_control *rac)
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 }
-#endif
 
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
 {
@@ -2302,11 +2253,7 @@ const struct address_space_operations scoutfs_file_aops = {
 #else
 	.readpage		= scoutfs_readpage,
 #endif
-#ifndef KC_FILE_AOPS_READAHEAD
-	.readpages		= scoutfs_readpages,
-#else
 	.readahead		= scoutfs_readahead,
-#endif
 	.writepage		= scoutfs_writepage,
 	.writepages		= scoutfs_writepages,
 	.write_begin		= scoutfs_write_begin,
