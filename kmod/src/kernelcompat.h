@@ -39,15 +39,6 @@ do {						\
 #define WQ_NON_REENTRANT 0
 #endif
 
-/*
- * v4.8-rc1-29-g31051c85b5e2
- *
- * fall back to inode_change_ok() if setattr_prepare() isn't available
- */
-#ifndef KC_SETATTR_PREPARE
-#define setattr_prepare(dentry, attr) inode_change_ok(d_inode(dentry), attr)
-#endif
-
 #ifndef KC_PERCPU_COUNTER_ADD_BATCH
 #define percpu_counter_add_batch __percpu_counter_add
 #endif
