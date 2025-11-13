@@ -7,16 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v5.3-12296-g6d2052d188d9
-#
-# The RBCOMPUTE function is now passed an extra flag, and should return a bool
-# to indicate whether the propagated callback should stop or not.
-#
-ifneq (,$(shell grep 'static inline bool RBNAME.*_compute_max' include/linux/rbtree_augmented.h))
-ccflags-y += -DKC_RB_TREE_AUGMENTED_COMPUTE_MAX
-endif
-
-#
 # v4.8-rc1-29-g31051c85b5e2
 #
 # inode_change_ok() removed - replace with setattr_prepare()
