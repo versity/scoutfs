@@ -7,7 +7,7 @@ message_output()
 
 error_message()
 {
-	message_output "$@" >&2
+	message_output "$@" >> /dev/stderr
 }
 
 error_exit()
@@ -62,31 +62,27 @@ test -x "$SCOUTFS_FENCED_RUN" || \
 # files disappear.
 #
 
-# generate failure messages to stderr while still echoing 0 for the caller
-careful_cat()
+# silence error messages
+quiet_cat()
 {
-	local path="$@"
-
-	cat "$@" || echo 0
+	cat "$@" 2>/dev/null
 }
 
 while sleep $SCOUTFS_FENCED_DELAY; do
+	shopt -s nullglob
 	for fence in /sys/fs/scoutfs/*/fence/*; do
-		# catches unmatched regex when no dirs
-		if [ ! -d "$fence" ]; then
-			continue
-		fi
-
-		# skip requests that have been handled
-		if [ "$(careful_cat $fence/fenced)" == 1 -o \
-		     "$(careful_cat $fence/error)" == 1 ]; then
-			continue
-		fi
 
 		srv=$(basename $(dirname $(dirname $fence)))
-		rid="$(cat $fence/rid)"
-		ip="$(cat $fence/ipv4_addr)"
-		reason="$(cat $fence/reason)"
+		fenced="$(quiet_cat $fence/fenced)"
+		error="$(quiet_cat $fence/error)"
+		rid="$(quiet_cat $fence/rid)"
+		ip="$(quiet_cat $fence/ipv4_addr)"
+		reason="$(quiet_cat $fence/reason)"
+
+		# request dirs can linger then disappear after fenced/error is set
+		if [ ! -d "$fence" -o "$fenced" == "1" -o "$error" == "1" ]; then
+			continue
+		fi
 
 		log_message "server $srv fencing rid $rid at IP $ip for $reason"
 

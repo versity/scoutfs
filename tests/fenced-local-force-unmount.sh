@@ -8,36 +8,34 @@
 
 echo "$0 running rid '$SCOUTFS_FENCED_REQ_RID' ip '$SCOUTFS_FENCED_REQ_IP' args '$@'"
 
-log() {
-	echo "$@" > /dev/stderr
+echo_fail() {
+	echo "$@" >> /dev/stderr
 	exit 1
 }
 
-echo_fail() {
-	echo "$@" > /dev/stderr
-	exit 1
+# silence error messages
+quiet_cat()
+{
+	cat "$@" 2>/dev/null
 }
 
 rid="$SCOUTFS_FENCED_REQ_RID"
 
+shopt -s nullglob
 for fs in /sys/fs/scoutfs/*; do
-	[ ! -d "$fs" ] && continue
+	fs_rid="$(quiet_cat $fs/rid)"
+	nr="$(quiet_cat $fs/data_device_maj_min)"
+	[ ! -d "$fs" -o "$fs_rid" != "$rid" ] && continue
 
-	fs_rid="$(cat $fs/rid)" || \
-		echo_fail "failed to get rid in $fs"
-	if [ "$fs_rid" != "$rid" ]; then
-		continue
-	fi
-
-	nr="$(cat $fs/data_device_maj_min)" || \
-		echo_fail "failed to get data device major:minor in $fs"
-
-	mnts=$(findmnt -l -n -t scoutfs -o TARGET -S $nr) || \
+	mnt=$(findmnt -l -n -t scoutfs -o TARGET -S $nr) || \
 		echo_fail "findmnt -t scoutfs -S $nr failed"
-	for mnt in $mnts; do
-		umount -f "$mnt" || \
-			echo_fail "umout -f $mnt failed"
-	done
+	[ -z "$mnt" ] && continue
+
+	if ! umount -qf "$mnt"; then
+		if [ -d "$fs" ]; then
+			echo_fail "umount -qf $mnt failed"
+		fi
+	fi
 done
 
 exit 0
