@@ -183,7 +183,7 @@ static int create_socket(struct super_block *sb)
 	int addrlen;
 	int ret;
 
-	ret = kc_sock_create_kern(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	ret = sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
 	if (ret) {
 		scoutfs_err(sb, "quorum couldn't create udp socket: %d", ret);
 		goto out;

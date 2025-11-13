@@ -1218,7 +1218,7 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 
 	trace_scoutfs_net_connect_work_enter(sb, 0, 0);
 
-	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 
@@ -1630,7 +1630,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	if (WARN_ON_ONCE(conn->sock))
 		return -EINVAL;
 
-	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 

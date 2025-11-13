@@ -7,15 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v4.1-rc1-410-geeb1bd5c40ed
-#
-# Adds a struct net parameter to sock_create_kern
-#
-ifneq (,$(shell grep 'sock_create_kern.*struct net' include/linux/net.h))
-ccflags-y += -DKC_SOCK_CREATE_KERN_NET=1
-endif
-
-#
 # v4.17-rc6-7-g95582b008388
 #
 # Kernel has current_time(inode) to uniformly retreive timespec in the right unit
