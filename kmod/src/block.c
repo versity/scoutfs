@@ -444,13 +444,13 @@ static void block_end_io(struct super_block *sb, blk_opf_t opf,
 		wake_up(&binf->waitq);
 }
 
-static void KC_DECLARE_BIO_END_IO(block_bio_end_io, struct bio *bio)
+static void block_bio_end_io(struct bio *bio)
 {
 	struct block_private *bp = bio->bi_private;
 	struct super_block *sb = bp->sb;
 
 	TRACE_BLOCK(end_io, bp);
-	block_end_io(sb, bio->bi_opf, bp, kc_bio_get_errno(bio));
+	block_end_io(sb, bio->bi_opf, bp, blk_status_to_errno(bio->bi_status));
 	bio_put(bio);
 }
 
@@ -1179,11 +1179,11 @@ struct sm_block_completion {
 	int err;
 };
 
-static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
+static void sm_block_bio_end_io(struct bio *bio)
 {
 	struct sm_block_completion *sbc = bio->bi_private;
 
-	sbc->err = kc_bio_get_errno(bio);
+	sbc->err = blk_status_to_errno(bio->bi_status);
 	complete(&sbc->comp);
 	bio_put(bio);
 }

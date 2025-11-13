@@ -14,14 +14,6 @@
 #define WQ_NON_REENTRANT 0
 #endif
 
-#ifdef KC_BIO_BI_STATUS
-#define KC_DECLARE_BIO_END_IO(name, bio)	name(bio)
-#define kc_bio_get_errno(bio)			({ blk_status_to_errno((bio)->bi_status); })
-#else
-#define KC_DECLARE_BIO_END_IO(name, bio)	name(bio, int _error_arg)
-#define kc_bio_get_errno(bio)			({ (int)((void)(bio), _error_arg); })
-#endif
-
 /*
  * v4.13-rc1-6-ge462ec50cb5f
  *

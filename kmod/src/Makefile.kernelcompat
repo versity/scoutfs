@@ -7,16 +7,6 @@
 ccflags-y += -include $(src)/kernelcompat.h
 
 #
-# v4.12-rc2-201-g4e4cbee93d56
-#
-# Moves to bi_status BLK_STS_ API instead of having a mix of error
-# end_io args or bi_error.
-#
-ifneq (,$(shell grep 'bi_status' include/linux/blk_types.h))
-ccflags-y += -DKC_BIO_BI_STATUS
-endif
-
-#
 # v4.3-9290-ge409de992e3e
 #
 # xattr handlers are now passed a struct that contains `flags`
