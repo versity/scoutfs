@@ -994,10 +994,11 @@ static int for_each_rid_last_lt(struct super_block *sb, struct scoutfs_btree_roo
 }
 
 /*
- * Log merge range items are stored at the starting fs key of the range.
- * The only fs key field that doesn't hold information is the zone, so
- * we use the zone to differentiate all types that we store in the log
- * merge tree.
+ * Log merge range items are stored at the starting fs key of the range
+ * with the zone overwritten to indicate the log merge item type.  This
+ * day0 mistake loses sorting information for items in the different
+ * zones in the fs root, so the range items aren't strictly sorted by
+ * the starting key of their range.
  */
 static void init_log_merge_key(struct scoutfs_key *key, u8 zone, u64 first,
 			       u64 second)
@@ -1025,6 +1026,51 @@ static int next_log_merge_item_key(struct super_block *sb, struct scoutfs_btree_
 			memcpy(val, iref.val, val_len);
 		scoutfs_btree_put_iref(&iref);
 	}
+
+	return ret;
+}
+
+/*
+ * The range items aren't sorted by their range.start because
+ * _RANGE_ZONE clobbers the range's zone.  We sweep all the items and
+ * find the range with the next least starting key that's greater than
+ * the caller's starting key.  We have to be careful to iterate over the
+ * log_merge tree keys because the ranges can overlap as they're mapped
+ * to the log_merge keys by clobbering their zone.
+ */
+static int next_log_merge_range(struct super_block *sb, struct scoutfs_btree_root *root,
+				struct scoutfs_key *start, struct scoutfs_log_merge_range *rng)
+{
+	struct scoutfs_log_merge_range *next;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	int ret;
+
+	key = *start;
+	key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
+	scoutfs_key_set_ones(&rng->start);
+
+	do {
+		ret = scoutfs_btree_next(sb, root, &key, &iref);
+		if (ret == 0) {
+			if (iref.key->sk_zone != SCOUTFS_LOG_MERGE_RANGE_ZONE) {
+				ret = -ENOENT;
+			} else if (iref.val_len != sizeof(struct scoutfs_log_merge_range)) {
+				ret = -EIO;
+			} else {
+				next = iref.val;
+				if (scoutfs_key_compare(&next->start, &rng->start) < 0 &&
+				    scoutfs_key_compare(&next->start, start) >= 0)
+					*rng = *next;
+				key = *iref.key;
+				scoutfs_key_inc(&key);
+			}
+			scoutfs_btree_put_iref(&iref);
+		}
+	} while (ret == 0);
+
+	if (ret == -ENOENT && !scoutfs_key_is_ones(&rng->start))
+		ret = 0;
 
 	return ret;
 }
@@ -2094,7 +2140,7 @@ static int server_srch_get_compact(struct super_block *sb,
 
 apply:
 	ret = server_apply_commit(sb, &hold, ret);
-	WARN_ON_ONCE(ret < 0 && ret != -ENOENT); /* XXX leaked busy item */
+	WARN_ON_ONCE(ret < 0 && ret != -ENOENT && ret != -ENOLINK); /* XXX leaked busy item */
 out:
 	ret = scoutfs_net_response(sb, conn, cmd, id, ret,
 				   sc, sizeof(struct scoutfs_srch_compact));
@@ -2472,10 +2518,9 @@ out:
 		}
 	}
 
-	if (ret < 0)
-		scoutfs_err(sb, "server error %d splicing log merge completion: %s", ret, err_str);
-
-	BUG_ON(ret); /* inconsistent */
+	/* inconsistent */
+	scoutfs_bug_on_err(sb, ret,
+			   "server error %d splicing log merge completion: %s", ret, err_str);
 
 	return ret ?: einprogress;
 }
@@ -2720,10 +2765,7 @@ restart:
 
 	/* find the next range, always checking for splicing */
 	for (;;) {
-		key = stat.next_range_key;
-		key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
-		ret = next_log_merge_item_key(sb, &super->log_merge, SCOUTFS_LOG_MERGE_RANGE_ZONE,
-					      &key, &rng, sizeof(rng));
+		ret = next_log_merge_range(sb, &super->log_merge, &stat.next_range_key, &rng);
 		if (ret < 0 && ret != -ENOENT) {
 			err_str = "finding merge range item";
 			goto out;

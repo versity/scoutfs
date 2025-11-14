@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <inttypes.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -29,7 +30,7 @@
 #include <errno.h>
 
 static int size = 0;
-static int count = 0; /* XXX make this duration instead */
+static int duration = 0;
 
 struct thread_info {
 	int nr;
@@ -41,6 +42,8 @@ static void *run_test_func(void *ptr)
 	void *buf = NULL;
 	char *addr = NULL;
 	struct thread_info *tinfo = ptr;
+	uint64_t seconds = 0;
+	struct timespec ts;
 	int c = 0;
 	int fd;
 	ssize_t read, written, ret;
@@ -61,9 +64,15 @@ static void *run_test_func(void *ptr)
 
 	usleep(100000); /* 0.1sec to allow all threads to start roughly at the same time */
 
+	clock_gettime(CLOCK_REALTIME, &ts); /* record start time */
+	seconds = ts.tv_sec + duration;
+
 	for (;;) {
-		if (++c > count)
-			break;
+		if (++c % 16 == 0) {
+			clock_gettime(CLOCK_REALTIME, &ts);
+			if (ts.tv_sec >= seconds)
+				break;
+		}
 
 		switch (rand() % 4) {
 		case 0: /* pread */
@@ -99,6 +108,8 @@ static void *run_test_func(void *ptr)
 			memcpy(addr, buf, size); /* noerr */
 			break;
 		}
+
+		usleep(10000);
 	}
 
 	munmap(addr, size);
@@ -120,7 +131,7 @@ int main(int argc, char **argv)
 	int i;
 
 	if (argc != 8) {
-		fprintf(stderr, "%s requires 7 arguments - size count file1 file2 file3 file4 file5\n", argv[0]);
+		fprintf(stderr, "%s requires 7 arguments - size duration file1 file2 file3 file4 file5\n", argv[0]);
 		exit(-1);
 	}
 
@@ -130,9 +141,9 @@ int main(int argc, char **argv)
 		exit(-1);
 	}
 
-	count = atoi(argv[2]);
-	if (count < 0) {
-		fprintf(stderr, "invalid count, must be greater than 0\n");
+	duration = atoi(argv[2]);
+	if (duration < 0) {
+		fprintf(stderr, "invalid duration, must be greater than or equal to 0\n");
 		exit(-1);
 	}
 

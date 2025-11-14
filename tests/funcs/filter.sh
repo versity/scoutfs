@@ -121,6 +121,7 @@ t_filter_dmesg()
 
 	# in debugging kernels we can slow things down a bit
 	re="$re|hrtimer: interrupt took .*"
+	re="$re|clocksource: Long readout interval"
 
 	# fencing tests force unmounts and trigger timeouts
 	re="$re|scoutfs .* forcing unmount"
@@ -165,6 +166,9 @@ t_filter_dmesg()
 
 	# perf warning that it adjusted sample rate
 	re="$re|perf: interrupt took too long.*lowering kernel.perf_event_max_sample_rate.*"
+
+	# some ci test guests are unresponsive
+	re="$re|longest quorum heartbeat .* delay"
 
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob

@@ -56,6 +56,7 @@ $(basename $0) options:
               | only tests matching will be run.  Can be provided multiple
               | times
     -i        | Force removing and inserting the built scoutfs.ko module.
+    -l <nr>   | Loop each test <nr> times while passing, last run counts.
     -M <file> | Specify the filesystem's meta data device path that contains
               | the file system to be tested.  Will be clobbered by -m mkfs.
     -m        | Run mkfs on the device before mounting and running
@@ -91,6 +92,7 @@ done
 T_TRACE_DUMP="0"
 T_TRACE_PRINTK="0"
 T_PORT_START="19700"
+T_LOOP_ITER="1"
 
 # array declarations to be able to use array ops
 declare -a T_TRACE_GLOB
@@ -130,6 +132,12 @@ while true; do
 		;;
 	-i)
 		T_INSMOD="1"
+		;;
+	-l)
+	        test -n "$2" || die "-l must have a nr iterations argument"
+		test "$2" -eq "$2" 2>/dev/null || die "-l <nr> argument must be an integer"
+		T_LOOP_ITER="$2"
+		shift
 		;;
 	-M)
 	        test -n "$2" || die "-z must have meta device file argument"
@@ -430,6 +438,30 @@ cmd grep .  /sys/kernel/debug/tracing/options/trace_printk \
 	    /sys/kernel/debug/tracing/buffer_size_kb \
 	    /proc/sys/kernel/ftrace_dump_on_oops
 
+# we can record pids to kill as we exit, we kill in reverse added order
+atexit_kill_pids=""
+add_atexit_kill_pid()
+{
+	atexit_kill_pids="$1 $atexit_kill_pids"
+}
+atexit_kill()
+{
+	local pid
+
+	# suppress bg function exited messages
+	exec {ERR}>&2 2>/dev/null
+
+	for pid in $atexit_kill_pids; do
+		if test -e "/proc/$pid/status" ; then
+			kill "$pid"
+			wait "$pid"
+		fi
+	done
+
+	exec 2>&$ERR {ERR}>&-
+}
+trap atexit_kill EXIT
+
 #
 # Build a fenced config that runs scripts out of the repository rather
 # than the default system directory
@@ -443,26 +475,43 @@ EOF
 export SCOUTFS_FENCED_CONFIG_FILE="$conf"
 T_FENCED_LOG="$T_RESULTS/fenced.log"
 
-#
-# Run the agent in the background, log its output, an kill it if we
-# exit
-#
-fenced_log()
-{
-	echo "[$(timestamp)] $*" >> "$T_FENCED_LOG"
-}
-fenced_pid=""
-kill_fenced()
-{
-	if test -n "$fenced_pid" -a -d "/proc/$fenced_pid" ; then
-		fenced_log "killing fenced pid $fenced_pid"
-		kill "$fenced_pid"
-	fi
-}
-trap kill_fenced EXIT
 $T_UTILS/fenced/scoutfs-fenced > "$T_FENCED_LOG" 2>&1 &
 fenced_pid=$!
-fenced_log "started fenced pid $fenced_pid in the background"
+add_atexit_kill_pid $fenced_pid
+
+#
+# some critical failures will cause fs operations to hang.  We can watch
+# for evidence of them and cause the system to crash, at least.
+#
+crash_monitor()
+{
+	local bad=0
+
+	while sleep 1; do
+		if dmesg | grep -q "inserting extent.*overlaps existing"; then
+			echo "run-tests monitor saw overlapping extent message"
+			bad=1
+		fi
+
+		if dmesg | grep -q "error indicated by fence action" ; then
+			echo "run-tests monitor saw fence agent error message"
+			bad=1
+		fi
+
+		if [ ! -e "/proc/${fenced_pid}/status" ]; then
+			echo "run-tests monitor didn't see fenced pid $fenced_pid /proc dir"
+			bad=1
+		fi
+
+		if [ "$bad" != 0 ]; then
+			echo "run-tests monitor triggering crash"
+			echo c > /proc/sysrq-trigger
+			exit 1
+		fi
+	done
+}
+crash_monitor &
+add_atexit_kill_pid $!
 
 # setup dm tables
 echo "0 $(blockdev --getsz $T_META_DEVICE) linear $T_META_DEVICE 0" > \
@@ -535,7 +584,7 @@ fi
 . funcs/filter.sh
 
 # give tests access to built binaries in src/, prefer over installed
-PATH="$PWD/src:$PATH"
+export PATH="$PWD/src:$PATH"
 
 msg "running tests"
 > "$T_RESULTS/skip.log"
@@ -555,101 +604,110 @@ for t in $tests; do
 	t="tests/$t"
 	test_name=$(basename "$t" | sed -e 's/.sh$//')
 
-	# create a temporary dir and file path for the test
-	T_TMPDIR="$T_RESULTS/tmp/$test_name"
-	T_TMP="$T_TMPDIR/tmp"
-	cmd rm -rf "$T_TMPDIR"
-	cmd mkdir -p "$T_TMPDIR"
-
-	# create a test name dir in the fs, clean up old data as needed
-	T_DS=""
-	for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
-		dir="${T_M[$i]}/test/$test_name"
-
-		test $i == 0 && (
-			test -d "$dir" && cmd rm -rf "$dir"
-			cmd mkdir -p "$dir"
-		)
-
-		eval T_D$i=$dir
-		T_D[$i]=$dir
-		T_DS+="$dir "
-	done
-
-	# export all our T_ variables
-	for v in ${!T_*}; do
-		eval export $v
-	done
-	export PATH # give test access to scoutfs binary
-
-	# prepare to compare output to golden output
-	test -e "$T_RESULTS/output" || cmd mkdir -p "$T_RESULTS/output"
-	out="$T_RESULTS/output/$test_name"
-	> "$T_TMPDIR/status.msg"
-	golden="golden/$test_name"
-
 	# get stats from previous pass
 	last="$T_RESULTS/last-passed-test-stats"
 	stats=$(grep -s "^$test_name " "$last" | cut -d " " -f 2-)
 	test -n "$stats" && stats="last: $stats"
-
 	printf "  %-30s $stats" "$test_name"
 
 	# mark in dmesg as to what test we are running
 	echo "run scoutfs test $test_name" > /dev/kmsg
 
-	# record dmesg before
-	dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.before"
+	# let the test get at its extra files
+	T_EXTRA="$T_TESTS/extra/$test_name"
 
-	# give tests stdout and compared output on specific fds
-	exec 6>&1
-	exec 7>$out
+	for iter in $(seq 1 $T_LOOP_ITER); do
 
-	# run the test with access to our functions
-	start_secs=$SECONDS
-	bash -c "for f in funcs/*.sh; do . \$f; done; . $t" >&7 2>&1
-	sts="$?"
-	log "test $t exited with status $sts"
-	stats="$((SECONDS - start_secs))s"
+		# create a temporary dir and file path for the test
+		T_TMPDIR="$T_RESULTS/tmp/$test_name"
+		T_TMP="$T_TMPDIR/tmp"
+		cmd rm -rf "$T_TMPDIR"
+		cmd mkdir -p "$T_TMPDIR"
 
-	# close our weird descriptors
-	exec 6>&-
-	exec 7>&-
+		# create a test name dir in the fs, clean up old data as needed
+		T_DS=""
+		for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
+			dir="${T_M[$i]}/test/$test_name"
 
-	# compare output if the test returned passed status
-	if [ "$sts" == "$T_PASS_STATUS" ]; then
-		if [ ! -e "$golden" ]; then
-			message="no golden output"
-			sts=$T_FAIL_STATUS
-		elif ! cmp -s "$golden" "$out"; then 
-			message="output differs"
-			sts=$T_FAIL_STATUS
-			diff -u "$golden" "$out" >> "$T_RESULTS/fail.log"
+			test $i == 0 && (
+				test -d "$dir" && cmd rm -rf "$dir"
+				cmd mkdir -p "$dir"
+			)
+
+			eval T_D$i=$dir
+			T_D[$i]=$dir
+			T_DS+="$dir "
+		done
+
+		# export all our T_ variables
+		for v in ${!T_*}; do
+			eval export $v
+		done
+
+		# prepare to compare output to golden output
+		test -e "$T_RESULTS/output" || cmd mkdir -p "$T_RESULTS/output"
+		out="$T_RESULTS/output/$test_name"
+		> "$T_TMPDIR/status.msg"
+		golden="golden/$test_name"
+
+		# record dmesg before
+		dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.before"
+
+		# give tests stdout and compared output on specific fds
+		exec 6>&1
+		exec 7>$out
+
+		# run the test with access to our functions
+		start_secs=$SECONDS
+		bash -c "for f in funcs/*.sh; do . \$f; done; . $t" >&7 2>&1
+		sts="$?"
+		log "test $t exited with status $sts"
+		stats="$((SECONDS - start_secs))s"
+
+		# close our weird descriptors
+		exec 6>&-
+		exec 7>&-
+
+		# compare output if the test returned passed status
+		if [ "$sts" == "$T_PASS_STATUS" ]; then
+			if [ ! -e "$golden" ]; then
+				message="no golden output"
+				sts=$T_FAIL_STATUS
+			elif ! cmp -s "$golden" "$out"; then 
+				message="output differs"
+				sts=$T_FAIL_STATUS
+				diff -u "$golden" "$out" >> "$T_RESULTS/fail.log"
+			fi
+		else
+			# get message from t_*() functions
+			message=$(cat "$T_TMPDIR/status.msg")
 		fi
-	else
-		# get message from t_*() functions
-		message=$(cat "$T_TMPDIR/status.msg")
-	fi
 
-	# see if anything unexpected was added to dmesg
-	if [ "$sts" == "$T_PASS_STATUS" ]; then
-		dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.after"
-		diff --old-line-format="" --unchanged-line-format="" \
-			"$T_TMPDIR/dmesg.before" "$T_TMPDIR/dmesg.after" > \
-			"$T_TMPDIR/dmesg.new"
+		# see if anything unexpected was added to dmesg
+		if [ "$sts" == "$T_PASS_STATUS" ]; then
+			dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.after"
+			diff --old-line-format="" --unchanged-line-format="" \
+				"$T_TMPDIR/dmesg.before" "$T_TMPDIR/dmesg.after" > \
+				"$T_TMPDIR/dmesg.new"
 
-		if [ -s "$T_TMPDIR/dmesg.new" ]; then
-			message="unexpected messages in dmesg"
-			sts=$T_FAIL_STATUS
-			cat "$T_TMPDIR/dmesg.new" >> "$T_RESULTS/fail.log"
+			if [ -s "$T_TMPDIR/dmesg.new" ]; then
+				message="unexpected messages in dmesg"
+				sts=$T_FAIL_STATUS
+				cat "$T_TMPDIR/dmesg.new" >> "$T_RESULTS/fail.log"
+			fi
 		fi
-	fi
 
-	# record unknown exit status
-	if [ "$sts" -lt "$T_FIRST_STATUS" -o "$sts" -gt "$T_LAST_STATUS" ]; then
-		message="unknown status: $sts"
-		sts=$T_FAIL_STATUS
-	fi
+		# record unknown exit status
+		if [ "$sts" -lt "$T_FIRST_STATUS" -o "$sts" -gt "$T_LAST_STATUS" ]; then
+			message="unknown status: $sts"
+			sts=$T_FAIL_STATUS
+		fi
+
+		# stop looping if we didn't pass
+		if [ "$sts" != "$T_PASS_STATUS" ]; then
+			break;
+		fi
+	done
 
 	# show and record the result of the test
 	if [ "$sts" == "$T_PASS_STATUS" ]; then

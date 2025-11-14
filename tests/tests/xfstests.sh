@@ -63,73 +63,47 @@ export MOUNT_OPTIONS="-o quorum_slot_nr=0,metadev_path=$T_MB0"
 export TEST_FS_MOUNT_OPTS="-o quorum_slot_nr=0,metadev_path=$T_MB0"
 EOF
 
-cat << EOF > local.exclude
-generic/003	# missing atime update in buffered read
-generic/075	# file content mismatch failures (fds, etc)
-generic/103	# enospc causes trans commit failures
-generic/108	# mount fails on failing device?
-generic/112	# file content mismatch failures (fds, etc)
-generic/213	# enospc causes trans commit failures
-generic/318	# can't support user namespaces until v5.11
-generic/321	# requires selinux enabled for '+' in ls?
-generic/338	# BUG_ON update inode error handling
-generic/347	# _dmthin_mount doesn't work?
-generic/356	# swap
-generic/357	# swap
-generic/409	# bind mounts not scripted yet
-generic/410	# bind mounts not scripted yet
-generic/411	# bind mounts not scripted yet
-generic/423	# symlink inode size is strlen() + 1 on scoutfs
-generic/430	# xfs_io copy_range missing in el7
-generic/431	# xfs_io copy_range missing in el7
-generic/432	# xfs_io copy_range missing in el7
-generic/433	# xfs_io copy_range missing in el7
-generic/434	# xfs_io copy_range missing in el7
-generic/441	# dm-mapper
-generic/444	# el9's posix_acl_update_mode is buggy ?
-generic/467	# open_by_handle ESTALE
-generic/472	# swap
-generic/484	# dm-mapper
-generic/493	# swap
-generic/494	# swap
-generic/495	# swap
-generic/496	# swap
-generic/497	# swap
-generic/532	# xfs_io statx attrib_mask missing in el7
-generic/554	# swap
-generic/563	# cgroup+loopdev
-generic/564	# xfs_io copy_range missing in el7
-generic/565	# xfs_io copy_range missing in el7
-generic/568	# falloc not resulting in block count increase
-generic/569	# swap
-generic/570	# swap
-generic/620	# dm-hugedisk
-generic/633	# id-mapped mounts missing in el7
-generic/636	# swap
-generic/641	# swap
-generic/643	# swap
-EOF
+cp "$T_EXTRA/local.exclude" local.exclude
 
-t_restore_output
+t_stdout_invoked
 echo "  (showing output of xfstests)"
 
 args="-E local.exclude ${T_XFSTESTS_ARGS:--g quick}"
 ./check $args
 # the fs is unmounted when check finishes
 
+t_stdout_compare
+
 #
-# ./check writes the results of the run to check.log.  It lists
-# the tests it ran, skipped, or failed.  Then it writes a line saying
-# everything passed or some failed.  We scrape the most recent run and
-# use it as the output to compare to make sure that we run the right
-# tests and get the right results.
+# ./check writes the results of the run to check.log.  It lists the
+# tests it ran, skipped, or failed.  Then it writes a line saying
+# everything passed or some failed.
+#
+
+#
+# If XFSTESTS_ARGS were specified then we just pass/fail to match the
+# check run.
+#
+if [ -n "$T_XFSTESTS_ARGS" ]; then
+	if tail -1 results/check.log | grep -q "Failed"; then
+		t_fail
+	else
+		t_pass
+	fi
+fi
+
+#
+# Otherwise, typically, when there were no args then we scrape the most
+# recent run and use it as the output to compare to make sure that we
+# run the right tests and get the right results.
 #
 awk '
 	/^(Ran|Not run|Failures):.*/ {
 		if (pf) {
 			res=""
 			pf=""
-		} res = res "\n" $0
+		}
+		res = res "\n" $0
 	}
 	/^(Passed|Failed).*tests$/ {
 		pf=$0
@@ -139,10 +113,14 @@ awk '
 	}' < results/check.log  > "$T_TMPDIR/results"
 
 # put a test per line so diff shows tests that differ
-egrep "^(Ran|Not run|Failures):" "$T_TMPDIR/results" | \
-	fmt -w 1 > "$T_TMPDIR/results.fmt"
-egrep "^(Passed|Failed).*tests$" "$T_TMPDIR/results" >> "$T_TMPDIR/results.fmt"
+grep -E "^(Ran|Not run|Failures):" "$T_TMPDIR/results" | fmt -w 1 > "$T_TMPDIR/results.fmt"
+grep -E "^(Passed|Failed).*tests$" "$T_TMPDIR/results" >> "$T_TMPDIR/results.fmt"
 
-t_compare_output cat "$T_TMPDIR/results.fmt"
+diff -u "$T_EXTRA/expected-results" "$T_TMPDIR/results.fmt" > "$T_TMPDIR/results.diff"
+if [ -s "$T_TMPDIR/results.diff" ]; then
+	echo "tests that were skipped/run differed from expected:"
+	cat "$T_TMPDIR/results.diff"
+	t_fail
+fi
 
 t_pass
