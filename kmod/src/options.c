@@ -33,6 +33,7 @@ enum {
 	Opt_acl,
 	Opt_data_prealloc_blocks,
 	Opt_data_prealloc_contig_only,
+	Opt_ino_alloc_per_lock,
 	Opt_log_merge_wait_timeout_ms,
 	Opt_metadev_path,
 	Opt_noacl,
@@ -47,6 +48,7 @@ static const match_table_t tokens = {
 	{Opt_acl, "acl"},
 	{Opt_data_prealloc_blocks, "data_prealloc_blocks=%s"},
 	{Opt_data_prealloc_contig_only, "data_prealloc_contig_only=%s"},
+	{Opt_ino_alloc_per_lock, "ino_alloc_per_lock=%s"},
 	{Opt_log_merge_wait_timeout_ms, "log_merge_wait_timeout_ms=%s"},
 	{Opt_metadev_path, "metadev_path=%s"},
 	{Opt_noacl, "noacl"},
@@ -136,6 +138,7 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 
 	opts->data_prealloc_blocks = SCOUTFS_DATA_PREALLOC_DEFAULT_BLOCKS;
 	opts->data_prealloc_contig_only = 1;
+	opts->ino_alloc_per_lock = SCOUTFS_LOCK_INODE_GROUP_NR;
 	opts->log_merge_wait_timeout_ms = DEFAULT_LOG_MERGE_WAIT_TIMEOUT_MS;
 	opts->orphan_scan_delay_ms = -1;
 	opts->quorum_heartbeat_timeout_ms = SCOUTFS_QUORUM_DEF_HB_TIMEO_MS;
@@ -236,6 +239,18 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 				return ret;
 			}
 			opts->data_prealloc_contig_only = nr;
+			break;
+
+		case Opt_ino_alloc_per_lock:
+			ret = match_int(args, &nr);
+			if (ret < 0 || nr < 1 || nr > SCOUTFS_LOCK_INODE_GROUP_NR) {
+				scoutfs_err(sb, "invalid ino_alloc_per_lock option, must be between 1 and %u",
+					    SCOUTFS_LOCK_INODE_GROUP_NR);
+				if (ret == 0)
+					ret = -EINVAL;
+				return ret;
+			}
+			opts->ino_alloc_per_lock = nr;
 			break;
 
 		case Opt_tcp_keepalive_timeout_ms:
@@ -393,6 +408,7 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 		seq_puts(seq, ",acl");
 	seq_printf(seq, ",data_prealloc_blocks=%llu", opts.data_prealloc_blocks);
 	seq_printf(seq, ",data_prealloc_contig_only=%u", opts.data_prealloc_contig_only);
+	seq_printf(seq, ",ino_alloc_per_lock=%u", opts.ino_alloc_per_lock);
 	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
 	if (!is_acl)
 		seq_puts(seq, ",noacl");
@@ -480,6 +496,45 @@ static ssize_t data_prealloc_contig_only_store(struct kobject *kobj, struct kobj
 	return count;
 }
 SCOUTFS_ATTR_RW(data_prealloc_contig_only);
+
+static ssize_t ino_alloc_per_lock_show(struct kobject *kobj, struct kobj_attribute *attr,
+					 char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%u", opts.ino_alloc_per_lock);
+}
+static ssize_t ino_alloc_per_lock_store(struct kobject *kobj, struct kobj_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[20]; /* more than enough for octal -U32_MAX */
+	long val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtol(nullterm, 0, &val);
+	if (ret < 0 || val < 1 || val > SCOUTFS_LOCK_INODE_GROUP_NR) {
+		scoutfs_err(sb, "invalid ino_alloc_per_lock option, must be between 1 and %u",
+			    SCOUTFS_LOCK_INODE_GROUP_NR);
+		return -EINVAL;
+	}
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.ino_alloc_per_lock = val;
+	write_sequnlock(&optinf->seqlock);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(ino_alloc_per_lock);
 
 static ssize_t log_merge_wait_timeout_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
 						char *buf)
@@ -621,6 +676,7 @@ SCOUTFS_ATTR_RO(quorum_slot_nr);
 static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(data_prealloc_blocks),
 	SCOUTFS_ATTR_PTR(data_prealloc_contig_only),
+	SCOUTFS_ATTR_PTR(ino_alloc_per_lock),
 	SCOUTFS_ATTR_PTR(log_merge_wait_timeout_ms),
 	SCOUTFS_ATTR_PTR(metadev_path),
 	SCOUTFS_ATTR_PTR(orphan_scan_delay_ms),

@@ -1482,12 +1482,6 @@ static int remove_index_items(struct super_block *sb, u64 ino,
  * Return an allocated and unused inode number.  Returns -ENOSPC if
  * we're out of inode.
  *
- * Each parent directory has its own pool of free inode numbers.  Items
- * are sorted by their inode numbers as they're stored in segments.
- * This will tend to group together files that are created in a
- * directory at the same time in segments.  Concurrent creation across
- * different directories will be stored in their own regions.
- *
  * Inode numbers are never reclaimed.  If the inode is evicted or we're
  * unmounted the pending inode numbers will be lost.  Asking for a
  * relatively small number from the server each time will tend to
@@ -1497,12 +1491,18 @@ static int remove_index_items(struct super_block *sb, u64 ino,
 int scoutfs_alloc_ino(struct super_block *sb, bool is_dir, u64 *ino_ret)
 {
 	DECLARE_INODE_SB_INFO(sb, inf);
+	struct scoutfs_mount_options opts;
 	struct inode_allocator *ia;
 	u64 ino;
 	u64 nr;
 	int ret;
 
-	ia = is_dir ? &inf->dir_ino_alloc : &inf->ino_alloc;
+	scoutfs_options_read(sb, &opts);
+
+	if (is_dir && opts.ino_alloc_per_lock == SCOUTFS_LOCK_INODE_GROUP_NR)
+		ia = &inf->dir_ino_alloc;
+	else
+		ia = &inf->ino_alloc;
 
 	spin_lock(&ia->lock);
 
@@ -1522,6 +1522,17 @@ int scoutfs_alloc_ino(struct super_block *sb, bool is_dir, u64 *ino_ret)
 
 	*ino_ret = ia->ino++;
 	ia->nr--;
+
+	if (opts.ino_alloc_per_lock != SCOUTFS_LOCK_INODE_GROUP_NR) {
+		nr = ia->ino & SCOUTFS_LOCK_INODE_GROUP_MASK;
+		if (nr >= opts.ino_alloc_per_lock) {
+			nr = SCOUTFS_LOCK_INODE_GROUP_NR - nr;
+			if (nr > ia->nr)
+				nr = ia->nr;
+			ia->ino += nr;
+			ia->nr -= nr;
+		}
+	}
 
 	spin_unlock(&ia->lock);
 	ret = 0;

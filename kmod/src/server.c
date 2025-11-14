@@ -1728,6 +1728,7 @@ static int server_commit_log_trees(struct super_block *sb,
 	int ret;
 
 	if (arg_len != sizeof(struct scoutfs_log_trees)) {
+		err_str = "invalid message log_trees size";
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1791,7 +1792,7 @@ static int server_commit_log_trees(struct super_block *sb,
 
 	ret = scoutfs_btree_update(sb, &server->alloc, &server->wri,
 				   &super->logs_root, &key, &lt, sizeof(lt));
-	BUG_ON(ret < 0); /* dirtying should have guaranteed success */
+	BUG_ON(ret < 0); /* dirtying should have guaranteed success, srch item inconsistent */
 	if (ret < 0)
 		err_str = "updating log trees item";
 
@@ -1799,11 +1800,10 @@ unlock:
 	mutex_unlock(&server->logs_mutex);
 
 	ret = server_apply_commit(sb, &hold, ret);
+out:
 	if (ret < 0)
 		scoutfs_err(sb, "server error %d committing client logs for rid %016llx, nr %llu: %s",
 			    ret, rid, le64_to_cpu(lt.nr), err_str);
-out:
-	WARN_ON_ONCE(ret < 0);
 	return scoutfs_net_response(sb, conn, cmd, id, ret, NULL, 0);
 }
 

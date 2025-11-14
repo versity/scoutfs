@@ -8,6 +8,7 @@
 struct scoutfs_mount_options {
 	u64 data_prealloc_blocks;
 	bool data_prealloc_contig_only;
+	unsigned int ino_alloc_per_lock;
 	unsigned int log_merge_wait_timeout_ms;
 	char *metadev_path;
 	unsigned int orphan_scan_delay_ms;
