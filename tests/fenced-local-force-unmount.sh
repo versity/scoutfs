@@ -27,8 +27,7 @@ for fs in /sys/fs/scoutfs/*; do
 	nr="$(quiet_cat $fs/data_device_maj_min)"
 	[ ! -d "$fs" -o "$fs_rid" != "$rid" ] && continue
 
-	mnt=$(findmnt -l -n -t scoutfs -o TARGET -S $nr) || \
-		echo_fail "findmnt -t scoutfs -S $nr failed"
+	mnt=$(findmnt -l -n -t scoutfs -o TARGET -S $nr)
 	[ -z "$mnt" ] && continue
 
 	if ! umount -qf "$mnt"; then
