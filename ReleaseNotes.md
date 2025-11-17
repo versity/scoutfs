@@ -2,6 +2,41 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.26
+\
+*Nov 17, 2025*
+
+Add the ino\_alloc\_per\_lock mount option.  This changes the number of
+inode numbers allocated under each cluster lock and can alleviate lock
+contention for some patterns of larger file creation.
+
+Add the tcp\_keepalive\_timeout\_ms mount option.  This can enable the
+system to survive longer periods of networking outages.
+
+Fix a rare double free of internal btree metadata blocks when merging
+log trees.  The duplicated freed metadata block numbers would cause
+persistent errors in the server, preventing the server from starting and
+hanging the system.
+
+Fix the data\_wait interface to not require the correct data\_version of
+the inode when raising an error.  This lets callers raise errors when
+they're unable to recall the details of the inode to discover its
+data\_version.
+
+Change scoutfs to more aggressively reclaim cached memory when under
+memory pressure.  This makes scoutfs behave more like other kernel
+components and it integrates better with the reclaim policy heuristics
+in the VM core of the kernel.
+
+Change scoutfs to more efficiently transmit and receive socket messages.
+Under heavy load this can process messages sufficiently more quickly to
+avoid hung task messages for tasks that were waiting for cluster lock
+messages to be processed.
+
+Fix faulty server block commit budget calculations that were generating
+spurious "holders exceeded alloc budget" console messages.
+
+---
 v1.25
 \
 *Jun 3, 2025*
