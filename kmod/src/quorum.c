@@ -145,14 +145,26 @@ struct quorum_info {
 #define DECLARE_QUORUM_INFO_KOBJ(kobj, name) \
 	DECLARE_QUORUM_INFO(SCOUTFS_SYSFS_ATTRS_SB(kobj), name)
 
-static bool quorum_slot_present(struct scoutfs_quorum_config *qconf, int i)
+static bool quorum_slot_ipv4(struct scoutfs_quorum_config *qconf, int i)
 {
 	BUG_ON(i < 0 || i > SCOUTFS_QUORUM_MAX_SLOTS);
 
 	return qconf->slots[i].addr.v4.family == cpu_to_le16(SCOUTFS_AF_IPV4);
 }
 
-static void quorum_slot_sin(struct scoutfs_quorum_config *qconf, int i, struct sockaddr_in *sin)
+static bool quorum_slot_ipv6(struct scoutfs_quorum_config *qconf, int i)
+{
+	BUG_ON(i < 0 || i > SCOUTFS_QUORUM_MAX_SLOTS);
+
+	return qconf->slots[i].addr.v6.family == cpu_to_le16(SCOUTFS_AF_IPV6);
+}
+
+static bool quorum_slot_present(struct scoutfs_quorum_config *qconf, int i)
+{
+	return quorum_slot_ipv4(qconf, i) || quorum_slot_ipv6(qconf, i);
+}
+
+static void quorum_slot_sin(struct scoutfs_quorum_config *qconf, int i, struct sockaddr_storage *sin)
 {
 	BUG_ON(i < 0 || i >= SCOUTFS_QUORUM_MAX_SLOTS);
 
@@ -179,11 +191,18 @@ static int create_socket(struct super_block *sb)
 {
 	DECLARE_QUORUM_INFO(sb, qinf);
 	struct socket *sock = NULL;
-	struct sockaddr_in sin;
+	struct sockaddr_storage sin;
+	struct scoutfs_quorum_slot slot = qinf->qconf.slots[qinf->our_quorum_slot_nr];
 	int addrlen;
 	int ret;
 
-	ret = kc_sock_create_kern(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	if (le16_to_cpu(slot.addr.v4.family) == SCOUTFS_AF_IPV4)
+		ret = kc_sock_create_kern(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	else if (le16_to_cpu(slot.addr.v6.family) == SCOUTFS_AF_IPV6)
+		ret = kc_sock_create_kern(PF_INET6, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	else
+		BUG();
+
 	if (ret) {
 		scoutfs_err(sb, "quorum couldn't create udp socket: %d", ret);
 		goto out;
@@ -192,9 +211,9 @@ static int create_socket(struct super_block *sb)
 	/* rather fail and retry than block waiting for free */
 	sock->sk->sk_allocation = GFP_ATOMIC;
 
+	addrlen = (le16_to_cpu(slot.addr.v4.family) == SCOUTFS_AF_IPV4) ?
+		  sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
 	quorum_slot_sin(&qinf->qconf, qinf->our_quorum_slot_nr, &sin);
-
-	addrlen = sizeof(sin);
 	ret = kernel_bind(sock, (struct sockaddr *)&sin, addrlen);
 	if (ret) {
 		scoutfs_err(sb, "quorum failed to bind udp socket to "SIN_FMT": %d",
@@ -241,7 +260,7 @@ static int send_msg_members(struct super_block *sb, int type, u64 term, int only
 		.iov_base = &qmes,
 		.iov_len = sizeof(qmes),
 	};
-	struct sockaddr_in sin;
+	struct sockaddr_storage sin;
 	struct msghdr mh = {
 		.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL,
 		.msg_name = &sin,
@@ -542,10 +561,11 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 				 u64 term)
 {
 #define NR_OLD 2
-	struct scoutfs_quorum_block_event old[SCOUTFS_QUORUM_MAX_SLOTS][NR_OLD] = {{{0,}}};
+	struct scoutfs_quorum_block_event (*old)[NR_OLD];
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_quorum_block blk;
-	struct sockaddr_in sin;
+	struct sockaddr_storage sin;
+	union scoutfs_inet_addr addr;
 	const __le64 lefsid = cpu_to_le64(sbi->fsid);
 	const u64 rid = sbi->rid;
 	bool fence_started = false;
@@ -558,13 +578,20 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 
 	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
 
+	old = kmalloc(NR_OLD * SCOUTFS_QUORUM_MAX_SLOTS * sizeof(struct scoutfs_quorum_block_event), GFP_KERNEL);
+	if (!old) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	memset(old, 0, NR_OLD * SCOUTFS_QUORUM_MAX_SLOTS * sizeof(struct scoutfs_quorum_block_event));
+
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(qconf, i))
 			continue;
 
 		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk, false);
 		if (ret < 0)
-			goto out;
+			goto out_free;
 
 		/* elected leader still running */
 		if (le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].term) >
@@ -598,14 +625,17 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 			scoutfs_info(sb, "fencing previous leader "SCSBF" at term %llu in slot %u with address "SIN_FMT,
 				     SCSB_LEFR_ARGS(lefsid, fence_rid),
 				     le64_to_cpu(old[i][j].term), i, SIN_ARG(&sin));
-			ret = scoutfs_fence_start(sb, le64_to_cpu(fence_rid), sin.sin_addr.s_addr,
+			scoutfs_sin_to_addr(&addr, &sin);
+			ret = scoutfs_fence_start(sb, le64_to_cpu(fence_rid), &addr,
 						  SCOUTFS_FENCE_QUORUM_BLOCK_LEADER);
 			if (ret < 0)
-				goto out;
+				goto out_free;
 			fence_started = true;
 		}
 	}
 
+out_free:
+	kfree(old);
 out:
 	err = scoutfs_fence_wait_fenced(sb, msecs_to_jiffies(SCOUTFS_QUORUM_FENCE_TO_MS));
 	if (ret == 0)
@@ -708,7 +738,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	struct quorum_info *qinf = container_of(work, struct quorum_info, work);
 	struct scoutfs_mount_options opts;
 	struct super_block *sb = qinf->sb;
-	struct sockaddr_in unused;
+	struct sockaddr_storage unused;
 	struct quorum_host_msg msg;
 	struct quorum_status qst = {0,};
 	struct hb_recording hbr;
@@ -990,7 +1020,7 @@ out:
  * leader with the greatest elected term.  If we get it wrong the
  * connection will timeout and the client will try again.
  */
-int scoutfs_quorum_server_sin(struct super_block *sb, struct sockaddr_in *sin)
+int scoutfs_quorum_server_sin(struct super_block *sb, struct sockaddr_storage *sin)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct scoutfs_quorum_block blk;
@@ -1049,7 +1079,7 @@ u8 scoutfs_quorum_votes_needed(struct super_block *sb)
 	return qinf->votes_needed;
 }
 
-void scoutfs_quorum_slot_sin(struct scoutfs_quorum_config *qconf, int i, struct sockaddr_in *sin)
+void scoutfs_quorum_slot_sin(struct scoutfs_quorum_config *qconf, int i, struct sockaddr_storage *sin)
 {
 	return quorum_slot_sin(qconf, i, sin);
 }
@@ -1208,8 +1238,12 @@ static int verify_quorum_slots(struct super_block *sb, struct quorum_info *qinf,
 			       struct scoutfs_quorum_config *qconf)
 {
 	char slots[(SCOUTFS_QUORUM_MAX_SLOTS * 3) + 1];
-	struct sockaddr_in other;
-	struct sockaddr_in sin;
+	struct sockaddr_storage other;
+	struct sockaddr_storage sin;
+	struct sockaddr_in *sin4;
+	struct sockaddr_in *other4;
+	struct sockaddr_in6 *sin6;
+	struct sockaddr_in6 *other6;
 	int found = 0;
 	int ret;
 	int i;
@@ -1220,35 +1254,78 @@ static int verify_quorum_slots(struct super_block *sb, struct quorum_info *qinf,
 		if (!quorum_slot_present(qconf, i))
 			continue;
 
-		scoutfs_quorum_slot_sin(qconf, i, &sin);
+		if (quorum_slot_ipv4(qconf, i)) {
+			scoutfs_quorum_slot_sin(qconf, i, &sin);
+			sin4 = (struct sockaddr_in *)&sin;
 
-		if (!valid_ipv4_unicast(sin.sin_addr.s_addr)) {
-			scoutfs_err(sb, "quorum slot #%d has invalid ipv4 unicast address: "SIN_FMT,
-				    i,  SIN_ARG(&sin));
-			return -EINVAL;
-		}
-
-		if (!valid_ipv4_port(sin.sin_port)) {
-			scoutfs_err(sb, "quorum slot #%d has invalid ipv4 port number:"SIN_FMT,
-				    i,  SIN_ARG(&sin));
-			return -EINVAL;
-		}
-
-		for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
-			if (!quorum_slot_present(qconf, j))
-				continue;
-
-			scoutfs_quorum_slot_sin(qconf, j, &other);
-
-			if (sin.sin_addr.s_addr == other.sin_addr.s_addr &&
-			    sin.sin_port == other.sin_port) {
-				scoutfs_err(sb, "quorum slots #%u and #%u have the same address: "SIN_FMT,
-					    i, j, SIN_ARG(&sin));
+			if (!valid_ipv4_unicast(sin4->sin_addr.s_addr)) {
+				scoutfs_err(sb, "quorum slot #%d has invalid ipv4 unicast address: "SIN_FMT,
+					    i, SIN_ARG(&sin));
 				return -EINVAL;
 			}
-		}
 
-		found++;
+			if (!valid_ipv4_port(sin4->sin_port)) {
+				scoutfs_err(sb, "quorum slot #%d has invalid ipv4 port number:"SIN_FMT,
+					    i, SIN_ARG(&sin));
+				return -EINVAL;
+			}
+
+			for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
+				if (!quorum_slot_ipv4(qconf, j))
+					continue;
+
+				scoutfs_quorum_slot_sin(qconf, j, &other);
+				other4 = (struct sockaddr_in *)&other;
+
+				if (sin4->sin_addr.s_addr == other4->sin_addr.s_addr &&
+				    sin4->sin_port == other4->sin_port) {
+					scoutfs_err(sb, "quorum slots #%u and #%u have the same address: "SIN_FMT,
+						    i, j, SIN_ARG(&sin));
+					return -EINVAL;
+				}
+			}
+
+			found++;
+		} else if (quorum_slot_ipv6(qconf, i)) {
+			quorum_slot_sin(qconf, i, &sin);
+			sin6 = (struct sockaddr_in6 *)&sin;
+
+			if ((sin6->sin6_addr.in6_u.u6_addr32[0] == 0) && (sin6->sin6_addr.in6_u.u6_addr32[1] == 0) &&
+			    (sin6->sin6_addr.in6_u.u6_addr32[2] == 0) && (sin6->sin6_addr.in6_u.u6_addr32[3] == 0)) {
+				scoutfs_err(sb, "quorum slot #%d has unspecified ipv6 address:"SIN_FMT,
+					    i, SIN_ARG(&sin));
+				return -EINVAL;
+			}
+
+			if (sin6->sin6_addr.in6_u.u6_addr8[0] == 0xff) {
+				scoutfs_err(sb, "quorum slot #%d has multicast ipv6 address:"SIN_FMT,
+					    i, SIN_ARG(&sin));
+				return -EINVAL;
+			}
+
+			if (!valid_ipv4_port(sin6->sin6_port)) {
+				scoutfs_err(sb, "quorum slot #%d has invalid ipv6 port number:"SIN_FMT,
+					    i,  SIN_ARG(&sin));
+				return -EINVAL;
+			}
+
+			for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
+				if (!quorum_slot_ipv6(qconf, j))
+					continue;
+
+				quorum_slot_sin(qconf, j, &other);
+				other6 = (struct sockaddr_in6 *)&other;
+
+				if ((ipv6_addr_equal(&sin6->sin6_addr, &other6->sin6_addr)) &&
+				    (sin6->sin6_port == other6->sin6_port)) {
+					scoutfs_err(sb, "quorum slots #%u and #%u have the same address: "SIN_FMT,
+						    i, j, SIN_ARG(&sin));
+					return -EINVAL;
+				}
+			}
+
+			found++;
+		}
 	}
 
 	if (found == 0)  {
