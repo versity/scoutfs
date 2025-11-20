@@ -188,15 +188,6 @@ ccflags-y += -DKC_MM_VM_FAULT_T
 endif
 
 #
-# v3.19-4742-g503c358cf192
-#
-# list_lru_shrink_count() and list_lru_shrink_walk() introduced
-#
-ifneq (,$(shell grep 'list_lru_shrink_count.*struct list_lru' include/linux/list_lru.h))
-ccflags-y += -DKC_LIST_LRU_SHRINK_COUNT_WALK
-endif
-
-#
 # v3.19-4757-g3f97b163207c
 #
 # lru_list_walk_cb lru arg added

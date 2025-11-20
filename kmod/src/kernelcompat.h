@@ -196,21 +196,6 @@ static inline vm_fault_t vmf_error(int err)
 
 #include <linux/list_lru.h>
 
-#ifndef KC_LIST_LRU_SHRINK_COUNT_WALK
-/* we don't bother with sc->{nid,memcg} (which doesn't exist in oldest kernels) */
-static inline unsigned long list_lru_shrink_count(struct list_lru *lru,
-                                                  struct shrink_control *sc)
-{
-        return list_lru_count(lru);
-}
-static inline unsigned long
-list_lru_shrink_walk(struct list_lru *lru, struct shrink_control *sc,
-		     list_lru_walk_cb isolate, void *cb_arg)
-{
-	return list_lru_walk(lru, isolate, cb_arg, sc->nr_to_scan);
-}
-#endif
-
 #ifndef KC_LIST_LRU_ADD_OBJ
 #define list_lru_add_obj list_lru_add
 #define list_lru_del_obj list_lru_del
