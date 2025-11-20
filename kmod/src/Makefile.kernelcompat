@@ -110,14 +110,6 @@ ccflags-y += -DKC_HAVE_TCP_SET_SOCKFN
 endif
 
 #
-# v4.16-rc3-13-ga84d1169164b
-#
-# Fixes y2038 issues with struct timeval.
-ifneq (,$(shell grep -s '^struct __kernel_old_timeval .' include/uapi/linux/time_types.h))
-ccflags-y += -DKC_KERNEL_OLD_TIMEVAL_STRUCT
-endif
-
-#
 # v5.19-rc4-52-ge33c267ab70d
 #
 # register_shrinker now requires a name, used for debug stats etc.

@@ -88,11 +88,6 @@ static inline struct bio *kc_bio_alloc(struct block_device *bdev, unsigned short
 #define fiemap_prep(inode, fieinfo, start, len, flags) fiemap_check_flags(fieinfo, flags)
 #endif
 
-#ifndef KC_KERNEL_OLD_TIMEVAL_STRUCT
-#define __kernel_old_timeval timeval
-#define ns_to_kernel_old_timeval(ktime) ns_to_timeval(ktime.tv64)
-#endif
-
 #ifdef KC_SOCK_SET_SNDTIMEO
 #include <net/sock.h>
 static inline int kc_sock_set_sndtimeo(struct socket *sock, s64 secs)
