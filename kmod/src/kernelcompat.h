@@ -650,4 +650,10 @@ static inline long inode_get_atime_nsec(const struct inode *inode)
 #define KC_KOBJ_DEFAULT_PICK(group, attrs) (attrs)
 #endif
 
+#ifdef KC_BLOCK_WRITE_BEGIN_FOLIO
+#define KC_PAGE_OR_FOLIO(p, f) f
+#else
+#define KC_PAGE_OR_FOLIO(p, f) p
+#endif
+
 #endif
