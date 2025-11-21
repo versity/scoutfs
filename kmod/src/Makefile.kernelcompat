@@ -335,6 +335,15 @@ ccflags-y += -DKC_HAVE_ITERATE_SHARED
 endif
 
 #
+# v6.11-rc1-54-g9f04609f74ec
+#
+# Last of a series of changes that make block_write_begin/end take a folio instead of
+# a struct pagep.
+ifneq (,$(shell grep 'int __block_write_begin.struct.folio' include/linux/buffer_head.h))
+ccflags-y += -DKC_BLOCK_WRITE_BEGIN_FOLIO
+endif
+
+#
 # v6.15-13744-g41cb08555c41
 #
 # from_timer renamed to timer_container_of.
