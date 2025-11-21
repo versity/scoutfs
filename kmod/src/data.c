@@ -853,7 +853,7 @@ static int scoutfs_write_begin(struct file *file,
 #ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
 			       unsigned flags,
 #endif
-			       struct page **pagep, void **fsdata)
+			       KC_PAGE_OR_FOLIO(struct page **pagep, struct folio **folio), void **fsdata)
 {
 	struct inode *inode = mapping->host;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -898,7 +898,7 @@ retry:
 #ifdef KC_BLOCK_WRITE_BEGIN_AOP_FLAGS
 				flags,
 #endif
-				pagep, scoutfs_get_block_write);
+				KC_PAGE_OR_FOLIO(pagep, folio), scoutfs_get_block_write);
 	if (ret < 0) {
 		scoutfs_release_trans(sb);
 		scoutfs_inode_index_unlock(sb, &wbd->ind_locks);
@@ -931,7 +931,8 @@ static int writepages_sync_none(struct address_space *mapping, loff_t start,
 
 static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 			     loff_t pos, unsigned len, unsigned copied,
-			     struct page *page, void *fsdata)
+			     KC_PAGE_OR_FOLIO(struct page *pagep, struct folio *folio),
+			     void *fsdata)
 {
 	struct inode *inode = mapping->host;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -939,10 +940,11 @@ static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 	struct write_begin_data *wbd = fsdata;
 	int ret;
 
-	trace_scoutfs_write_end(sb, scoutfs_ino(inode), page->index, (u64)pos,
-				len, copied);
+	trace_scoutfs_write_end(sb, scoutfs_ino(inode),
+				KC_PAGE_OR_FOLIO(pagep->index, folio_index(folio)),
+				(u64)pos, len, copied);
 
-	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
+	ret = generic_write_end(file, mapping, pos, len, copied, KC_PAGE_OR_FOLIO(pagep, folio), fsdata);
 	if (ret > 0) {
 		if (!si->staging) {
 			scoutfs_inode_set_data_seq(inode);
@@ -1981,7 +1983,11 @@ static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 				     struct vm_fault *vmf)
 {
 #endif
+#ifdef KC_MPAGE_READ_FOLIO
+	struct folio *folio = page_folio(vmf->page);
+#else
 	struct page *page = vmf->page;
+#endif
 	struct file *file = vma->vm_file;
 	struct inode *inode = file_inode(file);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -2049,27 +2055,50 @@ static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 
 	down_write(&si->extent_sem);
 
+#ifdef KC_MPAGE_READ_FOLIO
+	if (!folio_trylock(folio)) {
+#else
 	if (!trylock_page(page)) {
+#endif
 		ret = VM_FAULT_NOPAGE;
 		goto out_sem;
 	}
 	ret = VM_FAULT_LOCKED;
 
+#ifdef KC_MPAGE_READ_FOLIO
+	if ((folio->mapping != inode->i_mapping) ||
+	    (!folio_test_uptodate(folio)) ||
+	    (folio_pos(folio) > size)) {
+		folio_unlock(folio);
+#else
 	if ((page->mapping != inode->i_mapping) ||
 	    (!PageUptodate(page)) ||
-	    (page_offset(page) > size))	 {
+	    (page_offset(page) > size)) {
 		unlock_page(page);
+#endif
 		ret = VM_FAULT_NOPAGE;
 		goto out_sem;
 	}
 
+#ifdef KC_MPAGE_READ_FOLIO
+	if (folio_index(folio) == (size - 1) >> PAGE_SHIFT)
+#else
 	if (page->index == (size - 1) >> PAGE_SHIFT)
+#endif
 		len = ((size - 1) & ~PAGE_MASK) + 1;
 
+#ifdef KC_MPAGE_READ_FOLIO
+	err = __block_write_begin(KC_PAGE_OR_FOLIO(folio_page(folio, 0), folio), pos, PAGE_SIZE, scoutfs_get_block);
+#else
 	err = __block_write_begin(page, pos, PAGE_SIZE, scoutfs_get_block);
+#endif
 	if (err) {
 		ret = vmf_error(err);
+#ifdef KC_MPAGE_READ_FOLIO
+		folio_unlock(folio);
+#else
 		unlock_page(page);
+#endif
 		goto out_sem;
 	}
 	/* end scoutfs_write_begin */
@@ -2079,8 +2108,13 @@ static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
 	 * progress, we are guaranteed that writeback during freezing will
 	 * see the dirty page and writeprotect it again.
 	 */
+#ifdef KC_MPAGE_READ_FOLIO
+	folio_mark_dirty(folio);
+	folio_wait_stable(folio);
+#else
 	set_page_dirty(page);
 	wait_for_stable_page(page);
+#endif
 
 	/* scoutfs_write_end */
 	scoutfs_inode_set_data_seq(inode);
