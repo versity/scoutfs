@@ -7,8 +7,7 @@
 # take kernel version or default to uname -r
 %{!?kversion: %global kversion %(uname -r)}
 %global kernel_version %{kversion}
-%
-%define kernel_version_extra %(sed 's/.*-\\([0-9]\\+\\).*/\\1/' <<< "%{kernel_version}")
+%define sanitized_kernel_version %(echo %{kernel_version} | tr - _ |sed -e 's/.x86_64//')
 
 %if 0%{?el7}
 %global kernel_source() /usr/src/kernels/%{kernel_version}.$(arch)
@@ -19,18 +18,20 @@
 %{!?_release: %global _release 0.%{pkg_date}git%{kmod_git_hash}}
 
 %if 0%{?el7}
-Name:           %{kmod_name}
+Name:           %{kmod_name}-%{sanitized_kernel_version}
+Provides:       %{kmod_name}
 %else
-Name:           kmod-%{kmod_name}
+Name:           kmod-%{kmod_name}-%{sanitized_kernel_version}
+Provides:       kmod-%{kmod_name}
 %endif
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
-Release:        %{_release}.%{kernel_version_extra}%{?dist}
+Release:        %{_release}
 License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
-Requires:       kernel-core-uname-r >= %{kernel_version}
-Requires:       kernel-modules-uname-r >= %{kernel_version}
+Requires:       kernel-core-uname-r = %{kernel_version}
+Requires:       kernel-modules-uname-r = %{kernel_version}
 
 %if 0%{?el7}
 BuildRequires:  %{kernel_module_package_buildreqs}
