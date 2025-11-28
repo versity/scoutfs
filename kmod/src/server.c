@@ -1618,7 +1618,8 @@ static int server_get_log_trees(struct super_block *sb,
 		goto update;
 	}
 
-	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 100);
+	ret = alloc_move_empty(sb, &super->data_alloc, &lt.data_freed,
+			       COMMIT_HOLD_ALLOC_BUDGET / 2);
 	if (ret == -EINPROGRESS)
 		ret = 0;
 	if (ret < 0) {
@@ -1913,9 +1914,11 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	       scoutfs_alloc_splice_list(sb, &server->alloc, &server->wri, server->other_freed,
 					 &lt.meta_avail)) ?:
 	      (err_str = "empty data_avail",
-	       alloc_move_empty(sb, &super->data_alloc, &lt.data_avail, 100)) ?:
+	       alloc_move_empty(sb, &super->data_alloc, &lt.data_avail,
+				COMMIT_HOLD_ALLOC_BUDGET / 2)) ?:
 	      (err_str = "empty data_freed",
-	       alloc_move_empty(sb, &super->data_alloc, &lt.data_freed, 100));
+	       alloc_move_empty(sb, &super->data_alloc, &lt.data_freed,
+				COMMIT_HOLD_ALLOC_BUDGET / 2));
 	mutex_unlock(&server->alloc_mutex);
 
 	/* only finalize, allowing merging, once the allocators are fully freed */
