@@ -3036,7 +3036,13 @@ static int server_commit_log_merge(struct super_block *sb,
 				  SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0,
 				  &stat, sizeof(stat));
 	if (ret < 0) {
-		err_str = "getting merge status item";
+		/*
+		 * During a retransmission, it's possible that the server
+		 * already committed and resolved this log merge. ENOENT
+		 * is expected in that case.
+		 */
+		if (ret != -ENOENT)
+			err_str = "getting merge status item";
 		goto out;
 	}
 
