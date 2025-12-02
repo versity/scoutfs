@@ -31,7 +31,8 @@ License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
 Requires:       kernel-core-uname-r = %{kernel_version}
-Requires:       kernel-modules-uname-r = %{kernel_version}
+Conflicts:       kernel-core-uname-r < %{kernel_version}
+Conflicts:       kernel-core-uname-r > %{kernel_version}
 
 %if 0%{?el7}
 BuildRequires:  %{kernel_module_package_buildreqs}
