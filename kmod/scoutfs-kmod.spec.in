@@ -19,10 +19,10 @@
 
 %if 0%{?el7}
 Name:           %{kmod_name}-%{sanitized_kernel_version}
-Provides:       %{kmod_name}
+Provides:       %{kmod_name} = %{kmod_version}
 %else
 Name:           kmod-%{kmod_name}-%{sanitized_kernel_version}
-Provides:       kmod-%{kmod_name}
+Provides:       kmod-%{kmod_name} = %{kmod_version}
 %endif
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
