@@ -7,6 +7,16 @@ export MAJOR_VER="${EL_VER%%.*}"
 export MINOR_VER="${EL_VER#*.}"
 export RELEASE="${RELEASE:-0}"
 export IS_EDGE="${IS_EDGE:-0}"
+export FORCE_REBUILD_DOCKER_IMAGE="${FORCE_REBUILD_DOCKER_IMAGE:-false}"
+
+export PUB_OR_VAULT
+if [ "${IS_EDGE}" = 0 ]; then
+  PUB_OR_VAULT=vault
+else
+  PUB_OR_VAULT=pub
+fi
+
+bash build-container.sh
 
 for KVER in $(bash build-packages.sh get-kvers); do
   echo "Building for ${KVER} on ${EL_VER}"
