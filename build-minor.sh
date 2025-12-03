@@ -10,16 +10,16 @@ export IS_EDGE="${IS_EDGE:-0}"
 export VERBOSE="${VERBOSE:-1}"
 export FORCE_REBUILD_DOCKER_IMAGE="${FORCE_REBUILD_DOCKER_IMAGE:-0}"
 
-export PUB_OR_VAULT
-if [ "${IS_EDGE}" = 0 ]; then
-  PUB_OR_VAULT=vault
+if [ -z "${KVERS}" ]; then
+  KVERS="$(bash build-packages.sh get-kvers)"
 else
-  PUB_OR_VAULT=pub
+  echo "Specified the following kernel versions to build against:"
+  echo "${KVERS}"
 fi
 
 bash build-container.sh
 
-for KVER in $(bash build-packages.sh get-kvers); do
+for KVER in ${KVERS}; do
   echo "Building for ${KVER} on ${EL_VER}"
   docker run --rm --privileged \
     -e "VERBOSE=${VERBOSE}" \
