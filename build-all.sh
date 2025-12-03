@@ -11,5 +11,6 @@ done
 
 # then legacy
 for EL_VER in 8.9 9.4 9.5; do
+  IS_EDGE=0
   bash ./build-minor.sh
 done

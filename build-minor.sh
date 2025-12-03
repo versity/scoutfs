@@ -7,7 +7,8 @@ export MAJOR_VER="${EL_VER%%.*}"
 export MINOR_VER="${EL_VER#*.}"
 export RELEASE="${RELEASE:-0}"
 export IS_EDGE="${IS_EDGE:-0}"
-export FORCE_REBUILD_DOCKER_IMAGE="${FORCE_REBUILD_DOCKER_IMAGE:-false}"
+export VERBOSE="${VERBOSE:-1}"
+export FORCE_REBUILD_DOCKER_IMAGE="${FORCE_REBUILD_DOCKER_IMAGE:-0}"
 
 export PUB_OR_VAULT
 if [ "${IS_EDGE}" = 0 ]; then
@@ -21,7 +22,7 @@ bash build-container.sh
 for KVER in $(bash build-packages.sh get-kvers); do
   echo "Building for ${KVER} on ${EL_VER}"
   docker run --rm --privileged \
-    -e "VERBOSE=0" \
+    -e "VERBOSE=${VERBOSE}" \
     -e "KVERSION=${KVER}" \
     -e "EL_VER=${EL_VER}" \
     -e "RELEASE=${RELEASE}" \

@@ -12,12 +12,20 @@ else
     MINOR_VER=""
 fi
 DISTRO="${ID}"
-PUB_OR_VAULT="${PUB_OR_VAULT:-pub}"
+
+IS_EDGE="${IS_EDGE:-0}"
+
+if [ "${IS_EDGE}" = 0 ]; then
+  PUB_OR_VAULT=vault
+else
+  PUB_OR_VAULT=pub
+fi
+
 VAULT_PREFIX=""
 PUB_PREFIX=""
 
 # - Accept ${SKIP_REPO_FIXUP} to take no action at all
-# - Accept ${PUB_OR_VAULT} as pub/vault for whether we should lock to the *vaulted* repo vs. the current public one
+# - Accept ${IS_EDGE} as 1/0 for whether we should lock to the *vaulted* repo vs. the current public one
 
 if [ "${SKIP_REPO_FIXUP}" = 'true' ]; then
   echo "Requested to take no action on repositories; exiting cleanly"
@@ -44,7 +52,7 @@ case ${DISTRO} in
     ;;
 esac
 
-if [ "${PUB_OR_VAULT}" = 'true' ]; then
+if [ "${IS_EDGE}" = 0 ]; then
   BASE_URL="${VAULT_PREFIX}/${RELEASE}"
 else
   BASE_URL="${PUB_PREFIX}/${RELEASE}"
@@ -55,12 +63,12 @@ for repo in "/etc/yum.repos.d/"*; do
     -e "s|^metalink|#metalink|g" -e "s|https|http|g" "$repo"
   if ! [[ "$repo" =~ .*epel.* ]]; then
     sed -i -e "s|http.*releasever|${BASE_URL}|g" "$repo"
-    if [ "${PUB_OR_VAULT}" = 'vault' ]; then
+    if [ "${IS_EDGE}" = 0 ]; then
       sed -i -e "s|pub|vault|g" "$repo"
     fi
   else
     sed -i -e "s|download.example|archives.fedoraproject.org|g" "$repo"
-    if [ "${PUB_OR_VAULT}" = 'vault' ]; then
+    if [ "${IS_EDGE}" = 0 ]; then
       sed -i -e "s|pub/epel/${MAJOR_VER}|pub/archive/epel/${VERSION_ID}|g" "$repo"
     fi
   fi
