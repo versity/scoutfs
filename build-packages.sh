@@ -20,7 +20,12 @@ fi
 
 function get_kvers {
     REPO_PATH="$1"
-    curl "${REPO_PATH}/devel/x86_64/os/Packages/k/" | \
+    if [ "${MAJOR_VER}" -gt 7 ]; then
+      PKG_PATH="${REPO_PATH}/devel/x86_64/os/Packages/k/"
+    else
+      PKG_PATH="${REPO_PATH}/os/x86_64/Packages/"
+    fi
+    curl "${PKG_PATH}" | \
         grep -e 'kernel-devel-[0-9]' | \
         grep -o 'href="[^"]*\.rpm"' | \
         cut -d'"' -f2 | \
@@ -56,7 +61,21 @@ else
     REPO_ROOT_PATH="vault"
 fi
 
-REPO_BASE="http://download.rockylinux.org/${REPO_ROOT_PATH}/rocky/${EL_VER}"
+if [ "${MAJOR_VER}" -gt 7 ]; then
+  REPO_BASE="http://download.rockylinux.org/${REPO_ROOT_PATH}/rocky/${EL_VER}"
+  DISTRO=rocky
+  EXTRA_CONFIG="config_opts['bootstrap_image'] = \"quay.io/rockylinux/rockylinux:${EL_VER}\""
+  PACKAGE_MANAGER="dnf"
+  SETUP_CMD='install tar gcc-c++ redhat-rpm-config redhat-release which xz sed make bzip2 gzip gcc coreutils unzip shadow-utils diffutils cpio bash gawk rpm-build info patch util-linux findutils grep systemd sparse'
+  KEY_URL="https://download.rockylinux.org/pub/rocky/RPM-GPG-KEY-${DISTRO}-${MAJOR_VER}"
+else
+  REPO_BASE="https://vault.centos.org/7.9.2009"
+  DISTRO=centos
+  EXTRA_CONFIG=""
+  PACKAGE_MANAGER="yum"
+  SETUP_CMD='install @buildsys-build redhat-rpm-config /usr/bin/pigz /usr/bin/lbzip2 hostname shadow-utils rpm-build make gcc sparse'
+  KEY_URL="https://vault.centos.org/centos/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7"
+fi
 
 # if we haven't injected the KVERSION we want into the env, detect it based on the repo path
 if [ -z "${KVERSION}" ]; then
@@ -75,19 +94,19 @@ fi
 
 echo "Starting Build $BUILD_DISPLAY_NAME on $NODE_NAME"
 
-(git repack -a -d && rm .git/objects/info/alternates) || true
+(git repack -a -d && rm -f .git/objects/info/alternates) || true
 
 cat <<EOF >scoutfs-build-${EL_VER}.cfg
-config_opts['root'] = 'rocky-${EL_VER}-base-x86_64'
+config_opts['root'] = '${DISTRO}-${EL_VER}-base-x86_64'
 config_opts['target_arch'] = 'x86_64'
 config_opts['legal_host_arches'] = ('x86_64',)
-config_opts['chroot_setup_cmd'] = 'install tar gcc-c++ redhat-rpm-config redhat-release which xz sed make bzip2 gzip gcc coreutils unzip shadow-utils diffutils cpio bash gawk rpm-build info patch util-linux findutils grep systemd sparse'
+config_opts['chroot_setup_cmd'] = '${SETUP_CMD}'
 config_opts['dist'] = 'el${MAJOR_VER}'  # only useful for --resultdir variable subst
 config_opts['releasever'] = '${MAJOR_VER}'
-config_opts['package_manager'] = 'dnf'
+config_opts['package_manager'] = '${PACKAGE_MANAGER}'
 config_opts['extra_chroot_dirs'] = [ '/run/lock', ]
-config_opts['bootstrap_image'] = "quay.io/rockylinux/rockylinux:${EL_VER}"
-config_opts['description'] = "Rocky Linux ${EL_VER}"
+${EXTRA_CONFIG}
+config_opts['description'] = "${DISTRO} ${EL_VER}"
 config_opts['http_proxy'] = 'http://package-mirror.vpn.versity.com:3128'
 
 # experiment: simplify for better docker use
@@ -97,7 +116,7 @@ config_opts['plugin_conf']['root_cache_enable'] = True
 config_opts['plugin_conf']['yum_cache_enable'] = True
 config_opts['plugin_conf']['dnf_cache_enable'] = True
 
-config_opts['dnf.conf'] = """
+config_opts['${PACKAGE_MANAGER}.conf'] = """
 [main]
 keepcache=1
 debuglevel=2
@@ -118,41 +137,66 @@ module_platform_id=platform:el${MAJOR_VER}
 user_agent={{ user_agent }}
 
 # repos
+EOF
+
+if [ "${MAJOR_VER}" -gt 7 ]; then
+  cat <<EOF >>scoutfs-build-${EL_VER}.cfg
 [baseos]
-name=Rocky Linux ${EL_VER} - BaseOS
-repo=rocky-BaseOS-${EL_VER}&arch=x86_64
+name=${DISTRO} ${EL_VER} - BaseOS
+repo=${DISTRO}-BaseOS-${EL_VER}&arch=x86_64
 baseurl=$(repo_addr "${REPO_BASE}" "BaseOS")
 gpgcheck=0
 enabled=1
-gpgkey=file:///usr/share/distribution-gpg-keys/rocky/RPM-GPG-KEY-Rocky-${MAJOR_VER}
+gpgkey=file:///usr/share/distribution-gpg-keys/${DISTRO}/RPM-GPG-KEY-${DISTRO}-${MAJOR_VER}
 
 [appstream]
-name=Rocky Linux ${EL_VER} - AppStream
+name=${DISTRO} ${EL_VER} - AppStream
 baseurl=$(repo_addr "${REPO_BASE}" "AppStream")
 gpgcheck=0
 enabled=1
-gpgkey=file:///usr/share/distribution-gpg-keys/rocky/RPM-GPG-KEY-Rocky-${MAJOR_VER}
+gpgkey=file:///usr/share/distribution-gpg-keys/${DISTRO}/RPM-GPG-KEY-${DISTRO}-${MAJOR_VER}
 
 [devel]
-name=Rocky Linux ${EL_VER} - Devel
-repo=rocky-Devel-${EL_VER}&arch=x86_64
+name=${DISTRO} ${EL_VER} - Devel
+repo=${DISTRO}-Devel-${EL_VER}&arch=x86_64
 baseurl=$(repo_addr "${REPO_BASE}" "devel")
 gpgcheck=0
 enabled=1
-gpgkey=file:///usr/share/distribution-gpg-keys/rocky/RPM-GPG-KEY-Rocky-${MAJOR_VER}
+gpgkey=file:///usr/share/distribution-gpg-keys/${DISTRO}/RPM-GPG-KEY-${DISTRO}-${MAJOR_VER}
 
 [epel]
 name=EPEL - \$releasever
 baseurl=https://dl.fedoraproject.org/pub/epel/\$releasever/Everything/x86_64/
 gpgcheck=0
 enabled=1
+
 """
 EOF
 
+else
+  cat <<EOF >>scoutfs-build-${EL_VER}.cfg
+[baseos]
+name=${DISTRO} ${EL_VER} - BaseOS
+repo=${DISTRO}-BaseOS-${EL_VER}&arch=x86_64
+baseurl=http://vault.centos.org/7.9.2009/os/x86_64/
+gpgcheck=0
+enabled=1
+gpgkey=file:///usr/share/distribution-gpg-keys/${DISTRO}/RPM-GPG-KEY-${DISTRO}-${MAJOR_VER}
+
+[epel]
+name=EPEL - \$releasever
+baseurl=https://archives.fedoraproject.org/pub/archive/epel/${MAJOR_VER}/x86_64/
+gpgcheck=0
+enabled=1
+"""
+EOF
+
+fi
+
 cd "${WORKSPACE:-.}"
 
-sudo mkdir -p /usr/share/distribution-gpg-keys/rocky/
-sudo curl -o "/usr/share/distribution-gpg-keys/rocky/RPM-GPG-KEY-Rocky-${MAJOR_VER}" https://download.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-${MAJOR_VER}
+sudo mkdir -p /usr/share/distribution-gpg-keys/${DISTRO}/
+sudo curl -o "/usr/share/distribution-gpg-keys/${DISTRO}/RPM-GPG-KEY-${DISTRO}-${MAJOR_VER}" "${KEY_URL}"
 
 # make kmod rpms
 pushd kmod
@@ -183,11 +227,7 @@ if [ -z "$SRPM" ]; then
     exit 1
 fi
 
-if [ "${MAJOR_VER}" -gt 7 ] ; then
-  mock_args+=(--dnf)
-else
-  mock_args+=(--yum)
-fi
+mock_args+=(--${PACKAGE_MANAGER})
 
 mock "${mock_args[@]}" --enablerepo epel -r "../scoutfs-build-${EL_VER}.cfg" rebuild "${RELEASE_OPT[@]}" --define "kversion ${KVERSION}.el${EL_VER//./_}.x86_64" --define "dist .el${EL_VER//./_}" --resultdir "./scoutfs_${EL_VER//./_}" "${SRPM}"
 if [ "$?" -ne "0" ]; then
