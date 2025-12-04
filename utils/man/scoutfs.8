@@ -402,25 +402,39 @@ before destroying an old empty data device.
 .PD
 
 .TP
-.BI "print {-S|--skip-likely-huge} META-DEVICE"
+.BI "print {-a|--allocs} {-i|--items ITEMS} {-r|--roots ROOTS} {-S|--skip-likely-huge} META-DEVICE"
 .sp
-Prints out all of the metadata in the file system.  This makes no effort
+Prints out some or all of the metadata in the file system.  This makes no effort
 to ensure that the structures are consistent as they're traversed and
 can present structures that seem corrupt as they change as they're
 output.
+.sp
+Structures that are related to the number of mounts and are maintained at a
+relatively reasonable size are always printed. These include per-mount log
+trees, srch files, allocators, and the metadata allocators used by server
+commits. Other btrees and their items can be selected as desired.
 .RS 1.0i
 .PD 0
-.TP
 .sp
+.TP
+.B "-a, --allocs"
+Print the metadata and data allocators. Enabled by default.
+.TP
+.B "-r, --roots ROOTS"
+This option can be used to select which btrees are traversed. It is a comma-separated list containing one or more of the following btree roots: logs, srch, fs. Default is all roots.
+.TP
+.B "-i, --items ITEMS"
+This option can be used to choose which btree items are printed from the
+selected btree roots. It is a comma-separated list containing one or
+more of the following items: inode, xattr, dirent, symlink, backref, extent.
+Default is all items.
+.TP
 .B "-S, --skip-likely-huge"
 Skip printing structures that are likely to be very large.  The
 structures that are skipped tend to be global and whose size tends to be
 related to the size of the volume.   Examples of skipped structures include
 the global fs items, srch files, and metadata and data
-allocators.  Similar structures that are not skipped are related to the
-number of mounts and are maintained at a relatively reasonable size.
-These include per-mount log trees, srch files, allocators, and the
-metadata allocators used by server commits.
+allocators.
 .sp
 Skipping the larger structures limits the print output to a relatively
 constant size rather than being a large multiple of the used metadata
