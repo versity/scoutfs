@@ -1,27 +1,6 @@
 #ifndef _SCOUTFS_SERVER_H_
 #define _SCOUTFS_SERVER_H_
 
-#define SI4_FMT		"%u.%u.%u.%u:%u"
-
-#define si4_trace_define(name)		\
-	__field(__u32, name##_addr)	\
-	__field(__u16, name##_port)
-
-#define si4_trace_assign(name, sin)					\
-do {									\
-	__typeof__(sin) _sin = (sin);					\
-									\
-	__entry->name##_addr = be32_to_cpu(_sin->sin_addr.s_addr);	\
-	__entry->name##_port = be16_to_cpu(_sin->sin_port);		\
-} while(0)
-
-#define si4_trace_args(name)			\
-	(__entry->name##_addr >> 24),		\
-	(__entry->name##_addr >> 16) & 255,	\
-	(__entry->name##_addr >> 8) & 255,	\
-	__entry->name##_addr & 255,		\
-	__entry->name##_port
-
 #define SNH_FMT \
 	"seq %llu recv_seq %llu id %llu data_len %u cmd %u flags 0x%x error %u"
 #define SNH_ARG(nh)							\
