@@ -21,12 +21,12 @@ fi
 function get_kvers {
     REPO_PATH="$1"
     if [ "${MAJOR_VER}" -gt 7 ]; then
-      PKG_PATH="${REPO_PATH}/devel/x86_64/os/Packages/k/"
+      PKG_PATH="${REPO_PATH}/BaseOS/x86_64/os/Packages/k/"
     else
       PKG_PATH="${REPO_PATH}/os/x86_64/Packages/"
     fi
     curl "${PKG_PATH}" | \
-        grep -e 'kernel-devel-[0-9]' | \
+        grep -e 'kernel-[0-9]' | \
         grep -o 'href="[^"]*\.rpm"' | \
         cut -d'"' -f2 | \
         sed -e 's/^[a-z-]*//g' | \
