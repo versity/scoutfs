@@ -2155,6 +2155,8 @@ out:
 	if (ret < 0)
 		scoutfs_inc_counter(sb, orphan_scan_error);
 
+	scoutfs_inc_counter(sb, orphan_scan_complete);
+
 	scoutfs_inode_schedule_orphan_dwork(sb);
 }
 

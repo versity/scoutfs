@@ -498,3 +498,56 @@ t_restore_all_sysfs_mount_options() {
 		t_set_sysfs_mount_option $i $name "${_saved_opts[$ind]}"
 	done
 }
+
+# wait for finalize_and_start_log_merge() to find no active merges in flight
+# and not find any finalized trees
+t_wait_for_log_merge_no_finalized() {
+	sv=$(t_server_nr)
+	LMNF=$(t_counter log_merge_no_finalized $sv)
+
+	(( LMNF++ ))
+
+	while [ $(t_counter log_merge_no_finalized $sv) -lt $LMNF ]; do
+		sleep 1
+	done
+}
+
+# wait until we see two consecutive orphan scan worker runs without
+# any inode deletion forward progress in each mount
+t_wait_for_orphan_scan() {
+	t_save_all_sysfs_mount_options orphan_scan_delay_ms
+	t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
+
+	for nr in $(t_fs_nrs); do
+		C=0
+		LOSC=$(t_counter orphan_scan_complete $nr)
+		LDOP=$(t_counter inode_deleted $nr)
+
+		while [ $C -lt 2 ]; do
+			# there's some randomness added to orphan_scan_delay_ms
+			# so we need to account for that
+			sleep 2
+
+			OSC=$(t_counter orphan_scan_complete $nr)
+			DOP=$(t_counter inode_deleted $nr)
+
+			if [ $OSC != $LOSC ]; then
+				if [ $DOP == $LDOP ]; then
+					(( C++ ))
+				else
+					C=0
+				fi
+			fi
+
+			LOSC=$OSC
+			LDOP=$DOP
+		done
+	done
+
+	t_restore_all_sysfs_mount_options orphan_scan_delay_ms
+}
+
+t_wait_for_unlink() {
+	t_wait_for_log_merge_no_finalized
+	t_wait_for_orphan_scan
+}

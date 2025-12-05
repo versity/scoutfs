@@ -76,39 +76,7 @@ while [ $(t_counter reclaimed_open_logs $sv) -lt $T_NR_MOUNTS ]; do
 	sleep 1
 done
 
-# wait for finalize_and_start_log_merge() to find no active merges in flight
-# and not find any finalized trees
-while [ $(t_counter log_merge_no_finalized $sv) -lt 1 ]; do
-	sleep 1
-done
-
-# wait for orphan scans to run
-t_set_all_sysfs_mount_options orphan_scan_delay_ms 1000
-# wait until we see two consecutive orphan scan attempts without
-# any inode deletion forward progress in each mount
-for nr in $(t_fs_nrs); do
-	C=0
-	LOSA=$(t_counter orphan_scan_attempts $nr)
-	LDOP=$(t_counter inode_deleted $nr)
-
-	while [ $C -lt 2 ]; do
-		sleep 1
-
-		OSA=$(t_counter orphan_scan_attempts $nr)
-		DOP=$(t_counter inode_deleted $nr)
-
-		if [ $OSA != $LOSA ]; then
-			if [ $DOP == $LDOP ]; then
-				(( C++ ))
-			else
-				C=0
-			fi
-		fi
-
-		LOSA=$OSA
-		LDOP=$DOP
-	done
-done
+t_wait_for_unlink
 
 for ino in $inos; do
 	inode_exists $ino && echo "$ino still exists"

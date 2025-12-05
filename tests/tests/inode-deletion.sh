@@ -37,6 +37,7 @@ rm -f "$FILE"
 echo "contents after rm: $(cat <&$FD)"
 check_ino_index "$ino" "$dseq" "$T_M0"
 exec {FD}>&-  # close
+t_wait_for_unlink
 check_ino_index "$ino" "$dseq" "$T_M0"
 
 echo "== multiple local opens are protected"
@@ -51,6 +52,7 @@ echo "contents after rm 2: $(cat <&$FD2)"
 check_ino_index "$ino" "$dseq" "$T_M0"
 exec {FD1}>&-  # close
 exec {FD2}>&-  # close
+t_wait_for_unlink
 check_ino_index "$ino" "$dseq" "$T_M0"
 
 echo "== remote unopened unlink deletes"
@@ -73,6 +75,7 @@ check_ino_index "$ino" "$dseq" "$T_M1"
 exec {FD}>&-  # close
 # we know that revalidating will unhash the remote dentry
 stat "$T_D0/file" 2>&1 | sed 's/cannot statx/cannot stat/' | t_filter_fs
+t_wait_for_unlink
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
 
@@ -94,5 +97,9 @@ echo "mount 0 contents after mount 1 remounted: $(cat <&$FD)"
 exec {FD}>&-  # close
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
+
+# clean up, in case we're running in a loop
+rm -f "$FILE"
+t_wait_for_unlink
 
 t_pass

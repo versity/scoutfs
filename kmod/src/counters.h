@@ -160,6 +160,7 @@
 	EXPAND_COUNTER(orphan_scan)				\
 	EXPAND_COUNTER(orphan_scan_attempts)			\
 	EXPAND_COUNTER(orphan_scan_cached)			\
+	EXPAND_COUNTER(orphan_scan_complete)			\
 	EXPAND_COUNTER(orphan_scan_error)			\
 	EXPAND_COUNTER(orphan_scan_item)			\
 	EXPAND_COUNTER(orphan_scan_omap_set)			\
