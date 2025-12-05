@@ -526,7 +526,7 @@ t_wait_for_orphan_scan() {
 		while [ $C -lt 2 ]; do
 			# there's some randomness added to orphan_scan_delay_ms
 			# so we need to account for that
-			sleep 2
+			sleep 1.5
 
 			OSC=$(t_counter orphan_scan_complete $nr)
 			DOP=$(t_counter inode_deleted $nr)

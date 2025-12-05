@@ -2090,6 +2090,8 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 	u64 ino;
 	int ret;
 
+	trace_scoutfs_orphan_scan_start(sb);
+
 	scoutfs_inc_counter(sb, orphan_scan);
 
 	init_orphan_key(&last, U64_MAX);
@@ -2109,8 +2111,10 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		init_orphan_key(&key, ino);
 		ret = scoutfs_btree_next(sb, &roots.fs_root, &key, &iref);
 		if (ret < 0) {
-			if (ret == -ENOENT)
+			if (ret == -ENOENT) {
+				trace_scoutfs_orphan_scan_work(sb, 0);
 				break;
+			}
 			goto out;
 		}
 
@@ -2146,7 +2150,9 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 
 		/* seemingly orphaned and unused, get locks and check for sure */
 		scoutfs_inc_counter(sb, orphan_scan_attempts);
+		trace_scoutfs_orphan_scan_work(sb, ino);
 		ret = try_delete_inode_items(sb, ino);
+		trace_scoutfs_orphan_scan_end(sb, ino, ret);
 	}
 
 	ret = 0;
@@ -2156,6 +2162,8 @@ out:
 		scoutfs_inc_counter(sb, orphan_scan_error);
 
 	scoutfs_inc_counter(sb, orphan_scan_complete);
+
+	trace_scoutfs_orphan_scan_stop(sb);
 
 	scoutfs_inode_schedule_orphan_dwork(sb);
 }

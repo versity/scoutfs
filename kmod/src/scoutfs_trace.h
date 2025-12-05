@@ -789,6 +789,78 @@ TRACE_EVENT(scoutfs_inode_walk_writeback,
 		  __entry->ino, __entry->write, __entry->ret)
 );
 
+TRACE_EVENT(scoutfs_orphan_scan_start,
+	TP_PROTO(struct super_block *sb),
+
+	TP_ARGS(sb),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+	),
+
+	TP_printk(SCSBF, SCSB_TRACE_ARGS)
+);
+
+TRACE_EVENT(scoutfs_orphan_scan_stop,
+	TP_PROTO(struct super_block *sb),
+
+	TP_ARGS(sb),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+	),
+
+	TP_printk(SCSBF, SCSB_TRACE_ARGS)
+);
+
+TRACE_EVENT(scoutfs_orphan_scan_work,
+	TP_PROTO(struct super_block *sb, __u64 ino),
+
+	TP_ARGS(sb, ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+	),
+
+	TP_printk(SCSBF" ino %llu", SCSB_TRACE_ARGS,
+		  __entry->ino)
+);
+
+TRACE_EVENT(scoutfs_orphan_scan_end,
+	TP_PROTO(struct super_block *sb, __u64 ino, int ret),
+
+	TP_ARGS(sb, ino, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu ret %d", SCSB_TRACE_ARGS,
+		  __entry->ino, __entry->ret)
+);
+
 DECLARE_EVENT_CLASS(scoutfs_lock_info_class,
 	TP_PROTO(struct super_block *sb, struct lock_info *linfo),
 
