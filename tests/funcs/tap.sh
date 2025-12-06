@@ -43,8 +43,13 @@ t_tap_progress()
 	local testname=$1
 	local result=$2
 
+	local stmsg=""
 	local diff=""
 	local dmsg=""
+
+	if [[ -s $T_RESULTS/tmp/${testname}/status.msg ]]; then
+		stmsg="1"
+	fi
 
 	if [[ -s "$T_RESULTS/tmp/${testname}/dmesg.new" ]]; then
 		dmsg="1"
@@ -61,6 +66,7 @@ t_tap_progress()
 		echo "# ${testname} ** skipped - permitted **"
 	else
 		echo "not ok ${i} - ${testname}"
+
 		case ${result} in
 		101)
 			echo "# ${testname} ** skipped **"
@@ -69,6 +75,13 @@ t_tap_progress()
 			echo "# ${testname} ** failed **"
 			;;
 		esac
+
+		if [[ -n "${stmsg}" ]]; then
+			echo "#"
+			echo "# status:"
+			echo "#"
+			cat $T_RESULTS/tmp/${testname}/status.msg | sed 's/^/# - /'
+		fi
 
 		if [[ -n "${diff}" ]]; then
 			echo "#"
