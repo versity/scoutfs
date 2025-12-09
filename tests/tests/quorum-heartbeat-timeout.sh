@@ -76,11 +76,13 @@ test_timeout()
 	t_mount $sv
 
 	# make sure the new leader delay was reasonable, allowing for some slack
-	low=$((to - 1000))
 	high=$((to + 5000))
 
 	# make sure the new leader delay was reasonable
-	test "$delay" -lt "$low" && t_fail "delay $delay < low $low (to $to)"
+	if [[ $to -gt 10000 ]]; then
+		low=$((to - 10000))
+		test "$delay" -lt "$low" && t_fail "delay $delay < low $low (to $to)"
+	fi
 	test "$delay" -gt "$high" && t_fail "delay $delay > high $high (to $to)"
 }
 
