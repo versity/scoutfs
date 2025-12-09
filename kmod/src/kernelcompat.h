@@ -489,6 +489,7 @@ unsigned long kc_list_lru_shrink_walk(struct list_lru *lru, struct shrink_contro
 				      kc_list_lru_walk_cb_t isolate, void *cb_arg);
 #else
 #define kc_list_lru_shrink_walk list_lru_shrink_walk
+#define kc_list_lru_walk list_lru_walk
 #endif
 
 #if defined(KC_LIST_LRU_WALK_CB_ITEM_LOCK)
