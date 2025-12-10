@@ -92,10 +92,14 @@ done
 T_TRACE_DUMP="0"
 T_TRACE_PRINTK="0"
 T_PORT_START="19700"
-T_LOOP_ITER="1"
+T_LOOP_ITER="100"
 
 # array declarations to be able to use array ops
 declare -a T_TRACE_GLOB
+T_TRACE_GLOB=( "scoutfs*" )
+
+# CI sets this to 3600, but, for this case we want it very short
+echo 30 > /proc/sys/kernel/hung_task_timeout_secs
 
 while true; do
 	case $1 in
@@ -493,6 +497,11 @@ crash_monitor()
 			bad=1
 		fi
 
+		if dmesg | grep -q "blocked for more than"; then
+			echo "run-tests monitor saw blocked task message"
+			bad=1
+		fi
+
 		if dmesg | grep -q "error indicated by fence action" ; then
 			echo "run-tests monitor saw fence agent error message"
 			bad=1
@@ -504,6 +513,8 @@ crash_monitor()
 		fi
 
 		if [ "$bad" != 0 ]; then
+			sync & # maybe this gets logs synced...
+			sleep .1
 			echo "run-tests monitor triggering crash"
 			echo c > /proc/sysrq-trigger
 			exit 1
@@ -706,6 +717,8 @@ for t in $tests; do
 		# stop looping if we didn't pass
 		if [ "$sts" != "$T_PASS_STATUS" ]; then
 			break;
+		else
+			echo > /sys/kernel/debug/tracing/trace
 		fi
 	done
 
