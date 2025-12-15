@@ -1637,10 +1637,14 @@ int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_
 				struct scoutfs_lock *primary)
 {
 	struct scoutfs_key key;
+	int ret;
 
 	init_orphan_key(&key, ino);
 
-	return scoutfs_item_delete_force(sb, &key, lock, primary);
+	ret = scoutfs_item_delete_force(sb, &key, lock, primary);
+	trace_scoutfs_inode_orphan_delete(sb, ino, ret);
+
+	return ret;
 }
 
 /*
@@ -1721,6 +1725,8 @@ out:
 	if (release)
 		scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &ind_locks);
+
+	trace_scoutfs_delete_inode_end(sb, ino, mode, size, ret);
 
 	return ret;
 }
@@ -1817,6 +1823,9 @@ out:
  * they've checked that the inode could really be deleted.  We serialize
  * on a bit in the lock data so that we only have one deletion attempt
  * per inode under this mount's cluster lock.
+ *
+ * Returns -EAGAIN if we either did some cleanup work or are unable to finish
+ * cleaning up this inode right now.
  */
 static int try_delete_inode_items(struct super_block *sb, u64 ino)
 {
@@ -1830,6 +1839,8 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	int bit_nr;
 	int ret;
 
+	trace_scoutfs_try_delete(sb, ino);
+
 	ret = scoutfs_lock_ino(sb, SCOUTFS_LOCK_WRITE, 0, ino, &lock);
 	if (ret < 0)
 		goto out;
@@ -1842,27 +1853,32 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 
 	/* only one local attempt per inode at a time */
 	if (test_and_set_bit(bit_nr, ldata->trying)) {
-		ret = 0;
+		trace_scoutfs_try_delete_local_busy(sb, ino);
+		ret = -EAGAIN;
 		goto out;
 	}
 	clear_trying = true;
 
 	/* can't delete if it's cached in local or remote mounts */
 	if (scoutfs_omap_test(sb, ino) || test_bit_le(bit_nr, ldata->map.bits)) {
-		ret = 0;
+		trace_scoutfs_try_delete_cached(sb, ino);
+		ret = -EAGAIN;
 		goto out;
 	}
 
 	scoutfs_inode_init_key(&key, ino);
 	ret = lookup_inode_item(sb, &key, &sinode, lock);
 	if (ret < 0) {
-		if (ret == -ENOENT)
+		if (ret == -ENOENT) {
+			trace_scoutfs_try_delete_no_item(sb, ino);
 			ret = 0;
+		}
 		goto out;
 	}
 
 	if (le32_to_cpu(sinode.nlink) > 0) {
-		ret = 0;
+		trace_scoutfs_try_delete_has_links(sb, ino, le32_to_cpu(sinode.nlink));
+		ret = -EAGAIN;
 		goto out;
 	}
 
@@ -1871,8 +1887,10 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 		goto out;
 
 	ret = delete_inode_items(sb, ino, &sinode, lock, orph_lock);
-	if (ret == 0)
+	if (ret == 0) {
+		ret = -EAGAIN;
 		scoutfs_inc_counter(sb, inode_deleted);
+	}
 
 out:
 	if (clear_trying)
@@ -2074,6 +2092,10 @@ void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb)
  * a locally cached inode.  Then we ask the server for the open map
  * containing the inode.  Only if we don't see any cached users do we do
  * the expensive work of acquiring locks to try and delete the items.
+ *
+ * We need to track whether there is any orphan cleanup work remaining so
+ * that tests such as inode-deletion can watch the orphan_scan_empty counter
+ * to determine when inode cleanup from open-unlink scenarios is complete.
  */
 static void inode_orphan_scan_worker(struct work_struct *work)
 {
@@ -2085,10 +2107,13 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key last;
 	struct scoutfs_key key;
+	bool work_todo = false;
 	u64 group_nr;
 	int bit_nr;
 	u64 ino;
 	int ret;
+
+	trace_scoutfs_orphan_scan_start(sb);
 
 	scoutfs_inc_counter(sb, orphan_scan);
 
@@ -2109,8 +2134,10 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		init_orphan_key(&key, ino);
 		ret = scoutfs_btree_next(sb, &roots.fs_root, &key, &iref);
 		if (ret < 0) {
-			if (ret == -ENOENT)
+			if (ret == -ENOENT) {
+				trace_scoutfs_orphan_scan_work(sb, 0);
 				break;
+			}
 			goto out;
 		}
 
@@ -2125,6 +2152,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 
 		/* locally cached inodes will try to delete as they evict */
 		if (scoutfs_omap_test(sb, ino)) {
+			work_todo = true;
 			scoutfs_inc_counter(sb, orphan_scan_cached);
 			continue;
 		}
@@ -2140,13 +2168,22 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 
 		/* remote cached inodes will also try to delete */
 		if (test_bit_le(bit_nr, omap.bits)) {
+			work_todo = true;
 			scoutfs_inc_counter(sb, orphan_scan_omap_set);
 			continue;
 		}
 
 		/* seemingly orphaned and unused, get locks and check for sure */
 		scoutfs_inc_counter(sb, orphan_scan_attempts);
+		trace_scoutfs_orphan_scan_work(sb, ino);
+
 		ret = try_delete_inode_items(sb, ino);
+		if (ret == -EAGAIN) {
+			work_todo = true;
+			ret = 0;
+		}
+
+		trace_scoutfs_orphan_scan_end(sb, ino, ret);
 	}
 
 	ret = 0;
@@ -2154,6 +2191,11 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 out:
 	if (ret < 0)
 		scoutfs_inc_counter(sb, orphan_scan_error);
+
+	if (!work_todo)
+		scoutfs_inc_counter(sb, orphan_scan_empty);
+
+	trace_scoutfs_orphan_scan_stop(sb, work_todo);
 
 	scoutfs_inode_schedule_orphan_dwork(sb);
 }

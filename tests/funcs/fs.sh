@@ -498,3 +498,100 @@ t_restore_all_sysfs_mount_options() {
 		t_set_sysfs_mount_option $i $name "${_saved_opts[$ind]}"
 	done
 }
+
+t_force_log_merge() {
+	local sv=$(t_server_nr)
+	local merges_started
+	local last_merges_started
+	local merges_completed
+	local last_merges_completed
+
+	while true; do
+		last_merges_started=$(t_counter log_merge_start $sv)
+		last_merges_completed=$(t_counter log_merge_complete $sv)
+
+		t_trigger_arm_silent log_merge_force_finalize_ours $sv
+
+		t_sync_seq_index
+
+		while test "$(t_trigger_get log_merge_force_finalize_ours $sv)" == "1"; do
+			sleep .5
+		done
+
+		merges_started=$(t_counter log_merge_start $sv)
+
+		if (( merges_started > last_merges_started )); then
+			merges_completed=$(t_counter log_merge_complete $sv)
+
+			while (( merges_completed == last_merges_completed )); do
+				sleep .5
+				merges_completed=$(t_counter log_merge_complete $sv)
+			done
+			break
+		fi
+	done
+}
+
+declare -A _last_scan
+t_get_orphan_scan_runs() {
+	local i
+
+	for i in $(t_fs_nrs); do
+		_last_scan[$i]=$(t_counter orphan_scan $i)
+	done
+}
+
+t_wait_for_orphan_scan_runs() {
+	local i
+	local scan
+
+	t_get_orphan_scan_runs
+
+	for i in $(t_fs_nrs); do
+		while true; do
+			scan=$(t_counter orphan_scan $i)
+			if (( scan != _last_scan[$i] )); then
+				break
+			fi
+			sleep .5
+		done
+	done
+}
+
+declare -A _last_empty
+t_get_orphan_scan_empty() {
+	local i
+
+	for i in $(t_fs_nrs); do
+		_last_empty[$i]=$(t_counter orphan_scan_empty $i)
+	done
+}
+
+t_wait_for_no_orphans() {
+	local i;
+	local working;
+	local empty;
+
+	t_get_orphan_scan_empty
+
+	while true; do
+		working=0
+
+		t_wait_for_orphan_scan_runs
+
+		for i in $(t_fs_nrs); do
+			empty=$(t_counter orphan_scan_empty $i)
+			if (( empty == _last_empty[$i] )); then
+				(( working++ ))
+			else
+				(( _last_empty[$i] = empty ))
+			fi
+		done
+
+		if (( working == 0 )); then
+			break
+		fi
+
+		sleep 1
+	done
+}

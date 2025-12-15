@@ -145,7 +145,9 @@
 	EXPAND_COUNTER(lock_shrink_work)			\
 	EXPAND_COUNTER(lock_unlock)				\
 	EXPAND_COUNTER(lock_wait)				\
+	EXPAND_COUNTER(log_merge_complete)			\
 	EXPAND_COUNTER(log_merge_no_finalized)			\
+	EXPAND_COUNTER(log_merge_start)				\
 	EXPAND_COUNTER(log_merge_wait_timeout)			\
 	EXPAND_COUNTER(net_dropped_response)			\
 	EXPAND_COUNTER(net_send_bytes)				\
@@ -160,6 +162,7 @@
 	EXPAND_COUNTER(orphan_scan)				\
 	EXPAND_COUNTER(orphan_scan_attempts)			\
 	EXPAND_COUNTER(orphan_scan_cached)			\
+	EXPAND_COUNTER(orphan_scan_empty)			\
 	EXPAND_COUNTER(orphan_scan_error)			\
 	EXPAND_COUNTER(orphan_scan_item)			\
 	EXPAND_COUNTER(orphan_scan_omap_set)			\
