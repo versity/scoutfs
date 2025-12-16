@@ -1,5 +1,5 @@
 #!/bin/bash
-set -x
+set -e
 
 export EL_MAJOR_VER="${EL_MAJOR_VER:-9.4}"
 export EL_VER="${EL_VER:-${EL_MAJOR_VER}}"
