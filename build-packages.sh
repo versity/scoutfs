@@ -107,7 +107,7 @@ config_opts['package_manager'] = '${PACKAGE_MANAGER}'
 config_opts['extra_chroot_dirs'] = [ '/run/lock', ]
 ${EXTRA_CONFIG}
 config_opts['description'] = "${DISTRO} ${EL_VER}"
-config_opts['http_proxy'] = 'http://package-mirror.vpn.versity.com:3128'
+config_opts['http_proxy'] = '${HTTP_PROXY}'
 
 # experiment: simplify for better docker use
 config_opts['use_nspawn'] = False
