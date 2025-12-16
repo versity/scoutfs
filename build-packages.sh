@@ -255,8 +255,3 @@ if [ "$?" -ne "0" ]; then
 fi
 
 popd
-
-#gpg --export -a 'Versity Software' > RPM-GPG-KEY-scoutfs
-
-exit 0
-
