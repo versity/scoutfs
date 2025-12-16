@@ -76,6 +76,11 @@ else
   KEY_URL="https://vault.centos.org/centos/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7"
 fi
 
+if [[ "${1}" == 'get-kvers' ]]; then
+    get_kvers "${REPO_BASE}"
+    exit 0
+fi
+
 # if we haven't injected the KVERSION we want into the env, detect it based on the repo path
 if [ -z "${KVERSION}" ]; then
     if [ "${REPO_ROOT_PATH}" = "pub" ]; then
@@ -86,9 +91,10 @@ if [ -z "${KVERSION}" ]; then
     fi
 fi
 
-if [[ "${1}" == 'get-kvers' ]]; then
-    get_kvers "${REPO_BASE}"
-    exit 0
+if [ "${MAJOR_VER}" -gt 7 ]; then
+  RPM_KVERSION="${KVERSION}.el${EL_VER//./_}.x86_64"
+else
+  RPM_KVERSION="${KVERSION}.el${MAJOR_VER}.x86_64"
 fi
 
 echo "Starting Build $BUILD_DISPLAY_NAME on $NODE_NAME"
@@ -211,7 +217,7 @@ try=0
 while [[ "$try" -lt "3" ]]; do
     echo "Trying to build srpm; attempt #$try"
     set +e
-    SRPM=$(rpmbuild -ts "${RELEASE_OPT[@]}" --define "kversion ${KVERSION}.el${EL_VER//./_}.x86_64" --define "dist .el${MAJOR_VER}" scoutfs-kmod-*.tar | awk '{print $2}' )
+    SRPM=$(rpmbuild -ts "${RELEASE_OPT[@]}" --define "kversion ${RPM_KVERSION}" --define "dist .el${MAJOR_VER}" scoutfs-kmod-*.tar | awk '{print $2}' )
     set -e
     if [ -f "$SRPM" ]; then
         echo "SRPM created: $SRPM"
@@ -228,7 +234,7 @@ fi
 
 mock_args+=(--${PACKAGE_MANAGER})
 
-mock "${mock_args[@]}" --enablerepo epel -r "../scoutfs-build-${EL_VER}.cfg" rebuild "${RELEASE_OPT[@]}" --define "kversion ${KVERSION}.el${EL_VER//./_}.x86_64" --define "dist .el${EL_VER//./_}" --resultdir "./scoutfs_${EL_VER//./_}" "${SRPM}"
+mock "${mock_args[@]}" --enablerepo epel -r "../scoutfs-build-${EL_VER}.cfg" rebuild "${RELEASE_OPT[@]}" --define "kversion ${RPM_KVERSION}" --define "dist .el${EL_VER//./_}" --resultdir "./scoutfs_${EL_VER//./_}" "${SRPM}"
 if [ "$?" -ne "0" ]; then
     exit 1
 fi
