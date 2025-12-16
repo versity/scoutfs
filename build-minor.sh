@@ -1,13 +1,16 @@
 #!/bin/bash
 set -e
 
+export VERBOSE="${VERBOSE:-0}"
+if [ "${VERBOSE}" -eq 1 ]; then
+  set -x
+fi
 export EL_MAJOR_VER="${EL_MAJOR_VER:-9.4}"
 export EL_VER="${EL_VER:-${EL_MAJOR_VER}}"
 export MAJOR_VER="${EL_VER%%.*}"
 export MINOR_VER="${EL_VER#*.}"
 export RELEASE="${RELEASE:-0}"
 export IS_EDGE="${IS_EDGE:-0}"
-export VERBOSE="${VERBOSE:-1}"
 export FORCE_REBUILD_DOCKER_IMAGE="${FORCE_REBUILD_DOCKER_IMAGE:-0}"
 export HTTP_PROXY="${HTTP_PROXY:-}"
 

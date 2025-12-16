@@ -2,6 +2,10 @@
 
 set -ex
 
+export VERBOSE="${VERBOSE:-0}"
+if [ "${VERBOSE}" -eq 1 ]; then
+  set -x
+fi
 export EL_MAJOR_VER="${EL_MAJOR_VER:-9.5}"
 export EL_VER="${EL_VER:-${EL_MAJOR_VER}}"
 export MAJOR_VER="${EL_VER%%.*}"

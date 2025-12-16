@@ -1,5 +1,9 @@
 #!/bin/bash
 
+export VERBOSE="${VERBOSE:-0}"
+if [ "${VERBOSE}" -eq 1 ]; then
+  set -x
+fi
 export EL_VER
 export IS_EDGE
 

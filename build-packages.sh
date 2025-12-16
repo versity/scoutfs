@@ -1,13 +1,15 @@
 #!/bin/bash
 set -e
 
+export VERBOSE="${VERBOSE:-0}"
+if [ "${VERBOSE}" -eq 1 ]; then
+  set -x
+fi
 export EL_MAJOR_VER="${EL_MAJOR_VER:-9.5}"
 export EL_VER="${EL_VER:-${EL_MAJOR_VER}}"
 export MAJOR_VER="${EL_VER%%.*}"
 export MINOR_VER="${EL_VER#*.}"
-
-IS_EDGE="${IS_EDGE:-0}"
-VERBOSE="${VERBOSE:-1}"
+export IS_EDGE="${IS_EDGE:-0}"
 
 mock_args=()
 
