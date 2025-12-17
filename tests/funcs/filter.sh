@@ -170,6 +170,9 @@ t_filter_dmesg()
 	# some ci test guests are unresponsive
 	re="$re|longest quorum heartbeat .* delay"
 
+	# creating block devices may trigger this
+	re="$re|block device autoloading is deprecated and will be removed."
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob
 }

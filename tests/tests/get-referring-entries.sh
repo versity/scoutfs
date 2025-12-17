@@ -72,7 +72,7 @@ touch $T_D0/dir/file
 mkdir $T_D0/dir/dir
 ln -s $T_D0/dir/file $T_D0/dir/symlink
 mknod $T_D0/dir/char c 1 3 # null
-mknod $T_D0/dir/block b 7 0 # loop0
+mknod $T_D0/dir/block b 42 0 # SAMPLE block dev - nonexistant/demo use only number
 for name in $(ls -UA $T_D0/dir | sort); do
 	ino=$(stat -c '%i' $T_D0/dir/$name)
 	$GRE $ino | filter_types
