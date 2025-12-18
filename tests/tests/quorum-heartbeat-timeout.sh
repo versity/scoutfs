@@ -62,7 +62,7 @@ test_timeout()
 	sleep 1
 
 	# tear down the current server/leader
-	t_force_umount $sv
+	t_force_umount $sv &
 
 	# see how long it takes for the next leader to start
 	start=$(time_ms)
@@ -73,6 +73,8 @@ test_timeout()
 	echo "to $to delay $delay" >> $T_TMP.delay
 
 	# restore the mount that we tore down
+	wait
+	sleep 1
 	t_mount $sv
 
 	# make sure the new leader delay was reasonable, allowing for some slack
