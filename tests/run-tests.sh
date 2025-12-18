@@ -92,7 +92,8 @@ done
 T_TRACE_DUMP="0"
 T_TRACE_PRINTK="0"
 T_PORT_START="19700"
-T_LOOP_ITER="1"
+T_LOOP_ITER="30"
+T_INCLUDE="quorum-heartbeat-timeout"
 
 # array declarations to be able to use array ops
 declare -a T_TRACE_GLOB
