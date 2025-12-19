@@ -789,6 +789,97 @@ TRACE_EVENT(scoutfs_inode_walk_writeback,
 		  __entry->ino, __entry->write, __entry->ret)
 );
 
+TRACE_EVENT(scoutfs_orphan_scan_start,
+	TP_PROTO(struct super_block *sb),
+
+	TP_ARGS(sb),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+	),
+
+	TP_printk(SCSBF, SCSB_TRACE_ARGS)
+);
+
+TRACE_EVENT(scoutfs_orphan_scan_stop,
+	TP_PROTO(struct super_block *sb),
+
+	TP_ARGS(sb),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+	),
+
+	TP_printk(SCSBF, SCSB_TRACE_ARGS)
+);
+
+TRACE_EVENT(scoutfs_orphan_scan_work,
+	TP_PROTO(struct super_block *sb, __u64 ino),
+
+	TP_ARGS(sb, ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+	),
+
+	TP_printk(SCSBF" ino %llu", SCSB_TRACE_ARGS,
+		  __entry->ino)
+);
+
+TRACE_EVENT(scoutfs_orphan_scan_end,
+	TP_PROTO(struct super_block *sb, __u64 ino, int ret),
+
+	TP_ARGS(sb, ino, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu ret %d", SCSB_TRACE_ARGS,
+		  __entry->ino, __entry->ret)
+);
+
+TRACE_EVENT(scoutfs_orphan_scan_empty,
+	TP_PROTO(struct super_block *sb, bool found_work),
+
+	TP_ARGS(sb, found_work),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(bool, found_work)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->found_work = found_work;
+	),
+
+	TP_printk(SCSBF" found_work %d", SCSB_TRACE_ARGS,
+		  __entry->found_work)
+);
+
 DECLARE_EVENT_CLASS(scoutfs_lock_info_class,
 	TP_PROTO(struct super_block *sb, struct lock_info *linfo),
 
@@ -1036,6 +1127,136 @@ TRACE_EVENT(scoutfs_orphan_inode,
 		  MINOR(__entry->dev), __entry->ino)
 );
 
+TRACE_EVENT(scoutfs_try_delete,
+	TP_PROTO(struct super_block *sb, u64 ino),
+
+	TP_ARGS(sb, ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+	),
+
+	TP_printk(SCSBF" ino %llu", SCSB_TRACE_ARGS, __entry->ino)
+);
+
+TRACE_EVENT(scoutfs_try_delete_local_busy,
+	TP_PROTO(struct super_block *sb, u64 ino),
+
+	TP_ARGS(sb, ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+	),
+
+	TP_printk(SCSBF" ino %llu", SCSB_TRACE_ARGS, __entry->ino)
+);
+
+TRACE_EVENT(scoutfs_try_delete_cached,
+	TP_PROTO(struct super_block *sb, u64 ino),
+
+	TP_ARGS(sb, ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+	),
+
+	TP_printk(SCSBF" ino %llu", SCSB_TRACE_ARGS, __entry->ino)
+);
+
+TRACE_EVENT(scoutfs_try_delete_no_item,
+	TP_PROTO(struct super_block *sb, u64 ino),
+
+	TP_ARGS(sb, ino),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+	),
+
+	TP_printk(SCSBF" ino %llu", SCSB_TRACE_ARGS, __entry->ino)
+);
+
+TRACE_EVENT(scoutfs_try_delete_has_links,
+	TP_PROTO(struct super_block *sb, u64 ino, unsigned int nlink),
+
+	TP_ARGS(sb, ino, nlink),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(unsigned int, nlink)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->nlink = nlink;
+	),
+
+	TP_printk(SCSBF" ino %llu nlink %u", SCSB_TRACE_ARGS, __entry->ino,
+		  __entry->nlink)
+);
+
+TRACE_EVENT(scoutfs_inode_orphan_delete,
+	TP_PROTO(struct super_block *sb, u64 ino, int ret),
+
+	TP_ARGS(sb, ino, ret),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, ino)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->ret = ret;
+	),
+
+	TP_printk(SCSBF" ino %llu ret %d", SCSB_TRACE_ARGS, __entry->ino,
+		__entry->ret)
+);
+
+TRACE_EVENT(scoutfs_server_finalize_trigger,
+	TP_PROTO(struct super_block *sb),
+
+	TP_ARGS(sb),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+	),
+
+	TP_printk(SCSBF, SCSB_TRACE_ARGS)
+);
+
 TRACE_EVENT(scoutfs_delete_inode,
 	TP_PROTO(struct super_block *sb, u64 ino, umode_t mode, u64 size),
 
@@ -1058,6 +1279,32 @@ TRACE_EVENT(scoutfs_delete_inode,
 	TP_printk("dev %d,%d ino %llu, mode 0x%x size %llu",
 		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->ino,
 		  __entry->mode, __entry->size)
+);
+
+TRACE_EVENT(scoutfs_delete_inode_end,
+	TP_PROTO(struct super_block *sb, u64 ino, umode_t mode, u64 size, int ret),
+
+	TP_ARGS(sb, ino, mode, size, ret),
+
+	TP_STRUCT__entry(
+		__field(dev_t, dev)
+		__field(__u64, ino)
+		__field(umode_t, mode)
+		__field(__u64, size)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		__entry->dev = sb->s_dev;
+		__entry->ino = ino;
+		__entry->mode = mode;
+		__entry->size = size;
+		__entry->ret = ret;
+	),
+
+	TP_printk("dev %d,%d ino %llu, mode 0x%x size %llu, ret %d",
+		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->ino,
+		  __entry->mode, __entry->size, __entry->ret)
 );
 
 DECLARE_EVENT_CLASS(scoutfs_key_class,
