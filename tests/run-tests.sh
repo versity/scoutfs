@@ -403,7 +403,6 @@ if [ -n "$T_INSMOD" ]; then
 fi
 
 if [ -n "$T_TRACE_MULT" ]; then
-#	orig_trace_size=$(cat /sys/kernel/debug/tracing/buffer_size_kb)
 	orig_trace_size=1408
 	mult_trace_size=$((orig_trace_size * T_TRACE_MULT))
 	msg "increasing trace buffer size from $orig_trace_size KiB to $mult_trace_size KiB"
