@@ -63,6 +63,22 @@ mounts because there are more locks that cover the same number of
 created files.  This can be helpful when working with smaller numbers of
 large files.
 .TP
+.B lock_idle_count=<number>
+This option sets the number of locks that the client will allow to
+remain idle after being granted.  If the number of locks exceeds this
+count then the client will try to free the oldest locks.  This setting
+is per-mount and only changes the behavior of that mount.
+.sp
+Idle locks are not reclaimed by memory pressure so this option
+determines the limit of how much memory is likely to be pinned by
+allocated idle locks.  Setting this too low can increase latency of
+operations as repeated use of a working set of locks has to request the
+locks from the network rather than using granted idle locks.
+.sp
+The count is not strictly enforced.  Operations are allowed to use locks
+while over the limit to avoid deadlocks under heavy concurrent load.
+Exceeding the count only attempts freeing of idle locks.
+.TP
 .B log_merge_wait_timeout_ms=<number>
 This option sets the amount of time, in milliseconds, that log merge
 creation can wait before timing out.  This setting is per-mount, only

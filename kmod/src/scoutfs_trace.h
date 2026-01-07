@@ -1619,28 +1619,6 @@ DEFINE_EVENT(scoutfs_work_class, scoutfs_data_return_server_extents_exit,
         TP_ARGS(sb, data, ret)
 );
 
-DECLARE_EVENT_CLASS(scoutfs_shrink_exit_class,
-        TP_PROTO(struct super_block *sb, unsigned long nr_to_scan, int ret),
-        TP_ARGS(sb, nr_to_scan, ret),
-        TP_STRUCT__entry(
-		__field(void *, sb)
-		__field(unsigned long, nr_to_scan)
-		__field(int, ret)
-        ),
-        TP_fast_assign(
-		__entry->sb = sb;
-		__entry->nr_to_scan = nr_to_scan;
-		__entry->ret = ret;
-        ),
-        TP_printk("sb %p nr_to_scan %lu ret %d",
-		  __entry->sb, __entry->nr_to_scan, __entry->ret)
-);
-
-DEFINE_EVENT(scoutfs_shrink_exit_class, scoutfs_lock_shrink_exit,
-        TP_PROTO(struct super_block *sb, unsigned long nr_to_scan, int ret),
-        TP_ARGS(sb, nr_to_scan, ret)
-);
-
 TRACE_EVENT(scoutfs_rename,
 	TP_PROTO(struct super_block *sb, struct inode *old_dir,
 		 struct dentry *old_dentry, struct inode *new_dir,
