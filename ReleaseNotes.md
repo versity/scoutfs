@@ -2,6 +2,39 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.27
+\
+*Jan 15, 2026*
+
+Switch away from using the general VM cache reclaim machinery to reduce
+idle cluster locks in the client.  The VM treated locks like a cache and
+let many accumulate, presuming that it would be efficient to free them
+in batches.  Lock freeing requires network communication so this could
+result in enormous backlogs in network messages (on the order of
+hundreds of thousands) and could result in signifcant delays of other
+network messaging.
+
+Fix inefficient network receive processing while many messages are in
+the send queue.  This consumed sufficient CPU to cause significant
+stalls, perhaps resulting in hung task warning messages due to delayed
+lock message delivery.
+
+Fix a server livelock case that could happen while committing client
+transactions that contain a large amount of freed file data extents.
+This would present as client tasks hanging and a server task spinning
+consuming cpu.
+
+Fix a rare server request processing failure that doesn't deal with
+retransmission of a request that a previous server partially processed.
+This would present as hung client tasks and repeated "error -2
+committing log merge: getting merge status item" kernel messages.
+
+Fix an unneccessary server shutdown during specific circumstances in
+client lock recovery.  The shutdown was due to server state and was
+ultimately harmless.  The next server that started up would proceed
+accordingly.
+
+---
 v1.26
 \
 *Nov 17, 2025*
