@@ -61,18 +61,28 @@ rm -f "$T_D1/file"
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
 
+# Hurry along the orphan scanners. If any are currently asleep, we will
+# have to wait at least their current scan interval before they wake up,
+# run, and notice their new interval.
+t_save_all_sysfs_mount_options orphan_scan_delay_ms
+t_set_all_sysfs_mount_options orphan_scan_delay_ms 500
+t_wait_for_orphan_scan_runs
+
 echo "== unlink wait for open on other mount"
-echo "contents" > "$T_D0/file"
-ino=$(stat -c "%i" "$T_D0/file")
-dseq=$(scoutfs stat -s data_seq "$T_D0/file")
-exec {FD}<"$T_D0/file"
-rm -f "$T_D1/file"
+echo "contents" > "$T_D0/badfile"
+ino=$(stat -c "%i" "$T_D0/badfile")
+dseq=$(scoutfs stat -s data_seq "$T_D0/badfile")
+exec {FD}<"$T_D0/badfile"
+rm -f "$T_D1/badfile"
 echo "mount 0 contents after mount 1 rm: $(cat <&$FD)"
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
 exec {FD}>&-  # close
 # we know that revalidating will unhash the remote dentry
-stat "$T_D0/file" 2>&1 | sed 's/cannot statx/cannot stat/' | t_filter_fs
+stat "$T_D0/badfile" 2>&1 | sed 's/cannot statx/cannot stat/' | t_filter_fs
+t_force_log_merge
+# wait for orphan scanners to pick up the unlinked inode and become idle
+t_wait_for_no_orphans
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
 
@@ -83,16 +93,20 @@ rm -f "$T_D0/dir"/files-*
 rmdir "$T_D0/dir"
 
 echo "== open files survive remote scanning orphans"
-echo "contents" > "$T_D0/file"
-ino=$(stat -c "%i" "$T_D0/file")
-dseq=$(scoutfs stat -s data_seq "$T_D0/file")
-exec {FD}<"$T_D0/file"
-rm -f "$T_D0/file"
+echo "contents" > "$T_D0/lastfile"
+ino=$(stat -c "%i" "$T_D0/lastfile")
+dseq=$(scoutfs stat -s data_seq "$T_D0/lastfile")
+exec {FD}<"$T_D0/lastfile"
+rm -f "$T_D0/lastfile"
 t_umount 1
 t_mount 1
 echo "mount 0 contents after mount 1 remounted: $(cat <&$FD)"
 exec {FD}>&-  # close
+t_force_log_merge
+t_wait_for_no_orphans
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
+
+t_restore_all_sysfs_mount_options orphan_scan_delay_ms
 
 t_pass

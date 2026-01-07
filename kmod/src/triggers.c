@@ -18,6 +18,7 @@
 
 #include "super.h"
 #include "triggers.h"
+#include "scoutfs_trace.h"
 
 /*
  * We have debugfs files we can write to which arm triggers which
@@ -39,6 +40,7 @@ struct scoutfs_triggers {
 
 static char *names[] = {
 	[SCOUTFS_TRIGGER_BLOCK_REMOVE_STALE] = "block_remove_stale",
+	[SCOUTFS_TRIGGER_LOG_MERGE_FORCE_FINALIZE_OURS] = "log_merge_force_finalize_ours",
 	[SCOUTFS_TRIGGER_SRCH_COMPACT_LOGS_PAD_SAFE] = "srch_compact_logs_pad_safe",
 	[SCOUTFS_TRIGGER_SRCH_FORCE_LOG_ROTATE] = "srch_force_log_rotate",
 	[SCOUTFS_TRIGGER_SRCH_MERGE_STOP_SAFE] = "srch_merge_stop_safe",
@@ -51,6 +53,7 @@ bool scoutfs_trigger_test_and_clear(struct super_block *sb, unsigned int t)
 	atomic_t *atom;
 	int old;
 	int mem;
+	bool fired;
 
 	BUG_ON(t >= SCOUTFS_TRIGGER_NR);
 	atom = &triggers->atomics[t];
@@ -64,7 +67,12 @@ bool scoutfs_trigger_test_and_clear(struct super_block *sb, unsigned int t)
 		mem = atomic_cmpxchg(atom, old, 0);
 	} while (mem && mem != old);
 
-	return !!mem;
+	fired = !!mem;
+
+	if (fired)
+		trace_scoutfs_trigger_fired(sb, names[t]);
+
+	return fired;
 }
 
 int scoutfs_setup_triggers(struct super_block *sb)

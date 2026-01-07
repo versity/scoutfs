@@ -41,6 +41,7 @@
 #include "recov.h"
 #include "omap.h"
 #include "fence.h"
+#include "triggers.h"
 
 /*
  * Every active mount can act as the server that listens on a net
@@ -1291,9 +1292,13 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 		 * meta was low so that deleted items are merged
 		 * promptly and freed blocks can bring the client out of
 		 * enospc.
+		 *
+		 * The trigger can be used to force a log merge in cases where
+		 * a test only generates small amounts of change.
 		 */
 		finalize_ours = (lt->item_root.height > 2) ||
-				(le32_to_cpu(lt->meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW);
+				(le32_to_cpu(lt->meta_avail.flags) & SCOUTFS_ALLOC_FLAG_LOW) ||
+				scoutfs_trigger(sb, LOG_MERGE_FORCE_FINALIZE_OURS);
 
 		trace_scoutfs_server_finalize_decision(sb, rid, saw_finalized, others_active,
 						       ours_visible, finalize_ours, delay_ms,
@@ -1401,6 +1406,8 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 						   &super->log_merge, &key);
 			BUG_ON(err); /* inconsistent */
 		}
+
+		scoutfs_inc_counter(sb, log_merge_start);
 
 		/* we're done, caller can make forward progress */
 		break;
@@ -2509,6 +2516,8 @@ static int splice_log_merge_completions(struct super_block *sb,
 		queue_work(server->wq, &server->log_merge_free_work);
 	else
 		err_str = "deleting merge status item";
+
+	scoutfs_inc_counter(sb, log_merge_complete);
 out:
 	if (upd_stat) {
 		init_log_merge_key(&key, SCOUTFS_LOG_MERGE_STATUS_ZONE, 0, 0);
