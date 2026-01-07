@@ -2,6 +2,21 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.27
+\
+*Jan 7, 2026*
+
+Fix a server livelock case that can happen while committing client
+transations that contain a large amount of freed file data extents.
+This would present as client tasks hanging and a server task spinning
+consuming cpu.
+
+Fix a rare server request processing failure that doesn't deal with
+retransmission of a request that a previous server partially processed.
+This would present as hung client tasks and repeated "error -2
+committing log merge: getting merge status item" kernel messages.
+
+---
 v1.26
 \
 *Nov 17, 2025*
