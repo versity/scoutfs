@@ -2293,8 +2293,10 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 out:
 	/* our allocators and files should be stable */
 	WARN_ON_ONCE(ret == -ESTALE);
-	if (ret < 0)
+	if (ret < 0) {
+		scoutfs_err(sb, "@@@ srch_compact_error %d", ret);
 		scoutfs_inc_counter(sb, srch_compact_error);
+	}
 
 	scoutfs_block_writer_forget_all(sb, &wri);
 	queue_compact_work(srinf, sc != NULL && sc->nr > 0 && ret == 0);
