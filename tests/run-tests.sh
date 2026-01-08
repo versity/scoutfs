@@ -402,14 +402,14 @@ if [ -n "$T_INSMOD" ]; then
 	cmd insmod "$T_MODULE"
 fi
 
-if [ -n "$T_TRACE_MULT" ]; then
-	orig_trace_size=1408
-	mult_trace_size=$((orig_trace_size * T_TRACE_MULT))
-	msg "increasing trace buffer size from $orig_trace_size KiB to $mult_trace_size KiB"
-	echo $mult_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
-fi
-
 start_tracing() {
+	if [ -n "$T_TRACE_MULT" ]; then
+		orig_trace_size=1408
+		mult_trace_size=$((orig_trace_size * T_TRACE_MULT))
+		msg "increasing trace buffer size from $orig_trace_size KiB to $mult_trace_size KiB"
+		echo $mult_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
+	fi
+
 	nr_globs=${#T_TRACE_GLOB[@]}
 	if [ $nr_globs -gt 0 ]; then
 		echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
