@@ -34,6 +34,7 @@ enum {
 	Opt_data_prealloc_blocks,
 	Opt_data_prealloc_contig_only,
 	Opt_ino_alloc_per_lock,
+	Opt_lock_idle_count,
 	Opt_log_merge_wait_timeout_ms,
 	Opt_metadev_path,
 	Opt_noacl,
@@ -49,6 +50,7 @@ static const match_table_t tokens = {
 	{Opt_data_prealloc_blocks, "data_prealloc_blocks=%s"},
 	{Opt_data_prealloc_contig_only, "data_prealloc_contig_only=%s"},
 	{Opt_ino_alloc_per_lock, "ino_alloc_per_lock=%s"},
+	{Opt_lock_idle_count, "lock_idle_count=%s"},
 	{Opt_log_merge_wait_timeout_ms, "log_merge_wait_timeout_ms=%s"},
 	{Opt_metadev_path, "metadev_path=%s"},
 	{Opt_noacl, "noacl"},
@@ -119,6 +121,10 @@ static void free_options(struct scoutfs_mount_options *opts)
 	kfree(opts->metadev_path);
 }
 
+#define MIN_LOCK_IDLE_COUNT	32
+#define DEFAULT_LOCK_IDLE_COUNT	(10 * 1000)
+#define MAX_LOCK_IDLE_COUNT	(100 * 1000)
+
 #define MIN_LOG_MERGE_WAIT_TIMEOUT_MS		100UL
 #define DEFAULT_LOG_MERGE_WAIT_TIMEOUT_MS	500
 #define MAX_LOG_MERGE_WAIT_TIMEOUT_MS		(60 * MSEC_PER_SEC)
@@ -139,11 +145,27 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 	opts->data_prealloc_blocks = SCOUTFS_DATA_PREALLOC_DEFAULT_BLOCKS;
 	opts->data_prealloc_contig_only = 1;
 	opts->ino_alloc_per_lock = SCOUTFS_LOCK_INODE_GROUP_NR;
+	opts->lock_idle_count = DEFAULT_LOCK_IDLE_COUNT;
 	opts->log_merge_wait_timeout_ms = DEFAULT_LOG_MERGE_WAIT_TIMEOUT_MS;
 	opts->orphan_scan_delay_ms = -1;
 	opts->quorum_heartbeat_timeout_ms = SCOUTFS_QUORUM_DEF_HB_TIMEO_MS;
 	opts->quorum_slot_nr = -1;
 	opts->tcp_keepalive_timeout_ms = DEFAULT_TCP_KEEPALIVE_TIMEOUT_MS;
+}
+
+static int verify_lock_idle_count(struct super_block *sb, int ret, int val)
+{
+	if (ret < 0) {
+		scoutfs_err(sb, "failed to parse lock_idle_count value");
+		return -EINVAL;
+	}
+	if (val < MIN_LOCK_IDLE_COUNT || val > MAX_LOCK_IDLE_COUNT) {
+		scoutfs_err(sb, "invalid lock_idle_count value %d, must be between %u and %u",
+			    val, MIN_LOCK_IDLE_COUNT, MAX_LOCK_IDLE_COUNT);
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 static int verify_log_merge_wait_timeout_ms(struct super_block *sb, int ret, int val)
@@ -259,6 +281,14 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 			if (ret < 0)
 				return ret;
 			opts->tcp_keepalive_timeout_ms = nr;
+			break;
+
+		case Opt_lock_idle_count:
+			ret = match_int(args, &nr);
+			ret = verify_lock_idle_count(sb, ret, nr);
+			if (ret < 0)
+				return ret;
+			opts->lock_idle_count = nr;
 			break;
 
 		case Opt_log_merge_wait_timeout_ms:
@@ -536,6 +566,43 @@ static ssize_t ino_alloc_per_lock_store(struct kobject *kobj, struct kobj_attrib
 }
 SCOUTFS_ATTR_RW(ino_alloc_per_lock);
 
+static ssize_t lock_idle_count_show(struct kobject *kobj, struct kobj_attribute *attr,
+						char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%u", opts.lock_idle_count);
+}
+static ssize_t lock_idle_count_store(struct kobject *kobj, struct kobj_attribute *attr,
+						 const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	int val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoint(nullterm, 0, &val);
+	ret = verify_lock_idle_count(sb, ret, val);
+	if (ret == 0) {
+		write_seqlock(&optinf->seqlock);
+		optinf->opts.lock_idle_count = val;
+		write_sequnlock(&optinf->seqlock);
+		ret = count;
+	}
+
+	return ret;
+}
+SCOUTFS_ATTR_RW(lock_idle_count);
+
 static ssize_t log_merge_wait_timeout_ms_show(struct kobject *kobj, struct kobj_attribute *attr,
 						char *buf)
 {
@@ -677,6 +744,7 @@ static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(data_prealloc_blocks),
 	SCOUTFS_ATTR_PTR(data_prealloc_contig_only),
 	SCOUTFS_ATTR_PTR(ino_alloc_per_lock),
+	SCOUTFS_ATTR_PTR(lock_idle_count),
 	SCOUTFS_ATTR_PTR(log_merge_wait_timeout_ms),
 	SCOUTFS_ATTR_PTR(metadev_path),
 	SCOUTFS_ATTR_PTR(orphan_scan_delay_ms),
