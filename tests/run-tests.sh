@@ -743,7 +743,10 @@ for iter in $(seq 1 $T_LOOP_ITER); do
 			echo "$test_name $message" >> "$T_RESULTS/fail.log"
 			((failed++))
 
-			test -n "$T_ABORT" && die "aborting after first failure"
+			if [ -n "$T_ABORT" ]; then
+				stop_tracing
+				die "aborting after first failure"
+			fi
 		fi
 
 		# record results for TAP format output
