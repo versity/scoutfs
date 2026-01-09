@@ -717,14 +717,14 @@ static void lock_invalidate_worker(struct work_struct *work)
 		/* only lock protocol, inv can't call subsystems after shutdown */
 		if (!linfo->shutdown) {
 			ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
-			BUG_ON(ret);
+			BUG_ON(ret < 0 && ret != -ENOLINK);
 		}
 
 		/* respond with the key and modes from the request, server might have died */
 		ret = scoutfs_client_lock_response(sb, ireq->net_id, nl);
 		if (ret == -ENOTCONN)
 			ret = 0;
-		BUG_ON(ret);
+		BUG_ON(ret < 0 && ret != -ENOLINK);
 
 		scoutfs_inc_counter(sb, lock_invalidate_response);
 	}
