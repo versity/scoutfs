@@ -745,6 +745,7 @@ static int search_log_file(struct super_block *sb,
 		for (i = 0; i < le32_to_cpu(srb->entry_nr); i++) {
 			if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 				/* can only be inconsistency :/ */
+				scoutfs_err(sb, "@@@ pos %d > %d", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
 				ret = -EIO;
 				break;
 			}
@@ -752,6 +753,7 @@ static int search_log_file(struct super_block *sb,
 			ret = decode_entry(srb->entries + pos, &sre, &prev);
 			if (ret <= 0) {
 				/* can only be inconsistency :/ */
+				scoutfs_err(sb, "@@@ decode_entry -> %d", ret);
 				ret = -EIO;
 				break;
 			}
@@ -855,6 +857,7 @@ static int search_sorted_file(struct super_block *sb,
 
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
+			scoutfs_err(sb, "@@@ 2: pos %d > %d", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
 			ret = -EIO;
 			goto out;
 		}
@@ -862,6 +865,7 @@ static int search_sorted_file(struct super_block *sb,
 		ret = decode_entry(srb->entries + pos, &sre, &prev);
 		if (ret <= 0) {
 			/* can only be inconsistency :/ */
+			scoutfs_err(sb, "@@@ 2: decode -> %d", ret);
 			ret = -EIO;
 			goto out;
 		}
@@ -1001,6 +1005,7 @@ retry:
 				scoutfs_key_inc(&key);
 				memcpy(&sfl, iref.val, iref.val_len);
 			} else {
+				scoutfs_err(sb, "@@@ btree_next bad?");
 				ret = -EIO;
 			}
 			scoutfs_btree_put_iref(&iref);
@@ -1036,6 +1041,7 @@ retry:
 				scoutfs_key_inc(&key);
 				memcpy(&lt, iref.val, iref.val_len);
 			} else {
+				scoutfs_err(sb, "@@@ btree_next bad 2");
 				ret = -EIO;
 			}
 			scoutfs_btree_put_iref(&iref);
@@ -1151,6 +1157,7 @@ int scoutfs_srch_get_compact(struct super_block *sb,
 				key = *iref.key;
 				memcpy(sc, iref.val, iref.val_len);
 			} else {
+				scoutfs_err(sb, "@@@ btree_next bad 3");
 				ret = -EIO;
 			}
 			scoutfs_btree_put_iref(&iref);
@@ -1209,6 +1216,7 @@ int scoutfs_srch_get_compact(struct super_block *sb,
 				key = *iref.key;
 				memcpy(&sfl, iref.val, iref.val_len);
 			} else {
+				scoutfs_err(sb, "@@@ btree_next bad 4");
 				ret = -EIO;
 			}
 			scoutfs_btree_put_iref(&iref);
@@ -1402,8 +1410,10 @@ int scoutfs_srch_commit_compact(struct super_block *sb,
 	if (ret == 0) {
 		if (iref.val_len == sizeof(struct scoutfs_srch_compact))
 			memcpy(busy, iref.val, iref.val_len);
-		else
+		else {
+			scoutfs_err(sb, "@@@ btree_lookup bad");
 			ret = -EIO;
+		}
 		scoutfs_btree_put_iref(&iref);
 	}
 	if (ret < 0)
@@ -1496,6 +1506,7 @@ int scoutfs_srch_cancel_compact(struct super_block *sb,
 		if (scoutfs_key_compare(iref.key, &last) > 0) {
 			ret = -ENOENT;
 		} else if (iref.val_len != sizeof(*sc)) {
+			scoutfs_err(sb, "@@@ btree_next bad 5");
 			ret = -EIO;
 		} else {
 			key = *iref.key;
@@ -1637,6 +1648,7 @@ static int kway_merge(struct super_block *sb,
 					   &root->sre, &srb->tail);
 			if (WARN_ON_ONCE(ret <= 0)) {
 				/* shouldn't happen */
+				scoutfs_err(sb, "@@@ encode -> %d", ret);
 				ret = -EIO;
 				goto out;
 			}
@@ -1861,6 +1873,7 @@ static int compact_logs(struct super_block *sb,
 
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
+			scoutfs_err(sb, "@@@ 3: pos %d > %d", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
 			ret = -EIO;
 			goto out;
 		}
@@ -1868,6 +1881,7 @@ static int compact_logs(struct super_block *sb,
 		ret = decode_entry(srb->entries + pos, sre, &prev);
 		if (ret <= 0) {
 			/* can only be inconsistency :/ */
+			scoutfs_err(sb, "@@@ new decode -> %d", ret);
 			ret = -EIO;
 			goto out;
 		}
@@ -1982,6 +1996,10 @@ static int kway_get_reader(struct super_block *sb,
 	    rdr->skip > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
+		scoutfs_err(sb, "@@@ pos %u vs %u, skip %u , %u",
+			rdr->pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES,
+			rdr->skip,
+			le32_to_cpu(srb->entry_bytes));
 		return -EIO;
 	}
 
@@ -1997,6 +2015,7 @@ static int kway_get_reader(struct super_block *sb,
 				   &rdr->decoded_sre, &rdr->prev);
 		if (ret <= 0) {
 			/* XXX inconsistency */
+			scoutfs_err(sb, "@@@ decode new2 ret %d", ret);
 			return -EIO;
 		}
 
