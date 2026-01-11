@@ -745,7 +745,7 @@ static int search_log_file(struct super_block *sb,
 		for (i = 0; i < le32_to_cpu(srb->entry_nr); i++) {
 			if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 				/* can only be inconsistency :/ */
-				scoutfs_err(sb, "@@@ pos %d > %d", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
+				scoutfs_err(sb, "@@@ pos %d > %ld", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
 				ret = -EIO;
 				break;
 			}
@@ -857,7 +857,7 @@ static int search_sorted_file(struct super_block *sb,
 
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
-			scoutfs_err(sb, "@@@ 2: pos %d > %d", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
+			scoutfs_err(sb, "@@@ 2: pos %d > %ld", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
 			ret = -EIO;
 			goto out;
 		}
@@ -1873,7 +1873,7 @@ static int compact_logs(struct super_block *sb,
 
 		if (pos > SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
 			/* can only be inconsistency :/ */
-			scoutfs_err(sb, "@@@ 3: pos %d > %d", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
+			scoutfs_err(sb, "@@@ 3: pos %d > %ld", pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES);
 			ret = -EIO;
 			goto out;
 		}
@@ -1996,7 +1996,7 @@ static int kway_get_reader(struct super_block *sb,
 	    rdr->skip > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
-		scoutfs_err(sb, "@@@ pos %u vs %u, skip %u , %u",
+		scoutfs_err(sb, "@@@ pos %u vs %ld, skip %u , %u",
 			rdr->pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES,
 			rdr->skip,
 			le32_to_cpu(srb->entry_bytes));
