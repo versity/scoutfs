@@ -2651,7 +2651,7 @@ TRACE_EVENT(scoutfs_get_file_block,
 		__entry->last_id = __le64_to_cpu(srb->last.id);
 	),
 
-	TP_printk(SCSBF" blkno %llu bytes %u flags 0x%x first_hash 0x%llx first_ino %llu fist_id 0x%llx last_hash 0x%llx last_ino %llu last_id 0x%llx",
+	TP_printk(SCSBF" blkno %llu bytes %u flags 0x%x first_hash 0x%llx first_ino %llu first_id 0x%llx last_hash 0x%llx last_ino %llu last_id 0x%llx",
 		  SCSB_TRACE_ARGS,
 		  __entry->blkno, __entry->entry_bytes, __entry->flags,
 		  __entry->first_hash, __entry->first_ino, __entry->first_id,
