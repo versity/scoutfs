@@ -1996,7 +1996,8 @@ static int kway_get_reader(struct super_block *sb,
 	    rdr->skip > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
-		scoutfs_err(sb, "@@@ pos %u vs %ld, skip %u , %u",
+		scoutfs_err(sb, "@@@ blkno %llu pos %u vs %ld, skip %u , %u",
+			__le64_to_cpu(srb->hdr.blkno),
 			rdr->pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES,
 			rdr->skip,
 			le32_to_cpu(srb->entry_bytes));
