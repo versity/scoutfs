@@ -383,7 +383,7 @@ fi
 quo=""
 if [ -n "$T_MKFS" ]; then
 	for i in $(seq -0 $((T_QUORUM - 1))); do
-		quo="$quo -Q $i,127.0.0.1,$((T_TEST_PORT + i))"
+		quo="$quo -Q $i,::1,$((T_TEST_PORT + i))"
 	done
 
 	msg "making new filesystem with $T_QUORUM quorum members"
