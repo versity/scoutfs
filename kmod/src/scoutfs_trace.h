@@ -2620,24 +2620,44 @@ TRACE_EVENT(scoutfs_block_dirty_ref,
 );
 
 TRACE_EVENT(scoutfs_get_file_block,
-	TP_PROTO(struct super_block *sb, u64 blkno, int flags),
+	TP_PROTO(struct super_block *sb, u64 blkno, int flags,
+		 struct scoutfs_srch_block *srb),
 
-	TP_ARGS(sb, blkno, flags),
+	TP_ARGS(sb, blkno, flags, srb),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, blkno)
+		__field(__u32, entry_nr)
+		__field(__u32, entry_bytes)
 		__field(int, flags)
+		__field(__u64, first_hash)
+		__field(__u64, first_ino)
+		__field(__u64, first_id)
+		__field(__u64, last_hash)
+		__field(__u64, last_ino)
+		__field(__u64, last_id)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->blkno = blkno;
+		__entry->entry_nr = __le32_to_cpu(srb->entry_nr);
+		__entry->entry_bytes = __le32_to_cpu(srb->entry_bytes);
 		__entry->flags = flags;
+		__entry->first_hash = __le64_to_cpu(srb->first.hash);
+		__entry->first_ino = __le64_to_cpu(srb->first.ino);
+		__entry->first_id = __le64_to_cpu(srb->first.id);
+		__entry->last_hash = __le64_to_cpu(srb->last.hash);
+		__entry->last_ino = __le64_to_cpu(srb->last.ino);
+		__entry->last_id = __le64_to_cpu(srb->last.id);
 	),
 
-	TP_printk(SCSBF" blkno %llu flags 0x%x",
-		  SCSB_TRACE_ARGS, __entry->blkno, __entry->flags)
+	TP_printk(SCSBF" blkno %llu nr %u bytes %u flags 0x%x first_hash 0x%llx first_ino %llu first_id 0x%llx last_hash 0x%llx last_ino %llu last_id 0x%llx",
+		  SCSB_TRACE_ARGS, __entry->blkno, __entry->entry_nr,
+		  __entry->entry_bytes, __entry->flags,
+		  __entry->first_hash, __entry->first_ino, __entry->first_id,
+		  __entry->last_hash, __entry->last_ino, __entry->last_id)
 );
 
 TRACE_EVENT(scoutfs_block_stale,
