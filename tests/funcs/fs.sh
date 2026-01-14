@@ -595,3 +595,24 @@ t_wait_for_no_orphans() {
 		sleep 1
 	done
 }
+
+#
+# Repeatedly run the arguments as a command, sleeping in between, until
+# it returns success.  The first argument is a relative timeout in
+# seconds.  The remaining arguments are the command and its arguments.
+#
+# If the timeout expires without the command returning 0 then the test
+# fails.
+#
+t_wait_until_timeout() {
+	local relative="$1"
+	local expire="$((SECONDS + relative))"
+	shift
+
+	while (( SECONDS < expire )); do
+		"$@" && return
+		sleep 1
+	done
+
+	t_fail "command failed for $relative sec: $@"
+}

@@ -53,8 +53,10 @@
  * all access to the lock (by revoking it down to a null mode) then the
  * lock is freed.
  *
- * Memory pressure on the client can cause the client to request a null
- * mode from the server so that once its granted the lock can be freed.
+ * Each client has a configurable number of locks that are allowed to
+ * remain idle after being granted, for use by future tasks.  Past the
+ * limit locks are freed by requesting a null mode from the server,
+ * governed by a LRU.
  *
  * So far we've only needed a minimal trylock.  We return -EAGAIN if a
  * lock attempt can't immediately match an existing granted lock.  This
@@ -79,14 +81,11 @@ struct lock_info {
 	bool unmounting;
 	struct rb_root lock_tree;
 	struct rb_root lock_range_tree;
-	KC_DEFINE_SHRINKER(shrinker);
+	u64 nr_locks;
 	struct list_head lru_list;
-	unsigned long long lru_nr;
 	struct workqueue_struct *workq;
 	struct work_struct inv_work;
 	struct list_head inv_list;
-	struct work_struct shrink_work;
-	struct list_head shrink_list;
 	atomic64_t next_refresh_gen;
 
 	struct dentry *tseq_dentry;
@@ -249,7 +248,6 @@ static void lock_free(struct lock_info *linfo, struct scoutfs_lock *lock)
 	BUG_ON(!RB_EMPTY_NODE(&lock->range_node));
 	BUG_ON(!list_empty(&lock->lru_head));
 	BUG_ON(!list_empty(&lock->inv_head));
-	BUG_ON(!list_empty(&lock->shrink_head));
 	BUG_ON(!list_empty(&lock->cov_list));
 
 	kfree(lock->inode_deletion_data);
@@ -277,7 +275,6 @@ static struct scoutfs_lock *lock_alloc(struct super_block *sb,
 	INIT_LIST_HEAD(&lock->lru_head);
 	INIT_LIST_HEAD(&lock->inv_head);
 	INIT_LIST_HEAD(&lock->inv_list);
-	INIT_LIST_HEAD(&lock->shrink_head);
 	spin_lock_init(&lock->cov_list_lock);
 	INIT_LIST_HEAD(&lock->cov_list);
 
@@ -410,6 +407,7 @@ static bool lock_insert(struct super_block *sb, struct scoutfs_lock *ins)
 	rb_link_node(&ins->node, parent, node);
 	rb_insert_color(&ins->node, &linfo->lock_tree);
 
+	linfo->nr_locks++;
 	scoutfs_tseq_add(&linfo->tseq_tree, &ins->tseq_entry);
 
 	return true;
@@ -424,6 +422,7 @@ static void lock_remove(struct lock_info *linfo, struct scoutfs_lock *lock)
 	rb_erase(&lock->range_node, &linfo->lock_range_tree);
 	RB_CLEAR_NODE(&lock->range_node);
 
+	linfo->nr_locks--;
 	scoutfs_tseq_del(&linfo->tseq_tree, &lock->tseq_entry);
 }
 
@@ -463,10 +462,8 @@ static void __lock_del_lru(struct lock_info *linfo, struct scoutfs_lock *lock)
 {
 	assert_spin_locked(&linfo->lock);
 
-	if (!list_empty(&lock->lru_head)) {
+	if (!list_empty(&lock->lru_head))
 		list_del_init(&lock->lru_head);
-		linfo->lru_nr--;
-	}
 }
 
 /*
@@ -525,19 +522,26 @@ static struct scoutfs_lock *create_lock(struct super_block *sb,
  * indicate that the lock wasn't idle.  If it really is idle then we
  * either free it if it's null or put it back on the lru.
  */
-static void put_lock(struct lock_info *linfo,struct scoutfs_lock *lock)
+static void __put_lock(struct lock_info *linfo, struct scoutfs_lock *lock, bool tail)
 {
 	assert_spin_locked(&linfo->lock);
 
 	if (lock_idle(lock)) {
 		if (lock->mode != SCOUTFS_LOCK_NULL) {
-			list_add_tail(&lock->lru_head, &linfo->lru_list);
-			linfo->lru_nr++;
+			if (tail)
+				list_add_tail(&lock->lru_head, &linfo->lru_list);
+			else
+				list_add(&lock->lru_head, &linfo->lru_list);
 		} else {
 			lock_remove(linfo, lock);
 			lock_free(linfo, lock);
 		}
 	}
+}
+
+static inline void put_lock(struct lock_info *linfo, struct scoutfs_lock *lock)
+{
+	__put_lock(linfo, lock, true);
 }
 
 /*
@@ -713,14 +717,14 @@ static void lock_invalidate_worker(struct work_struct *work)
 		/* only lock protocol, inv can't call subsystems after shutdown */
 		if (!linfo->shutdown) {
 			ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
-			BUG_ON(ret);
+			BUG_ON(ret < 0 && ret != -ENOLINK);
 		}
 
 		/* respond with the key and modes from the request, server might have died */
 		ret = scoutfs_client_lock_response(sb, ireq->net_id, nl);
 		if (ret == -ENOTCONN)
 			ret = 0;
-		BUG_ON(ret);
+		BUG_ON(ret < 0 && ret != -ENOLINK);
 
 		scoutfs_inc_counter(sb, lock_invalidate_response);
 	}
@@ -875,6 +879,69 @@ int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
 	return ret;
 }
 
+/*
+ * This is called on every _lock call to try and keep the number of
+ * locks under the idle count.  We're intentionally trying to throttle
+ * shrinking bursts by tying its frequency to lock use.  It will only
+ * send requests to free unused locks, though, so it's always possible
+ * to exceed the high water mark under heavy load.
+ *
+ * We send a null request and the lock will be freed by the response
+ * once all users drain.  If this races with invalidation then the
+ * server will only send the grant response once the invalidation is
+ * finished.
+ */
+static bool try_shrink_lock(struct super_block *sb, struct lock_info *linfo, bool force)
+{
+	struct scoutfs_mount_options opts;
+	struct scoutfs_lock *lock = NULL;
+	struct scoutfs_net_lock nl;
+	int ret = 0;
+
+	scoutfs_options_read(sb, &opts);
+
+	/* avoiding lock contention with unsynchronized test, don't mind temp false results */
+	if (!force && (list_empty(&linfo->lru_list) ||
+	               READ_ONCE(linfo->nr_locks) <= opts.lock_idle_count))
+		return false;
+
+	spin_lock(&linfo->lock);
+
+	lock = list_first_entry_or_null(&linfo->lru_list, struct scoutfs_lock, lru_head);
+	if (lock && (force || (linfo->nr_locks > opts.lock_idle_count))) {
+		__lock_del_lru(linfo, lock);
+		lock->request_pending = 1;
+
+		nl.key = lock->start;
+		nl.old_mode = lock->mode;
+		nl.new_mode = SCOUTFS_LOCK_NULL;
+	} else {
+		lock = NULL;
+	}
+
+	spin_unlock(&linfo->lock);
+
+	if (lock) {
+		ret = scoutfs_client_lock_request(sb, &nl);
+		if (ret < 0) {
+			scoutfs_inc_counter(sb, lock_shrink_request_failed);
+
+			spin_lock(&linfo->lock);
+
+			lock->request_pending = 0;
+			wake_up(&lock->waitq);
+			__put_lock(linfo, lock, false);
+
+			spin_unlock(&linfo->lock);
+		} else {
+			scoutfs_inc_counter(sb, lock_shrink_attempted);
+			trace_scoutfs_lock_shrink(sb, lock);
+		}
+	}
+
+	return lock && ret == 0;
+}
+
 static bool lock_wait_cond(struct super_block *sb, struct scoutfs_lock *lock,
 			   enum scoutfs_lock_mode mode)
 {
@@ -936,6 +1003,8 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 	/* have to lock before entering transactions */
 	if (WARN_ON_ONCE(scoutfs_trans_held()))
 		return -EDEADLK;
+
+	try_shrink_lock(sb, linfo, false);
 
 	spin_lock(&linfo->lock);
 
@@ -1380,134 +1449,12 @@ bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 					  &lock->start, &lock->end) == 0;
 }
 
-/*
- * The shrink callback got the lock, marked it request_pending, and put
- * it on the shrink list.  We send a null request and the lock will be
- * freed by the response once all users drain.  If this races with
- * invalidation then the server will only send the grant response once
- * the invalidation is finished.
- */
-static void lock_shrink_worker(struct work_struct *work)
-{
-	struct lock_info *linfo = container_of(work, struct lock_info,
-					       shrink_work);
-	struct super_block *sb = linfo->sb;
-	struct scoutfs_net_lock nl;
-	struct scoutfs_lock *lock;
-	struct scoutfs_lock *tmp;
-	LIST_HEAD(list);
-	int ret;
-
-	scoutfs_inc_counter(sb, lock_shrink_work);
-
-	spin_lock(&linfo->lock);
-	list_splice_init(&linfo->shrink_list, &list);
-	spin_unlock(&linfo->lock);
-
-	list_for_each_entry_safe(lock, tmp, &list, shrink_head) {
-		list_del_init(&lock->shrink_head);
-
-		/* unlocked lock access, but should be stable since we queued */
-		nl.key = lock->start;
-		nl.old_mode = lock->mode;
-		nl.new_mode = SCOUTFS_LOCK_NULL;
-
-		ret = scoutfs_client_lock_request(sb, &nl);
-		if (ret) {
-			/* oh well, not freeing */
-			scoutfs_inc_counter(sb, lock_shrink_aborted);
-
-			spin_lock(&linfo->lock);
-
-			lock->request_pending = 0;
-			wake_up(&lock->waitq);
-			put_lock(linfo, lock);
-
-			spin_unlock(&linfo->lock);
-		}
-	}
-}
-
-static unsigned long lock_count_objects(struct shrinker *shrink,
-					struct shrink_control *sc)
-{
-	struct lock_info *linfo = KC_SHRINKER_CONTAINER_OF(shrink, struct lock_info);
-	struct super_block *sb = linfo->sb;
-
-	scoutfs_inc_counter(sb, lock_count_objects);
-
-	return shrinker_min_long(linfo->lru_nr);
-}
-
-/*
- * Start the shrinking process for locks on the lru.  If a lock is on
- * the lru then it can't have any active users.  We don't want to block
- * or allocate here so all we do is get the lock, mark it request
- * pending, and kick off the work.  The work sends a null request and
- * eventually the lock is freed by its response.
- *
- * Only a racing lock attempt that isn't matched can prevent the lock
- * from being freed.  It'll block waiting to send its request for its
- * mode which will prevent the lock from being freed when the null
- * response arrives.
- */
-static unsigned long lock_scan_objects(struct shrinker *shrink,
-				       struct shrink_control *sc)
-{
-	struct lock_info *linfo = KC_SHRINKER_CONTAINER_OF(shrink, struct lock_info);
-	struct super_block *sb = linfo->sb;
-	struct scoutfs_lock *lock;
-	struct scoutfs_lock *tmp;
-	unsigned long freed = 0;
-	unsigned long nr = sc->nr_to_scan;
-	bool added = false;
-
-	scoutfs_inc_counter(sb, lock_scan_objects);
-
-	spin_lock(&linfo->lock);
-
-restart:
-	list_for_each_entry_safe(lock, tmp, &linfo->lru_list, lru_head) {
-
-		BUG_ON(!lock_idle(lock));
-		BUG_ON(lock->mode == SCOUTFS_LOCK_NULL);
-		BUG_ON(!list_empty(&lock->shrink_head));
-
-		if (nr-- == 0)
-			break;
-
-		__lock_del_lru(linfo, lock);
-		lock->request_pending = 1;
-		list_add_tail(&lock->shrink_head, &linfo->shrink_list);
-		added = true;
-		freed++;
-
-		scoutfs_inc_counter(sb, lock_shrink_attempted);
-		trace_scoutfs_lock_shrink(sb, lock);
-
-		/* could have bazillions of idle locks */
-		if (cond_resched_lock(&linfo->lock))
-			goto restart;
-	}
-
-	spin_unlock(&linfo->lock);
-
-	if (added)
-		queue_work(linfo->workq, &linfo->shrink_work);
-
-	trace_scoutfs_lock_shrink_exit(sb, sc->nr_to_scan, freed);
-	return freed;
-}
-
 void scoutfs_free_unused_locks(struct super_block *sb)
 {
-	struct lock_info *linfo = SCOUTFS_SB(sb)->lock_info;
-	struct shrink_control sc = {
-		.gfp_mask = GFP_NOFS,
-		.nr_to_scan = INT_MAX,
-	};
+	DECLARE_LOCK_INFO(sb, linfo);
 
-	lock_scan_objects(KC_SHRINKER_FN(&linfo->shrinker), &sc);
+	while (try_shrink_lock(sb, linfo, true))
+		cond_resched();
 }
 
 static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
@@ -1590,10 +1537,10 @@ u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino)
  * transitions and sending requests.   We set the shutdown flag to catch
  * anyone who breaks this rule.
  *
- * We unregister the shrinker so that we won't try and send null
- * requests in response to memory pressure.  The locks will all be
- * unceremoniously dropped once we get a farewell response from the
- * server which indicates that they destroyed our locking state.
+ * With no more lock callers, we'll no longer try to shrink the pool of
+ * granted locks.  We'll free all of them as _destroy() is called after
+ * the farewell response indicates that the server tore down all our
+ * lock state.
  *
  * We will still respond to invalidation requests that have to be
  * processed to let unmount in other mounts acquire locks and make
@@ -1612,10 +1559,6 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 		return;
 
 	trace_scoutfs_lock_shutdown(sb, linfo);
-
-	/* stop the shrinker from queueing work */
-	KC_UNREGISTER_SHRINKER(&linfo->shrinker);
-	flush_work(&linfo->shrink_work);
 
 	/* cause current and future lock calls to return errors */
 	spin_lock(&linfo->lock);
@@ -1707,8 +1650,6 @@ void scoutfs_lock_destroy(struct super_block *sb)
 			list_del_init(&lock->inv_head);
 			lock->invalidate_pending = 0;
 		}
-		if (!list_empty(&lock->shrink_head))
-			list_del_init(&lock->shrink_head);
 		lock_remove(linfo, lock);
 		lock_free(linfo, lock);
 	}
@@ -1733,14 +1674,9 @@ int scoutfs_lock_setup(struct super_block *sb)
 	spin_lock_init(&linfo->lock);
 	linfo->lock_tree = RB_ROOT;
 	linfo->lock_range_tree = RB_ROOT;
-	KC_INIT_SHRINKER_FUNCS(&linfo->shrinker, lock_count_objects,
-			       lock_scan_objects);
-	KC_REGISTER_SHRINKER(&linfo->shrinker, "scoutfs-lock:" SCSBF, SCSB_ARGS(sb));
 	INIT_LIST_HEAD(&linfo->lru_list);
 	INIT_WORK(&linfo->inv_work, lock_invalidate_worker);
 	INIT_LIST_HEAD(&linfo->inv_list);
-	INIT_WORK(&linfo->shrink_work, lock_shrink_worker);
-	INIT_LIST_HEAD(&linfo->shrink_list);
 	atomic64_set(&linfo->next_refresh_gen, 0);
 	scoutfs_tseq_tree_init(&linfo->tseq_tree, lock_tseq_show);
 

@@ -67,6 +67,8 @@ struct scoutfs_net_connection {
 	u64 next_send_id;
 	struct list_head send_queue;
 	struct list_head resend_queue;
+	struct rb_root req_root;
+	struct rb_root resp_root;
 
 	atomic64_t recv_seq;
 	unsigned int ordered_proc_nr;

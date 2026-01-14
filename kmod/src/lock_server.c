@@ -506,6 +506,19 @@ out:
  * because we don't know which locks they'll hold.  Once recover
  * finishes the server calls us to kick all the locks that were waiting
  * during recovery.
+ *
+ * The calling server shuts down if we return errors indicating that we
+ * weren't able to ensure forward progress in the lock state machine.
+ *
+ * Failure to send to a disconnected client is not a fatal error.
+ * During normal disconnection the client's state is removed before
+ * their connection is destroyed.  We can't use state to try and send to
+ * a non-existing connection.  But a client that fails to reconnect is
+ * disconnected before being fenced.  If we have multiple disconnected
+ * clients we can try to send to one while cleaning up another.  If
+ * they've uncleanly disconnected their locks are going to be removed
+ * and the lock can make forward progress again.  Or we'll shutdown for
+ * failure to fence.
  */
 static int process_waiting_requests(struct super_block *sb,
 				    struct server_lock_node *snode)
@@ -596,6 +609,10 @@ static int process_waiting_requests(struct super_block *sb,
 	ret = 0;
 out:
 	put_server_lock(inf, snode);
+
+	/* disconnected clients will be fenced, trying to send to them isn't fatal */
+	if (ret == -ENOTCONN)
+		ret = 0;
 
 	return ret;
 }
