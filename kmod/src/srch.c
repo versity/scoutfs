@@ -1665,7 +1665,10 @@ static int kway_merge(struct super_block *sb,
 			if (bl && le32_to_cpu(srb->entry_nr) == 1 && logs_input &&
 			    scoutfs_trigger(sb, SRCH_COMPACT_LOGS_PAD_SAFE)) {
 				pad_entries_at_safe(sfl, srb);
-				scoutfs_block_put(sb, bl);
+				if (le32_to_cpu(srb->entry_bytes) > 0)
+					scoutfs_block_put(sb, bl);
+				else
+					scoutfs_block_writer_forget(sb, wri, bl);
 				bl = NULL;
 				blk++;
 			}
@@ -1739,7 +1742,10 @@ static int kway_merge(struct super_block *sb,
 	/* could stream a final index.. arguably a small portion of work */
 
 out:
-	scoutfs_block_put(sb, bl);
+	if (le32_to_cpu(srb->entry_bytes) > 0)
+		scoutfs_block_put(sb, bl);
+	else
+		scoutfs_block_writer_forget(sb, wri, bl);
 	vfree(tnodes);
 	return ret;
 }
@@ -1982,6 +1988,11 @@ static int kway_get_reader(struct super_block *sb,
 	    rdr->skip > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
+		scoutfs_err(sb, "blkno %llu pos %u vs %ld, skip %u, bytes %u",
+			__le64_to_cpu(srb->hdr.blkno),
+			rdr->pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES,
+			rdr->skip,
+			le32_to_cpu(srb->entry_bytes));
 		return -EIO;
 	}
 
