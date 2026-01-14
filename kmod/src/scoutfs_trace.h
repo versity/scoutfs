@@ -2660,6 +2660,22 @@ TRACE_EVENT(scoutfs_get_file_block,
 		  __entry->last_hash, __entry->last_ino, __entry->last_id)
 );
 
+TRACE_EVENT(scoutfs_srch_new_merge,
+	TP_PROTO(struct super_block *sb),
+
+	TP_ARGS(sb),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+	),
+
+	TP_printk(SCSBF, SCSB_TRACE_ARGS)
+);
+
 TRACE_EVENT(scoutfs_block_stale,
 	TP_PROTO(struct super_block *sb, struct scoutfs_block_ref *ref,
 		 struct scoutfs_block_header *hdr, u32 magic, u32 crc),
