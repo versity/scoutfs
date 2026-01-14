@@ -443,7 +443,7 @@ out:
 		sfl->blocks = cpu_to_le64(blk + 1);
 
 	if (bl) {
-		trace_scoutfs_get_file_block(sb, bl->blkno, flags);
+		trace_scoutfs_get_file_block(sb, bl->blkno, flags, bl->data);
 	}
 
 	*bl_ret = bl;
