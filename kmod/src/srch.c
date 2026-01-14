@@ -1620,27 +1620,29 @@ static int kway_merge(struct super_block *sb,
 	/* always append new blocks */
 	blk = le64_to_cpu(sfl->blocks);
 	while (empty < nr) {
-		if (bl == NULL) {
-			if (atomic_read(&srinf->shutdown)) {
-				ret = -ESHUTDOWN;
-				goto out;
+		if (srb == NULL || sre_cmp(&root->sre, &srb->last) != 0) {
+			if (bl == NULL) {
+				if (atomic_read(&srinf->shutdown)) {
+					ret = -ESHUTDOWN;
+					goto out;
+				}
+
+				/* could grow and dirty to a leaf */
+				if (should_commit(sb, alloc, wri,
+						  sfl->height + 1)) {
+					ret = 0;
+					goto out;
+				}
+
+				ret = get_file_block(sb, alloc, wri, sfl,
+						     GFB_INSERT | GFB_DIRTY,
+						     blk, &bl);
+				if (ret < 0)
+					goto out;
+				srb = bl->data;
+				scoutfs_inc_counter(sb, srch_compact_dirty_block);
 			}
 
-			/* could grow and dirty to a leaf */
-			if (should_commit(sb, alloc, wri, sfl->height + 1)) {
-				ret = 0;
-				goto out;
-			}
-
-			ret = get_file_block(sb, alloc, wri, sfl,
-					     GFB_INSERT | GFB_DIRTY, blk, &bl);
-			if (ret < 0)
-				goto out;
-			srb = bl->data;
-			scoutfs_inc_counter(sb, srch_compact_dirty_block);
-		}
-
-		if (sre_cmp(&root->sre, &srb->last) != 0) {
 			last_bytes = le32_to_cpu(srb->entry_bytes);
 			last_tail = srb->last;
 			ret = encode_entry(srb->entries +
