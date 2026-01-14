@@ -90,7 +90,7 @@ done
 
 # set some T_ defaults
 T_TRACE_DUMP="0"
-T_TRACE_PRINTK="0"
+T_TRACE_PRINTK=""
 T_PORT_START="19700"
 T_LOOP_ITER="1"
 
@@ -137,6 +137,9 @@ while true; do
 	        test -n "$2" || die "-l must have a nr iterations argument"
 		test "$2" -eq "$2" 2>/dev/null || die "-l <nr> argument must be an integer"
 		T_LOOP_ITER="$2"
+
+		# when looping, break after first failure
+		T_ABORT="1"
 		shift
 		;;
 	-M)
@@ -399,31 +402,44 @@ if [ -n "$T_INSMOD" ]; then
 	cmd insmod "$T_MODULE"
 fi
 
-if [ -n "$T_TRACE_MULT" ]; then
-#	orig_trace_size=$(cat /sys/kernel/debug/tracing/buffer_size_kb)
-	orig_trace_size=1408
-	mult_trace_size=$((orig_trace_size * T_TRACE_MULT))
-	msg "increasing trace buffer size from $orig_trace_size KiB to $mult_trace_size KiB"
-	echo $mult_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
-fi
+start_tracing() {
+	if [ -n "$T_TRACE_MULT" ]; then
+		orig_trace_size=1408
+		mult_trace_size=$((orig_trace_size * T_TRACE_MULT))
+		msg "increasing trace buffer size from $orig_trace_size KiB to $mult_trace_size KiB"
+		echo $mult_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
+	fi
 
-nr_globs=${#T_TRACE_GLOB[@]}
-if [ $nr_globs -gt 0 ]; then
-	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
+	nr_globs=${#T_TRACE_GLOB[@]}
+	if [ $nr_globs -gt 0 ]; then
+		echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
 
-	for g in "${T_TRACE_GLOB[@]}"; do
-		for e in /sys/kernel/debug/tracing/events/scoutfs/$g/enable; do
-			if test -w "$e"; then
-				echo 1 > "$e"
-			else
-				die "-t glob '$g' matched no scoutfs events"
-			fi
+		for g in "${T_TRACE_GLOB[@]}"; do
+			for e in /sys/kernel/debug/tracing/events/scoutfs/$g/enable; do
+				if test -w "$e"; then
+					echo 1 > "$e"
+				else
+					die "-t glob '$g' matched no scoutfs events"
+				fi
+			done
 		done
-	done
 
-	nr_events=$(cat /sys/kernel/debug/tracing/set_event | wc -l)
-	msg "enabled $nr_events trace events from $nr_globs -t globs"
-fi
+		nr_events=$(cat /sys/kernel/debug/tracing/set_event | wc -l)
+		msg "enabled $nr_events trace events from $nr_globs -t globs"
+	fi
+}
+
+stop_tracing() {
+	if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
+		msg "saving traces and disabling tracing"
+		echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
+		echo 0 > /sys/kernel/debug/tracing/options/trace_printk
+		cat /sys/kernel/debug/tracing/trace | gzip > "$T_RESULTS/traces.gz"
+		if [ -n "$orig_trace_size" ]; then
+			echo $orig_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
+		fi
+	fi
+}
 
 if [ -n "$T_TRACE_PRINTK" ]; then
 	echo "$T_TRACE_PRINTK" > /sys/kernel/debug/tracing/options/trace_printk
@@ -603,24 +619,26 @@ passed=0
 skipped=0
 failed=0
 skipped_permitted=0
-for t in $tests; do
-	# tests has basenames from sequence, get path and name
-	t="tests/$t"
-	test_name=$(basename "$t" | sed -e 's/.sh$//')
+for iter in $(seq 1 $T_LOOP_ITER); do
 
-	# get stats from previous pass
-	last="$T_RESULTS/last-passed-test-stats"
-	stats=$(grep -s "^$test_name " "$last" | cut -d " " -f 2-)
-	test -n "$stats" && stats="last: $stats"
-	printf "  %-30s $stats" "$test_name"
+	start_tracing
 
-	# mark in dmesg as to what test we are running
-	echo "run scoutfs test $test_name" > /dev/kmsg
+	for t in $tests; do
+		# tests has basenames from sequence, get path and name
+		t="tests/$t"
+		test_name=$(basename "$t" | sed -e 's/.sh$//')
 
-	# let the test get at its extra files
-	T_EXTRA="$T_TESTS/extra/$test_name"
+		# get stats from previous pass
+		last="$T_RESULTS/last-passed-test-stats"
+		stats=$(grep -s "^$test_name " "$last" | cut -d " " -f 2-)
+		test -n "$stats" && stats="last: $stats"
+		printf "  %-30s $stats" "$test_name"
 
-	for iter in $(seq 1 $T_LOOP_ITER); do
+		# mark in dmesg as to what test we are running
+		echo "run scoutfs test $test_name" > /dev/kmsg
+
+		# let the test get at its extra files
+		T_EXTRA="$T_TESTS/extra/$test_name"
 
 		# create a temporary dir and file path for the test
 		T_TMPDIR="$T_RESULTS/tmp/$test_name"
@@ -710,54 +728,42 @@ for t in $tests; do
 			sts=$T_FAIL_STATUS
 		fi
 
-		# stop looping if we didn't pass
-		if [ "$sts" != "$T_PASS_STATUS" ]; then
-			break;
+		# show and record the result of the test
+		if [ "$sts" == "$T_PASS_STATUS" ]; then
+			echo "  passed: $stats"
+			((passed++))
+			# save stats for passed test
+			grep -s -v "^$test_name " "$last" > "$last.tmp"
+			echo "$test_name $stats" >> "$last.tmp"
+			mv -f "$last.tmp" "$last"
+		elif [ "$sts" == "$T_SKIP_PERMITTED_STATUS" ]; then
+			echo "  [ skipped (permitted): $message ]"
+			echo "$test_name skipped (permitted) $message " >> "$T_RESULTS/skip.log"
+			((skipped_permitted++))
+		elif [ "$sts" == "$T_SKIP_STATUS" ]; then
+			echo "  [ skipped: $message ]"
+			echo "$test_name $message" >> "$T_RESULTS/skip.log"
+			((skipped++))
+		elif [ "$sts" == "$T_FAIL_STATUS" ]; then
+			echo "  [ failed: $message ]"
+			echo "$test_name $message" >> "$T_RESULTS/fail.log"
+			((failed++))
+
+			if [ -n "$T_ABORT" ]; then
+				stop_tracing
+				die "aborting after first failure"
+			fi
 		fi
+
+		# record results for TAP format output
+		t_tap_progress $test_name $sts
+		((testcount++))
 	done
 
-	# show and record the result of the test
-	if [ "$sts" == "$T_PASS_STATUS" ]; then
-		echo "  passed: $stats"
-		((passed++))
-		# save stats for passed test
-		grep -s -v "^$test_name " "$last" > "$last.tmp"
-		echo "$test_name $stats" >> "$last.tmp"
-		mv -f "$last.tmp" "$last"
-	elif [ "$sts" == "$T_SKIP_PERMITTED_STATUS" ]; then
-		echo "  [ skipped (permitted): $message ]"
-		echo "$test_name skipped (permitted) $message " >> "$T_RESULTS/skip.log"
-		((skipped_permitted++))
-	elif [ "$sts" == "$T_SKIP_STATUS" ]; then
-		echo "  [ skipped: $message ]"
-		echo "$test_name $message" >> "$T_RESULTS/skip.log"
-		((skipped++))
-	elif [ "$sts" == "$T_FAIL_STATUS" ]; then
-		echo "  [ failed: $message ]"
-		echo "$test_name $message" >> "$T_RESULTS/fail.log"
-		((failed++))
-
-		test -n "$T_ABORT" && die "aborting after first failure"
-	fi
-
-	# record results for TAP format output
-	t_tap_progress $test_name $sts
-	((testcount++))
-
+	stop_tracing
 done
 
 msg "all tests run: $passed passed, $skipped skipped, $skipped_permitted skipped (permitted), $failed failed"
-
-
-if [ -n "$T_TRACE_GLOB" -o -n "$T_TRACE_PRINTK" ]; then
-	msg "saving traces and disabling tracing"
-	echo 0 > /sys/kernel/debug/tracing/events/scoutfs/enable
-	echo 0 > /sys/kernel/debug/tracing/options/trace_printk
-	cat /sys/kernel/debug/tracing/trace > "$T_RESULTS/traces"
-	if [ -n "$orig_trace_size" ]; then
-		echo $orig_trace_size > /sys/kernel/debug/tracing/buffer_size_kb
-	fi
-fi
 
 if [ "$skipped" == 0 -a "$failed" == 0 ]; then
 	msg "all tests passed"
