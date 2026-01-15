@@ -505,7 +505,10 @@ crash_monitor()
 		fi
 
 		if [ "$bad" != 0 ]; then
-			echo "run-tests monitor triggering crash"
+			echo "run-tests monitor syncing and triggering crash"
+			# hail mary, the sync could well hang
+			(echo s > /proc/sysrq-trigger) &
+			sleep 5
 			echo c > /proc/sysrq-trigger
 			exit 1
 		fi
