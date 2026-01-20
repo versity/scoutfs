@@ -1,0 +1,453 @@
+== can't hole punch dir or special ==
+failed to open '/mnt/test.0/test/punch-offline/dir': Is a directory (21)
+scoutfs: punch-offline failed: Is a directory (21)
+== punching an empty file does nothing ==
+== punch outside of i_size does nothing ==
+== can't hole punch online extent ==
+0: offset: 0 length: 4096 flags: ..L
+extents: 1
+punch_offline ioctl failed: Invalid argument (22)
+scoutfs: punch-offline failed: Invalid argument (22)
+0: offset: 0 length: 4096 flags: ..L
+extents: 1
+== can't hole punch unwritten extent ==
+0: offset: 0 length: 12288 flags: .UL
+extents: 1
+punch_offline ioctl failed: Invalid argument (22)
+scoutfs: punch-offline failed: Invalid argument (22)
+0: offset: 0 length: 12288 flags: .UL
+extents: 1
+== hole punch offline extent ==
+0: offset: 0 length: 12288 flags: O.L
+extents: 1
+0: offset: 0 length: 4096 flags: O..
+1: offset: 8192 length: 4096 flags: O.L
+extents: 2
+== can't hole punch non-aligned bsz offset or len ==
+0: offset: 0 length: 12288 flags: O.L
+extents: 1
+punch_offline ioctl failed: Value too large for defined data type (75)
+scoutfs: punch-offline failed: Value too large for defined data type (75)
+punch_offline ioctl failed: Value too large for defined data type (75)
+scoutfs: punch-offline failed: Value too large for defined data type (75)
+punch_offline ioctl failed: Value too large for defined data type (75)
+scoutfs: punch-offline failed: Value too large for defined data type (75)
+punch_offline ioctl failed: Value too large for defined data type (75)
+scoutfs: punch-offline failed: Value too large for defined data type (75)
+punch_offline ioctl failed: Value too large for defined data type (75)
+scoutfs: punch-offline failed: Value too large for defined data type (75)
+punch_offline ioctl failed: Value too large for defined data type (75)
+scoutfs: punch-offline failed: Value too large for defined data type (75)
+0: offset: 0 length: 12288 flags: O.L
+extents: 1
+== can't hole punch mismatched data_version ==
+0: offset: 0 length: 12288 flags: O.L
+extents: 1
+punch_offline ioctl failed: Stale file handle (116)
+scoutfs: punch-offline failed: Stale file handle (116)
+punch_offline ioctl failed: Stale file handle (116)
+scoutfs: punch-offline failed: Stale file handle (116)
+punch_offline ioctl failed: Stale file handle (116)
+scoutfs: punch-offline failed: Stale file handle (116)
+0: offset: 0 length: 12288 flags: O.L
+extents: 1
+== Punch hole crossing multiple extents ==
+0: offset: 0 length: 7 flags: O.L
+extents: 1
+0: offset: 0 length: 1 flags: O..
+1: offset: 2 length: 1 flags: O..
+2: offset: 4 length: 1 flags: O..
+3: offset: 6 length: 1 flags: O.L
+extents: 4
+0: offset: 0 length: 1 flags: O..
+1: offset: 6 length: 1 flags: O.L
+extents: 2
+== punch hole starting at a hole ==
+0: offset: 0 length: 7 flags: O.L
+extents: 1
+0: offset: 0 length: 1 flags: O..
+1: offset: 2 length: 1 flags: O..
+2: offset: 4 length: 1 flags: O..
+3: offset: 6 length: 1 flags: O.L
+extents: 4
+0: offset: 0 length: 1 flags: O..
+1: offset: 6 length: 1 flags: O.L
+extents: 2
+== large punch ==
+0: offset: 0 length: 1572864 flags: O.L
+extents: 1
+0: offset: 0 length: 134123 flags: O..
+1: offset: 202466 length: 264807 flags: O..
+2: offset: 535616 length: 199007 flags: O..
+3: offset: 802966 length: 769898 flags: O.L
+extents: 4
+== overlapping punches with lots of extents ==
+0: offset: 0 length: 4194304 flags: O.L
+extents: 1
+extents: 512
+extents: 505
+extents: 378
+extents: 252
+0: offset: 0 length: 4096 flags: O..
+1: offset: 8192 length: 4096 flags: O..
+2: offset: 32768 length: 4096 flags: O..
+3: offset: 40960 length: 4096 flags: O..
+4: offset: 65536 length: 4096 flags: O..
+5: offset: 73728 length: 4096 flags: O..
+6: offset: 98304 length: 4096 flags: O..
+7: offset: 106496 length: 4096 flags: O..
+8: offset: 196608 length: 4096 flags: O..
+9: offset: 204800 length: 4096 flags: O..
+10: offset: 229376 length: 4096 flags: O..
+11: offset: 237568 length: 4096 flags: O..
+12: offset: 262144 length: 4096 flags: O..
+13: offset: 270336 length: 4096 flags: O..
+14: offset: 294912 length: 4096 flags: O..
+15: offset: 303104 length: 4096 flags: O..
+16: offset: 327680 length: 4096 flags: O..
+17: offset: 335872 length: 4096 flags: O..
+18: offset: 360448 length: 4096 flags: O..
+19: offset: 368640 length: 4096 flags: O..
+20: offset: 393216 length: 4096 flags: O..
+21: offset: 401408 length: 4096 flags: O..
+22: offset: 425984 length: 4096 flags: O..
+23: offset: 434176 length: 4096 flags: O..
+24: offset: 458752 length: 4096 flags: O..
+25: offset: 466944 length: 4096 flags: O..
+26: offset: 491520 length: 4096 flags: O..
+27: offset: 499712 length: 4096 flags: O..
+28: offset: 720896 length: 4096 flags: O..
+29: offset: 729088 length: 4096 flags: O..
+30: offset: 753664 length: 4096 flags: O..
+31: offset: 761856 length: 4096 flags: O..
+32: offset: 786432 length: 4096 flags: O..
+33: offset: 794624 length: 4096 flags: O..
+34: offset: 819200 length: 4096 flags: O..
+35: offset: 827392 length: 4096 flags: O..
+36: offset: 851968 length: 4096 flags: O..
+37: offset: 860160 length: 4096 flags: O..
+38: offset: 884736 length: 4096 flags: O..
+39: offset: 892928 length: 4096 flags: O..
+40: offset: 917504 length: 4096 flags: O..
+41: offset: 925696 length: 4096 flags: O..
+42: offset: 950272 length: 4096 flags: O..
+43: offset: 958464 length: 4096 flags: O..
+44: offset: 983040 length: 4096 flags: O..
+45: offset: 991232 length: 4096 flags: O..
+46: offset: 1015808 length: 4096 flags: O..
+47: offset: 1024000 length: 4096 flags: O..
+48: offset: 1048576 length: 4096 flags: O..
+49: offset: 1056768 length: 4096 flags: O..
+50: offset: 1081344 length: 4096 flags: O..
+51: offset: 1089536 length: 4096 flags: O..
+52: offset: 1114112 length: 4096 flags: O..
+53: offset: 1122304 length: 4096 flags: O..
+54: offset: 1146880 length: 4096 flags: O..
+55: offset: 1155072 length: 4096 flags: O..
+56: offset: 1179648 length: 4096 flags: O..
+57: offset: 1187840 length: 4096 flags: O..
+58: offset: 1212416 length: 4096 flags: O..
+59: offset: 1220608 length: 4096 flags: O..
+60: offset: 1245184 length: 4096 flags: O..
+61: offset: 1253376 length: 4096 flags: O..
+62: offset: 1277952 length: 4096 flags: O..
+63: offset: 1286144 length: 4096 flags: O..
+64: offset: 1310720 length: 4096 flags: O..
+65: offset: 1318912 length: 4096 flags: O..
+66: offset: 1343488 length: 4096 flags: O..
+67: offset: 1351680 length: 4096 flags: O..
+68: offset: 1376256 length: 4096 flags: O..
+69: offset: 1384448 length: 4096 flags: O..
+70: offset: 1409024 length: 4096 flags: O..
+71: offset: 1417216 length: 4096 flags: O..
+72: offset: 1441792 length: 4096 flags: O..
+73: offset: 1449984 length: 4096 flags: O..
+74: offset: 1474560 length: 4096 flags: O..
+75: offset: 1482752 length: 4096 flags: O..
+76: offset: 1507328 length: 4096 flags: O..
+77: offset: 1515520 length: 4096 flags: O..
+78: offset: 1540096 length: 4096 flags: O..
+79: offset: 1548288 length: 4096 flags: O..
+80: offset: 1572864 length: 4096 flags: O..
+81: offset: 1581056 length: 4096 flags: O..
+82: offset: 1605632 length: 4096 flags: O..
+83: offset: 1613824 length: 4096 flags: O..
+84: offset: 1638400 length: 4096 flags: O..
+85: offset: 1646592 length: 4096 flags: O..
+86: offset: 1671168 length: 4096 flags: O..
+87: offset: 1679360 length: 4096 flags: O..
+88: offset: 1703936 length: 4096 flags: O..
+89: offset: 1712128 length: 4096 flags: O..
+90: offset: 1736704 length: 4096 flags: O..
+91: offset: 1744896 length: 4096 flags: O..
+92: offset: 1769472 length: 4096 flags: O..
+93: offset: 1777664 length: 4096 flags: O..
+94: offset: 1802240 length: 4096 flags: O..
+95: offset: 1810432 length: 4096 flags: O..
+96: offset: 1835008 length: 4096 flags: O..
+97: offset: 1843200 length: 4096 flags: O..
+98: offset: 1867776 length: 4096 flags: O..
+99: offset: 1875968 length: 4096 flags: O..
+100: offset: 1900544 length: 4096 flags: O..
+101: offset: 1908736 length: 4096 flags: O..
+102: offset: 1933312 length: 4096 flags: O..
+103: offset: 1941504 length: 4096 flags: O..
+104: offset: 1966080 length: 4096 flags: O..
+105: offset: 1974272 length: 4096 flags: O..
+106: offset: 1998848 length: 4096 flags: O..
+107: offset: 2007040 length: 4096 flags: O..
+108: offset: 2031616 length: 4096 flags: O..
+109: offset: 2039808 length: 4096 flags: O..
+110: offset: 2064384 length: 4096 flags: O..
+111: offset: 2072576 length: 4096 flags: O..
+112: offset: 2097152 length: 4096 flags: O..
+113: offset: 2105344 length: 4096 flags: O..
+114: offset: 2129920 length: 4096 flags: O..
+115: offset: 2138112 length: 4096 flags: O..
+116: offset: 2162688 length: 4096 flags: O..
+117: offset: 2170880 length: 4096 flags: O..
+118: offset: 2195456 length: 4096 flags: O..
+119: offset: 2203648 length: 4096 flags: O..
+120: offset: 2228224 length: 4096 flags: O..
+121: offset: 2236416 length: 4096 flags: O..
+122: offset: 2260992 length: 4096 flags: O..
+123: offset: 2269184 length: 4096 flags: O..
+124: offset: 2293760 length: 4096 flags: O..
+125: offset: 2301952 length: 4096 flags: O..
+126: offset: 2326528 length: 4096 flags: O..
+127: offset: 2334720 length: 4096 flags: O..
+128: offset: 2359296 length: 4096 flags: O..
+129: offset: 2367488 length: 4096 flags: O..
+130: offset: 2392064 length: 4096 flags: O..
+131: offset: 2400256 length: 4096 flags: O..
+132: offset: 2424832 length: 4096 flags: O..
+133: offset: 2433024 length: 4096 flags: O..
+134: offset: 2457600 length: 4096 flags: O..
+135: offset: 2465792 length: 4096 flags: O..
+136: offset: 2490368 length: 4096 flags: O..
+137: offset: 2498560 length: 4096 flags: O..
+138: offset: 2523136 length: 4096 flags: O..
+139: offset: 2531328 length: 4096 flags: O..
+140: offset: 2555904 length: 4096 flags: O..
+141: offset: 2564096 length: 4096 flags: O..
+142: offset: 2588672 length: 4096 flags: O..
+143: offset: 2596864 length: 4096 flags: O..
+144: offset: 2621440 length: 4096 flags: O..
+145: offset: 2629632 length: 4096 flags: O..
+146: offset: 2654208 length: 4096 flags: O..
+147: offset: 2662400 length: 4096 flags: O..
+148: offset: 2686976 length: 4096 flags: O..
+149: offset: 2695168 length: 4096 flags: O..
+150: offset: 2719744 length: 4096 flags: O..
+151: offset: 2727936 length: 4096 flags: O..
+152: offset: 2752512 length: 4096 flags: O..
+153: offset: 2760704 length: 4096 flags: O..
+154: offset: 2785280 length: 4096 flags: O..
+155: offset: 2793472 length: 4096 flags: O..
+156: offset: 2818048 length: 4096 flags: O..
+157: offset: 2826240 length: 4096 flags: O..
+158: offset: 2850816 length: 4096 flags: O..
+159: offset: 2859008 length: 4096 flags: O..
+160: offset: 2883584 length: 4096 flags: O..
+161: offset: 2891776 length: 4096 flags: O..
+162: offset: 2916352 length: 4096 flags: O..
+163: offset: 2924544 length: 4096 flags: O..
+164: offset: 2949120 length: 4096 flags: O..
+165: offset: 2957312 length: 4096 flags: O..
+166: offset: 2981888 length: 4096 flags: O..
+167: offset: 2990080 length: 4096 flags: O..
+168: offset: 3014656 length: 4096 flags: O..
+169: offset: 3022848 length: 4096 flags: O..
+170: offset: 3047424 length: 4096 flags: O..
+171: offset: 3055616 length: 4096 flags: O..
+172: offset: 3080192 length: 4096 flags: O..
+173: offset: 3088384 length: 4096 flags: O..
+174: offset: 3112960 length: 4096 flags: O..
+175: offset: 3121152 length: 4096 flags: O..
+176: offset: 3145728 length: 4096 flags: O..
+177: offset: 3153920 length: 4096 flags: O..
+178: offset: 3178496 length: 4096 flags: O..
+179: offset: 3186688 length: 4096 flags: O..
+180: offset: 3211264 length: 4096 flags: O..
+181: offset: 3219456 length: 4096 flags: O..
+182: offset: 3244032 length: 4096 flags: O..
+183: offset: 3252224 length: 4096 flags: O..
+184: offset: 3276800 length: 4096 flags: O..
+185: offset: 3284992 length: 4096 flags: O..
+186: offset: 3309568 length: 4096 flags: O..
+187: offset: 3317760 length: 4096 flags: O..
+188: offset: 3342336 length: 4096 flags: O..
+189: offset: 3350528 length: 4096 flags: O..
+190: offset: 3375104 length: 4096 flags: O..
+191: offset: 3383296 length: 4096 flags: O..
+192: offset: 3407872 length: 4096 flags: O..
+193: offset: 3416064 length: 4096 flags: O..
+194: offset: 3440640 length: 4096 flags: O..
+195: offset: 3448832 length: 4096 flags: O..
+196: offset: 3473408 length: 4096 flags: O..
+197: offset: 3481600 length: 4096 flags: O..
+198: offset: 3506176 length: 4096 flags: O..
+199: offset: 3514368 length: 4096 flags: O..
+200: offset: 3538944 length: 4096 flags: O..
+201: offset: 3547136 length: 4096 flags: O..
+202: offset: 3571712 length: 4096 flags: O..
+203: offset: 3579904 length: 4096 flags: O..
+204: offset: 3604480 length: 4096 flags: O..
+205: offset: 3612672 length: 4096 flags: O..
+206: offset: 3637248 length: 4096 flags: O..
+207: offset: 3645440 length: 4096 flags: O..
+208: offset: 3670016 length: 4096 flags: O..
+209: offset: 3678208 length: 4096 flags: O..
+210: offset: 3702784 length: 4096 flags: O..
+211: offset: 3710976 length: 4096 flags: O..
+212: offset: 3735552 length: 4096 flags: O..
+213: offset: 3743744 length: 4096 flags: O..
+214: offset: 3768320 length: 4096 flags: O..
+215: offset: 3776512 length: 4096 flags: O..
+216: offset: 3801088 length: 4096 flags: O..
+217: offset: 3809280 length: 4096 flags: O..
+218: offset: 3833856 length: 4096 flags: O..
+219: offset: 3842048 length: 4096 flags: O..
+220: offset: 3866624 length: 4096 flags: O..
+221: offset: 3874816 length: 4096 flags: O..
+222: offset: 3899392 length: 4096 flags: O..
+223: offset: 3907584 length: 4096 flags: O..
+224: offset: 3932160 length: 4096 flags: O..
+225: offset: 3940352 length: 4096 flags: O..
+226: offset: 3964928 length: 4096 flags: O..
+227: offset: 3973120 length: 4096 flags: O..
+228: offset: 3997696 length: 4096 flags: O..
+229: offset: 4005888 length: 4096 flags: O..
+230: offset: 4030464 length: 4096 flags: O..
+231: offset: 4038656 length: 4096 flags: O..
+232: offset: 4063232 length: 4096 flags: O..
+233: offset: 4071424 length: 4096 flags: O..
+234: offset: 4096000 length: 4096 flags: O..
+235: offset: 4104192 length: 4096 flags: O..
+236: offset: 4128768 length: 4096 flags: O..
+237: offset: 4136960 length: 4096 flags: O..
+238: offset: 4161536 length: 4096 flags: O..
+239: offset: 4169728 length: 4096 flags: O.L
+extents: 240
+0: offset: 0 length: 1 flags: O..
+1: offset: 8 length: 1 flags: O..
+2: offset: 16 length: 1 flags: O..
+3: offset: 24 length: 1 flags: O..
+4: offset: 48 length: 1 flags: O..
+5: offset: 56 length: 1 flags: O..
+6: offset: 64 length: 1 flags: O..
+7: offset: 72 length: 1 flags: O..
+8: offset: 80 length: 1 flags: O..
+9: offset: 88 length: 1 flags: O..
+10: offset: 96 length: 1 flags: O..
+11: offset: 104 length: 1 flags: O..
+12: offset: 112 length: 1 flags: O..
+13: offset: 120 length: 1 flags: O..
+14: offset: 176 length: 1 flags: O..
+15: offset: 184 length: 1 flags: O..
+16: offset: 192 length: 1 flags: O..
+17: offset: 200 length: 1 flags: O..
+18: offset: 208 length: 1 flags: O..
+19: offset: 216 length: 1 flags: O..
+20: offset: 224 length: 1 flags: O..
+21: offset: 232 length: 1 flags: O..
+22: offset: 240 length: 1 flags: O..
+23: offset: 248 length: 1 flags: O..
+24: offset: 256 length: 1 flags: O..
+25: offset: 264 length: 1 flags: O..
+26: offset: 272 length: 1 flags: O..
+27: offset: 280 length: 1 flags: O..
+28: offset: 288 length: 1 flags: O..
+29: offset: 296 length: 1 flags: O..
+30: offset: 304 length: 1 flags: O..
+31: offset: 312 length: 1 flags: O..
+32: offset: 320 length: 1 flags: O..
+33: offset: 328 length: 1 flags: O..
+34: offset: 336 length: 1 flags: O..
+35: offset: 344 length: 1 flags: O..
+36: offset: 352 length: 1 flags: O..
+37: offset: 360 length: 1 flags: O..
+38: offset: 368 length: 1 flags: O..
+39: offset: 376 length: 1 flags: O..
+40: offset: 384 length: 1 flags: O..
+41: offset: 392 length: 1 flags: O..
+42: offset: 400 length: 1 flags: O..
+43: offset: 408 length: 1 flags: O..
+44: offset: 416 length: 1 flags: O..
+45: offset: 424 length: 1 flags: O..
+46: offset: 432 length: 1 flags: O..
+47: offset: 440 length: 1 flags: O..
+48: offset: 448 length: 1 flags: O..
+49: offset: 456 length: 1 flags: O..
+50: offset: 464 length: 1 flags: O..
+51: offset: 472 length: 1 flags: O..
+52: offset: 480 length: 1 flags: O..
+53: offset: 488 length: 1 flags: O..
+54: offset: 496 length: 1 flags: O..
+55: offset: 504 length: 1 flags: O..
+56: offset: 512 length: 1 flags: O..
+57: offset: 520 length: 1 flags: O..
+58: offset: 528 length: 1 flags: O..
+59: offset: 536 length: 1 flags: O..
+60: offset: 544 length: 1 flags: O..
+61: offset: 552 length: 1 flags: O..
+62: offset: 560 length: 1 flags: O..
+63: offset: 568 length: 1 flags: O..
+64: offset: 576 length: 1 flags: O..
+65: offset: 584 length: 1 flags: O..
+66: offset: 592 length: 1 flags: O..
+67: offset: 600 length: 1 flags: O..
+68: offset: 608 length: 1 flags: O..
+69: offset: 616 length: 1 flags: O..
+70: offset: 624 length: 1 flags: O..
+71: offset: 632 length: 1 flags: O..
+72: offset: 640 length: 1 flags: O..
+73: offset: 648 length: 1 flags: O..
+74: offset: 656 length: 1 flags: O..
+75: offset: 664 length: 1 flags: O..
+76: offset: 672 length: 1 flags: O..
+77: offset: 680 length: 1 flags: O..
+78: offset: 688 length: 1 flags: O..
+79: offset: 696 length: 1 flags: O..
+80: offset: 704 length: 1 flags: O..
+81: offset: 712 length: 1 flags: O..
+82: offset: 720 length: 1 flags: O..
+83: offset: 728 length: 1 flags: O..
+84: offset: 736 length: 1 flags: O..
+85: offset: 744 length: 1 flags: O..
+86: offset: 752 length: 1 flags: O..
+87: offset: 760 length: 1 flags: O..
+88: offset: 768 length: 1 flags: O..
+89: offset: 776 length: 1 flags: O..
+90: offset: 784 length: 1 flags: O..
+91: offset: 792 length: 1 flags: O..
+92: offset: 800 length: 1 flags: O..
+93: offset: 808 length: 1 flags: O..
+94: offset: 816 length: 1 flags: O..
+95: offset: 824 length: 1 flags: O..
+96: offset: 832 length: 1 flags: O..
+97: offset: 840 length: 1 flags: O..
+98: offset: 848 length: 1 flags: O..
+99: offset: 856 length: 1 flags: O..
+100: offset: 864 length: 1 flags: O..
+101: offset: 872 length: 1 flags: O..
+102: offset: 880 length: 1 flags: O..
+103: offset: 888 length: 1 flags: O..
+104: offset: 896 length: 1 flags: O..
+105: offset: 904 length: 1 flags: O..
+106: offset: 912 length: 1 flags: O..
+107: offset: 920 length: 1 flags: O..
+108: offset: 928 length: 1 flags: O..
+109: offset: 936 length: 1 flags: O..
+110: offset: 944 length: 1 flags: O..
+111: offset: 952 length: 1 flags: O..
+112: offset: 960 length: 1 flags: O..
+113: offset: 968 length: 1 flags: O..
+114: offset: 976 length: 1 flags: O..
+115: offset: 984 length: 1 flags: O..
+116: offset: 992 length: 1 flags: O..
+117: offset: 1000 length: 1 flags: O..
+118: offset: 1008 length: 1 flags: O..
+119: offset: 1016 length: 1 flags: O.L
+extents: 120
+extents: 0
