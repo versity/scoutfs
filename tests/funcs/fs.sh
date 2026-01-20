@@ -283,6 +283,30 @@ t_reinsert_remount_all()
 	t_quiet t_mount_all || t_fail "mounting all failed"
 }
 
+#
+# scratch helpers
+#
+t_scratch_mkfs()
+{
+	scoutfs mkfs -f -Q 0,127.0.0.1,$T_SCRATCH_PORT "$T_EX_META_DEV" "$T_EX_DATA_DEV" "$@" > $T_TMP.mkfs.out 2>&1 || \
+		t_fail "scratch mkfs failed"
+}
+
+t_scratch_mount()
+{
+	mkdir -p "$T_MSCR"
+	mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$@" "$T_EX_DATA_DEV" "$T_MSCR" || \
+		t_fail "scratch mount failed"
+}
+
+t_scratch_umount()
+{
+	umount "$T_MSCR" || \
+		t_fail "scratch umount failed"
+	rmdir "$T_MSCR"
+}
+
+
 t_trigger_path() {
 	local nr="$1"
 
