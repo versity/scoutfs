@@ -1,0 +1,6 @@
+== make scratch fs
+== create uid/gids
+== set acls and permissions
+== compare output
+== drop caches and compare again
+== cleanup scratch fs
