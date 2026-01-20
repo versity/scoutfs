@@ -49,15 +49,15 @@ struct scoutfs_net_connection {
 	unsigned long flags; /* CONN_FL_* bitmask */
 	unsigned long reconn_deadline;
 
-	struct sockaddr_in connect_sin;
+	struct sockaddr_storage connect_sin;
 	unsigned long connect_timeout_ms;
 
 	struct socket *sock;
 	u64 rid;
 	u64 greeting_id;
-	struct sockaddr_in sockname;
-	struct sockaddr_in peername;
-	struct sockaddr_in last_peername;
+	struct sockaddr_storage sockname;
+	struct sockaddr_storage peername;
+	struct sockaddr_storage last_peername;
 
 	struct list_head accepted_head;
 	struct scoutfs_net_connection *listening_conn;
@@ -99,27 +99,44 @@ enum conn_flags {
 	CONN_FL_reconn_freeing = (1UL << 6), /* waiting done, setter frees */
 };
 
-#define SIN_FMT		"%pIS:%u"
-#define SIN_ARG(sin)	sin, be16_to_cpu((sin)->sin_port)
+#define SIN_FMT		"%pISpc"
+#define SIN_ARG(sin)	sin
 
-static inline void scoutfs_addr_to_sin(struct sockaddr_in *sin,
+static inline void scoutfs_addr_to_sin(struct sockaddr_storage *sin,
 				       union scoutfs_inet_addr *addr)
 {
-	BUG_ON(addr->v4.family != cpu_to_le16(SCOUTFS_AF_IPV4));
-
-	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = cpu_to_be32(le32_to_cpu(addr->v4.addr));
-	sin->sin_port = cpu_to_be16(le16_to_cpu(addr->v4.port));
+	if (addr->v4.family == cpu_to_le16(SCOUTFS_AF_IPV4)) {
+		struct sockaddr_in *sin4 = (struct sockaddr_in *)sin;
+		memset(sin, 0, sizeof(struct sockaddr_storage));
+		sin4->sin_family = AF_INET;
+		sin4->sin_addr.s_addr = cpu_to_be32(le32_to_cpu(addr->v4.addr));
+		sin4->sin_port = cpu_to_be16(le16_to_cpu(addr->v4.port));
+	} else if (addr->v6.family == cpu_to_le16(SCOUTFS_AF_IPV6)) {
+		struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sin;
+		memset(sin, 0, sizeof(struct sockaddr_storage));
+		sin6->sin6_family = AF_INET6;
+		memcpy(&sin6->sin6_addr.in6_u.u6_addr8, &addr->v6.addr, 16);
+		sin6->sin6_port = cpu_to_be16(le16_to_cpu(addr->v6.port));
+	} else
+		BUG();
 }
 
-static inline void scoutfs_sin_to_addr(union scoutfs_inet_addr *addr, struct sockaddr_in *sin)
+static inline void scoutfs_sin_to_addr(union scoutfs_inet_addr *addr, struct sockaddr_storage *sin)
 {
-	BUG_ON(sin->sin_family != AF_INET);
-
-	memset(addr, 0, sizeof(union scoutfs_inet_addr));
-	addr->v4.family = cpu_to_le16(SCOUTFS_AF_IPV4);
-	addr->v4.addr = be32_to_le32(sin->sin_addr.s_addr);
-	addr->v4.port = be16_to_le16(sin->sin_port);
+	if (sin->ss_family == AF_INET) {
+		struct sockaddr_in *sin4 = (struct sockaddr_in *)sin;
+		memset(addr, 0, sizeof(union scoutfs_inet_addr));
+		addr->v4.family = cpu_to_le16(SCOUTFS_AF_IPV4);
+		addr->v4.addr = be32_to_le32(sin4->sin_addr.s_addr);
+		addr->v4.port = be16_to_le16(sin4->sin_port);
+	} else if (sin->ss_family == AF_INET6) {
+		struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sin;
+		memset(addr, 0, sizeof(union scoutfs_inet_addr));
+		addr->v6.family = cpu_to_le16(SCOUTFS_AF_IPV6);
+		memcpy(&addr->v6.addr, &sin6->sin6_addr.in6_u.u6_addr8, 16);
+		addr->v6.port = be16_to_le16(sin6->sin6_port);
+	} else
+		BUG();
 }
 
 struct scoutfs_net_connection *
@@ -130,10 +147,10 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 u64 scoutfs_net_client_rid(struct scoutfs_net_connection *conn);
 int scoutfs_net_connect(struct super_block *sb,
 			struct scoutfs_net_connection *conn,
-			struct sockaddr_in *sin, unsigned long timeout_ms);
+			struct sockaddr_storage *sin, unsigned long timeout_ms);
 int scoutfs_net_bind(struct super_block *sb,
 		     struct scoutfs_net_connection *conn,
-		     struct sockaddr_in *sin);
+		     struct sockaddr_storage *sin);
 void scoutfs_net_listen(struct super_block *sb,
 			struct scoutfs_net_connection *conn);
 int scoutfs_net_submit_request(struct super_block *sb,
