@@ -7,7 +7,7 @@ FMTIOC_H := format.h ioctl.h
 FMTIOC_KMOD := $(addprefix ../kmod/src/,$(FMTIOC_H))
 
 CFLAGS := -Wall -O2 -Werror -D_FILE_OFFSET_BITS=64 -g -msse4.2 \
-	-fno-strict-aliasing \
+	-I src/ -fno-strict-aliasing \
 	-DSCOUTFS_FORMAT_HASH=0x$(SCOUTFS_FORMAT_HASH)LLU
 
 ifneq ($(wildcard $(firstword $(FMTIOC_KMOD))),)
@@ -15,10 +15,13 @@ CFLAGS += -I../kmod/src
 endif
 
 BIN := src/scoutfs
-OBJ := $(patsubst %.c,%.o,$(wildcard src/*.c))
-DEPS := $(wildcard */*.d)
+OBJ_DIRS := src src/check
+OBJ := $(foreach dir,$(OBJ_DIRS),$(patsubst %.c,%.o,$(wildcard $(dir)/*.c)))
+DEPS := $(foreach dir,$(OBJ_DIRS),$(wildcard $(dir)/*.d))
 
-all: $(BIN)
+AR := src/scoutfs_parallel_restore.a
+
+all: $(BIN) $(AR)
 
 ifneq ($(DEPS),)
 -include $(DEPS)
@@ -35,6 +38,10 @@ endif
 $(BIN): $(OBJ)
 	$(QU)  [BIN $@]
 	$(VE)gcc -o $@ $^ -luuid -lm -lcrypto -lblkid
+
+$(AR): $(OBJ)
+	$(QU)  [AR $@]
+	$(VE)ar rcs $@ $^
 
 %.o %.d: %.c Makefile sparse.sh
 	$(QU)  [CC $<]
