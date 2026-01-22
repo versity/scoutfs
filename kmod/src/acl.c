@@ -107,19 +107,21 @@ struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct s
 	return acl;
 }
 
-#ifdef KC_GET_ACL_DENTRY
-struct posix_acl *scoutfs_get_acl(KC_VFS_NS_DEF
-				  struct dentry *dentry, int type)
-{
-	struct inode *inode = dentry->d_inode;
+#ifdef KC_GET_INODE_ACL
+struct posix_acl *scoutfs_get_acl(struct inode *inode, int type, bool rcu)
 #else
 struct posix_acl *scoutfs_get_acl(struct inode *inode, int type)
-{
 #endif
+{
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
 	struct posix_acl *acl;
 	int ret;
+
+#ifdef KC_GET_INODE_ACL
+	if (rcu)
+		return ERR_PTR(-ECHILD);
+#endif
 
 #ifndef KC___POSIX_ACL_CREATE
 	if (!IS_POSIXACL(inode))
@@ -208,7 +210,7 @@ out:
 	return ret;
 }
 
-#ifdef KC_GET_ACL_DENTRY
+#ifdef KC_SET_ACL_DENTRY
 int scoutfs_set_acl(KC_VFS_NS_DEF
 		    struct dentry *dentry, struct posix_acl *acl, int type)
 {
@@ -254,9 +256,8 @@ int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, 
 	if (!IS_POSIXACL(dentry->d_inode))
 		return -EOPNOTSUPP;
 
-#ifdef KC_GET_ACL_DENTRY
-	acl = scoutfs_get_acl(KC_VFS_INIT_NS
-			      dentry, type);
+#ifdef KC_GET_INODE_ACL
+	acl = scoutfs_get_acl(dentry->d_inode, type, false);
 #else
 	acl = scoutfs_get_acl(dentry->d_inode, type);
 #endif
@@ -305,7 +306,7 @@ int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *v
 		}
 	}
 
-#ifdef KC_GET_ACL_DENTRY
+#ifdef KC_SET_ACL_DENTRY
 	ret = scoutfs_set_acl(KC_VFS_INIT_NS dentry, acl, type);
 #else
 	ret = scoutfs_set_acl(dentry->d_inode, acl, type);
