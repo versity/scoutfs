@@ -11,9 +11,8 @@ truncate -s $sz "$T_TMP.equal"
 truncate -s $large_sz "$T_TMP.large"
 
 echo "== make scratch fs"
-t_quiet scoutfs mkfs -f -Q 0,127.0.0.1,$T_SCRATCH_PORT "$T_EX_META_DEV" "$T_EX_DATA_DEV"
-SCR="$T_TMPDIR/mnt.scratch"
-mkdir -p "$SCR"
+t_scratch_mkfs
+mkdir -p "$T_MSCR"
 
 echo "== small new data device fails"
 t_rc scoutfs prepare-empty-data-device "$T_EX_META_DEV" "$T_TMP.small"
@@ -23,13 +22,13 @@ t_rc scoutfs prepare-empty-data-device --check "$T_EX_META_DEV" "$T_TMP.small"
 t_rc scoutfs prepare-empty-data-device --check "$T_EX_META_DEV"
 
 echo "== preparing while mounted fails"
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$SCR"
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$T_MSCR"
 t_rc scoutfs prepare-empty-data-device "$T_EX_META_DEV" "$T_TMP.equal"
-umount "$SCR"
+umount "$T_MSCR"
 
 echo "== preparing without recovery fails"
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$SCR"
-umount -f "$SCR"
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$T_MSCR"
+umount -f "$T_MSCR"
 t_rc scoutfs prepare-empty-data-device "$T_EX_META_DEV" "$T_TMP.equal"
 
 echo "== check sees metadata errors"
@@ -37,16 +36,16 @@ t_rc scoutfs prepare-empty-data-device --check "$T_EX_META_DEV"
 t_rc scoutfs prepare-empty-data-device --check "$T_EX_META_DEV" "$T_TMP.equal"
 
 echo "== preparing with file data fails"
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$SCR"
-echo hi > "$SCR"/file
-umount "$SCR"
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$T_MSCR"
+echo hi > "$T_MSCR"/file
+umount "$T_MSCR"
 scoutfs print "$T_EX_META_DEV" > "$T_TMP.print"
 t_rc scoutfs prepare-empty-data-device "$T_EX_META_DEV" "$T_TMP.equal"
 
 echo "== preparing after emptied"
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$SCR"
-rm -f "$SCR"/file
-umount "$SCR"
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$T_MSCR"
+rm -f "$T_MSCR"/file
+umount "$T_MSCR"
 t_rc scoutfs prepare-empty-data-device "$T_EX_META_DEV" "$T_TMP.equal"
 
 echo "== checks pass"
@@ -55,22 +54,22 @@ t_rc scoutfs prepare-empty-data-device --check "$T_EX_META_DEV" "$T_TMP.equal"
 
 echo "== using prepared"
 scr_loop=$(losetup --find --show "$T_TMP.equal")
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$scr_loop" "$SCR"
-touch "$SCR"/equal_prepared
-equal_tot=$(scoutfs statfs -s total_data_blocks -p "$SCR")
-umount "$SCR"
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$scr_loop" "$T_MSCR"
+touch "$T_MSCR"/equal_prepared
+equal_tot=$(scoutfs statfs -s total_data_blocks -p "$T_MSCR")
+umount "$T_MSCR"
 losetup -d "$scr_loop"
 
 echo "== preparing larger and resizing"
 t_rc scoutfs prepare-empty-data-device "$T_EX_META_DEV" "$T_TMP.large"
 scr_loop=$(losetup --find --show "$T_TMP.large")
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$scr_loop" "$SCR"
-touch "$SCR"/large_prepared
-ls "$SCR"
-scoutfs resize-devices -p "$SCR" -d $large_sz
-large_tot=$(scoutfs statfs -s total_data_blocks -p "$SCR")
+mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$scr_loop" "$T_MSCR"
+touch "$T_MSCR"/large_prepared
+ls "$T_MSCR"
+scoutfs resize-devices -p "$T_MSCR" -d $large_sz
+large_tot=$(scoutfs statfs -s total_data_blocks -p "$T_MSCR")
 test "$large_tot" -gt "$equal_tot" ; echo "resized larger test rc: $?"
-umount "$SCR"
+umount "$T_MSCR"
 losetup -d "$scr_loop"
 
 echo "== cleanup"

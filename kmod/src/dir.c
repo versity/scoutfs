@@ -2006,7 +2006,11 @@ const struct inode_operations scoutfs_symlink_iops = {
 #ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.removexattr	= generic_removexattr,
 #endif
+#ifdef KC_GET_INODE_ACL
+	.get_inode_acl	= scoutfs_get_acl,
+#else
 	.get_acl	= scoutfs_get_acl,
+#endif
 #ifndef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.tmpfile	= scoutfs_tmpfile,
 	.rename		= scoutfs_rename_common,
@@ -2052,8 +2056,12 @@ const struct inode_operations scoutfs_dir_iops = {
 	.removexattr	= generic_removexattr,
 #endif
 	.listxattr	= scoutfs_listxattr,
+#ifdef KC_GET_INODE_ACL
+	.get_inode_acl	= scoutfs_get_acl,
+#else
 	.get_acl	= scoutfs_get_acl,
-#ifdef KC_GET_ACL_DENTRY
+#endif
+#ifdef KC_SET_ACL_DENTRY
 	.set_acl	= scoutfs_set_acl,
 #endif
 	.symlink	= scoutfs_symlink,

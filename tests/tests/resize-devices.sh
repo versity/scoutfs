@@ -19,8 +19,8 @@ df_free() {
 }
 
 same_totals() {
-	cur_meta_tot=$(statfs_total meta "$SCR")
-	cur_data_tot=$(statfs_total data "$SCR")
+	cur_meta_tot=$(statfs_total meta "$T_MSCR")
+	cur_data_tot=$(statfs_total data "$T_MSCR")
 
 	test "$cur_meta_tot" == "$exp_meta_tot" || \
 		t_fail "cur total_meta_blocks $cur_meta_tot != expected $exp_meta_tot"
@@ -34,10 +34,10 @@ same_totals() {
 # some slop to account for reserved blocks and concurrent allocation.
 #
 devices_grew() {
-	cur_meta_tot=$(statfs_total meta "$SCR")
-	cur_data_tot=$(statfs_total data "$SCR")
-	cur_meta_df=$(df_free MetaData "$SCR")
-	cur_data_df=$(df_free Data "$SCR")
+	cur_meta_tot=$(statfs_total meta "$T_MSCR")
+	cur_data_tot=$(statfs_total data "$T_MSCR")
+	cur_meta_df=$(df_free MetaData "$T_MSCR")
+	cur_data_df=$(df_free Data "$T_MSCR")
 
 	local grow_meta_tot=$(echo "$exp_meta_tot * 2" | bc)
 	local grow_data_tot=$(echo "$exp_data_tot * 2" | bc)
@@ -70,19 +70,13 @@ size_data=$(blockdev --getsize64 "$T_EX_DATA_DEV")
 quarter_meta=$(echo "$size_meta / 4" | bc)
 quarter_data=$(echo "$size_data / 4" | bc)
 
-# XXX this is all pretty manual, would be nice to have helpers
 echo "== make initial small fs"
-scoutfs mkfs -A -f -Q 0,127.0.0.1,$T_SCRATCH_PORT -m $quarter_meta -d $quarter_data \
-	"$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
-		t_fail "mkfs failed"
-SCR="$T_TMPDIR/mnt.scratch"
-mkdir -p "$SCR"
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 \
-	"$T_EX_DATA_DEV" "$SCR"
+t_scratch_mkfs -A -m $quarter_meta -d $quarter_data
+t_scratch_mount
 
 # then calculate sizes based on blocks that mkfs used
-quarter_meta=$(echo "$(statfs_total meta "$SCR") * 64 * 1024" | bc)
-quarter_data=$(echo "$(statfs_total data "$SCR") * 4 * 1024" | bc)
+quarter_meta=$(echo "$(statfs_total meta "$T_MSCR") * 64 * 1024" | bc)
+quarter_data=$(echo "$(statfs_total data "$T_MSCR") * 4 * 1024" | bc)
 whole_meta=$(echo "$quarter_meta * 4" | bc)
 whole_data=$(echo "$quarter_data * 4" | bc)
 outsize_meta=$(echo "$whole_meta * 2" | bc)
@@ -93,59 +87,58 @@ shrink_meta=$(echo "$quarter_meta / 2" | bc)
 shrink_data=$(echo "$quarter_data / 2" | bc)
 
 # and save expected values for checks
-exp_meta_tot=$(statfs_total meta "$SCR")
-exp_meta_df=$(df_free MetaData "$SCR")
-exp_data_tot=$(statfs_total data "$SCR")
-exp_data_df=$(df_free Data "$SCR")
+exp_meta_tot=$(statfs_total meta "$T_MSCR")
+exp_meta_df=$(df_free MetaData "$T_MSCR")
+exp_data_tot=$(statfs_total data "$T_MSCR")
+exp_data_df=$(df_free Data "$T_MSCR")
 
 echo "== 0s do nothing"
-scoutfs resize-devices -p "$SCR" 
-scoutfs resize-devices -p "$SCR" -m 0
-scoutfs resize-devices -p "$SCR" -d 0
-scoutfs resize-devices -p "$SCR" -m 0 -d 0
+scoutfs resize-devices -p "$T_MSCR"
+scoutfs resize-devices -p "$T_MSCR" -m 0
+scoutfs resize-devices -p "$T_MSCR" -d 0
+scoutfs resize-devices -p "$T_MSCR" -m 0 -d 0
 
 echo "== shrinking fails"
-scoutfs resize-devices -p "$SCR" -m $shrink_meta
-scoutfs resize-devices -p "$SCR" -d $shrink_data
-scoutfs resize-devices -p "$SCR" -m $shrink_meta -d $shrink_data
+scoutfs resize-devices -p "$T_MSCR" -m $shrink_meta
+scoutfs resize-devices -p "$T_MSCR" -d $shrink_data
+scoutfs resize-devices -p "$T_MSCR" -m $shrink_meta -d $shrink_data
 same_totals
 
 echo "== existing sizes do nothing"
-scoutfs resize-devices -p "$SCR" -m $quarter_meta
-scoutfs resize-devices -p "$SCR" -d $quarter_data
-scoutfs resize-devices -p "$SCR" -m $quarter_meta -d $quarter_data
+scoutfs resize-devices -p "$T_MSCR" -m $quarter_meta
+scoutfs resize-devices -p "$T_MSCR" -d $quarter_data
+scoutfs resize-devices -p "$T_MSCR" -m $quarter_meta -d $quarter_data
 same_totals
 
 echo "== growing outside device fails"
-scoutfs resize-devices -p "$SCR" -m $outsize_meta
-scoutfs resize-devices -p "$SCR" -d $outsize_data
-scoutfs resize-devices -p "$SCR" -m $outsize_meta -d $outsize_data
+scoutfs resize-devices -p "$T_MSCR" -m $outsize_meta
+scoutfs resize-devices -p "$T_MSCR" -d $outsize_data
+scoutfs resize-devices -p "$T_MSCR" -m $outsize_meta -d $outsize_data
 same_totals
 
 echo "== resizing meta works"
-scoutfs resize-devices -p "$SCR" -m $half_meta
+scoutfs resize-devices -p "$T_MSCR" -m $half_meta
 devices_grew meta
 
 echo "== resizing data works"
-scoutfs resize-devices -p "$SCR" -d $half_data
+scoutfs resize-devices -p "$T_MSCR" -d $half_data
 devices_grew data
 
 echo "== shrinking back fails"
-scoutfs resize-devices -p "$SCR" -m $quarter_meta
-scoutfs resize-devices -p "$SCR" -m $quarter_data
+scoutfs resize-devices -p "$T_MSCR" -m $quarter_meta
+scoutfs resize-devices -p "$T_MSCR" -m $quarter_data
 same_totals
 
 echo "== resizing again does nothing"
-scoutfs resize-devices -p "$SCR" -m $half_meta
-scoutfs resize-devices -p "$SCR" -m $half_data
+scoutfs resize-devices -p "$T_MSCR" -m $half_meta
+scoutfs resize-devices -p "$T_MSCR" -m $half_data
 same_totals
 
 echo "== resizing to full works"
-scoutfs resize-devices -p "$SCR" -m $whole_meta -d $whole_data
+scoutfs resize-devices -p "$T_MSCR" -m $whole_meta -d $whole_data
 devices_grew meta data
 
 echo "== cleanup extra fs"
-umount "$SCR"
-rmdir "$SCR"
+t_scratch_umount
 
 t_pass
