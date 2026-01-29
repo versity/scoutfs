@@ -630,7 +630,7 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 	ret = scoutfs_alloc_empty_list(sb, &server->alloc, &server->wri,
 				       server->meta_freed,
 				       server->other_freed);
-	if (ret) {
+	if (ret && ret != -ENOLINK) {
 		scoutfs_err(sb, "server error emptying freed: %d", ret);
 		goto out;
 	}
