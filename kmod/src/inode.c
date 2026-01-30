@@ -149,8 +149,12 @@ static const struct inode_operations scoutfs_file_iops = {
 	.removexattr	= generic_removexattr,
 #endif
 	.listxattr	= scoutfs_listxattr,
+#ifdef KC_GET_INODE_ACL
+	.get_inode_acl	= scoutfs_get_acl,
+#else
 	.get_acl	= scoutfs_get_acl,
-#ifdef KC_GET_ACL_DENTRY
+#endif
+#ifdef KC_SET_ACL_DENTRY
 	.set_acl	= scoutfs_set_acl,
 #endif
 	.fiemap		= scoutfs_data_fiemap,
@@ -165,8 +169,12 @@ static const struct inode_operations scoutfs_special_iops = {
 	.removexattr	= generic_removexattr,
 #endif
 	.listxattr	= scoutfs_listxattr,
+#ifdef KC_GET_INODE_ACL
+	.get_inode_acl	= scoutfs_get_acl,
+#else
 	.get_acl	= scoutfs_get_acl,
-#ifdef KC_GET_ACL_DENTRY
+#endif
+#ifdef KC_SET_ACL_DENTRY
 	.set_acl	= scoutfs_set_acl,
 #endif
 };

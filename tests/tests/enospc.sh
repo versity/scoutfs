@@ -54,21 +54,16 @@ after=$(free_blocks Data "$T_M0")
 test "$before" == "$after" || \
 	t_fail "$after free data blocks after rm, expected $before"
 
-# XXX this is all pretty manual, would be nice to have helpers
 echo "== make small meta fs"
 # meta device just big enough for reserves and the metadata we'll fill
-scoutfs mkfs -A -f -Q 0,127.0.0.1,$T_SCRATCH_PORT -m 10G "$T_EX_META_DEV" "$T_EX_DATA_DEV" > $T_TMP.mkfs.out 2>&1 || \
-	t_fail "mkfs failed"
-SCR="$T_TMPDIR/mnt.scratch"
-mkdir -p "$SCR"
-mount -t scoutfs -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 \
-	"$T_EX_DATA_DEV" "$SCR"
+t_scratch_mkfs -A -m 10G
+t_scratch_mount
 
 echo "== create large xattrs until we fill up metadata"
-mkdir -p "$SCR/xattrs"
+mkdir -p "$T_MSCR/xattrs"
 
 for f in $(seq 1 100000); do
-	file="$SCR/xattrs/file-$f"
+	file="$T_MSCR/xattrs/file-$f"
 	touch "$file"
 
 	LC_ALL=C create_xattr_loop -c 1000 -n user.scoutfs-enospc -p "$file" -s 65535 > $T_TMP.cxl 2>&1
@@ -84,10 +79,10 @@ for f in $(seq 1 100000); do
 done
 
 echo "== remove files with xattrs after enospc"
-rm -rf "$SCR/xattrs"
+rm -rf "$T_MSCR/xattrs"
 
 echo "== make sure we can create again"
-file="$SCR/file-after"
+file="$T_MSCR/file-after"
 C=120
 while (( C-- )); do
 	touch $file 2> /dev/null && break
@@ -99,7 +94,6 @@ sync
 rm -f "$file"
 
 echo "== cleanup small meta fs"
-umount "$SCR"
-rmdir "$SCR"
+t_scratch_umount
 
 t_pass

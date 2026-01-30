@@ -628,6 +628,9 @@ for t in $tests; do
 		cmd rm -rf "$T_TMPDIR"
 		cmd mkdir -p "$T_TMPDIR"
 
+		# assign scratch mount point in temporary dir
+		T_MSCR="$T_TMPDIR/scratch"
+
 		# create a test name dir in the fs, clean up old data as needed
 		T_DS=""
 		for i in $(seq 0 $((T_NR_MOUNTS - 1))); do
