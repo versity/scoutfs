@@ -443,7 +443,7 @@ out:
 		sfl->blocks = cpu_to_le64(blk + 1);
 
 	if (bl) {
-		trace_scoutfs_get_file_block(sb, bl->blkno, flags);
+		trace_scoutfs_get_file_block(sb, bl->blkno, flags, bl->data);
 	}
 
 	*bl_ret = bl;
@@ -1525,6 +1525,66 @@ static bool should_commit(struct super_block *sb, struct scoutfs_alloc *alloc,
 		scoutfs_alloc_meta_low(sb, alloc, nr);
 }
 
+static int alloc_srch_block(struct super_block *sb, struct scoutfs_alloc *alloc,
+			    struct scoutfs_block_writer *wri,
+			    struct scoutfs_srch_file *sfl,
+			    struct scoutfs_block **bl,
+			    u64 blk)
+{
+	DECLARE_SRCH_INFO(sb, srinf);
+	int ret;
+
+	if (atomic_read(&srinf->shutdown))
+		return -ESHUTDOWN;
+
+	/* could grow and dirty to a leaf */
+	if (should_commit(sb, alloc, wri, sfl->height + 1))
+		return -EAGAIN;
+
+	ret = get_file_block(sb, alloc, wri, sfl, GFB_INSERT | GFB_DIRTY,
+			     blk, bl);
+	if (ret < 0)
+		return ret;
+
+	scoutfs_inc_counter(sb, srch_compact_dirty_block);
+
+	return 0;
+}
+
+static int emit_srch_entry(struct super_block *sb,
+			   struct scoutfs_srch_file *sfl,
+			   struct scoutfs_srch_block *srb,
+			   struct scoutfs_srch_entry *sre,
+			   u64 blk)
+{
+	int ret;
+
+	ret = encode_entry(srb->entries + le32_to_cpu(srb->entry_bytes),
+			   sre, &srb->tail);
+	if (WARN_ON_ONCE(ret <= 0)) {
+		/* shouldn't happen */
+		return -EIO;
+	}
+
+	if (srb->entry_bytes == 0) {
+		if (blk == 0)
+			sfl->first = *sre;
+		srb->first = *sre;
+	}
+
+	le32_add_cpu(&srb->entry_nr, 1);
+	le32_add_cpu(&srb->entry_bytes, ret);
+	srb->last = *sre;
+	srb->tail = *sre;
+	sfl->last = *sre;
+	le64_add_cpu(&sfl->entries, 1);
+
+	scoutfs_inc_counter(sb, srch_compact_entry);
+	trace_scoutfs_srch_emit_entry(sb, sre, srb, blk);
+
+	return 0;
+}
+
 struct tourn_node {
 	struct scoutfs_srch_entry sre;
 	int ind;
@@ -1559,20 +1619,18 @@ static int kway_merge(struct super_block *sb,
 		      kway_get_t kway_get, kway_advance_t kway_adv,
 		      void **args, int nr, bool logs_input)
 {
-	DECLARE_SRCH_INFO(sb, srinf);
 	struct scoutfs_srch_block *srb = NULL;
-	struct scoutfs_srch_entry last_tail;
+	struct scoutfs_srch_entry tmp_entry = {0};
 	struct scoutfs_block *bl = NULL;
 	struct tourn_node *tnodes;
 	struct tourn_node *leaves;
 	struct tourn_node *root;
 	struct tourn_node *tn;
-	int last_bytes = 0;
+	bool have_tmp = false;
 	int nr_parents;
 	int nr_nodes;
 	int empty = 0;
 	int ret = 0;
-	int diff;
 	u64 blk;
 	int ind;
 	int i;
@@ -1606,97 +1664,73 @@ static int kway_merge(struct super_block *sb,
 		}
 	}
 
+	trace_scoutfs_srch_new_merge(sb);
+
 	/* always append new blocks */
 	blk = le64_to_cpu(sfl->blocks);
 	while (empty < nr) {
-		if (bl == NULL) {
-			if (atomic_read(&srinf->shutdown)) {
-				ret = -ESHUTDOWN;
-				goto out;
+		trace_scoutfs_srch_cmp(sb, &root->sre, &tmp_entry, bl);
+
+		if (sre_cmp(&root->sre, &tmp_entry) != 0) {
+			if (have_tmp) {
+				if (bl == NULL) {
+					ret = alloc_srch_block(sb, alloc, wri,
+							       sfl, &bl, blk);
+					if (ret < 0) {
+						if (ret == -EAGAIN)
+							ret = 0;
+						goto out;
+					}
+					srb = bl->data;
+				}
+
+				ret = emit_srch_entry(sb, sfl, srb, &tmp_entry,
+						      blk);
+				if (ret < 0)
+					goto out;
+
+				if (le32_to_cpu(srb->entry_bytes) >
+						SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
+					scoutfs_block_put(sb, bl);
+					bl = NULL;
+					blk++;
+					memset(&tmp_entry, 0, sizeof(tmp_entry));
+					have_tmp = false;
+					continue;
+				}
+
+				/*
+				 * end sorted block on _SAFE offset for
+				 * testing
+				 */
+				if (bl && le32_to_cpu(srb->entry_nr) == 1 &&
+				    logs_input &&
+				    scoutfs_trigger(sb, SRCH_COMPACT_LOGS_PAD_SAFE)) {
+					pad_entries_at_safe(sfl, srb);
+					scoutfs_block_put(sb, bl);
+					bl = NULL;
+					blk++;
+
+					memset(&tmp_entry, 0, sizeof(tmp_entry));
+					have_tmp = false;
+					continue;
+				}
 			}
 
-			/* could grow and dirty to a leaf */
-			if (should_commit(sb, alloc, wri, sfl->height + 1)) {
-				ret = 0;
-				goto out;
-			}
-
-			ret = get_file_block(sb, alloc, wri, sfl,
-					     GFB_INSERT | GFB_DIRTY, blk, &bl);
-			if (ret < 0)
-				goto out;
-			srb = bl->data;
-			scoutfs_inc_counter(sb, srch_compact_dirty_block);
-		}
-
-		if (sre_cmp(&root->sre, &srb->last) != 0) {
-			last_bytes = le32_to_cpu(srb->entry_bytes);
-			last_tail = srb->last;
-			ret = encode_entry(srb->entries +
-					   le32_to_cpu(srb->entry_bytes),
-					   &root->sre, &srb->tail);
-			if (WARN_ON_ONCE(ret <= 0)) {
-				/* shouldn't happen */
-				ret = -EIO;
-				goto out;
-			}
-
-			if (srb->entry_bytes == 0) {
-				if (blk == 0)
-					sfl->first = root->sre;
-				srb->first = root->sre;
-			}
-			le32_add_cpu(&srb->entry_nr, 1);
-			le32_add_cpu(&srb->entry_bytes, ret);
-			srb->last = root->sre;
-			srb->tail = root->sre;
-			sfl->last = root->sre;
-			le64_add_cpu(&sfl->entries, 1);
-			ret = 0;
-
-			if (le32_to_cpu(srb->entry_bytes) >
-			    SCOUTFS_SRCH_BLOCK_SAFE_BYTES) {
-				scoutfs_block_put(sb, bl);
-				bl = NULL;
-				blk++;
-			}
-
-			/* end sorted block on _SAFE offset for testing */
-			if (bl && le32_to_cpu(srb->entry_nr) == 1 && logs_input &&
-			    scoutfs_trigger(sb, SRCH_COMPACT_LOGS_PAD_SAFE)) {
-				pad_entries_at_safe(sfl, srb);
-				scoutfs_block_put(sb, bl);
-				bl = NULL;
-				blk++;
-			}
-
-			scoutfs_inc_counter(sb, srch_compact_entry);
-
+			tmp_entry = root->sre;
+			have_tmp = true;
 		} else {
 			/*
 			 * Duplicate entries indicate deletion so we
-			 * undo the previously encoded entry and ignore
+			 * undo the previously cached tmp entry and ignore
 			 * this entry.  This only happens within each
 			 * block.  Deletions can span block boundaries
 			 * and will be filtered out by search and
 			 * hopefully removed in future compactions.
 			 */
-			diff = le32_to_cpu(srb->entry_bytes) - last_bytes;
-			if (diff) {
-				memset(srb->entries + last_bytes, 0, diff);
-				if (srb->entry_bytes == 0) {
-					/* last_tail will be 0 */
-					if (blk == 0)
-						sfl->first = last_tail;
-					srb->first = last_tail;
-				}
-				le32_add_cpu(&srb->entry_nr, -1);
-				srb->entry_bytes = cpu_to_le32(last_bytes);
-				srb->last = last_tail;
-				srb->tail = last_tail;
-				sfl->last = last_tail;
-				le64_add_cpu(&sfl->entries, -1);
-			}
+			trace_scoutfs_srch_clr_tmp(sb, &tmp_entry);
+			memset(&tmp_entry, 0, sizeof(tmp_entry));
+			have_tmp = false;
 
 			scoutfs_inc_counter(sb, srch_compact_removed_entry);
 		}
@@ -1739,6 +1773,24 @@ static int kway_merge(struct super_block *sb,
 	/* could stream a final index.. arguably a small portion of work */
 
 out:
+	if (have_tmp) {
+		bool emit = true;
+
+		if (bl == NULL) {
+			ret = alloc_srch_block(sb, alloc, wri, sfl, &bl, blk);
+			if (ret) {
+				emit = false;
+				if (ret == -EAGAIN)
+					ret = 0;
+			} else {
+				srb = bl->data;
+			}
+		}
+
+		if (emit)
+			ret = emit_srch_entry(sb, sfl, srb, &tmp_entry, blk);
+	}
+
 	scoutfs_block_put(sb, bl);
 	vfree(tnodes);
 	return ret;
@@ -1982,6 +2034,11 @@ static int kway_get_reader(struct super_block *sb,
 	    rdr->skip > SCOUTFS_SRCH_BLOCK_SAFE_BYTES ||
 	    rdr->skip >= le32_to_cpu(srb->entry_bytes)) {
 		/* XXX inconsistency */
+		scoutfs_err(sb, "blkno %llu pos %u vs %ld, skip %u, bytes %u",
+			__le64_to_cpu(srb->hdr.blkno),
+			rdr->pos, SCOUTFS_SRCH_BLOCK_SAFE_BYTES,
+			rdr->skip,
+			le32_to_cpu(srb->entry_bytes));
 		return -EIO;
 	}
 
