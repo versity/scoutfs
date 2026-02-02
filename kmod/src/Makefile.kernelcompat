@@ -479,10 +479,20 @@ ifneq (,$(shell grep '^unsigned int stack_trace_save' include/linux/stacktrace.h
 ccflags-y += -DKC_STACK_TRACE_SAVE
 endif
 
-# v6.1-rc1-4-g7420332a6ff4
 #
-# .get_acl() method now has dentry arg (and mnt_idmap). The old get_acl has been renamed
-# to get_inode_acl() and is still available as well, but has an extra rcu param.
-ifneq (,$(shell grep 'struct posix_acl ...get_acl..struct mnt_idmap ., struct dentry' include/linux/fs.h))
-ccflags-y += -DKC_GET_ACL_DENTRY
+# v6.1-rc1-2-g138060ba92b3
+#
+# set_acl now passed a struct dentry instead of inode.
+#
+ifneq (,$(shell grep 'int ..set_acl.*struct dentry' include/linux/fs.h))
+ccflags-y += -DKC_SET_ACL_DENTRY
+endif
+
+#
+# v6.1-rc1-3-gcac2f8b8d8b5
+#
+# get_acl renamed to get_inode_acl.
+#
+ifneq (,$(shell grep 'struct posix_acl.*get_inode_acl' include/linux/fs.h))
+ccflags-y += -DKC_GET_INODE_ACL
 endif
