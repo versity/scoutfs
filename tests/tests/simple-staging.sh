@@ -12,12 +12,12 @@ create_file() {
 
 	if [ "$blocks" != 0 ]; then
 		dd if=/dev/urandom bs=4096 count=$blocks of="$file" \
-			>> $seqres.full 2>&1
+			>> "$T_TMPDIR/seqres.full" 2>&1
 	fi
 
 	if [ "$remainder" != 0 ]; then
 		dd if=/dev/urandom bs="$remainder" count=1 of="$file" \
-			conv=notrunc oflag=append >> $seqres.full 2>&1
+			conv=notrunc oflag=append >> "$T_TMPDIR/seqres.full" 2>&1
 	fi
 }
 
@@ -78,7 +78,7 @@ create_file "$FILE" $((4096 * 1024))
 cp "$FILE"  "$T_TMP"
 nr=1
 while [ "$nr" -lt 10 ]; do
-	echo "attempt $nr" >> $seqres.full 2>&1
+	echo "attempt $nr" >> "$T_TMPDIR/$seqres.full" 2>&1
 	release_vers "$FILE" stat 0 4096K
 	sync
 	echo 3 > /proc/sys/vm/drop_caches

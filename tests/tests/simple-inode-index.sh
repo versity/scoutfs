@@ -92,13 +92,13 @@ test "$before" -lt "$after" || \
 # didn't skip past deleted dirty items
 #
 echo "== make sure dirtying doesn't livelock walk"
-dd if=/dev/urandom of="$DIR/dirtying" bs=4K count=1 >> $seqres.full 2>&1
+dd if=/dev/urandom of="$DIR/dirtying" bs=4K count=1 >> "$T_TMPDIR/seqres.full" 2>&1
 nr=1
 while [ "$nr" -lt 100 ]; do
-	echo "dirty/walk attempt $nr" >> $seqres.full
+	echo "dirty/walk attempt $nr" >> "$T_TMPDIR/seqres.full"
 	sync
 	dd if=/dev/urandom of="$DIR/dirtying" bs=4K count=1 conv=notrunc \
-		>> $seqres.full 2>&1
+		>> "$T_TMPDIR/seqres.full" 2>&1
 	scoutfs walk-inodes data_seq 0 -1 $DIR/dirtying >& /dev/null 
 	((nr++))
 done
