@@ -29,6 +29,42 @@
 #include "leaf_item_hash.h"
 #include "dev.h"
 
+struct print_args {
+	char *meta_device;
+	bool skip_likely_huge;
+	bool roots_requested;
+	bool items_requested;
+	bool allocs_requested;
+	bool walk_allocs;
+	bool walk_logs_root;
+	bool walk_fs_root;
+	bool walk_srch_root;
+	bool print_inodes;
+	bool print_xattrs;
+	bool print_dirents;
+	bool print_symlinks;
+	bool print_backrefs;
+	bool print_extents;
+};
+
+static struct print_args print_args = {
+	.meta_device	  = NULL,
+	.skip_likely_huge = false,
+	.roots_requested  = false,
+	.items_requested  = false,
+	.allocs_requested = false,
+	.walk_allocs	  = true,
+	.walk_logs_root	  = true,
+	.walk_fs_root	  = true,
+	.walk_srch_root	  = true,
+	.print_inodes	  = true,
+	.print_xattrs	  = true,
+	.print_dirents	  = true,
+	.print_symlinks	  = true,
+	.print_backrefs	  = true,
+	.print_extents	  = true
+};
+
 static void print_block_header(struct scoutfs_block_header *hdr, int size)
 {
 	u32 crc = crc_block(hdr, size);
@@ -195,7 +231,7 @@ static void print_inode_index(struct scoutfs_key *key, void *val, int val_len)
 
 typedef void (*print_func_t)(struct scoutfs_key *key, void *val, int val_len);
 
-static print_func_t find_printer(u8 zone, u8 type)
+static print_func_t find_printer(u8 zone, u8 type, bool *suppress)
 {
 	if (zone == SCOUTFS_INODE_INDEX_ZONE &&
 	    type >= SCOUTFS_INODE_INDEX_META_SEQ_TYPE  &&
@@ -218,13 +254,34 @@ static print_func_t find_printer(u8 zone, u8 type)
 
 	if (zone == SCOUTFS_FS_ZONE) {
 		switch(type) {
-			case SCOUTFS_INODE_TYPE: return print_inode;
-			case SCOUTFS_XATTR_TYPE: return print_xattr;
-			case SCOUTFS_DIRENT_TYPE: return print_dirent;
-			case SCOUTFS_READDIR_TYPE: return print_dirent;
-			case SCOUTFS_SYMLINK_TYPE: return print_symlink;
-			case SCOUTFS_LINK_BACKREF_TYPE: return print_dirent;
-			case SCOUTFS_DATA_EXTENT_TYPE: return print_data_extent;
+			case SCOUTFS_INODE_TYPE:
+				if (!print_args.print_inodes)
+					*suppress = true;
+				return print_inode;
+			case SCOUTFS_XATTR_TYPE:
+				if (!print_args.print_xattrs)
+					*suppress = true;
+				return print_xattr;
+			case SCOUTFS_DIRENT_TYPE:
+				if (!print_args.print_dirents)
+					*suppress = true;
+				return print_dirent;
+			case SCOUTFS_READDIR_TYPE:
+				if (!print_args.print_dirents)
+					*suppress = true;
+				return print_dirent;
+			case SCOUTFS_SYMLINK_TYPE:
+				if (!print_args.print_symlinks)
+					*suppress = true;
+				return print_symlink;
+			case SCOUTFS_LINK_BACKREF_TYPE:
+				if (!print_args.print_backrefs)
+					*suppress = true;
+				return print_dirent;
+			case SCOUTFS_DATA_EXTENT_TYPE:
+				if (!print_args.print_extents)
+					*suppress = true;
+				return print_data_extent;
 		}
 	}
 
@@ -244,12 +301,16 @@ static int print_fs_item(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 
 	/* only items in leaf blocks have values */
 	if (val != NULL && !(flags & SCOUTFS_ITEM_FLAG_DELETION)) {
-		printer = find_printer(key->sk_zone, key->sk_type);
-		if (printer)
-			printer(key, val, val_len);
-		else
+		bool suppress = false;
+
+		printer = find_printer(key->sk_zone, key->sk_type, &suppress);
+		if (printer) {
+			if (!suppress)
+				printer(key, val, val_len);
+		} else {
 			printf("      (unknown zone %u type %u)\n",
 			       key->sk_zone, key->sk_type);
+		}
 	}
 
 	return 0;
@@ -1037,12 +1098,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	}
 }
 
-struct print_args {
-	char *meta_device;
-	bool skip_likely_huge;
-};
-
-static int print_volume(int fd, struct print_args *args)
+static int print_volume(int fd)
 {
 	struct scoutfs_super_block *super = NULL;
 	struct print_recursion_args pa;
@@ -1092,7 +1148,7 @@ static int print_volume(int fd, struct print_args *args)
 			ret = err;
 	}
 
-	if (!args->skip_likely_huge) {
+	if (print_args.walk_allocs) {
 		for (i = 0; i < array_size(super->meta_alloc); i++) {
 			snprintf(str, sizeof(str), "meta_alloc[%u]", i);
 			err = print_btree(fd, super, str, &super->meta_alloc[i].root,
@@ -1119,18 +1175,21 @@ static int print_volume(int fd, struct print_args *args)
 
 	pa.super = super;
 	pa.fd = fd;
-	if (!args->skip_likely_huge) {
+	if (print_args.walk_srch_root) {
 		err = print_btree_leaf_items(fd, super, &super->srch_root.ref,
 					     print_srch_root_files, &pa);
 		if (err && !ret)
 			ret = err;
 	}
-	err = print_btree_leaf_items(fd, super, &super->logs_root.ref,
-				     print_log_trees_roots, &pa);
-	if (err && !ret)
-		ret = err;
 
-	if (!args->skip_likely_huge) {
+	if (print_args.walk_logs_root) {
+		err = print_btree_leaf_items(fd, super, &super->logs_root.ref,
+					     print_log_trees_roots, &pa);
+		if (err && !ret)
+			ret = err;
+	}
+
+	if (print_args.walk_fs_root) {
 		err = print_btree(fd, super, "fs_root", &super->fs_root,
 				  print_fs_item, NULL);
 		if (err && !ret)
@@ -1143,16 +1202,16 @@ out:
 	return ret;
 }
 
-static int do_print(struct print_args *args)
+static int do_print(void)
 {
 	int ret;
 	int fd;
 
-	fd = open(args->meta_device, O_RDONLY);
+	fd = open(print_args.meta_device, O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
 		fprintf(stderr, "failed to open '%s': %s (%d)\n",
-			args->meta_device, strerror(errno), errno);
+			print_args.meta_device, strerror(errno), errno);
 		return ret;
 	}
 
@@ -1160,30 +1219,169 @@ static int do_print(struct print_args *args)
 	if (ret < 0)
 		goto out;
 
-	ret = print_volume(fd, args);
+	ret = print_volume(fd);
 out:
 	close(fd);
 	return ret;
 };
 
+enum {
+	LOGS_OPT = 0,
+	FS_OPT,
+	SRCH_OPT
+};
+
+static char *const root_tokens[] = {
+	[LOGS_OPT] = "logs",
+	[FS_OPT] =   "fs",
+	[SRCH_OPT] = "srch",
+	NULL
+};
+
+enum {
+	INODE_OPT = 0,
+	XATTR_OPT,
+	DIRENT_OPT,
+	SYMLINK_OPT,
+	BACKREF_OPT,
+	EXTENT_OPT
+};
+
+static char *const item_tokens[] = {
+	[INODE_OPT] =   "inode",
+	[XATTR_OPT] =   "xattr",
+	[DIRENT_OPT] =  "dirent",
+	[SYMLINK_OPT] = "symlink",
+	[BACKREF_OPT] = "backref",
+	[EXTENT_OPT] =  "extent",
+	NULL
+};
+
+static void clear_items(void)
+{
+	print_args.print_inodes = false;
+	print_args.print_xattrs = false;
+	print_args.print_dirents = false;
+	print_args.print_symlinks = false;
+	print_args.print_backrefs = false;
+	print_args.print_extents = false;
+}
+
+static void clear_roots(void)
+{
+	print_args.walk_logs_root = false;
+	print_args.walk_fs_root = false;
+	print_args.walk_srch_root = false;
+}
+
 static int parse_opt(int key, char *arg, struct argp_state *state)
 {
 	struct print_args *args = state->input;
+	char *subopts;
+	char *value;
+	bool parse_err = false;
 
 	switch (key) {
 	case 'S':
 		args->skip_likely_huge = true;
 		break;
+
+	case 'a':
+		args->allocs_requested = true;
+		args->walk_allocs = true;
+		break;
+
+	case 'i':
+		/* Specific items being requested- clear them all to start */
+		if (!args->items_requested) {
+			clear_items();
+			if (!args->allocs_requested)
+				args->walk_allocs = false;
+			args->items_requested = true;
+		}
+
+		subopts = arg;
+		while (*subopts != '\0' && !parse_err) {
+			switch (getsubopt(&subopts, item_tokens, &value)) {
+			case INODE_OPT:
+				args->print_inodes = true;
+				break;
+			case XATTR_OPT:
+				args->print_xattrs = true;
+				break;
+			case DIRENT_OPT:
+				args->print_dirents = true;
+				break;
+			case SYMLINK_OPT:
+				args->print_symlinks = true;
+				break;
+			case BACKREF_OPT:
+				args->print_backrefs = true;
+				break;
+			case EXTENT_OPT:
+				args->print_extents = true;
+				break;
+			default:
+				argp_usage(state);
+				parse_err = true;
+				break;
+			}
+		}
+		break;
+
+	case 'r':
+		/* Specific roots being requested- clear them all to start */
+		if (!args->roots_requested) {
+			clear_roots();
+			if (!args->allocs_requested)
+				args->walk_allocs = false;
+			args->roots_requested = true;
+		}
+
+		subopts = arg;
+		while (*subopts != '\0' && !parse_err) {
+			switch (getsubopt(&subopts, root_tokens, &value)) {
+			case LOGS_OPT:
+				args->walk_logs_root = true;
+				break;
+			case FS_OPT:
+				args->walk_fs_root = true;
+				break;
+			case SRCH_OPT:
+				args->walk_srch_root = true;
+				break;
+			default:
+				argp_usage(state);
+				parse_err = true;
+				break;
+			}
+		}
+		break;
+
 	case ARGP_KEY_ARG:
 		if (!args->meta_device)
 			args->meta_device = strdup_or_error(state, arg);
 		else
 			argp_error(state, "more than one argument given");
 		break;
+
 	case ARGP_KEY_FINI:
 		if (!args->meta_device)
 			argp_error(state, "no metadata device argument given");
+
+		/*
+		 * For backwards compatibility, translate -S. Should we warn if
+		 * this conflicts with other explicit options?
+		 */
+		if (args->skip_likely_huge) {
+			if (!args->allocs_requested)
+				args->walk_allocs = false;
+			args->walk_fs_root = false;
+			args->walk_srch_root = false;
+		}
+
 		break;
+
 	default:
 		break;
 	}
@@ -1192,7 +1390,10 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 }
 
 static struct argp_option options[] = {
-	{ "skip-likely-huge", 'S', NULL, 0, "Skip large structures to minimize output size"},
+	{ "allocs", 'a', NULL, 0, "Print metadata and data alloc lists" },
+	{ "items", 'i', "ITEMS", 0, "Item(s) to print (inode, xattr, dirent, symlink, backref, extent)" },
+	{ "roots", 'r', "ROOTS", 0, "Tree root(s) to walk (logs, srch, fs)" },
+	{ "skip-likely-huge", 'S', NULL, 0, "Skip allocs, srch root and fs root to minimize output size" },
 	{ NULL }
 };
 
@@ -1205,16 +1406,14 @@ static struct argp argp = {
 
 static int print_cmd(int argc, char **argv)
 {
-	struct print_args print_args = {NULL};
 	int ret;
 
 	ret = argp_parse(&argp, argc, argv, 0, NULL, &print_args);
 	if (ret)
 		return ret;
 
-	return do_print(&print_args);
+	return do_print();
 }
-
 
 static void __attribute__((constructor)) print_ctor(void)
 {
