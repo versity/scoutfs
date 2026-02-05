@@ -2,6 +2,18 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.28
+\
+*Feb 5, 2026*
+
+Fix a bug that lead to incorrect negative caching of ACL entries
+starting in version 9.6 of distribution kernels in the enterprise linux
+family.  This would manifest as ACLs seemingly disappearing,
+particularly default ACLs on directories.  The persistent ACLs always
+existed but because of internal API incompatibility some readers
+couldn't see them and would cache that they didn't exist.
+
+---
 v1.27
 \
 *Jan 15, 2026*
