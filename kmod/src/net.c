@@ -1218,7 +1218,8 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 
 	trace_scoutfs_net_connect_work_enter(sb, 0, 0);
 
-	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = kc_sock_create_kern(conn->connect_sin.ss_family,
+				  SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 
@@ -1239,7 +1240,9 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 	trace_scoutfs_conn_connect_start(conn);
 
 	ret = kernel_connect(sock, (struct sockaddr *)&conn->connect_sin,
-			     sizeof(struct sockaddr_in), 0);
+			     conn->connect_sin.ss_family == AF_INET ?
+				sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6),
+			     0);
 	if (ret)
 		goto out;
 
@@ -1282,6 +1285,13 @@ static bool empty_accepted_list(struct scoutfs_net_connection *conn)
 }
 
 /*
+ * sockaddr_storage wraps both _in and _in6, which have _port always
+ * __be16 at the same offset, and we only need to test whether it's
+ * zero.
+ */
+#define sockaddr_port_is_nonzero(sin) ((sin).__data[0] || (sin).__data[1])
+
+/*
  * Safely shut down an active connection.  This can be triggered by
  * errors in workers or by an external call to free the connection.  The
  * shutting down flag ensures that this only executes once for each live
@@ -1304,7 +1314,7 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 	trace_scoutfs_conn_shutdown_start(conn);
 
 	/* connected and accepted conns print a message */
-	if (conn->peername.sin_port != 0)
+	if (sockaddr_port_is_nonzero(conn->peername))
 		scoutfs_info(sb, "%s "SIN_FMT" -> "SIN_FMT,
 			     conn->listening_conn ? "server closing" :
 			                            "client disconnected",
@@ -1434,6 +1444,7 @@ static void scoutfs_net_reconn_free_worker(struct work_struct *work)
 	DEFINE_CONN_FROM_WORK(conn, work, reconn_free_dwork.work);
 	struct super_block *sb = conn->sb;
 	struct scoutfs_net_connection *acc;
+	union scoutfs_inet_addr addr;
 	unsigned long now = jiffies;
 	unsigned long deadline = 0;
 	bool requeue = false;
@@ -1454,8 +1465,9 @@ restart:
 			if (!test_conn_fl(conn, shutting_down)) {
 				scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
 					     SIN_ARG(&acc->last_peername));
+				scoutfs_sin_to_addr(&addr, &acc->last_peername);
 				ret = scoutfs_fence_start(sb, acc->rid,
-						acc->last_peername.sin_addr.s_addr,
+						&addr,
 						SCOUTFS_FENCE_CLIENT_RECONNECT);
 				if (ret) {
 					scoutfs_err(sb, "client fence returned err %d, shutting down server",
@@ -1538,9 +1550,9 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 	conn->req_funcs = req_funcs;
 	spin_lock_init(&conn->lock);
 	init_waitqueue_head(&conn->waitq);
-	conn->sockname.sin_family = AF_INET;
-	conn->peername.sin_family = AF_INET;
-	conn->last_peername.sin_family = AF_INET;
+	conn->sockname.ss_family = AF_UNSPEC;
+	conn->peername.ss_family = AF_UNSPEC;
+	conn->last_peername.ss_family = AF_UNSPEC;
 	INIT_LIST_HEAD(&conn->accepted_head);
 	INIT_LIST_HEAD(&conn->accepted_list);
 	conn->next_send_seq = 1;
@@ -1619,7 +1631,7 @@ void scoutfs_net_free_conn(struct super_block *sb,
  */
 int scoutfs_net_bind(struct super_block *sb,
 		     struct scoutfs_net_connection *conn,
-		     struct sockaddr_in *sin)
+		     struct sockaddr_storage *sin)
 {
 	struct socket *sock = NULL;
 	int addrlen;
@@ -1630,7 +1642,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	if (WARN_ON_ONCE(conn->sock))
 		return -EINVAL;
 
-	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = kc_sock_create_kern(sin->ss_family, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 
@@ -1642,7 +1654,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	if (ret)
 		goto out;
 
-	addrlen = sizeof(struct sockaddr_in);
+	addrlen = sin->ss_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
 	ret = kernel_bind(sock, (struct sockaddr *)sin, addrlen);
 	if (ret)
 		goto out;
@@ -1658,7 +1670,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	ret = 0;
 
 	conn->sock = sock;
-	*sin = conn->sockname;
+	sin = (struct sockaddr_storage *)&conn->sockname;
 
 out:
 	if (ret < 0 && sock)
@@ -1693,7 +1705,7 @@ static bool connect_result(struct scoutfs_net_connection *conn, int *error)
 		done = true;
 		*error = 0;
 	} else if (test_conn_fl(conn, shutting_down) ||
-		   conn->connect_sin.sin_family == 0) {
+		   conn->connect_sin.ss_family == AF_UNSPEC) {
 		done = true;
 		*error = -ESHUTDOWN;
 	}
@@ -1714,7 +1726,7 @@ static bool connect_result(struct scoutfs_net_connection *conn, int *error)
  */
 int scoutfs_net_connect(struct super_block *sb,
 			struct scoutfs_net_connection *conn,
-			struct sockaddr_in *sin, unsigned long timeout_ms)
+			struct sockaddr_storage *sin, unsigned long timeout_ms)
 {
 	int ret = 0;
 
