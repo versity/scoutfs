@@ -36,6 +36,7 @@ scoutfs-y +=			\
 	per_task.o		\
 	quorum.o		\
 	quota.o			\
+	raw.o			\
 	recov.o			\
 	scoutfs_trace.o		\
 	server.o		\

@@ -49,6 +49,7 @@
 #include "quota.h"
 #include "scoutfs_trace.h"
 #include "util.h"
+#include "raw.h"
 
 /*
  * We make inode index items coherent by locking fixed size regions of
@@ -1739,6 +1740,41 @@ out:
 	return ret;
 }
 
+static long scoutfs_ioc_raw_read_meta_seq(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_raw_read_meta_seq __user *urms = (void __user *)arg;
+	struct scoutfs_ioctl_raw_read_meta_seq rms;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&rms, urms, sizeof(rms))) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	if (rms.results_size == 0) {
+		ret = 0;
+		goto out;
+	}
+
+	if (rms.results_size < sizeof(struct scoutfs_ioctl_meta_seq) ||
+	    rms.results_size > INT_MAX) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = scoutfs_raw_read_meta_seq(sb, &rms, &rms.last);
+	if (ret >= 0 && copy_to_user(&urms->last, &rms.last, sizeof(rms.last)))
+		ret = -EFAULT;
+out:
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1790,6 +1826,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_read_xattr_index(file, arg);
 	case SCOUTFS_IOC_PUNCH_OFFLINE:
 		return scoutfs_ioc_punch_offline(file, arg);
+	case SCOUTFS_IOC_RAW_READ_META_SEQ:
+		return scoutfs_ioc_raw_read_meta_seq(file, arg);
 	}
 
 	return -ENOTTY;
