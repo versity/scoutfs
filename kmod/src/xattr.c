@@ -47,7 +47,7 @@
  *  - add acl support and call generic xattr->handlers for SYSTEM
  */
 
-static u32 xattr_name_hash(const char *name, unsigned int name_len)
+u32 scoutfs_xattr_name_hash(const char *name, unsigned int name_len)
 {
 	return crc32c(U32_MAX, name, name_len);
 }
@@ -65,8 +65,7 @@ static unsigned int xattr_nr_parts(struct scoutfs_xattr *xat)
 				      le16_to_cpu(xat->val_len));
 }
 
-static void init_xattr_key(struct scoutfs_key *key, u64 ino, u32 name_hash,
-			   u64 id)
+void scoutfs_xattr_init_key(struct scoutfs_key *key, u64 ino, u32 name_hash, u64 id)
 {
 	*key = (struct scoutfs_key) {
 		.sk_zone = SCOUTFS_FS_ZONE,
@@ -187,10 +186,10 @@ static int get_next_xattr(struct inode *inode, struct scoutfs_key *key,
 		return -EINVAL;
 
 	if (name_len)
-		name_hash = xattr_name_hash(name, name_len);
+		name_hash = scoutfs_xattr_name_hash(name, name_len);
 
-	init_xattr_key(key, scoutfs_ino(inode), name_hash, id);
-	init_xattr_key(&last, scoutfs_ino(inode), U32_MAX, U64_MAX);
+	scoutfs_xattr_init_key(key, scoutfs_ino(inode), name_hash, id);
+	scoutfs_xattr_init_key(&last, scoutfs_ino(inode), U32_MAX, U64_MAX);
 
 	for (;;) {
 		ret = scoutfs_item_next(sb, key, &last, xat, xat_bytes, lock);
@@ -335,8 +334,8 @@ static int create_xattr_items(struct inode *inode, u64 id, struct scoutfs_xattr 
 	int len;
 	int i;
 
-	init_xattr_key(&key, scoutfs_ino(inode),
-		       xattr_name_hash(xat->name, xat->name_len), id);
+	scoutfs_xattr_init_key(&key, scoutfs_ino(inode),
+		       scoutfs_xattr_name_hash(xat->name, xat->name_len), id);
 
 	for (i = 0; i < new_parts; i++) {
 		key.skx_part = i;
@@ -365,7 +364,7 @@ static int delete_xattr_items(struct inode *inode, u32 name_hash, u64 id,
 	int ret = 0;
 	int i;
 
-	init_xattr_key(&key, scoutfs_ino(inode), name_hash, id);
+	scoutfs_xattr_init_key(&key, scoutfs_ino(inode), name_hash, id);
 
 	/* dirty additional existing old items */
 	for (i = 1; i < nr_parts; i++) {
@@ -407,8 +406,8 @@ static int change_xattr_items(struct inode *inode, u64 id,
 	int i;
 	int ret;
 
-	init_xattr_key(&key, scoutfs_ino(inode),
-		       xattr_name_hash(xat->name, xat->name_len), id);
+	scoutfs_xattr_init_key(&key, scoutfs_ino(inode),
+			       scoutfs_xattr_name_hash(xat->name, xat->name_len), id);
 
 	/* dirty existing old items */
 	for (i = 0; i < old_parts; i++) {
@@ -1224,8 +1223,8 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 		goto out;
 	}
 
-	init_xattr_key(&key, ino, 0, 0);
-	init_xattr_key(&last, ino, U32_MAX, U64_MAX);
+	scoutfs_xattr_init_key(&key, ino, 0, 0);
+	scoutfs_xattr_init_key(&last, ino, U32_MAX, U64_MAX);
 
 	for (;;) {
 		ret = scoutfs_item_next(sb, &key, &last, (void *)xat, bytes,
