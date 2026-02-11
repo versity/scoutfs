@@ -10,6 +10,9 @@ struct scoutfs_xattr_prefix_tags {
 
 extern const struct xattr_handler *scoutfs_xattr_handlers[];
 
+u32 scoutfs_xattr_name_hash(const char *name, unsigned int name_len);
+void scoutfs_xattr_init_key(struct scoutfs_key *key, u64 ino, u32 name_hash, u64 id);
+
 int scoutfs_xattr_get_locked(struct inode *inode, const char *name, void *buffer, size_t size,
 			     struct scoutfs_lock *lck);
 int scoutfs_xattr_set_locked(struct inode *inode, const char *name, size_t name_len,
