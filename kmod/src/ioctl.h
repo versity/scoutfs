@@ -834,4 +834,65 @@ struct scoutfs_ioctl_read_xattr_index {
 #define SCOUTFS_IOC_READ_XATTR_INDEX \
 	_IOR(SCOUTFS_IOCTL_MAGIC, 23, struct scoutfs_ioctl_read_xattr_index)
 
+/*
+ * Read meta_seq items without cluster locking.
+ *
+ * @start is the first meta_seq item value that could be returned.
+ * {0,0} is the minimum.
+ *
+ * @end is the last meta_seq item value that could be returned.
+ * {U64_MAX, U64_MAX} is the maximum.
+ *
+ * @last is only set on success from the call.  It's the last meta_seq
+ * item that could have been returned.  This lets the caller detect that
+ * the full input range wasn't explored.  Another call can be made with
+ * start set to just after this.
+ *
+ * @results_ptr is a pointer to an array of (struct
+ * scoutfs_ioctl_meta_seq) elements that were found in the input range.
+ *
+ * @results_size is the count of elements in the results_ptr array and
+ * the maximum number of results that can be returned.  There must be
+ * room for at least one result.
+ *
+ * Return existing meta_seq items starting from @start until @last.
+ * Partial results can be returned and is indicated by @last being set
+ * to an item before @last.
+ *
+ * The results are sorted first by increasing meta_seq and then by
+ * increasing ino.  All of the results are from one version of file
+ * system metadata.  This means that an inode can not be found multiple
+ * times within the results of one call.
+ *
+ * This call ignores currently dirty transactions and reads persistent
+ * items directly.  A transaction can be written after this call and
+ * cause meta_seq items to appear before or within the results from this
+ * call.
+ *
+ * The number of meta_seq items stored in the results buffer is returned
+ * and @last is updated.  0 items can be returned if none are found
+ * within the input range.
+ *
+ * Unique errors:
+ *
+ *  -EINVAL: The result count was 0 or greater than INT_MAX.
+ *
+ *  -ESTALE: The results could not be read from one stable version of
+ *    file system metadata.  Decrease the number of inodes requested.
+ */
+struct scoutfs_ioctl_meta_seq {
+	__u64 meta_seq;
+	__u64 ino;
+};
+struct scoutfs_ioctl_raw_read_meta_seq {
+	struct scoutfs_ioctl_meta_seq start;
+	struct scoutfs_ioctl_meta_seq end;
+	struct scoutfs_ioctl_meta_seq last;
+	__u64 results_ptr;
+	__u32 results_size;
+	__u32 _pad;
+};
+#define SCOUTFS_IOC_RAW_READ_META_SEQ \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 24, struct scoutfs_ioctl_raw_read_meta_seq)
+
 #endif
