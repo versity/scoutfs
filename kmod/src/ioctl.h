@@ -15,20 +15,6 @@
 
 #define SCOUTFS_IOCTL_MAGIC 0xE8  /* arbitrarily chosen hole in ioctl-number.rst */
 
-/*
- * Packed scoutfs keys rarely cross the ioctl boundary so we have a
- * translation struct.
- */
-struct scoutfs_ioctl_key {
-	__le64	_sk_first;
-	__le64	_sk_second;
-	__le64	_sk_third;
-	__u8	_sk_fourth;
-	__u8	sk_type;
-	__u8	sk_zone;
-	__u8	_pad[5];
-};
-
 struct scoutfs_ioctl_walk_inodes_entry {
 	__u64 major;
 	__u64 ino;
