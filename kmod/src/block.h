@@ -1,6 +1,8 @@
 #ifndef _SCOUTFS_BLOCK_H_
 #define _SCOUTFS_BLOCK_H_
 
+struct scoutfs_alloc;
+
 struct scoutfs_block_writer {
 	spinlock_t lock;
 	struct list_head dirty_list;
