@@ -275,12 +275,9 @@ static void load_inode(struct inode *inode, struct scoutfs_inode *cinode, int in
 	i_gid_write(inode, le32_to_cpu(cinode->gid));
 	inode->i_mode = le32_to_cpu(cinode->mode);
 	inode->i_rdev = le32_to_cpu(cinode->rdev);
-	inode->i_atime.tv_sec = le64_to_cpu(cinode->atime.sec);
-	inode->i_atime.tv_nsec = le32_to_cpu(cinode->atime.nsec);
-	inode->i_mtime.tv_sec = le64_to_cpu(cinode->mtime.sec);
-	inode->i_mtime.tv_nsec = le32_to_cpu(cinode->mtime.nsec);
-	inode->i_ctime.tv_sec = le64_to_cpu(cinode->ctime.sec);
-	inode->i_ctime.tv_nsec = le32_to_cpu(cinode->ctime.nsec);
+	inode_set_atime(inode, le64_to_cpu(cinode->atime.sec), le32_to_cpu(cinode->atime.nsec));
+	inode_set_mtime(inode, le64_to_cpu(cinode->mtime.sec), le32_to_cpu(cinode->mtime.nsec));
+	inode_set_ctime(inode, le64_to_cpu(cinode->ctime.sec), le32_to_cpu(cinode->ctime.nsec));
 
 	si->meta_seq = le64_to_cpu(cinode->meta_seq);
 	si->data_seq = le64_to_cpu(cinode->data_seq);
@@ -401,6 +398,7 @@ int scoutfs_getattr(KC_VFS_NS_DEF
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
 	if (ret == 0) {
 		generic_fillattr(KC_VFS_INIT_NS
+				 KC_FILLATTR_REQUEST_MASK
 				 inode, stat);
 		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	}
@@ -412,6 +410,7 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
+	struct kc_timespec cur_time;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	LIST_HEAD(ind_locks);
 	int ret;
@@ -434,7 +433,9 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 		scoutfs_inode_inc_data_version(inode);
 
 	truncate_setsize(inode, new_size);
-	inode->i_ctime = inode->i_mtime = current_time(inode);
+	cur_time = current_time(inode);
+	inode_set_ctime_to_ts(inode, cur_time);
+	inode_set_mtime_to_ts(inode, cur_time);
 	if (truncate)
 		si->flags |= SCOUTFS_INO_FLAG_TRUNCATE;
 	scoutfs_inode_set_data_seq(inode);
@@ -901,14 +902,14 @@ static void store_inode(struct scoutfs_inode *cinode, struct inode *inode, int i
 	cinode->gid = cpu_to_le32(i_gid_read(inode));
 	cinode->mode = cpu_to_le32(inode->i_mode);
 	cinode->rdev = cpu_to_le32(inode->i_rdev);
-	cinode->atime.sec = cpu_to_le64(inode->i_atime.tv_sec);
-	cinode->atime.nsec = cpu_to_le32(inode->i_atime.tv_nsec);
+	cinode->atime.sec = cpu_to_le64(inode_get_atime_sec(inode));
+	cinode->atime.nsec = cpu_to_le32(inode_get_atime_nsec(inode));
 	memset(cinode->atime.__pad, 0, sizeof(cinode->atime.__pad));
-	cinode->ctime.sec = cpu_to_le64(inode->i_ctime.tv_sec);
-	cinode->ctime.nsec = cpu_to_le32(inode->i_ctime.tv_nsec);
+	cinode->ctime.sec = cpu_to_le64(inode_get_ctime_sec(inode));
+	cinode->ctime.nsec = cpu_to_le32(inode_get_ctime_nsec(inode));
 	memset(cinode->ctime.__pad, 0, sizeof(cinode->ctime.__pad));
-	cinode->mtime.sec = cpu_to_le64(inode->i_mtime.tv_sec);
-	cinode->mtime.nsec = cpu_to_le32(inode->i_mtime.tv_nsec);
+	cinode->mtime.sec = cpu_to_le64(inode_get_mtime_sec(inode));
+	cinode->mtime.nsec = cpu_to_le32(inode_get_mtime_nsec(inode));
 	memset(cinode->mtime.__pad, 0, sizeof(cinode->mtime.__pad));
 
 	cinode->meta_seq = cpu_to_le64(scoutfs_inode_meta_seq(inode));
@@ -1566,6 +1567,7 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	struct scoutfs_inode sinode;
 	struct scoutfs_key key;
 	struct inode *inode;
+	struct kc_timespec cur_time;
 	int inode_bytes;
 	int ret;
 
@@ -1595,7 +1597,10 @@ int scoutfs_new_inode(struct super_block *sb, struct inode *dir, umode_t mode, d
 	inode_init_owner(KC_VFS_INIT_NS
 			 inode, dir, mode);
 	inode_set_bytes(inode, 0);
-	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
+	cur_time = current_time(inode);
+	inode_set_mtime_to_ts(inode, cur_time);
+	inode_set_atime_to_ts(inode, cur_time);
+	inode_set_ctime_to_ts(inode, cur_time);
 	inode->i_rdev = rdev;
 	set_inode_ops(inode);
 
@@ -2068,7 +2073,7 @@ void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb)
 
 		low = (opts.orphan_scan_delay_ms * 80) / 100;
 		high = (opts.orphan_scan_delay_ms * 120) / 100;
-		delay = msecs_to_jiffies(low + prandom_u32_max(high - low)) ?: 1;
+		delay = msecs_to_jiffies(low + get_random_u32_below(high - low)) ?: 1;
 
 		mod_delayed_work(system_wq, &inf->orphan_scan_dwork, delay);
 	}
