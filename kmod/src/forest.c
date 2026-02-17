@@ -291,8 +291,6 @@ int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_r
 	struct forest_bloom_nrs bloom;
 	SCOUTFS_BTREE_ITEM_REF(iref);
 	struct scoutfs_key ltk;
-	struct scoutfs_key orig_start = *start;
-	struct scoutfs_key orig_end = *end;
 	int ret;
 
 	scoutfs_inc_counter(sb, forest_read_items);
@@ -300,9 +298,6 @@ int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_r
 		calc_bloom_nrs(&bloom, bloom_key);
 
 	trace_scoutfs_forest_using_roots(sb, &roots->fs_root, &roots->logs_root);
-
-	*start = orig_start;
-	*end = orig_end;
 
 	/* start with fs root items */
 	rid.fic |= FIC_FS_ROOT;
