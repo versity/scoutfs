@@ -1093,19 +1093,24 @@ out_unlock:
 	return ret;
 }
 
+void scoutfs_lock_get_fs_item_range(u64 ino, struct scoutfs_key *start, struct scoutfs_key *end)
+{
+	scoutfs_key_set_zeros(start);
+	start->sk_zone = SCOUTFS_FS_ZONE;
+	start->ski_ino = cpu_to_le64(ino & ~(u64)SCOUTFS_LOCK_INODE_GROUP_MASK);
+
+	scoutfs_key_set_ones(end);
+	end->sk_zone = SCOUTFS_FS_ZONE;
+	end->ski_ino = cpu_to_le64(ino | SCOUTFS_LOCK_INODE_GROUP_MASK);
+}
+
 int scoutfs_lock_ino(struct super_block *sb, enum scoutfs_lock_mode mode, int flags, u64 ino,
 		     struct scoutfs_lock **ret_lock)
 {
 	struct scoutfs_key start;
 	struct scoutfs_key end;
 
-	scoutfs_key_set_zeros(&start);
-	start.sk_zone = SCOUTFS_FS_ZONE;
-	start.ski_ino = cpu_to_le64(ino & ~(u64)SCOUTFS_LOCK_INODE_GROUP_MASK);
-
-	scoutfs_key_set_ones(&end);
-	end.sk_zone = SCOUTFS_FS_ZONE;
-	end.ski_ino = cpu_to_le64(ino | SCOUTFS_LOCK_INODE_GROUP_MASK);
+	scoutfs_lock_get_fs_item_range(ino, &start, &end);
 
 	return lock_key_range(sb, mode, flags, &start, &end, ret_lock);
 }
