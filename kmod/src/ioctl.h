@@ -895,4 +895,108 @@ struct scoutfs_ioctl_raw_read_meta_seq {
 #define SCOUTFS_IOC_RAW_READ_META_SEQ \
 	_IOR(SCOUTFS_IOCTL_MAGIC, 24, struct scoutfs_ioctl_raw_read_meta_seq)
 
+
+/*
+ * Read inode metadata without cluster locking.
+ *
+ * @inos_ptr is a pointer to an aligned array of 64bit inode numbers.
+ *
+ * @inos_count is the number of elements in the array.  The inode
+ * numbers must not be zero, must strictly increase, and must not
+ * contain any duplicates.
+ *
+ * @names_ptr is a pointer to a byte array of xattr names to return with
+ * each inode.  The names are identical to those used in
+ * {get,set}xattr(2).  The names must be null terminated and no two
+ * names may be equal.
+ *
+ * @names_count is the number of names that will be found in the
+ * names_ptr buffer.
+ *
+ * @results_ptr is a pointer to a buffer that will be filled by the read
+ * inode info results.  The result structs and payloads are not aligned.
+ * Callers will almost certainly need to copy them into aligned
+ * addresses before referencing their contents.
+ *
+ * @results_size is the number of bytes available in the results_ptr
+ * buffer.
+ *
+ * For each inode an _INODE result will always be returned.  Then a
+ * _XATTR result will be returned for each xattr on the inode that
+ * matches one of the given input names.
+ *
+ * Each call will not return partial results. -ERANGE is returned if the
+ * results for the requested inodes do not fit in the results buffer.
+ *
+ * The info for one call is from one consistent version of the file
+ * system metadata.  The call can have to retry if it sees metadata
+ * change during its call.  -ESTALE will be returned if it was not able
+ * to read all the inodes info from one metadata version.  The number of
+ * inodes being read can be decreased to avoid this.
+ *
+ * Inodes with an nlink of 0 are not returned.
+ *
+ * The size in bytes of filled results is returned.  A non-zero return
+ * will always include at least one full
+ * (struct scoutfs_ioctl_raw_read_result) header.
+ *
+ * Unique errors:
+ *
+ *  -EINVAL: The inode count can't be zero. The inos ptr must be aligned
+ *    to __u64 alignment.  The results buffer size can't be larger than
+ *    INT_MAX.  Inode numbers can't be zero, must be sorted, and can't
+ *    have duplicates.  The xattr names must be unique, null terminated,
+ *    and less than 256 bytes long.
+ *
+ *  -ERANGE: The results for the requested inodes do not fit in the
+ *    results buffer.  Increase the buffer size (perhaps allowing for all
+ *    xattrs with large values) or decrease the number of inodes per call.
+ *
+ *  -ESTALE: The results could not be read from one stable version of
+ *    file system metadata.  Decrease the number of inodes requested.
+ *
+ *  -EUCLEAN: Internal xattr metadata is inconsistent.
+ */
+
+struct scoutfs_ioctl_raw_read_inode_info {
+	__u64 inos_ptr;
+	__u32 inos_count;
+	__u32 names_count;
+	__u64 names_ptr;
+	__u64 results_ptr;
+	__u32 results_size;
+	__u8  _pad[4];
+};
+
+/*
+ * @type is one of the enums that determines the type of the following
+ * result payload.
+ *
+ * @size is the number of bytes of result payload immediately following
+ * the result struct.  It does not include the size of the result struct
+ * header.
+ */
+struct scoutfs_ioctl_raw_read_result {
+	__u32 size;
+	__u8  _pad[7];
+	__u8 type;
+};
+
+/*
+ * The _INODE result contains an initial 64bit inode number followed by a
+ * struct scoutfs_inode as defined in format.h.  The size includes the
+ * 8byte initial inode number.  With that subtracted the size of the
+ * inode struct defines its version (and so the fields it supports).
+ */
+#define SCOUTFS_IOC_RAW_READ_RESULT_INODE	1
+/*
+ * The result payload contains the null terminated name and the value.
+ * The value size can be found by subtracting the null terminated name
+ * length from the result size.
+ */
+#define SCOUTFS_IOC_RAW_READ_RESULT_XATTR	2
+
+#define SCOUTFS_IOC_RAW_READ_INODE_INFO \
+	_IOR(SCOUTFS_IOCTL_MAGIC, 25, struct scoutfs_ioctl_raw_read_inode_info)
+
 #endif

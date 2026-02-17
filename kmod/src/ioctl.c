@@ -1705,6 +1705,34 @@ out:
 	return ret;
 }
 
+static long scoutfs_ioc_raw_read_inode_info(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_raw_read_inode_info __user *urii = (void __user *)arg;
+	struct scoutfs_ioctl_raw_read_inode_info rii;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		ret = -EPERM;
+		goto out;
+	}
+
+	if (copy_from_user(&rii, urii, sizeof(rii))) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	if (rii.inos_count == 0 || rii.results_size > INT_MAX ||
+	    !IS_ALIGNED(rii.inos_ptr, __alignof__(__u64))) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = scoutfs_raw_read_inode_info(sb, &rii);
+out:
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1756,6 +1784,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_read_xattr_index(file, arg);
 	case SCOUTFS_IOC_RAW_READ_META_SEQ:
 		return scoutfs_ioc_raw_read_meta_seq(file, arg);
+	case SCOUTFS_IOC_RAW_READ_INODE_INFO:
+		return scoutfs_ioc_raw_read_inode_info(file, arg);
 	}
 
 	return -ENOTTY;
