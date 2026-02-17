@@ -1816,6 +1816,11 @@ int scoutfs_btree_dirty(struct super_block *sb,
  * Call the users callback on all the items in the leaf that we find.
  * We also set the caller's keys for the first and last possible keys
  * that could exist in the leaf block.
+ *
+ * The callback can set a new key to continue reading from rather than
+ * iterating over all the items.  It modifies the key and returns
+ * -ESRCH, which performs a new avl search.  If the modified key falls
+ * outside of the range of keys in the block then we return.
  */
 int scoutfs_btree_read_items(struct super_block *sb,
 			     struct scoutfs_btree_root *root,
@@ -1829,6 +1834,7 @@ int scoutfs_btree_read_items(struct super_block *sb,
 	struct scoutfs_avl_node *next_node;
 	struct scoutfs_avl_node *node;
 	struct btree_walk_key_range kr;
+	struct scoutfs_key cb_key;
 	struct scoutfs_block *bl;
 	int ret;
 
@@ -1842,22 +1848,32 @@ int scoutfs_btree_read_items(struct super_block *sb,
 	if (scoutfs_key_compare(&kr.end, end) < 0)
 		*end = kr.end;
 
-	node = scoutfs_avl_search(&bt->item_root, cmp_key_item, start, NULL,
+	cb_key = *start;
+search:
+	node = scoutfs_avl_search(&bt->item_root, cmp_key_item, &cb_key, NULL,
 				  NULL, &next_node, NULL) ?: next_node;
 	while (node) {
 		item = node_item(node);
 		if (scoutfs_key_compare(&item->key, end) > 0)
 			break;
 
-		ret = cb(sb, item_key(item), le64_to_cpu(item->seq), item->flags,
+		cb_key = *item_key(item);
+		ret = cb(sb, &cb_key, le64_to_cpu(item->seq), item->flags,
 			 item_val(bt, item), item_val_len(item), arg);
-		if (ret < 0)
-			break;
+		if (ret < 0) {
+			if (ret == -ESRCH) {
+				if (scoutfs_key_compare(&cb_key, start) >= 0)
+					goto search;
+				ret = 0;
+			}
+			goto out;
+		}
 
 		node = scoutfs_avl_next(&bt->item_root, node);
 	}
 
 	scoutfs_block_put(sb, bl);
+	ret = 0;
 out:
 	return ret;
 }
