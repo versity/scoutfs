@@ -13,6 +13,7 @@ scoutfs-y +=			\
 	avl.o			\
 	alloc.o			\
 	block.o			\
+	bsearch_index.o		\
 	btree.o			\
 	client.o		\
 	counters.o		\
