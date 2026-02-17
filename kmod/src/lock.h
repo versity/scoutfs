@@ -65,6 +65,7 @@ int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
 				 struct scoutfs_key *key);
 
+void scoutfs_lock_get_fs_item_range(u64 ino, struct scoutfs_key *start, struct scoutfs_key *end);
 int scoutfs_lock_inode(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
 		       struct inode *inode, struct scoutfs_lock **ret_lock);
 int scoutfs_lock_ino(struct super_block *sb, enum scoutfs_lock_mode mode, int flags, u64 ino,
