@@ -115,6 +115,42 @@ static struct scoutfs_block *read_bloom_ref(struct super_block *sb, struct scout
 }
 
 /*
+ * Returns >0 if there was a bloom block and all the bits were present.
+ */
+static int all_bloom_bits_present(struct super_block *sb, struct scoutfs_block_ref *ref,
+				  struct forest_bloom_nrs *bloom)
+{
+	struct scoutfs_bloom_block *bb;
+	struct scoutfs_block *bl;
+	int i;
+
+	if (ref->blkno == 0)
+		return 0;
+
+	bl = read_bloom_ref(sb, ref);
+	if (IS_ERR(bl))
+		return PTR_ERR(bl);
+
+	bb = bl->data;
+
+	for (i = 0; i < ARRAY_SIZE(bloom->nrs); i++) {
+		if (!test_bit_le(bloom->nrs[i], bb->bits))
+			break;
+	}
+
+	scoutfs_block_put(sb, bl);
+
+	/* one of the bloom bits wasn't set */
+	if (i != ARRAY_SIZE(bloom->nrs)) {
+		scoutfs_inc_counter(sb, forest_bloom_fail);
+		return 0;
+	}
+
+	scoutfs_inc_counter(sb, forest_bloom_pass);
+	return 1;
+}
+
+/*
  * This is an unlocked iteration across all the btrees to find a hint at
  * the next key that the caller could read.  It's used to find out what
  * next key range to lock, presuming you're allowed to only see items
@@ -227,9 +263,13 @@ static int forest_read_items(struct super_block *sb, struct scoutfs_key *key, u6
 }
 
 /*
- * For each forest btree whose bloom block indicates that the lock might
- * have items stored, call the caller's callback for every item in the
- * leaf block in each tree which contains the key.
+ * Call the caller's callback for every item in the leaf blocks in each
+ * forest btree that contain the caller's key.
+ *
+ * If a bloom key is provided then each log tree's bloom block is
+ * checked and only trees with all the bloom key's bloom bits set will
+ * be read from.  When the bloom key is null all trees will be read
+ * from.
  *
  * The btree iter calls clamp the caller's range to the tightest range
  * that covers all the blocks.  Any keys outside of this range can't be
@@ -248,18 +288,16 @@ int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_r
 		.cb_arg = arg,
 	};
 	struct scoutfs_log_trees lt;
-	struct scoutfs_bloom_block *bb;
 	struct forest_bloom_nrs bloom;
 	SCOUTFS_BTREE_ITEM_REF(iref);
-	struct scoutfs_block *bl;
 	struct scoutfs_key ltk;
 	struct scoutfs_key orig_start = *start;
 	struct scoutfs_key orig_end = *end;
 	int ret;
-	int i;
 
 	scoutfs_inc_counter(sb, forest_read_items);
-	calc_bloom_nrs(&bloom, bloom_key);
+	if (bloom_key)
+		calc_bloom_nrs(&bloom, bloom_key);
 
 	trace_scoutfs_forest_using_roots(sb, &roots->fs_root, &roots->logs_root);
 
@@ -292,30 +330,17 @@ int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_r
 			goto out; /* including stale */
 		}
 
-		if (lt.bloom_ref.blkno == 0)
+		/* we're not expecting -ENOENT from _read_items */
+		if (lt.item_root.ref.blkno == 0)
 			continue;
 
-		bl = read_bloom_ref(sb, &lt.bloom_ref);
-		if (IS_ERR(bl)) {
-			ret = PTR_ERR(bl);
-			goto out;
+		if (bloom_key) {
+			ret = all_bloom_bits_present(sb, &lt.bloom_ref, &bloom);
+			if (ret < 0)
+				goto out;
+			if (ret == 0)
+				continue;
 		}
-		bb = bl->data;
-
-		for (i = 0; i < ARRAY_SIZE(bloom.nrs); i++) {
-			if (!test_bit_le(bloom.nrs[i], bb->bits))
-				break;
-		}
-
-		scoutfs_block_put(sb, bl);
-
-		/* one of the bloom bits wasn't set */
-		if (i != ARRAY_SIZE(bloom.nrs)) {
-			scoutfs_inc_counter(sb, forest_bloom_fail);
-			continue;
-		}
-
-		scoutfs_inc_counter(sb, forest_bloom_pass);
 
 		if ((le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
 			rid.fic |= FIC_FINALIZED;
