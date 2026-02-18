@@ -45,6 +45,7 @@ static char *names[] = {
 	[SCOUTFS_TRIGGER_SRCH_FORCE_LOG_ROTATE] = "srch_force_log_rotate",
 	[SCOUTFS_TRIGGER_SRCH_MERGE_STOP_SAFE] = "srch_merge_stop_safe",
 	[SCOUTFS_TRIGGER_STATFS_LOCK_PURGE] = "statfs_lock_purge",
+	[SCOUTFS_TRIGGER_LOG_MERGE_FORCE_PARTIAL] = "log_merge_force_partial",
 };
 
 bool scoutfs_trigger_test_and_clear(struct super_block *sb, unsigned int t)
