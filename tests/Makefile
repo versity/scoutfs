@@ -15,7 +15,8 @@ BIN := src/createmany			\
 	src/o_tmpfile_umask		\
 	src/o_tmpfile_linkat		\
 	src/mmap_stress			\
-	src/mmap_validate
+	src/mmap_validate		\
+	src/totl_xattr_fill
 
 DEPS := $(wildcard src/*.d)
 
