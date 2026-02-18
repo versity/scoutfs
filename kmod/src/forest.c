@@ -26,6 +26,7 @@
 #include "hash.h"
 #include "srch.h"
 #include "counters.h"
+#include "triggers.h"
 #include "xattr.h"
 #include "scoutfs_trace.h"
 
@@ -731,6 +732,8 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 	ret = scoutfs_btree_merge(sb, &alloc, &wri, &req.start, &req.end,
 				  &next, &comp.root, &inputs,
 				  !!(req.flags & cpu_to_le64(SCOUTFS_LOG_MERGE_REQUEST_SUBTREE)),
+				  scoutfs_trigger(sb, LOG_MERGE_FORCE_PARTIAL) ?
+				  SCOUTFS_BLOCK_LG_SIZE :
 				  SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT, 10,
 				  (2 * 1024 * 1024));
 	if (ret == -ERANGE) {
