@@ -336,7 +336,7 @@ static inline u8 net_err_from_host(struct super_block *sb, int error)
 				     error);
 		}
 
-		return -EINVAL;
+		return SCOUTFS_NET_ERR_EINVAL;
 	}
 
 	return net_errs[ind];
