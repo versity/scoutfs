@@ -1195,8 +1195,8 @@ static struct attribute *quorum_attrs[] = {
 
 static inline bool valid_ipv4_unicast(__be32 addr)
 {
-	return !(ipv4_is_multicast(addr) && ipv4_is_lbcast(addr) &&
-		 ipv4_is_zeronet(addr) && ipv4_is_local_multicast(addr));
+	return !(ipv4_is_multicast(addr) || ipv4_is_lbcast(addr) ||
+		 ipv4_is_zeronet(addr) || ipv4_is_local_multicast(addr));
 }
 
 static inline bool valid_ipv4_port(__be16 port)
