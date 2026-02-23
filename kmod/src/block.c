@@ -884,7 +884,7 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 	hdr->magic = cpu_to_le32(magic);
 	hdr->fsid = cpu_to_le64(sbi->fsid);
 	hdr->blkno = cpu_to_le64(bl->blkno);
-	prandom_bytes(&hdr->seq, sizeof(hdr->seq));
+	get_random_bytes(&hdr->seq, sizeof(hdr->seq));
 
 	trace_scoutfs_block_dirty_ref(sb, le64_to_cpu(ref->blkno), le64_to_cpu(ref->seq),
 				      le64_to_cpu(hdr->blkno), le64_to_cpu(hdr->seq));
@@ -1229,7 +1229,12 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_op
 	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
-	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
+	ret = bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
+	if (ret != SCOUTFS_BLOCK_SM_SIZE) {
+		bio_put(bio);
+		ret = -EFAULT;
+		goto out;
+	}
 
 	init_completion(&sbc.comp);
 	sbc.err = 0;
@@ -1285,9 +1290,12 @@ int scoutfs_block_setup(struct super_block *sb)
 
 	binf->sb = sb;
 	init_waitqueue_head(&binf->waitq);
-	KC_INIT_SHRINKER_FUNCS(&binf->shrinker, block_count_objects,
-			       block_scan_objects);
-	KC_REGISTER_SHRINKER(&binf->shrinker, "scoutfs-block:" SCSBF, SCSB_ARGS(sb));
+	KC_SETUP_SHRINKER(binf->shrinker, binf, 0, block_count_objects,
+			  block_scan_objects, "scoutfs-block:" SCSBF, SCSB_ARGS(sb));
+	if (KC_SHRINKER_IS_NULL(binf->shrinker)) {
+		ret = -ENOMEM;
+		goto out;
+	}
 	INIT_WORK(&binf->free_work, block_free_work);
 	init_llist_head(&binf->free_llist);
 
@@ -1309,7 +1317,7 @@ void scoutfs_block_destroy(struct super_block *sb)
 	struct block_info *binf = SCOUTFS_SB(sb)->block_info;
 
 	if (binf) {
-		KC_UNREGISTER_SHRINKER(&binf->shrinker);
+		KC_UNREGISTER_SHRINKER(binf->shrinker);
 		block_shrink_all(sb);
 		flush_work(&binf->free_work);
 		rhashtable_destroy(&binf->ht);

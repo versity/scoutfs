@@ -20,7 +20,6 @@
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <linux/log2.h>
-#include <asm/unaligned.h>
 
 #include "format.h"
 #include "counters.h"
@@ -3372,7 +3371,7 @@ out:
 
 static u64 device_blocks(struct block_device *bdev, int shift)
 {
-	return i_size_read(bdev->bd_inode) >> shift;
+	return i_size_read(KC_BDEV_INODE(bdev)) >> shift;
 }
 
 static int server_resize_devices(struct super_block *sb, struct scoutfs_net_connection *conn,

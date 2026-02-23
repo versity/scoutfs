@@ -759,6 +759,7 @@ static int scoutfs_mknod(KC_VFS_NS_DEF
 	struct scoutfs_lock *dir_lock = NULL;
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_inode_info *si;
+	struct kc_timespec cur_time;
 	LIST_HEAD(ind_locks);
 	u64 hash;
 	u64 pos;
@@ -790,9 +791,13 @@ static int scoutfs_mknod(KC_VFS_NS_DEF
 	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
-	dir->i_mtime = dir->i_ctime = current_time(inode);
-	inode->i_mtime = inode->i_atime = inode->i_ctime = dir->i_mtime;
-	si->crtime = inode->i_mtime;
+	cur_time = current_time(inode);
+	inode_set_mtime_to_ts(dir, cur_time);
+	inode_set_ctime_to_ts(dir, cur_time);
+	inode_set_mtime_to_ts(inode, cur_time);
+	inode_set_atime_to_ts(inode, cur_time);
+	inode_set_ctime_to_ts(inode, cur_time);
+	si->crtime = inode_get_mtime(inode);
 	inode_inc_iversion(dir);
 	inode_inc_iversion(inode);
 	scoutfs_forest_inc_inode_count(sb);
@@ -845,6 +850,7 @@ static int scoutfs_link(struct dentry *old_dentry,
 	struct scoutfs_lock *dir_lock;
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
+	struct kc_timespec cur_time;
 	LIST_HEAD(ind_locks);
 	bool del_orphan = false;
 	u64 dir_size;
@@ -919,8 +925,10 @@ retry:
 	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, dir_size);
-	dir->i_mtime = dir->i_ctime = current_time(inode);
-	inode->i_ctime = dir->i_mtime;
+	cur_time = current_time(inode);
+	inode_set_mtime_to_ts(dir, cur_time);
+	inode_set_ctime_to_ts(dir, cur_time);
+	inode_set_ctime_to_ts(inode, inode_get_mtime(dir));
 	inc_nlink(inode);
 	inode_inc_iversion(dir);
 	inode_inc_iversion(inode);
@@ -1030,13 +1038,13 @@ retry:
 
 	set_dentry_fsdata(dentry, dir_lock);
 
-	dir->i_ctime = ts;
-	dir->i_mtime = ts;
+	inode_set_ctime_to_ts(dir, ts);
+	inode_set_mtime_to_ts(dir, ts);
 	i_size_write(dir, i_size_read(dir) - dentry->d_name.len);
 	inode_inc_iversion(dir);
 	inode_inc_iversion(inode);
 
-	inode->i_ctime = ts;
+	inode_set_ctime_to_ts(inode, ts);
 	drop_nlink(inode);
 	if (S_ISDIR(inode->i_mode)) {
 		drop_nlink(dir);
@@ -1239,6 +1247,7 @@ static int scoutfs_symlink(KC_VFS_NS_DEF
 	struct scoutfs_lock *dir_lock = NULL;
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_inode_info *si;
+	struct kc_timespec cur_time;
 	LIST_HEAD(ind_locks);
 	u64 hash;
 	u64 pos;
@@ -1278,11 +1287,13 @@ static int scoutfs_symlink(KC_VFS_NS_DEF
 	set_dentry_fsdata(dentry, dir_lock);
 
 	i_size_write(dir, i_size_read(dir) + dentry->d_name.len);
-	dir->i_mtime = dir->i_ctime = current_time(inode);
+	cur_time = current_time(inode);
+	inode_set_mtime_to_ts(dir, cur_time);
+	inode_set_ctime_to_ts(dir, cur_time);
 	inode_inc_iversion(dir);
 
-	inode->i_ctime = dir->i_mtime;
-	si->crtime = inode->i_ctime;
+	inode_set_ctime_to_ts(inode, inode_get_mtime(dir));
+	si->crtime = inode_get_ctime(inode);
 	i_size_write(inode, name_len);
 	inode_inc_iversion(inode);
 	scoutfs_forest_inc_inode_count(sb);
@@ -1804,15 +1815,15 @@ retry:
 	}
 
 	now = current_time(old_inode);
-	old_dir->i_ctime = now;
-	old_dir->i_mtime = now;
+	inode_set_ctime_to_ts(old_dir, now);
+	inode_set_mtime_to_ts(old_dir, now);
 	if (new_dir != old_dir) {
-		new_dir->i_ctime = now;
-		new_dir->i_mtime = now;
+		inode_set_ctime_to_ts(new_dir, now);
+		inode_set_mtime_to_ts(new_dir, now);
 	}
-	old_inode->i_ctime = now;
+	inode_set_ctime_to_ts(old_inode, now);
 	if (new_inode)
-		new_inode->i_ctime = now;
+		inode_set_ctime_to_ts(new_inode, now);
 
 	inode_inc_iversion(old_dir);
 	inode_inc_iversion(old_inode);
@@ -1939,6 +1950,7 @@ static int scoutfs_tmpfile(KC_VFS_NS_DEF
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_inode_info *si;
+	struct kc_timespec cur_time;
 	LIST_HEAD(ind_locks);
 	int ret;
 
@@ -1955,8 +1967,11 @@ static int scoutfs_tmpfile(KC_VFS_NS_DEF
 	if (ret < 0)
 		goto out; /* XXX returning error but items created */
 
-	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
-	si->crtime = inode->i_mtime;
+	cur_time = current_time(inode);
+	inode_set_mtime_to_ts(inode, cur_time);
+	inode_set_ctime_to_ts(inode, cur_time);
+	inode_set_atime_to_ts(inode, cur_time);
+	si->crtime = inode_get_mtime(inode);
 	insert_inode_hash(inode);
 	ihold(inode); /* need to update inode modifications in d_tmpfile */
 #ifdef KC_D_TMPFILE_DENTRY
@@ -2024,7 +2039,11 @@ const struct inode_operations scoutfs_symlink_iops = {
 };
 
 const struct file_operations scoutfs_dir_fops = {
+#ifdef KC_HAVE_ITERATE_SHARED
+	.iterate_shared	= scoutfs_readdir,
+#else
 	.iterate	= scoutfs_readdir,
+#endif
 #ifdef KC_FMODE_KABI_ITERATE
 	.open		= scoutfs_dir_open,
 #endif

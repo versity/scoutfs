@@ -496,3 +496,131 @@ endif
 ifneq (,$(shell grep 'struct posix_acl.*get_inode_acl' include/linux/fs.h))
 ccflags-y += -DKC_GET_INODE_ACL
 endif
+
+#
+# v6.1-rc5-2-ge9a688bcb193
+#
+# get_random_u32_below() implementation
+ifneq (,$(shell grep 'u32 get_random_u32_below' include/linux/random.h))
+ccflags-y += -DKC_HAVE_GET_RANDOM_U32_BELOW
+endif
+
+# v6.5-rc1-7-g9b6304c1d537
+#
+# ctime accessor methods
+ifneq (,$(shell grep 'timespec64 inode_set_ctime_current' include/linux/fs.h))
+ccflags-y += -DKC_FS_INODE_C_TIME_ACCESSOR
+endif
+
+#
+# v6.6-rc5-1-g077c212f0344
+#
+# Must use access methods from fs.h to get to inode ctime/mtime/atime
+ifneq (,$(shell grep 'inline time64_t inode_get_atime_sec' include/linux/fs.h))
+ccflags-y += -DKC_FS_INODE_AM_TIME_ACCESSOR
+endif
+
+#
+# v6.12-rc1-3-g5f60d5f6bbc1
+#
+# asm/unaligned.h replaced with linux/unaligned.h
+ifneq (,$(shell grep -s 'define __LINUX_UNALIGNED_H' include/linux/unaligned.h))
+ccflags-y += -DKC_HAVE__LINUX_UNALIGNED_H
+endif
+
+#
+# v6.9-rc4-29-g203c1ce0bb06
+#
+# RIP bd_inode. (note, struct moved between headers!)
+ifneq (,$(shell grep -s 'struct inode.*bd_inode' include/linux/blk_types.h include/linux/fs.h))
+ccflags-y += -DKC_HAVE_BD_INODE
+endif
+
+#
+# v6.8-9146-gc759e609030c
+#
+# Removes __assign_str_len() and removes the 2nd param of __assign_str().
+ifneq (,$(shell grep -s 'define __assign_str.dst, src' \
+				include/trace/trace_events.h \
+				include/trace/ftrace.h \
+				include/trace/stages/stage6_event_callback.h))
+ccflags-y += -DKC_HAVE_ASSIGN_STR_PARMS
+endif
+
+#
+# v6.5-113-g615e95831ec3
+#
+ifneq (,$(shell grep 'generic_fillattr..*,.u32,' include/linux/fs.h))
+ccflags-y += -DKC_GENERIC_FILLATTR_REQUEST_MASK
+endif
+
+#
+# v6.6-rc4-53-gc42d50aefd17
+#
+# el10 yet again modifies the shrinker API significantly, breaking our current
+# implementation.
+ifneq (,$(shell grep 'struct shrinker .shrinker_alloc' include/linux/shrinker.h))
+ccflags-y += -DKC_SHRINKER_ALLOC
+endif
+
+#
+# v6.9-rc4-8-gead083aeeed9
+#
+# set_blocksize() now has a struct file arg.
+ifneq (,$(shell grep -s 'int set_blocksize.struct file' include/linux/blkdev.h))
+ccflags-y += -DKC_BLKDEV_SET_BLOCKSIZE_FILE
+endif
+
+#
+# v5.1-rc3-29-gaa30f47cf666
+#
+# struct kobj_type now has member `default_groups`
+ifneq (,$(shell grep 'const struct attribute_group ..default_groups;' include/linux/kobject.h))
+ccflags-y += -DKC_KOBJECT_DEFAULT_GROUPS
+endif
+
+#
+# v6.7-rc4-307-g17bf23a981be
+#
+# block_write_full_page() is replaced with block_write_full_folio(),
+# but that isn't exported as it used to be (and the only users now
+# are builtin). However, the kernel will fall back to using the
+# .writepages method instead, so we can drop this method.
+ifneq (,$(shell grep 'int block_write_full_page.struct page' include/linux/buffer_head.h))
+ccflags-y += -DKC_HAVE_BLOCK_WRITE_FULL_PAGE
+endif
+
+#
+# v6.4-rc2-29-gc6585011bc1d
+#
+# generic_file_splice_read is removed. It can be replaced with filemap_splice_read
+# or copy_splice_read.
+ifneq (,$(shell grep 'ssize_t generic_file_splice_read.struct file' include/linux/fs.h))
+ccflags-y += -DKC_HAVE_GENERIC_FILE_SPLICE_READ
+endif
+
+#
+# v5.19-rc3-395-g67235182a41c
+#
+# Adds buffer_migrate_folio(), similar to other fss. Quote willy: "If the filesystem
+# implements migrate_folio and writepages, there is no need for a writepage implementation."
+ifneq (,$(shell grep 'int buffer_migrate_folio.struct address_space' include/linux/buffer_head.h))
+ccflags-y += -DKC_HAVE_BUFFER_MIGRATE_FOLIO
+endif
+
+#
+# v4.6-rc3-29-g6192269444eb
+#
+# Adds .iterate_shared readdir() iterator vfs method.
+ifneq (,$(shell grep 'iterate_shared...struct file.., struct dir_context' include/linux/fs.h))
+ccflags-y += -DKC_HAVE_ITERATE_SHARED
+endif
+
+#
+# v6.11-rc1-54-g9f04609f74ec
+#
+# Last of a series of changes that make block_write_begin/end take a folio instead of
+# a struct pagep.
+ifneq (,$(shell grep 'int __block_write_begin.struct.folio' include/linux/buffer_head.h))
+ccflags-y += -DKC_BLOCK_WRITE_BEGIN_FOLIO
+endif
