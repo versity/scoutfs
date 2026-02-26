@@ -198,11 +198,13 @@ int write_block_sync(int fd, u32 magic, __le64 fsid, u64 seq, u64 blkno,
  */
 int meta_super_in_use(int meta_fd, struct scoutfs_super_block *meta_super)
 {
-	struct scoutfs_quorum_block *qblk = NULL;
+	struct scoutfs_quorum_block *qblk[SCOUTFS_QUORUM_BLOCKS] = {NULL,};
 	struct scoutfs_quorum_block_event *beg;
 	struct scoutfs_quorum_block_event *end;
+	struct scoutfs_quorum_block_event *fence;
+	bool beg_was_fenced;
 	int ret = 0;
-	int i;
+	int i, j;
 
 	if (meta_super->mounted_clients.ref.blkno != 0) {
 		fprintf(stderr, "meta superblock mounted clients btree is not empty.\n");
@@ -210,36 +212,61 @@ int meta_super_in_use(int meta_fd, struct scoutfs_super_block *meta_super)
 		goto out;
 	}
 
-	/* check for active quorum slots */
+	/* read all blocks */
 	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
 		if (!quorum_slot_present(meta_super, i))
 			continue;
 		ret = read_block(meta_fd, SCOUTFS_QUORUM_BLKNO + i, SCOUTFS_BLOCK_SM_SHIFT,
-				 (void **)&qblk);
+				 (void **)&qblk[i]);
 		if (ret < 0) {
 			fprintf(stderr, "error reading quorum block for slot %u\n", i);
 			goto out;
 		}
+	}
 
-		beg = &qblk->events[SCOUTFS_QUORUM_EVENT_BEGIN];
-		end = &qblk->events[SCOUTFS_QUORUM_EVENT_END];
+	/* check for active quorum slots */
+	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++) {
+		if (!qblk[i])
+			continue;
 
-		if (le64_to_cpu(beg->write_nr) > le64_to_cpu(end->write_nr)) {
-			fprintf(stderr, "mount in quorum slot %u could still be running.\n"
-					"  begin event: write_nr %llu timestamp %llu.%08u\n"
-					"    end event: write_nr %llu timestamp %llu.%08u\n",
-				i, le64_to_cpu(beg->write_nr), le64_to_cpu(beg->ts.sec),
-				le32_to_cpu(beg->ts.nsec),
-				le64_to_cpu(end->write_nr), le64_to_cpu(end->ts.sec),
-				le32_to_cpu(end->ts.nsec));
-			ret = -EBUSY;
-			goto out;
+		beg = &qblk[i]->events[SCOUTFS_QUORUM_EVENT_BEGIN];
+		end = &qblk[i]->events[SCOUTFS_QUORUM_EVENT_END];
+
+		if (le64_to_cpu(beg->write_nr) <= le64_to_cpu(end->write_nr))
+			continue;
+
+		/* check if this term was fenced by others in a later term */
+		beg_was_fenced = false;
+		for (j = 0; j < SCOUTFS_QUORUM_BLOCKS; j++) {
+			if ((!qblk[j]) || (i == j))
+				continue;
+
+			fence = &qblk[j]->events[SCOUTFS_QUORUM_EVENT_FENCE];
+			if (le64_to_cpu(fence->term) > le64_to_cpu(beg->term)) {
+				beg_was_fenced = true;
+				break;
+			}
 		}
 
-		free(qblk);
-		qblk = NULL;
+		if (beg_was_fenced)
+			continue;
+
+		fprintf(stderr, "mount in quorum slot %u could still be running.\n"
+				"  begin event: write_nr %llu timestamp %llu.%08u\n"
+				"    end event: write_nr %llu timestamp %llu.%08u\n",
+			i, le64_to_cpu(beg->write_nr), le64_to_cpu(beg->ts.sec),
+			le32_to_cpu(beg->ts.nsec),
+			le64_to_cpu(end->write_nr), le64_to_cpu(end->ts.sec),
+			le32_to_cpu(end->ts.nsec));
+		ret = -EBUSY;
+		goto out;
 	}
 
 out:
+	/* free any allocated blocks */
+	for (i = 0; i < SCOUTFS_QUORUM_BLOCKS; i++)
+		if (qblk[i] != NULL)
+			free(qblk[i]);
+
 	return ret;
 }
