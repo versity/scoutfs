@@ -53,20 +53,25 @@ exec {FD1}>&-  # close
 exec {FD2}>&-  # close
 check_ino_index "$ino" "$dseq" "$T_M0"
 
-echo "== remote unopened unlink deletes"
-echo "contents" > "$T_D0/file"
-ino=$(stat -c "%i" "$T_D0/file")
-dseq=$(scoutfs stat -s data_seq "$T_D0/file")
-rm -f "$T_D1/file"
-check_ino_index "$ino" "$dseq" "$T_M0"
-check_ino_index "$ino" "$dseq" "$T_M1"
-
 # Hurry along the orphan scanners. If any are currently asleep, we will
 # have to wait at least their current scan interval before they wake up,
 # run, and notice their new interval.
 t_save_all_sysfs_mount_options orphan_scan_delay_ms
 t_set_all_sysfs_mount_options orphan_scan_delay_ms 500
 t_wait_for_orphan_scan_runs
+
+echo "== remote unopened unlink deletes"
+echo "contents" > "$T_D0/file"
+ino=$(stat -c "%i" "$T_D0/file")
+dseq=$(scoutfs stat -s data_seq "$T_D0/file")
+rm -f "$T_D1/file"
+# cross-mount deletion falls back to the orphan scanner when the
+# creating mount still has the inode cached, wait for it to complete
+t_force_log_merge
+# wait for orphan scanners to pick up the unlinked inode and become idle
+t_wait_for_no_orphans
+check_ino_index "$ino" "$dseq" "$T_M0"
+check_ino_index "$ino" "$dseq" "$T_M1"
 
 echo "== unlink wait for open on other mount"
 echo "contents" > "$T_D0/badfile"
@@ -81,7 +86,6 @@ exec {FD}>&-  # close
 # we know that revalidating will unhash the remote dentry
 stat "$T_D0/badfile" 2>&1 | sed 's/cannot statx/cannot stat/' | t_filter_fs
 t_force_log_merge
-# wait for orphan scanners to pick up the unlinked inode and become idle
 t_wait_for_no_orphans
 check_ino_index "$ino" "$dseq" "$T_M0"
 check_ino_index "$ino" "$dseq" "$T_M1"
