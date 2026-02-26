@@ -3553,7 +3553,7 @@ static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
  * it's acceptable to see -EEXIST.
  */
 static int insert_mounted_client(struct super_block *sb, u64 rid, u64 gr_flags,
-				 struct sockaddr_in *sin)
+				 struct sockaddr_storage *sin)
 {
 	DECLARE_SERVER_INFO(sb, server);
 	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
@@ -4306,7 +4306,7 @@ static void fence_pending_recov_worker(struct work_struct *work)
 			break;
 		}
 
-		ret = scoutfs_fence_start(sb, rid, le32_to_be32(addr.v4.addr),
+		ret = scoutfs_fence_start(sb, rid, &addr,
 					  SCOUTFS_FENCE_CLIENT_RECOVERY);
 		if (ret < 0) {
 			scoutfs_err(sb, "fence returned err %d, shutting down server", ret);
@@ -4457,7 +4457,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 	struct scoutfs_net_connection *conn = NULL;
 	struct scoutfs_mount_options opts;
 	DECLARE_WAIT_QUEUE_HEAD(waitq);
-	struct sockaddr_in sin;
+	struct sockaddr_storage sin;
 	bool alloc_init = false;
 	u64 max_seq;
 	int ret;
@@ -4466,7 +4466,7 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	scoutfs_options_read(sb, &opts);
 	scoutfs_quorum_slot_sin(&server->qconf, opts.quorum_slot_nr, &sin);
-	scoutfs_info(sb, "server starting at "SIN_FMT, SIN_ARG(&sin));
+	scoutfs_info(sb, "server starting at "SIN_FMT, &sin);
 
 	scoutfs_block_writer_init(sb, &server->wri);
 	server->finalize_sent_seq = 0;

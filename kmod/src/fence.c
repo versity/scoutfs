@@ -25,6 +25,7 @@
 #include "sysfs.h"
 #include "server.h"
 #include "fence.h"
+#include "net.h"
 
 /*
  * Fencing ensures that a given mount can no longer write to the
@@ -79,7 +80,7 @@ struct pending_fence {
 	struct timer_list timer;
 
 	ktime_t start_kt;
-	__be32 ipv4_addr;
+	union scoutfs_inet_addr addr;
 	bool fenced;
 	bool error;
 	int reason;
@@ -171,14 +172,19 @@ static ssize_t error_store(struct kobject *kobj, struct kobj_attribute *attr, co
 }
 SCOUTFS_ATTR_RW(error);
 
-static ssize_t ipv4_addr_show(struct kobject *kobj,
+static ssize_t inet_addr_show(struct kobject *kobj,
 			      struct kobj_attribute *attr, char *buf)
 {
 	DECLARE_FENCE_FROM_KOBJ(fence, kobj);
+	struct sockaddr_storage sin;
 
-	return snprintf(buf, PAGE_SIZE, "%pI4", &fence->ipv4_addr);
+	memset(&sin, 0, sizeof(struct sockaddr_storage));
+
+	scoutfs_addr_to_sin(&sin, &fence->addr);
+
+	return snprintf(buf, PAGE_SIZE, "%pISc", SIN_ARG(&sin));
 }
-SCOUTFS_ATTR_RO(ipv4_addr);
+SCOUTFS_ATTR_RO(inet_addr);
 
 static ssize_t reason_show(struct kobject *kobj, struct kobj_attribute *attr,
 			   char *buf)
@@ -212,7 +218,7 @@ static struct attribute *fence_attrs[] = {
 	SCOUTFS_ATTR_PTR(elapsed_secs),
 	SCOUTFS_ATTR_PTR(fenced),
 	SCOUTFS_ATTR_PTR(error),
-	SCOUTFS_ATTR_PTR(ipv4_addr),
+	SCOUTFS_ATTR_PTR(inet_addr),
 	SCOUTFS_ATTR_PTR(reason),
 	SCOUTFS_ATTR_PTR(rid),
 	NULL,
@@ -232,7 +238,7 @@ static void fence_timeout(struct timer_list *timer)
 	wake_up(&fi->waitq);
 }
 
-int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int reason)
+int scoutfs_fence_start(struct super_block *sb, u64 rid, union scoutfs_inet_addr *addr, int reason)
 {
 	DECLARE_FENCE_INFO(sb, fi);
 	struct pending_fence *fence;
@@ -248,7 +254,7 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 	scoutfs_sysfs_init_attrs(sb, &fence->ssa);
 
 	fence->start_kt = ktime_get();
-	fence->ipv4_addr = ipv4_addr;
+	memcpy(&fence->addr, addr, sizeof(union scoutfs_inet_addr));
 	fence->fenced = false;
 	fence->error = false;
 	fence->reason = reason;
