@@ -793,7 +793,7 @@ out:
 	if (ret)
 		scoutfs_forest_destroy(sb);
 
-	return 0;
+	return ret;
 }
 
 void scoutfs_forest_start(struct super_block *sb)

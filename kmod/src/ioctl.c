@@ -415,8 +415,6 @@ static long scoutfs_ioc_data_wait_err(struct file *file, unsigned long arg)
 		return 0;
 	if ((args.op & SCOUTFS_IOC_DWO_UNKNOWN) || !IS_ERR_VALUE(args.err))
 		return -EINVAL;
-	if ((args.op & SCOUTFS_IOC_DWO_UNKNOWN) || !IS_ERR_VALUE(args.err))
-		return -EINVAL;
 
 	trace_scoutfs_ioc_data_wait_err(sb, &args);
 
