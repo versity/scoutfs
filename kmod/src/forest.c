@@ -68,6 +68,8 @@ struct forest_info {
 	struct delayed_work log_merge_dwork;
 
 	atomic64_t inode_count_delta;
+
+	u64 merge_dirty_limit_override;
 };
 
 #define DECLARE_FOREST_INFO(sb, name) \
@@ -668,6 +670,7 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 	struct scoutfs_key key;
 	unsigned long delay;
 	LIST_HEAD(inputs);
+	u64 dirty_limit;
 	int ret;
 
 	ret = scoutfs_client_get_log_merge(sb, &req);
@@ -728,10 +731,14 @@ static void scoutfs_forest_log_merge_worker(struct work_struct *work)
 		goto out;
 	}
 
+	dirty_limit = READ_ONCE(finf->merge_dirty_limit_override);
+	if (!dirty_limit)
+		dirty_limit = SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT;
+
 	ret = scoutfs_btree_merge(sb, &alloc, &wri, &req.start, &req.end,
 				  &next, &comp.root, &inputs,
 				  !!(req.flags & cpu_to_le64(SCOUTFS_LOG_MERGE_REQUEST_SUBTREE)),
-				  SCOUTFS_LOG_MERGE_DIRTY_BYTE_LIMIT, 10,
+				  dirty_limit, 10,
 				  (2 * 1024 * 1024));
 	if (ret == -ERANGE) {
 		comp.remain = next;
@@ -780,6 +787,9 @@ int scoutfs_forest_setup(struct super_block *sb)
 	INIT_DELAYED_WORK(&finf->log_merge_dwork,
 			  scoutfs_forest_log_merge_worker);
 	sbi->forest_info = finf;
+
+	debugfs_create_u64("log_merge_dirty_limit", 0644, sbi->debug_root,
+			   &finf->merge_dirty_limit_override);
 
 	finf->workq = alloc_workqueue("scoutfs_log_merge", WQ_NON_REENTRANT |
 				      WQ_UNBOUND | WQ_HIGHPRI, 0);

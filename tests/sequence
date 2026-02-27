@@ -26,6 +26,7 @@ simple-xattr-unit.sh
 retention-basic.sh
 totl-xattr-tag.sh
 quota.sh
+totl-merge-negative.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
 lock-shrink-read-race.sh
