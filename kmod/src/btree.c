@@ -2183,6 +2183,8 @@ static int merge_read_item(struct super_block *sb, struct scoutfs_key *key, u64 
 		if (ret > 0) {
 			if (ret == SCOUTFS_DELTA_COMBINED) {
 				scoutfs_inc_counter(sb, btree_merge_delta_combined);
+				if (seq > found->seq)
+					found->seq = seq;
 			} else if (ret == SCOUTFS_DELTA_COMBINED_NULL) {
 				scoutfs_inc_counter(sb, btree_merge_delta_null);
 				free_mitem(rng, found);
