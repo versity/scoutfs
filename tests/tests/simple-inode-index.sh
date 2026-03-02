@@ -32,7 +32,7 @@ echo "== dirs shouldn't appear in data_seq queries"
 mkdir "$DIR"
 ino=$(stat -c "%i" "$DIR")
 t_sync_seq_index
-query_index data_seq | grep "$ino\>"
+query_index data_seq | awk '($4 == "'$ino'")'
 
 echo "== two created files are present and come after each other"
 touch "$DIR/first"
