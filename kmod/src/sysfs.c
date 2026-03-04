@@ -103,11 +103,10 @@ static ssize_t attr_funcs_show(struct kobject *kobj, struct attribute *attr,
 	};								\
 									\
 	static struct kobj_type _name##_ktype = {			\
-		.default_attrs  = _name##_attrs,			\
+		.KC_KOBJ_DEFAULT_OP = KC_KOBJ_DEFAULT(_name),		\
 		.sysfs_ops      = &_name##_sysfs_ops,			\
 		.release        = _name##_release,			\
 	};
-
 
 static struct attribute *sb_id_attrs[] = {
 	&data_device_maj_min_attr_funcs.attr,
@@ -116,6 +115,9 @@ static struct attribute *sb_id_attrs[] = {
 	&rid_attr_funcs.attr,
 	NULL,
 };
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+ATTRIBUTE_GROUPS(sb_id);
+#endif
 KTYPE(sb_id);
 
 struct kobject *scoutfs_sysfs_sb_dir(struct super_block *sb)
@@ -155,7 +157,12 @@ void scoutfs_sysfs_init_attrs(struct super_block *sb,
 int scoutfs_sysfs_create_attrs_parent(struct super_block *sb,
 				      struct kobject *parent,
 				      struct scoutfs_sysfs_attrs *ssa,
-				      struct attribute **attrs, char *fmt, ...)
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+				      const struct attribute_group **groups,
+#else
+				      struct attribute **attrs,
+#endif
+				      char *fmt, ...)
 {
 	va_list args;
 	size_t name_len;
@@ -168,7 +175,11 @@ int scoutfs_sysfs_create_attrs_parent(struct super_block *sb,
 
 	ssa->sb = sb;
 	init_completion(&ssa->comp);
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+	ssa->ktype.default_groups = groups;
+#else
 	ssa->ktype.default_attrs = attrs;
+#endif
 	ssa->ktype.sysfs_ops = &kobj_sysfs_ops;
 	ssa->ktype.release = scoutfs_sysfs_release;
 
