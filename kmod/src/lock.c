@@ -71,6 +71,8 @@
  * relative to that lock state we resend.
  */
 
+#define CLIENT_LOCK_WAIT_TIMEOUT (60 * HZ)
+
 /*
  * allocated per-super, freed on unmount.
  */
@@ -954,6 +956,9 @@ static bool lock_wait_cond(struct super_block *sb, struct scoutfs_lock *lock,
 	spin_unlock(&linfo->lock);
 
 	if (!wake)
+		wake = scoutfs_unmounting(sb);
+
+	if (!wake)
 		scoutfs_inc_counter(sb, lock_wait);
 
 	return wake;
@@ -997,8 +1002,10 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 		return -EINVAL;
 
 	/* maybe catch _setup() and _shutdown order mistakes */
-	if (WARN_ON_ONCE(!linfo || linfo->shutdown))
+	if (!linfo || linfo->shutdown) {
+		WARN_ON_ONCE(!scoutfs_unmounting(sb));
 		return -ENOLCK;
+	}
 
 	/* have to lock before entering transactions */
 	if (WARN_ON_ONCE(scoutfs_trans_held()))
@@ -1020,6 +1027,11 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 
 	for (;;) {
 		if (WARN_ON_ONCE(linfo->shutdown)) {
+			ret = -ESHUTDOWN;
+			break;
+		}
+
+		if (scoutfs_unmounting(sb)) {
 			ret = -ESHUTDOWN;
 			break;
 		}
@@ -1067,8 +1079,9 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 		if (flags & SCOUTFS_LKF_INTERRUPTIBLE) {
 			ret = wait_event_interruptible(lock->waitq,
 						       lock_wait_cond(sb, lock, mode));
-		} else {
-			wait_event(lock->waitq, lock_wait_cond(sb, lock, mode));
+		} else if (!wait_event_timeout(lock->waitq,
+					       lock_wait_cond(sb, lock, mode),
+					       CLIENT_LOCK_WAIT_TIMEOUT)) {
 			ret = 0;
 		}
 
