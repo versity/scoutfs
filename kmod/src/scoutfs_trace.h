@@ -2620,24 +2620,148 @@ TRACE_EVENT(scoutfs_block_dirty_ref,
 );
 
 TRACE_EVENT(scoutfs_get_file_block,
-	TP_PROTO(struct super_block *sb, u64 blkno, int flags),
+	TP_PROTO(struct super_block *sb, u64 blkno, int flags,
+		 struct scoutfs_srch_block *srb),
 
-	TP_ARGS(sb, blkno, flags),
+	TP_ARGS(sb, blkno, flags, srb),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, blkno)
+		__field(__u32, entry_nr)
+		__field(__u32, entry_bytes)
 		__field(int, flags)
+		__field(__u64, first_hash)
+		__field(__u64, first_ino)
+		__field(__u64, first_id)
+		__field(__u64, last_hash)
+		__field(__u64, last_ino)
+		__field(__u64, last_id)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->blkno = blkno;
+		__entry->entry_nr = __le32_to_cpu(srb->entry_nr);
+		__entry->entry_bytes = __le32_to_cpu(srb->entry_bytes);
 		__entry->flags = flags;
+		__entry->first_hash = __le64_to_cpu(srb->first.hash);
+		__entry->first_ino = __le64_to_cpu(srb->first.ino);
+		__entry->first_id = __le64_to_cpu(srb->first.id);
+		__entry->last_hash = __le64_to_cpu(srb->last.hash);
+		__entry->last_ino = __le64_to_cpu(srb->last.ino);
+		__entry->last_id = __le64_to_cpu(srb->last.id);
 	),
 
-	TP_printk(SCSBF" blkno %llu flags 0x%x",
-		  SCSB_TRACE_ARGS, __entry->blkno, __entry->flags)
+	TP_printk(SCSBF" blkno %llu nr %u bytes %u flags 0x%x first_hash 0x%llx first_ino %llu first_id 0x%llx last_hash 0x%llx last_ino %llu last_id 0x%llx",
+		  SCSB_TRACE_ARGS, __entry->blkno, __entry->entry_nr,
+		  __entry->entry_bytes, __entry->flags,
+		  __entry->first_hash, __entry->first_ino, __entry->first_id,
+		  __entry->last_hash, __entry->last_ino, __entry->last_id)
+);
+
+TRACE_EVENT(scoutfs_srch_new_merge,
+	TP_PROTO(struct super_block *sb),
+
+	TP_ARGS(sb),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+	),
+
+	TP_printk(SCSBF, SCSB_TRACE_ARGS)
+);
+
+TRACE_EVENT(scoutfs_srch_emit_entry,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_entry *sre,
+		 struct scoutfs_srch_block *srb, u64 blkno),
+
+	TP_ARGS(sb, sre, srb, blkno),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u32, entry_nr)
+		__field(__u64, blkno)
+		__field(__u64, hash)
+		__field(__u64, ino)
+		__field(__u64, id)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->entry_nr = __le32_to_cpu(srb->entry_nr);
+		__entry->blkno = blkno;
+		__entry->hash = __le64_to_cpu(sre->hash);
+		__entry->ino = __le64_to_cpu(sre->ino);
+		__entry->id = __le64_to_cpu(sre->id);
+	),
+
+	TP_printk(SCSBF" nr %u blkno %llu hash 0x%llx ino %llu id 0x%llx",
+		  SCSB_TRACE_ARGS, __entry->entry_nr, __entry->blkno,
+		  __entry->hash, __entry->ino, __entry->id)
+);
+
+TRACE_EVENT(scoutfs_srch_clr_tmp,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_entry *tmp),
+
+	TP_ARGS(sb, tmp),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, tmp_hash)
+		__field(__u64, tmp_ino)
+		__field(__u64, tmp_id)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->tmp_hash = __le64_to_cpu(tmp->hash);
+		__entry->tmp_ino = __le64_to_cpu(tmp->ino);
+		__entry->tmp_id = __le64_to_cpu(tmp->id);
+	),
+
+	TP_printk(SCSBF" tmp hash 0x%llx tmp ino %llu tmp hash 0x%llx",
+		  SCSB_TRACE_ARGS,
+		  __entry->tmp_hash, __entry->tmp_ino, __entry->tmp_id)
+);
+
+TRACE_EVENT(scoutfs_srch_cmp,
+	TP_PROTO(struct super_block *sb, struct scoutfs_srch_entry *root,
+		 struct scoutfs_srch_entry *tmp, void *bl),
+
+	TP_ARGS(sb, root, tmp, bl),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, root_hash)
+		__field(__u64, root_ino)
+		__field(__u64, root_id)
+		__field(__u64, tmp_hash)
+		__field(__u64, tmp_ino)
+		__field(__u64, tmp_id)
+		__field(void *, bl)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->root_hash = __le64_to_cpu(root->hash);
+		__entry->root_ino = __le64_to_cpu(root->ino);
+		__entry->root_id = __le64_to_cpu(root->id);
+		__entry->tmp_hash = __le64_to_cpu(tmp->hash);
+		__entry->tmp_ino = __le64_to_cpu(tmp->ino);
+		__entry->tmp_id = __le64_to_cpu(tmp->id);
+		__entry->bl = bl;
+	),
+
+	TP_printk(SCSBF" root hash 0x%llx root ino %llu root id 0x%llx tmp hash 0x%llx tmp ino %llu tmp hash 0x%llx, bl %p",
+		  SCSB_TRACE_ARGS,
+		  __entry->root_hash, __entry->root_ino, __entry->root_id,
+		  __entry->tmp_hash, __entry->tmp_ino, __entry->tmp_id,
+		  __entry->bl)
 );
 
 TRACE_EVENT(scoutfs_block_stale,
