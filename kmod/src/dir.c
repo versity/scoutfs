@@ -587,10 +587,12 @@ static int add_entry_items(struct super_block *sb, u64 dir_ino, u64 hash,
 	}
 
 	/* initialize the dent */
-	dent->ino = cpu_to_le64(ino);
-	dent->hash = cpu_to_le64(hash);
-	dent->pos = cpu_to_le64(pos);
-	dent->type = mode_to_type(mode);
+	*dent = (struct scoutfs_dirent) {
+		.ino = cpu_to_le64(ino),
+		.hash = cpu_to_le64(hash),
+		.pos = cpu_to_le64(pos),
+		.type = mode_to_type(mode),
+	};
 	memcpy(dent->name, name, name_len);
 
 	init_dirent_key(&ent_key, SCOUTFS_DIRENT_TYPE, dir_ino, hash, pos);

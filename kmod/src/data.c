@@ -79,8 +79,10 @@ static void item_from_extent(struct scoutfs_key *key,
 		.skdx_end = cpu_to_le64(start + len - 1),
 		.skdx_len = cpu_to_le64(len),
 	};
-	dv->blkno = cpu_to_le64(map);
-	dv->flags = flags;
+	*dv = (struct scoutfs_data_extent_val) {
+		.blkno = cpu_to_le64(map),
+		.flags = flags,
+	};
 }
 
 static void ext_from_item(struct scoutfs_extent *ext,
