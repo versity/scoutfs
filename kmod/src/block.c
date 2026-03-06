@@ -624,8 +624,10 @@ static struct block_private *block_read(struct super_block *sb, u64 blkno)
 	if (!test_bit(BLOCK_BIT_UPTODATE, &bp->bits) &&
 	     test_and_clear_bit(BLOCK_BIT_NEW, &bp->bits)) {
 		ret = block_submit_bio(sb, bp, REQ_OP_READ);
-		if (ret < 0)
+		if (ret < 0) {
+			set_bit(BLOCK_BIT_ERROR, &bp->bits);
 			goto out;
+		}
 	}
 
 	wait_event(binf->waitq, uptodate_or_error(bp));
