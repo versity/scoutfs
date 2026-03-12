@@ -1998,7 +1998,6 @@ int scoutfs_btree_set_parent(struct super_block *sb,
 			     struct scoutfs_key *key,
 			     struct scoutfs_btree_root *par_root)
 {
-
 	trace_scoutfs_btree_set_parent(sb, root, key, par_root);
 
 	return btree_walk(sb, alloc, wri, root, BTW_DIRTY | BTW_SET_PAR,
@@ -2617,7 +2616,7 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 		while (node) {
 
 			/* make sure we can always free parents after leaves */
-			if ((nr_freed + 1 + nr_par) > free_budget) {
+			if ((nr_freed + 1 + nr_par + 1) > free_budget) {
 				ret = 0;
 				goto out;
 			}
@@ -2641,7 +2640,17 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 			}
 		}
 
-		/* now that leaves are freed, free any empty parents */
+		/* free the last parent block whose leaves were all freed */
+		trace_scoutfs_btree_free_blocks_parent(sb, root,
+						       le64_to_cpu(bt->hdr.blkno));
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+		ret = scoutfs_free_meta(sb, alloc, wri,
+					le64_to_cpu(bt->hdr.blkno));
+		BUG_ON(ret); /* checked meta low, freed should fit */
+		nr_freed++;
+
+		/* now that leaves are freed, free any empty ancestors */
 		for (i = 0; i < nr_par; i++) {
 			trace_scoutfs_btree_free_blocks_parent(sb, root,
 							       blknos[i]);
