@@ -2816,6 +2816,22 @@ restart:
 			goto out;
 		}
 
+		/*
+		 * When the tree is too short for subtrees, get_parent
+		 * returns the entire root for every request.  Multiple
+		 * concurrent merges would each independently CoW and
+		 * modify the same root tree.  Processing their
+		 * completions would replace the root with each result,
+		 * only keeping the last and orphaning blocks allocated
+		 * by earlier completions.  Limit to one outstanding
+		 * request to avoid this.
+		 */
+		if (super->fs_root.height <= 2 &&
+		    le64_to_cpu(stat.nr_requests) > 0) {
+			ret = -ENOENT;
+			goto out;
+		}
+
 		/* find the next logged item in the next range */
 		ret = next_least_log_item(sb, &super->logs_root, le64_to_cpu(stat.seq),
 					  &rng.start, &rng.end, &next_key);
