@@ -301,7 +301,7 @@ fi
 # include everything by default
 test -z "$T_INCLUDE" && T_INCLUDE="-e '.*'"
 # (quickly) exclude nothing by default
-test -z "$T_EXCLUDE" && T_EXCLUDE="-e '\Zx'"
+test -z "$T_EXCLUDE" && T_EXCLUDE="-e '^$'"
 
 # eval to strip re ticks but not expand
 tests=$(grep -v "^#" $T_SEQUENCE |
