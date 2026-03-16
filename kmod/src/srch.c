@@ -1780,8 +1780,7 @@ out:
 			ret = alloc_srch_block(sb, alloc, wri, sfl, &bl, blk);
 			if (ret) {
 				emit = false;
-				if (ret == -EAGAIN)
-					ret = 0;
+				/* don't swallow -EAGAIN: tmp_entry would be lost */
 			} else {
 				srb = bl->data;
 			}
