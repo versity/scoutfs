@@ -2533,6 +2533,7 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 	struct scoutfs_avl_node *node;
 	struct scoutfs_avl_node *next;
 	struct scoutfs_key par_next;
+	u64 par_blkno;
 	int nr_freed = 0;
 	int nr_par;
 	int level;
@@ -2641,12 +2642,11 @@ int scoutfs_btree_free_blocks(struct super_block *sb,
 		}
 
 		/* free the last parent block whose leaves were all freed */
-		trace_scoutfs_btree_free_blocks_parent(sb, root,
-						       le64_to_cpu(bt->hdr.blkno));
+		par_blkno = le64_to_cpu(bt->hdr.blkno);
+		trace_scoutfs_btree_free_blocks_parent(sb, root, par_blkno);
 		scoutfs_block_put(sb, bl);
 		bl = NULL;
-		ret = scoutfs_free_meta(sb, alloc, wri,
-					le64_to_cpu(bt->hdr.blkno));
+		ret = scoutfs_free_meta(sb, alloc, wri, par_blkno);
 		BUG_ON(ret); /* checked meta low, freed should fit */
 		nr_freed++;
 
