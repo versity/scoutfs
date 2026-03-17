@@ -2318,6 +2318,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 	struct merged_item *mitem;
 	struct merged_item *tmp;
 	struct merged_range rng;
+	int nr_modified = 0;
 	int walk_val_len;
 	int walk_flags;
 	bool is_del;
@@ -2437,6 +2438,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 				create_item(bt, &mitem->key, mitem->seq, mitem->flags,
 					    mitem->val, mitem->val_len, par, cmp);
 				scoutfs_inc_counter(sb, btree_merge_insert);
+				nr_modified++;
 			}
 
 			/* update existing items */
@@ -2445,11 +2447,13 @@ int scoutfs_btree_merge(struct super_block *sb,
 				item->flags = mitem->flags;
 				update_item_value(bt, item, mitem->val, mitem->val_len);
 				scoutfs_inc_counter(sb, btree_merge_update);
+				nr_modified++;
 			}
 
 			/* update combined delta item seq */
 			if (delta == SCOUTFS_DELTA_COMBINED) {
 				item->seq = cpu_to_le64(mitem->seq);
+				nr_modified++;
 			}
 
 			/*
@@ -2463,6 +2467,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 			if (delta == SCOUTFS_DELTA_COMBINED_NULL) {
 				delete_item(bt, item, NULL);
 				scoutfs_inc_counter(sb, btree_merge_delta_null);
+				nr_modified++;
 			}
 
 			/* delete if merge item was deletion */
@@ -2475,6 +2480,7 @@ int scoutfs_btree_merge(struct super_block *sb,
 				}
 				delete_item(bt, item, NULL);
 				scoutfs_inc_counter(sb, btree_merge_delete);
+				nr_modified++;
 			}
 
 			/* reset walk args now that we're not split/join */
@@ -2485,6 +2491,16 @@ int scoutfs_btree_merge(struct super_block *sb,
 			tmp = mitem;
 			mitem = next_mitem(mitem);
 			free_mitem(&rng, tmp);
+		}
+
+		if (nr_modified >= le16_to_cpu(bt->nr_items) &&
+		    scoutfs_trigger(sb, LOG_MERGE_FORCE_PARTIAL)) {
+			mitem = first_mitem(&rng.root);
+			if (mitem) {
+				ret = -ERANGE;
+				*next_ret = mitem->key;
+				goto out;
+			}
 		}
 	}
 
