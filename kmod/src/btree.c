@@ -2486,6 +2486,14 @@ int scoutfs_btree_merge(struct super_block *sb,
 			mitem = next_mitem(mitem);
 			free_mitem(&rng, tmp);
 		}
+
+		if (mitem && walk_val_len == 0 &&
+		    !(walk_flags & (BTW_INSERT | BTW_DELETE)) &&
+		    scoutfs_trigger(sb, LOG_MERGE_FORCE_PARTIAL)) {
+			ret = -ERANGE;
+			*next_ret = mitem->key;
+			goto out;
+		}
 	}
 
 	ret = 0;
