@@ -1990,8 +1990,9 @@ static int sync_response(struct super_block *sb,
  * buffer.  Errors returned can come from the remote request processing
  * or local failure to send.
  *
- * The wait for the response is interruptible and can return
- * -ERESTARTSYS if it is interrupted.
+ * The wait for the response uses a 60 second timeout loop that
+ * checks for unmount, returning -ESHUTDOWN if the mount is
+ * being torn down.
  *
  * -EOVERFLOW is returned if the response message's data_length doesn't
  * match the caller's resp_len buffer.
@@ -2002,6 +2003,7 @@ int scoutfs_net_sync_request(struct super_block *sb,
 			     void *resp, size_t resp_len)
 {
 	struct sync_request_completion sreq;
+	struct message_send *msend;
 	int ret;
 	u64 id;
 
@@ -2014,8 +2016,21 @@ int scoutfs_net_sync_request(struct super_block *sb,
 					 sync_response, &sreq, &id);
 
 	if (ret == 0) {
-		wait_for_completion(&sreq.comp);
-		ret = sreq.error;
+		while (!wait_for_completion_timeout(&sreq.comp, 60 * HZ)) {
+			if (scoutfs_unmounting(sb)) {
+				ret = -ESHUTDOWN;
+				break;
+			}
+		}
+		if (ret == -ESHUTDOWN) {
+			spin_lock(&conn->lock);
+			msend = find_request(conn, cmd, id);
+			if (msend)
+				queue_dead_free(conn, msend);
+			spin_unlock(&conn->lock);
+		} else {
+			ret = sreq.error;
+		}
 	}
 
 	return ret;
