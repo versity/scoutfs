@@ -2014,8 +2014,14 @@ int scoutfs_net_sync_request(struct super_block *sb,
 					 sync_response, &sreq, &id);
 
 	if (ret == 0) {
-		wait_for_completion(&sreq.comp);
-		ret = sreq.error;
+		while (!wait_for_completion_timeout(&sreq.comp, 60 * HZ)) {
+			if (scoutfs_unmounting(sb)) {
+				ret = -ESHUTDOWN;
+				break;
+			}
+		}
+		if (ret == 0)
+			ret = sreq.error;
 	}
 
 	return ret;
