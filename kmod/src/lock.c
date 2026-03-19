@@ -716,8 +716,8 @@ static void lock_invalidate_worker(struct work_struct *work)
 		ireq = list_first_entry(&lock->inv_list, struct inv_req, head);
 		nl = &ireq->nl;
 
-		/* only lock protocol, inv can't call subsystems after shutdown */
-		if (!linfo->shutdown) {
+		/* only lock protocol, inv can't call subsystems after shutdown or unmount */
+		if (!linfo->shutdown && !scoutfs_unmounting(sb)) {
 			ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
 			BUG_ON(ret < 0 && ret != -ENOLINK);
 		}
