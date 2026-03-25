@@ -123,6 +123,9 @@ t_filter_dmesg()
 	re="$re|hrtimer: interrupt took .*"
 	re="$re|clocksource: Long readout interval"
 
+	# orphan log trees reclaim is handled, not an error
+	re="$re|scoutfs .* reclaiming orphan log trees"
+
 	# fencing tests force unmounts and trigger timeouts
 	re="$re|scoutfs .* forcing unmount"
 	re="$re|scoutfs .* reconnect timed out"
