@@ -256,6 +256,14 @@ static void server_down(struct server_info *server)
 		cmpxchg(&server->status, was, SERVER_DOWN);
 }
 
+static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
+{
+	*key = (struct scoutfs_key) {
+		.sk_zone = SCOUTFS_MOUNTED_CLIENT_ZONE,
+		.skmc_rid = cpu_to_le64(rid),
+	};
+}
+
 /*
  * The per-holder allocation block use budget balances batching
  * efficiency and concurrency.  The larger this gets, the fewer
@@ -964,6 +972,28 @@ static int find_log_trees_item(struct super_block *sb,
 }
 
 /*
+ * Return true if the given rid has a mounted_clients entry.
+ */
+static bool rid_is_mounted(struct super_block *sb, u64 rid)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	int ret;
+
+	init_mounted_client_key(&key, rid);
+
+	mutex_lock(&server->mounted_clients_mutex);
+	ret = scoutfs_btree_lookup(sb, &super->mounted_clients, &key, &iref);
+	if (ret == 0)
+		scoutfs_btree_put_iref(&iref);
+	mutex_unlock(&server->mounted_clients_mutex);
+
+	return ret == 0;
+}
+
+/*
  * Find the log_trees item with the greatest nr for each rid.  Fills the
  * caller's log_trees and sets the key before the returned log_trees for
  * the next iteration.  Returns 0 when done, > 0 for each item, and
@@ -1221,6 +1251,60 @@ static int do_finalize_ours(struct super_block *sb,
  * happens to arrive at just the right time.  That's fine, merging will
  * ignore and tear down the empty input.
  */
+
+static int reclaim_open_log_tree(struct super_block *sb, u64 rid);
+
+/*
+ * Reclaim log trees for rids that have no mounted_clients entry.
+ * They block merges by appearing active.  reclaim_open_log_tree
+ * may need multiple commits to drain allocators (-EINPROGRESS).
+ *
+ * The caller holds logs_mutex and a commit, both are dropped and
+ * re-acquired around each reclaim call.  Returns >0 if any orphans
+ * were reclaimed so the caller can re-check state that may have
+ * changed while the lock was dropped.
+ */
+static int reclaim_orphan_log_trees(struct super_block *sb, u64 rid,
+				    struct commit_hold *hold)
+{
+	struct server_info *server = SCOUTFS_SB(sb)->server_info;
+	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
+	struct scoutfs_log_trees lt;
+	struct scoutfs_key key;
+	bool found = false;
+	u64 orphan_rid;
+	int ret;
+	int err;
+
+	scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
+	while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &lt)) > 0) {
+
+		if ((le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) ||
+		    le64_to_cpu(lt.rid) == rid ||
+		    rid_is_mounted(sb, le64_to_cpu(lt.rid)))
+			continue;
+
+		orphan_rid = le64_to_cpu(lt.rid);
+		scoutfs_err(sb, "reclaiming orphan log trees for rid %016llx nr %llu",
+			    orphan_rid, le64_to_cpu(lt.nr));
+		found = true;
+
+		do {
+			mutex_unlock(&server->logs_mutex);
+			err = reclaim_open_log_tree(sb, orphan_rid);
+			ret = server_apply_commit(sb, hold,
+						  err == -EINPROGRESS ? 0 : err);
+			server_hold_commit(sb, hold);
+			mutex_lock(&server->logs_mutex);
+		} while (err == -EINPROGRESS && ret == 0);
+
+		if (ret < 0)
+			break;
+	}
+
+	return ret < 0 ? ret : found;
+}
+
 #define FINALIZE_POLL_MIN_DELAY_MS	5U
 #define FINALIZE_POLL_MAX_DELAY_MS	100U
 #define FINALIZE_POLL_DELAY_GROWTH_PCT	150U
@@ -1259,6 +1343,16 @@ static int finalize_and_start_log_merge(struct super_block *sb, struct scoutfs_l
 			if (ret < 0)
 				err_str = "checking merge status item to finalize";
 			break;
+		}
+
+		ret = reclaim_orphan_log_trees(sb, rid, hold);
+		if (ret < 0) {
+			err_str = "reclaiming orphan log trees";
+			break;
+		}
+		if (ret > 0) {
+			/* lock was dropped, re-check merge status */
+			continue;
 		}
 
 		/* look for finalized and other active log btrees */
@@ -1981,7 +2075,8 @@ static int get_stable_trans_seq(struct super_block *sb, u64 *last_seq_ret)
 	scoutfs_key_init_log_trees(&key, U64_MAX, U64_MAX);
 	while ((ret = for_each_rid_last_lt(sb, &super->logs_root, &key, &lt)) > 0) {
 		if ((le64_to_cpu(lt.get_trans_seq) > le64_to_cpu(lt.commit_trans_seq)) &&
-		     le64_to_cpu(lt.get_trans_seq) <= last_seq) {
+		     le64_to_cpu(lt.get_trans_seq) <= last_seq &&
+		     rid_is_mounted(sb, le64_to_cpu(lt.rid))) {
 			last_seq = le64_to_cpu(lt.get_trans_seq) - 1;
 		}
 	}
@@ -3531,14 +3626,6 @@ static int server_statfs(struct super_block *sb, struct scoutfs_net_connection *
 	ret = 0;
 out:
 	return scoutfs_net_response(sb, conn, cmd, id, ret, &nst, sizeof(nst));
-}
-
-static void init_mounted_client_key(struct scoutfs_key *key, u64 rid)
-{
-	*key = (struct scoutfs_key) {
-		.sk_zone = SCOUTFS_MOUNTED_CLIENT_ZONE,
-		.skmc_rid = cpu_to_le64(rid),
-	};
 }
 
 static bool invalid_mounted_client_item(struct scoutfs_btree_item_ref *iref)
