@@ -422,6 +422,8 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 
 	mutex_lock(&datinf->mutex);
 
+	scoutfs_inode_get_onoff(inode, &online, &offline);
+
 	/* default to single allocation at the written block */
 	start = iblock;
 	count = 1;
@@ -444,7 +446,6 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		 * the preallocation size to the number of online
 		 * blocks.
 		 */
-		scoutfs_inode_get_onoff(inode, &online, &offline);
 		if (iblock > 1 && iblock == online) {
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
 					       iblock, 1, &found);
@@ -486,6 +487,13 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		/* trim count by next extent after iblock */
 		if (found.len && found.start > start && found.start < start + count)
 			count = (found.start - start);
+
+		/*
+		 * Ramp the aligned region size up proportionally with
+		 * the file's online block count rather than jumping to
+		 * the full prealloc size.
+		 */
+		count = max_t(u64, 1, min(count, online));
 	}
 
 	/* overall prealloc limit */
