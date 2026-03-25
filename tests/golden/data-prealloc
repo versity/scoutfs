@@ -8,10 +8,10 @@
 /mnt/test/test/data-prealloc/file-1: extents: 32
 /mnt/test/test/data-prealloc/file-2: extents: 32
 == any writes to region prealloc get full extents
-/mnt/test/test/data-prealloc/file-1: extents: 4
-/mnt/test/test/data-prealloc/file-2: extents: 4
-/mnt/test/test/data-prealloc/file-1: extents: 4
-/mnt/test/test/data-prealloc/file-2: extents: 4
+/mnt/test/test/data-prealloc/file-1: extents: 8
+/mnt/test/test/data-prealloc/file-2: extents: 8
+/mnt/test/test/data-prealloc/file-1: extents: 8
+/mnt/test/test/data-prealloc/file-2: extents: 8
 == streaming offline writes get full extents either way
 /mnt/test/test/data-prealloc/file-1: extents: 4
 /mnt/test/test/data-prealloc/file-2: extents: 4
@@ -20,8 +20,8 @@
 == goofy preallocation amounts work
 /mnt/test/test/data-prealloc/file-1: extents: 6
 /mnt/test/test/data-prealloc/file-2: extents: 6
-/mnt/test/test/data-prealloc/file-1: extents: 6
-/mnt/test/test/data-prealloc/file-2: extents: 6
+/mnt/test/test/data-prealloc/file-1: extents: 10
+/mnt/test/test/data-prealloc/file-2: extents: 10
 /mnt/test/test/data-prealloc/file-1: extents: 3
 /mnt/test/test/data-prealloc/file-2: extents: 3
 == block writes into region allocs hole

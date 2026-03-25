@@ -384,6 +384,12 @@ static inline u64 ext_last(struct scoutfs_extent *ext)
  * This can waste a lot of space for small or sparse files but is
  * reasonable when a file population is known to be large and dense but
  * known to be written with non-streaming write patterns.
+ *
+ * In either strategy, preallocation ramps up proportionally with the
+ * file's online block count rather than jumping to the full prealloc
+ * size.  This avoids overallocation for small files in mixed-size
+ * workloads while still allowing large files to benefit from full
+ * preallocation.
  */
 static int alloc_block(struct super_block *sb, struct inode *inode,
 		       struct scoutfs_extent *ext, u64 iblock,
@@ -400,6 +406,7 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 	struct scoutfs_extent found;
 	struct scoutfs_extent pre = {0,};
 	bool undo_pre = false;
+	bool have_onoff = false;
 	u64 blkno = 0;
 	u64 online;
 	u64 offline;
@@ -445,6 +452,7 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		 * blocks.
 		 */
 		scoutfs_inode_get_onoff(inode, &online, &offline);
+		have_onoff = true;
 		if (iblock > 1 && iblock == online) {
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
 					       iblock, 1, &found);
@@ -490,6 +498,16 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 
 	/* overall prealloc limit */
 	count = min_t(u64, count, opts.data_prealloc_blocks);
+
+	/*
+	 * Ramp preallocation up proportionally with the file's online
+	 * block count rather than jumping to the full prealloc size.
+	 */
+	if (!ext->len) {
+		if (!have_onoff)
+			scoutfs_inode_get_onoff(inode, &online, &offline);
+		count = max_t(u64, 1, min(count, online));
+	}
 
 	ret = scoutfs_alloc_data(sb, datinf->alloc, datinf->wri,
 				 &datinf->dalloc, count, &blkno, &count);
