@@ -1,0 +1,3 @@
+== create orphan log_trees entry via trigger
+== verify orphan is reclaimed and merge completes
+== verify orphan reclaim was logged

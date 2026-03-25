@@ -2023,7 +2023,7 @@ static int reclaim_open_log_tree(struct super_block *sb, u64 rid)
 	mutex_unlock(&server->alloc_mutex);
 
 	/* only finalize, allowing merging, once the allocators are fully freed */
-	if (ret == 0) {
+	if (ret == 0 && !scoutfs_trigger(sb, RECLAIM_SKIP_FINALIZE)) {
 		/* the transaction is no longer open */
 		lt.commit_trans_seq = lt.get_trans_seq;
 
