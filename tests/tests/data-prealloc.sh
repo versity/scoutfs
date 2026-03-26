@@ -90,10 +90,17 @@ print_extents_found()
 	done
 }
 
+read_opt()
+{
+	cat "$(t_sysfs_path 0)/mount_options/$1"
+}
+
 t_save_all_sysfs_mount_options data_prealloc_blocks
+t_save_all_sysfs_mount_options data_prealloc_blocks_min
 t_save_all_sysfs_mount_options data_prealloc_contig_only
 restore_options()
 {
+	t_restore_all_sysfs_mount_options data_prealloc_blocks_min
 	t_restore_all_sysfs_mount_options data_prealloc_blocks
 	t_restore_all_sysfs_mount_options data_prealloc_contig_only
 }
@@ -153,6 +160,50 @@ t_set_sysfs_mount_option 0 data_prealloc_contig_only 0
 write_forwards $prefix 3
 print_extents_found $prefix
 
+echo "== blocks_min rejects values greater than blocks"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
+t_set_sysfs_mount_option 0 data_prealloc_blocks 32
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 33
+echo "blocks_min after rejected write: $(read_opt data_prealloc_blocks_min)"
+
+echo "== blocks rejects values less than blocks_min"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
+t_set_sysfs_mount_option 0 data_prealloc_blocks 32
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 16
+t_set_sysfs_mount_option 0 data_prealloc_blocks 8
+echo "blocks after rejected write: $(read_opt data_prealloc_blocks)"
+
+echo "== blocks_min accepts value equal to blocks"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
+t_set_sysfs_mount_option 0 data_prealloc_blocks 32
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 32
+echo "blocks_min after accepted write: $(read_opt data_prealloc_blocks_min)"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
+
+echo "== blocks_min suppresses prealloc for small files"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
+t_set_sysfs_mount_option 0 data_prealloc_blocks 32
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 16
+t_set_sysfs_mount_option 0 data_prealloc_contig_only 1
+write_forwards $prefix 8
+print_extents_found $prefix
+
+echo "== blocks_min prealloc ramps up past threshold"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
+t_set_sysfs_mount_option 0 data_prealloc_blocks 32
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 4
+t_set_sysfs_mount_option 0 data_prealloc_contig_only 1
+write_forwards $prefix 64
+print_extents_found $prefix
+
+echo "== blocks_min with region prealloc"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
+t_set_sysfs_mount_option 0 data_prealloc_blocks 16
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 8
+t_set_sysfs_mount_option 0 data_prealloc_contig_only 0
+write_forwards $prefix 64
+print_extents_found $prefix
+
 #
 # prepare aligned regions of 8 blocks that we'll write into.
 # We'll right into the first, last, and middle block of each
@@ -163,7 +214,8 @@ print_extents_found $prefix
 # through.  The correct output is tied to preallocation strategy so it
 # has to be verified each time we change preallocation.
 #
-echo "== block writes into region allocs hole" 
+echo "== block writes into region allocs hole"
+t_set_sysfs_mount_option 0 data_prealloc_blocks_min 0
 t_set_sysfs_mount_option 0 data_prealloc_blocks 8
 t_set_sysfs_mount_option 0 data_prealloc_contig_only 1
 touch "$prefix"

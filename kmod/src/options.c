@@ -32,6 +32,7 @@
 enum {
 	Opt_acl,
 	Opt_data_prealloc_blocks,
+	Opt_data_prealloc_blocks_min,
 	Opt_data_prealloc_contig_only,
 	Opt_ino_alloc_per_lock,
 	Opt_lock_idle_count,
@@ -48,6 +49,7 @@ enum {
 static const match_table_t tokens = {
 	{Opt_acl, "acl"},
 	{Opt_data_prealloc_blocks, "data_prealloc_blocks=%s"},
+	{Opt_data_prealloc_blocks_min, "data_prealloc_blocks_min=%s"},
 	{Opt_data_prealloc_contig_only, "data_prealloc_contig_only=%s"},
 	{Opt_ino_alloc_per_lock, "ino_alloc_per_lock=%s"},
 	{Opt_lock_idle_count, "lock_idle_count=%s"},
@@ -252,6 +254,18 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 			opts->data_prealloc_blocks = nr64;
 			break;
 
+		case Opt_data_prealloc_blocks_min:
+			ret = match_u64(args, &nr64);
+			if (ret < 0 || nr64 > MAX_DATA_PREALLOC_BLOCKS) {
+				scoutfs_err(sb, "invalid data_prealloc_blocks_min option, must be between 0 and %llu",
+					    MAX_DATA_PREALLOC_BLOCKS);
+				if (ret == 0)
+					ret = -EINVAL;
+				return ret;
+			}
+			opts->data_prealloc_blocks_min = nr64;
+			break;
+
 		case Opt_data_prealloc_contig_only:
 			ret = match_int(args, &nr);
 			if (ret < 0 || nr < 0 || nr > 1) {
@@ -366,6 +380,12 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 		return -EINVAL;
 	}
 
+	if (opts->data_prealloc_blocks_min > opts->data_prealloc_blocks) {
+		scoutfs_err(sb, "data_prealloc_blocks_min %llu must not exceed data_prealloc_blocks %llu",
+			    opts->data_prealloc_blocks_min, opts->data_prealloc_blocks);
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -437,6 +457,7 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 	if (is_acl)
 		seq_puts(seq, ",acl");
 	seq_printf(seq, ",data_prealloc_blocks=%llu", opts.data_prealloc_blocks);
+	seq_printf(seq, ",data_prealloc_blocks_min=%llu", opts.data_prealloc_blocks_min);
 	seq_printf(seq, ",data_prealloc_contig_only=%u", opts.data_prealloc_contig_only);
 	seq_printf(seq, ",ino_alloc_per_lock=%u", opts.ino_alloc_per_lock);
 	seq_printf(seq, ",metadev_path=%s", opts.metadev_path);
@@ -480,6 +501,8 @@ static ssize_t data_prealloc_blocks_store(struct kobject *kobj, struct kobj_attr
 			    MIN_DATA_PREALLOC_BLOCKS, MAX_DATA_PREALLOC_BLOCKS);
 		return -EINVAL;
 	}
+	if (val < optinf->opts.data_prealloc_blocks_min)
+		return -EINVAL;
 
 	write_seqlock(&optinf->seqlock);
 	optinf->opts.data_prealloc_blocks = val;
@@ -488,6 +511,42 @@ static ssize_t data_prealloc_blocks_store(struct kobject *kobj, struct kobj_attr
 	return count;
 }
 SCOUTFS_ATTR_RW(data_prealloc_blocks);
+
+static ssize_t data_prealloc_blocks_min_show(struct kobject *kobj, struct kobj_attribute *attr,
+					 char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%llu", opts.data_prealloc_blocks_min);
+}
+static ssize_t data_prealloc_blocks_min_store(struct kobject *kobj, struct kobj_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	u64 val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoll(nullterm, 0, &val);
+	if (ret < 0 || val > optinf->opts.data_prealloc_blocks)
+		return -EINVAL;
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.data_prealloc_blocks_min = val;
+	write_sequnlock(&optinf->seqlock);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(data_prealloc_blocks_min);
 
 static ssize_t data_prealloc_contig_only_show(struct kobject *kobj, struct kobj_attribute *attr,
 					 char *buf)
@@ -742,6 +801,7 @@ SCOUTFS_ATTR_RO(quorum_slot_nr);
 
 static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(data_prealloc_blocks),
+	SCOUTFS_ATTR_PTR(data_prealloc_blocks_min),
 	SCOUTFS_ATTR_PTR(data_prealloc_contig_only),
 	SCOUTFS_ATTR_PTR(ino_alloc_per_lock),
 	SCOUTFS_ATTR_PTR(lock_idle_count),

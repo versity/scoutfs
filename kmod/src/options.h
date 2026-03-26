@@ -7,6 +7,7 @@
 
 struct scoutfs_mount_options {
 	u64 data_prealloc_blocks;
+	u64 data_prealloc_blocks_min;
 	bool data_prealloc_contig_only;
 	unsigned int ino_alloc_per_lock;
 	int lock_idle_count;

@@ -384,6 +384,15 @@ static inline u64 ext_last(struct scoutfs_extent *ext)
  * This can waste a lot of space for small or sparse files but is
  * reasonable when a file population is known to be large and dense but
  * known to be written with non-streaming write patterns.
+ *
+ * In either strategy, a minimum block count threshold can be configured
+ * to suppress preallocation for small files and then ramp up
+ * preallocation proportionally with the file's online block count.
+ * Files below the threshold get single block allocations.  Files above
+ * the threshold limit preallocation to their current online block count,
+ * regardless of write offset.  This avoids overallocation for small
+ * files in mixed-size workloads while still allowing large files to
+ * benefit from full preallocation.
  */
 static int alloc_block(struct super_block *sb, struct inode *inode,
 		       struct scoutfs_extent *ext, u64 iblock,
@@ -400,6 +409,7 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 	struct scoutfs_extent found;
 	struct scoutfs_extent pre = {0,};
 	bool undo_pre = false;
+	bool have_onoff = false;
 	u64 blkno = 0;
 	u64 online;
 	u64 offline;
@@ -445,6 +455,7 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 		 * blocks.
 		 */
 		scoutfs_inode_get_onoff(inode, &online, &offline);
+		have_onoff = true;
 		if (iblock > 1 && iblock == online) {
 			ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
 					       iblock, 1, &found);
@@ -490,6 +501,23 @@ static int alloc_block(struct super_block *sb, struct inode *inode,
 
 	/* overall prealloc limit */
 	count = min_t(u64, count, opts.data_prealloc_blocks);
+
+	/*
+	 * Limit preallocation based on the number of blocks already
+	 * allocated in the file.  Files with fewer online blocks than
+	 * the configured minimum get no preallocation.  Once past the
+	 * minimum, preallocation ramps up proportionally with the
+	 * file's online block count rather than jumping to the full
+	 * prealloc size.
+	 */
+	if (opts.data_prealloc_blocks_min > 0 && !ext->len) {
+		if (!have_onoff)
+			scoutfs_inode_get_onoff(inode, &online, &offline);
+		if (online < opts.data_prealloc_blocks_min)
+			count = 1;
+		else
+			count = min(count, online);
+	}
 
 	ret = scoutfs_alloc_data(sb, datinf->alloc, datinf->wri,
 				 &datinf->dalloc, count, &blkno, &count);
