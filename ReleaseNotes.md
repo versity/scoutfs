@@ -2,6 +2,21 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.29
+\
+*Mar 25, 2026*
+
+Add a repair mechanism for mount logs that weren't properly resolved as
+mounts left the cluster.  The presence of these logs prevents log
+merging from making forward progress and the backlog of logs over time
+can cause operations to slow to a crawl.  With the repair mechanism in
+place the orphaned logs don't stop merging and operations proceed as
+usual.
+
+Add an ioctl for turning offline unmapped file regions into sparse
+regions.
+
+---
 v1.28
 \
 *Feb 5, 2026*
