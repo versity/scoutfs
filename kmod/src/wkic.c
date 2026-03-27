@@ -30,6 +30,7 @@
 #include "counters.h"
 #include "scoutfs_trace.h"
 #include "wkic.h"
+#include "msg.h"
 
 /*
  * This weaker item cache differs from the core item cache in item.c:
@@ -743,6 +744,16 @@ static void fill_page_items(struct super_block *sb, struct wkic_page *wpage, str
 			witem->val_len = sizeof(struct scoutfs_xattr_totl_val);
 
 			if (tval->total == 0 && tval->count == 0) {
+				rb_erase(&witem->node, root);
+				kfree(witem);
+				continue;
+			} else if (tval->count == 0) {
+				/*
+				 * BUG: there are no contributing items but count != 0,
+				 * which shouldn't happen - we've gone off kilt.
+				 */
+				scoutfs_err(sb, "non-zero value for zero count totl "SK_FMT", dropping item",
+					    SK_ARG(&witem->key));
 				rb_erase(&witem->node, root);
 				kfree(witem);
 				continue;
