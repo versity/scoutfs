@@ -146,7 +146,7 @@ struct cached_item {
 	unsigned int val_len;
 	struct scoutfs_key key;
 	u64 seq;
-	char val[0];
+	char val[];
 };
 
 #define CACHED_ITEM_ALIGN 8
@@ -424,7 +424,7 @@ static struct cached_item *alloc_item(struct cached_page *pg,
 	item->seq = seq;
 
 	if (val_len)
-		memcpy(item->val, val, val_len);
+		memcpy(&item->val[0], val, val_len);
 
 	update_pg_max_seq(pg, item);
 
@@ -1999,7 +1999,7 @@ int scoutfs_item_update(struct super_block *sb, struct scoutfs_key *key,
 
 	if (val_len <= found->val_len) {
 		if (val_len)
-			memcpy(found->val, val, val_len);
+			memcpy(&found->val[0], val, val_len);
 		if (val_len < found->val_len)
 			pg->erased_bytes += item_val_bytes(found->val_len) -
 					    item_val_bytes(val_len);
@@ -2316,7 +2316,7 @@ int scoutfs_item_write_dirty(struct super_block *sb)
 			lst->seq = item->seq;
 			lst->flags = item->deletion ? SCOUTFS_ITEM_FLAG_DELETION : 0;
 			lst->val_len = item->val_len;
-			memcpy(lst->val, item->val, item->val_len);
+			memcpy(&lst->val[0], item->val, item->val_len);
 		}
 
 		spin_lock(&cinf->dirty_lock);
@@ -2626,10 +2626,10 @@ int scoutfs_item_setup(struct super_block *sb)
 
 	for_each_possible_cpu(cpu)
 		init_pcpu_pages(cinf, cpu);
-
-	KC_INIT_SHRINKER_FUNCS(&cinf->shrinker, item_cache_count_objects,
-			       item_cache_scan_objects);
-	KC_REGISTER_SHRINKER(&cinf->shrinker, "scoutfs-item:" SCSBF, SCSB_ARGS(sb));
+	KC_SETUP_SHRINKER(cinf->shrinker, cinf, 0, item_cache_count_objects,
+			  item_cache_scan_objects, "scoutfs-item:" SCSBF, SCSB_ARGS(sb));
+	if (KC_SHRINKER_IS_NULL(cinf->shrinker))
+		return -ENOMEM;
 #ifdef KC_CPU_NOTIFIER
         cinf->notifier.notifier_call = item_cpu_callback;
         register_hotcpu_notifier(&cinf->notifier);
@@ -2654,7 +2654,7 @@ void scoutfs_item_destroy(struct super_block *sb)
 #ifdef KC_CPU_NOTIFIER
 		unregister_hotcpu_notifier(&cinf->notifier);
 #endif
-		KC_UNREGISTER_SHRINKER(&cinf->shrinker);
+		KC_UNREGISTER_SHRINKER(cinf->shrinker);
 
 		for_each_possible_cpu(cpu)
 			drop_pcpu_pages(sb, cinf, cpu);

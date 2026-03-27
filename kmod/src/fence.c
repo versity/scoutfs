@@ -217,6 +217,9 @@ static struct attribute *fence_attrs[] = {
 	SCOUTFS_ATTR_PTR(rid),
 	NULL,
 };
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+ATTRIBUTE_GROUPS(fence);
+#endif
 
 #define FENCE_TIMEOUT_MS (MSEC_PER_SEC * 30)
 
@@ -255,7 +258,8 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 	fence->rid = rid;
 
 	ret = scoutfs_sysfs_create_attrs_parent(sb, &fi->kset->kobj,
-						&fence->ssa, fence_attrs,
+						&fence->ssa,
+						KC_KOBJ_DEFAULT(fence),
 						"%016llx", rid);
 	if (ret < 0) {
 		kfree(fence);
