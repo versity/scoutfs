@@ -886,8 +886,12 @@ retry_stale:
 	trace_scoutfs_wkic_read_items(sb, key, &start, &end);
 	ret = scoutfs_block_check_stale(sb, ret, &saved, &roots.fs_root.ref, &roots.logs_root.ref);
 	if (ret < 0) {
-		if (ret == -ESTALE)
+		if (ret == -ESTALE) {
+			/* not safe to retry due to delta items, must restart clean */
+			free_item_tree(&root);
+			root = RB_ROOT;
 			goto retry_stale;
+		}
 		goto out;
 	}
 
