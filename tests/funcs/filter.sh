@@ -20,9 +20,6 @@ t_filter_fs()
 # [ 2687.691366] BUG: KASAN: stack-out-of-bounds in get_reg+0x1bc/0x230
 # ...
 # [ 2687.706220] ==================================================================
-# [ 2687.707284] Disabling lock debugging due to kernel taint
-#
-# That final lock debugging message may not be included.
 #
 ignore_harmless_unwind_kasan_stack_oob()
 {
@@ -46,10 +43,6 @@ awk '
 		saved=""
         }
         ( in_soob == 2 && $0 ~ /==================================================================/ ) {
-                in_soob = 3
-                soob_nr = NR
-        }
-        ( in_soob == 3 && NR > soob_nr && $0 !~ /Disabling lock debugging/ ) {
                 in_soob = 0
         }
         ( !in_soob ) { print $0 }
@@ -58,6 +51,58 @@ awk '
                         print saved
                 }
         }
+'
+}
+
+#
+# in el97+, XFS can generate a spurious lockdep circular dependency
+# warning about reclaim. Fixed upstream in e.g. v5.7-rc4-129-g6dcde60efd94
+#
+ignore_harmless_xfs_lockdep_warning()
+{
+awk '
+	BEGIN {
+		in_block = 0
+		block_nr = 0
+		buf = ""
+	}
+	( !in_block && $0 ~ /======================================================/ ) {
+		in_block = 1
+		block_nr = NR
+		buf = $0 "\n"
+		next
+	}
+	( in_block == 1 && NR == (block_nr + 1) ) {
+		if (match($0, /WARNING: possible circular locking dependency detected/) != 0) {
+			in_block = 2
+			buf = buf $0 "\n"
+		} else {
+			in_block = 0
+			printf "%s", buf
+			print $0
+			buf = ""
+		}
+		next
+	}
+	( in_block == 2 ) {
+		buf = buf $0 "\n"
+		if ($0 ~ /<\/TASK>/) {
+			if (buf ~ /xfs_nondir_ilock_class/ && buf ~ /fs_reclaim/) {
+				# known xfs lockdep false positive, discard
+			} else {
+				printf "%s", buf
+			}
+			in_block = 0
+			buf = ""
+		}
+		next
+	}
+	{ print $0 }
+	END {
+		if (buf) {
+			printf "%s", buf
+		}
+	}
 '
 }
 
@@ -176,6 +221,10 @@ t_filter_dmesg()
 	# creating block devices may trigger this
 	re="$re|block device autoloading is deprecated and will be removed."
 
+	# lockdep or kasan warnings can cause this
+	re="$re|Disabling lock debugging due to kernel taint"
+
 	egrep -v "($re)" | \
-		ignore_harmless_unwind_kasan_stack_oob
+		ignore_harmless_unwind_kasan_stack_oob | \
+		ignore_harmless_xfs_lockdep_warning
 }
