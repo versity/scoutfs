@@ -30,6 +30,11 @@ void scoutfs_totl_merge_init(struct scoutfs_totl_merging *merg)
 	memset(merg, 0, sizeof(struct scoutfs_totl_merging));
 }
 
+/*
+ * bin the incoming merge inputs so that we can resolve delta items
+ * properly. Finalized logs that are merge inputs are kept separately
+ * from those that are not.
+ */
 void scoutfs_totl_merge_contribute(struct scoutfs_totl_merging *merg,
 				   u64 seq, u8 flags, void *val, int val_len, int fic)
 {
@@ -39,10 +44,10 @@ void scoutfs_totl_merge_contribute(struct scoutfs_totl_merging *merg,
 		merg->fs_seq = seq;
 		merg->fs_total = le64_to_cpu(tval->total);
 		merg->fs_count = le64_to_cpu(tval->count);
-	} else if (fic & FIC_FINALIZED) {
-		merg->fin_seq = seq;
-		merg->fin_total += le64_to_cpu(tval->total);
-		merg->fin_count += le64_to_cpu(tval->count);
+	} else if (fic & FIC_MERGE_INPUT) {
+		merg->inp_seq = seq;
+		merg->inp_total += le64_to_cpu(tval->total);
+		merg->inp_count += le64_to_cpu(tval->count);
 	} else {
 		merg->log_seq = seq;
 		merg->log_total += le64_to_cpu(tval->total);
@@ -53,15 +58,18 @@ void scoutfs_totl_merge_contribute(struct scoutfs_totl_merging *merg,
 /*
  * .totl. item merging has to be careful because the log btree merging
  * code can write partial results to the fs_root.  This means that a
- * reader can see both cases where new finalized logs should be applied
- * to the old fs items and where old finalized logs have already been
- * applied to the partially merged fs items.  Currently active logged
- * items are always applied on top of all cases.
+ * reader can see both cases where merge input deltas should be applied
+ * to the old fs items and where they have already been applied to the
+ * partially merged fs items.
+ *
+ * Only finalized log trees that are inputs to the current merge cycle
+ * are tracked in the inp_ bucket.  Finalized trees that aren't merge
+ * inputs and active log trees are always applied unconditionally since
+ * they cannot be in fs_root.
  *
  * These cases are differentiated with a combination of sequence numbers
- * in items, the count of contributing xattrs, and a flag
- * differentiating finalized and active logged items.  This lets us
- * recognize all cases, including when finalized logs were merged and
+ * in items and the count of contributing xattrs.  This lets us
+ * recognize all cases, including when merge inputs were merged and
  * deleted the fs item.
  */
 void scoutfs_totl_merge_resolve(struct scoutfs_totl_merging *merg, __u64 *total, __u64 *count)
@@ -75,14 +83,14 @@ void scoutfs_totl_merge_resolve(struct scoutfs_totl_merging *merg, __u64 *total,
 		*count = merg->fs_count;
 	}
 
-	/* apply finalized logs if they're newer or creating */
-	if (((merg->fs_seq != 0) && (merg->fin_seq > merg->fs_seq)) ||
-	    ((merg->fs_seq == 0) && (merg->fin_count > 0))) {
-		*total += merg->fin_total;
-		*count += merg->fin_count;
+	/* apply merge input deltas if they're newer or creating */
+	if (((merg->fs_seq != 0) && (merg->inp_seq > merg->fs_seq)) ||
+	    ((merg->fs_seq == 0) && (merg->inp_count > 0))) {
+		*total += merg->inp_total;
+		*count += merg->inp_count;
 	}
 
-	/* always apply active logs which must be newer than fs and finalized */
+	/* always apply non-input finalized and active logs */
 	if (merg->log_seq > 0) {
 		*total += merg->log_total;
 		*count += merg->log_count;

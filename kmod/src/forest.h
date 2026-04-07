@@ -11,7 +11,7 @@ struct scoutfs_lock;
 /* caller gives an item to the callback */
 enum {
 	FIC_FS_ROOT = (1 << 0),
-	FIC_FINALIZED = (1 << 1),
+	FIC_MERGE_INPUT = (1 << 1),
 };
 typedef int (*scoutfs_forest_item_cb)(struct super_block *sb, struct scoutfs_key *key, u64 seq,
 				      u8 flags, void *val, int val_len, int fic, void *arg);

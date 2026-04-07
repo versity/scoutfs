@@ -318,14 +318,14 @@ int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_r
 		scoutfs_inc_counter(sb, forest_bloom_pass);
 
 		if ((le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
-			rid.fic |= FIC_FINALIZED;
+			rid.fic |= FIC_MERGE_INPUT;
 
 		ret = scoutfs_btree_read_items(sb, &lt.item_root, key, start,
 					       end, forest_read_items, &rid);
 		if (ret < 0)
 			goto out;
 
-		rid.fic &= ~FIC_FINALIZED;
+		rid.fic &= ~FIC_MERGE_INPUT;
 	}
 
 	ret = 0;
