@@ -1265,6 +1265,7 @@ int scoutfs_xattr_drop(struct super_block *sb, u64 ino,
 			ret = parse_indx_key(&tag_key, xat->name, xat->name_len, ino);
 			if (ret < 0)
 				goto out;
+			scoutfs_xattr_set_indx_key_xid(&tag_key, le64_to_cpu(key.skx_id));
 		}
 
 		if ((tgs.totl || tgs.indx) && locked_zone != tag_key.sk_zone) {
