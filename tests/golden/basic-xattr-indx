@@ -1,0 +1,54 @@
+== testing invalid read-xattr-index arguments
+bad index position entry argument 'bad', it must be in the form "a.b.ino" where each value can be prefixed by '0' for octal or '0x' for hex
+scoutfs: read-xattr-index failed: Invalid argument (22)
+bad index position entry argument '1.2', it must be in the form "a.b.ino" where each value can be prefixed by '0' for octal or '0x' for hex
+scoutfs: read-xattr-index failed: Invalid argument (22)
+initial major index position '256' must be between 0 and 255, inclusive.
+scoutfs: read-xattr-index failed: Invalid argument (22)
+first index position 1.2.3 must be less than last index position 0.0.0
+scoutfs: read-xattr-index failed: Invalid argument (22)
+first index position 1.2.0 must be less than last index position 1.1.2
+scoutfs: read-xattr-index failed: Invalid argument (22)
+first index position 2.2.2 must be less than last index position 2.2.1
+scoutfs: read-xattr-index failed: Invalid argument (22)
+== testing invalid names
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/invalid: Numerical result out of range
+== testing boundary values
+0.0 found
+255.max found
+== indx xattr must have no value
+setfattr: /mnt/test/test/basic-xattr-indx/noval: Invalid argument
+setfattr: /mnt/test/test/basic-xattr-indx/noval: Invalid argument
+== set indx xattr and verify index entry
+found
+== setting same indx xattr again is a no-op
+found
+== removing non-existent indx xattr succeeds
+setfattr: /mnt/test/test/basic-xattr-indx/file: No such attribute
+still found
+== explicit xattr removal cleans up index entry
+== file deletion cleans up index entry
+found before delete
+== multiple indx xattrs on one file cleaned up by deletion
+entries before delete: 2
+entries after delete: 0
+== partial removal leaves other entries
+300 found
+== multiple files at same index position
+files at same position: 2
+surviving file found
+== cross-mount visibility
+found on mount 1
+== duplicate position deduplication
+entries for same position: 1
