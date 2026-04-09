@@ -549,6 +549,7 @@ retry:
 				goto out;
 			if (scoutfs_data_wait_found(&dw)) {
 				scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+				lock = NULL;
 
 				/* XXX callee locks instead? */
 				inode_unlock(inode);
