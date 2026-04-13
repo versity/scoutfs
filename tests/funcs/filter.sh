@@ -87,7 +87,7 @@ awk '
 	( in_block == 2 ) {
 		buf = buf $0 "\n"
 		if ($0 ~ /<\/TASK>/) {
-			if (buf ~ /xfs_nondir_ilock_class/ && buf ~ /fs_reclaim/) {
+			if (buf ~ /xfs_(nondir_|dir_)?ilock_class/ && buf ~ /fs_reclaim/) {
 				# known xfs lockdep false positive, discard
 			} else {
 				printf "%s", buf
