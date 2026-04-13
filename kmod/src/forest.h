@@ -11,7 +11,7 @@ struct scoutfs_lock;
 /* caller gives an item to the callback */
 enum {
 	FIC_FS_ROOT = (1 << 0),
-	FIC_FINALIZED = (1 << 1),
+	FIC_MERGE_INPUT = (1 << 1),
 };
 typedef int (*scoutfs_forest_item_cb)(struct super_block *sb, struct scoutfs_key *key, u64 seq,
 				      u8 flags, void *val, int val_len, int fic, void *arg);
@@ -25,9 +25,9 @@ int scoutfs_forest_read_items(struct super_block *sb,
 			      struct scoutfs_key *end,
 			      scoutfs_forest_item_cb cb, void *arg);
 int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_roots *roots,
-				    struct scoutfs_key *key, struct scoutfs_key *bloom_key,
-				    struct scoutfs_key *start, struct scoutfs_key *end,
-				    scoutfs_forest_item_cb cb, void *arg);
+				    u64 merge_input_seq, struct scoutfs_key *key,
+				    struct scoutfs_key *bloom_key, struct scoutfs_key *start,
+				    struct scoutfs_key *end, scoutfs_forest_item_cb cb, void *arg);
 int scoutfs_forest_set_bloom_bits(struct super_block *sb,
 				  struct scoutfs_lock *lock);
 void scoutfs_forest_set_max_seq(struct super_block *sb, u64 max_seq);

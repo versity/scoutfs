@@ -239,9 +239,9 @@ static int forest_read_items(struct super_block *sb, struct scoutfs_key *key, u6
  * to reset their state and retry with a newer version of the btrees.
  */
 int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_roots *roots,
-				    struct scoutfs_key *key, struct scoutfs_key *bloom_key,
-				    struct scoutfs_key *start, struct scoutfs_key *end,
-				    scoutfs_forest_item_cb cb, void *arg)
+				    u64 merge_input_seq, struct scoutfs_key *key,
+				    struct scoutfs_key *bloom_key, struct scoutfs_key *start,
+				    struct scoutfs_key *end, scoutfs_forest_item_cb cb, void *arg)
 {
 	struct forest_read_items_data rid = {
 		.cb = cb,
@@ -317,15 +317,17 @@ int scoutfs_forest_read_items_roots(struct super_block *sb, struct scoutfs_net_r
 
 		scoutfs_inc_counter(sb, forest_bloom_pass);
 
-		if ((le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED))
-			rid.fic |= FIC_FINALIZED;
+		if ((le64_to_cpu(lt.flags) & SCOUTFS_LOG_TREES_FINALIZED) &&
+		    (merge_input_seq == 0 ||
+		     le64_to_cpu(lt.finalize_seq) < merge_input_seq))
+			rid.fic |= FIC_MERGE_INPUT;
 
 		ret = scoutfs_btree_read_items(sb, &lt.item_root, key, start,
 					       end, forest_read_items, &rid);
 		if (ret < 0)
 			goto out;
 
-		rid.fic &= ~FIC_FINALIZED;
+		rid.fic &= ~FIC_MERGE_INPUT;
 	}
 
 	ret = 0;
@@ -345,7 +347,7 @@ int scoutfs_forest_read_items(struct super_block *sb,
 
 	ret = scoutfs_client_get_roots(sb, &roots);
 	if (ret == 0)
-		ret = scoutfs_forest_read_items_roots(sb, &roots, key, bloom_key, start, end,
+		ret = scoutfs_forest_read_items_roots(sb, &roots, 0, key, bloom_key, start, end,
 						      cb, arg);
 	return ret;
 }

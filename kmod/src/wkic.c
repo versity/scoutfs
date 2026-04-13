@@ -95,6 +95,7 @@ struct wkic_info {
 	/* block reading slow path */
 	struct mutex roots_mutex;
 	struct scoutfs_net_roots roots;
+	u64 merge_input_seq;
 	u64 roots_read_seq;
 	ktime_t roots_expire;
 
@@ -805,29 +806,79 @@ static void free_page_list(struct super_block *sb, struct list_head *list)
  * read_seq number so that we can compare the age of the items in cached
  * pages.  Only one request to refresh the roots is in progress at a
  * time.  This is the slow path that's only used when the cache isn't
- * populated and the roots aren't cached.  The root request is fast
- * enough, especially compared to the resulting item reading IO, that we
- * don't mind hiding it behind a trivial mutex.
+ * populated and the roots aren't cached.
+ *
+ * We read roots directly from the on-disk superblock rather than
+ * requesting them from the server so that we can also read the
+ * log_merge btree from the same superblock.  The merge status item
+ * seq tells us which finalized log trees are inputs to the current
+ * merge, which is needed to correctly resolve totl delta items.
  */
-static int get_roots(struct super_block *sb, struct wkic_info *winf,
-		     struct scoutfs_net_roots *roots_ret, u64 *read_seq, bool force_new)
+static int refresh_roots(struct super_block *sb, struct wkic_info *winf)
 {
-	struct scoutfs_net_roots roots;
+	struct scoutfs_super_block *super;
+	struct scoutfs_log_merge_status *stat;
+	SCOUTFS_BTREE_ITEM_REF(iref);
+	struct scoutfs_key key;
+	int ret;
+
+	super = kmalloc(sizeof(*super), GFP_NOFS);
+	if (!super)
+		return -ENOMEM;
+
+	ret = scoutfs_read_super(sb, super);
+	if (ret < 0)
+		goto out;
+
+	winf->roots = (struct scoutfs_net_roots){
+		.fs_root = super->fs_root,
+		.logs_root = super->logs_root,
+		.srch_root = super->srch_root,
+	};
+
+	winf->merge_input_seq = 0;
+	if (super->log_merge.ref.blkno) {
+		scoutfs_key_set_zeros(&key);
+		key.sk_zone = SCOUTFS_LOG_MERGE_STATUS_ZONE;
+		ret = scoutfs_btree_lookup(sb, &super->log_merge, &key, &iref);
+		if (ret == 0) {
+			if (iref.val_len == sizeof(*stat)) {
+				stat = iref.val;
+				winf->merge_input_seq = le64_to_cpu(stat->seq);
+			} else {
+				ret = -EUCLEAN;
+			}
+			scoutfs_btree_put_iref(&iref);
+		} else if (ret == -ENOENT) {
+			ret = 0;
+		}
+		if (ret < 0)
+			goto out;
+	}
+
+	winf->roots_read_seq++;
+	winf->roots_expire = ktime_add_ms(ktime_get_raw(), WKIC_CACHE_LIFETIME_MS);
+out:
+	kfree(super);
+	return ret;
+}
+
+static int get_roots(struct super_block *sb, struct wkic_info *winf,
+		     struct scoutfs_net_roots *roots_ret, u64 *merge_input_seq,
+		     u64 *read_seq, bool force_new)
+{
 	int ret;
 
 	mutex_lock(&winf->roots_mutex);
 
 	if (force_new || ktime_before(winf->roots_expire, ktime_get_raw())) {
-		ret = scoutfs_client_get_roots(sb, &roots);
+		ret = refresh_roots(sb, winf);
 		if (ret < 0)
 			goto out;
-
-		winf->roots = roots;
-		winf->roots_read_seq++;
-		winf->roots_expire = ktime_add_ms(ktime_get_raw(), WKIC_CACHE_LIFETIME_MS);
 	}
 
 	*roots_ret = winf->roots;
+	*merge_input_seq = winf->merge_input_seq;
 	*read_seq = winf->roots_read_seq;
 	ret = 0;
 out:
@@ -870,24 +921,30 @@ static int insert_read_pages(struct super_block *sb, struct wkic_info *winf,
 	struct scoutfs_key end;
 	struct wkic_page *wpage;
 	LIST_HEAD(pages);
+	u64 merge_input_seq;
 	u64 read_seq;
 	int ret;
 
 	ret = 0;
 retry_stale:
-	ret = get_roots(sb, winf, &roots, &read_seq, ret == -ESTALE);
+	ret = get_roots(sb, winf, &roots, &merge_input_seq, &read_seq, ret == -ESTALE);
 	if (ret < 0)
-		goto out;
+		goto check_stale;
 
 	start = *range_start;
 	end = *range_end;
-	ret = scoutfs_forest_read_items_roots(sb, &roots, key, range_start, &start, &end,
-					      read_items_cb, &root);
+	ret = scoutfs_forest_read_items_roots(sb, &roots, merge_input_seq, key, range_start,
+					      &start, &end, read_items_cb, &root);
 	trace_scoutfs_wkic_read_items(sb, key, &start, &end);
+check_stale:
 	ret = scoutfs_block_check_stale(sb, ret, &saved, &roots.fs_root.ref, &roots.logs_root.ref);
 	if (ret < 0) {
-		if (ret == -ESTALE)
+		if (ret == -ESTALE) {
+			/* not safe to retry due to delta items, must restart clean */
+			free_item_tree(&root);
+			root = RB_ROOT;
 			goto retry_stale;
+		}
 		goto out;
 	}
 

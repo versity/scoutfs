@@ -2183,6 +2183,8 @@ static int merge_read_item(struct super_block *sb, struct scoutfs_key *key, u64 
 		if (ret > 0) {
 			if (ret == SCOUTFS_DELTA_COMBINED) {
 				scoutfs_inc_counter(sb, btree_merge_delta_combined);
+				if (seq > found->seq)
+					found->seq = seq;
 			} else if (ret == SCOUTFS_DELTA_COMBINED_NULL) {
 				scoutfs_inc_counter(sb, btree_merge_delta_null);
 				free_mitem(rng, found);
@@ -2485,6 +2487,14 @@ int scoutfs_btree_merge(struct super_block *sb,
 			tmp = mitem;
 			mitem = next_mitem(mitem);
 			free_mitem(&rng, tmp);
+		}
+
+		if (mitem && walk_val_len == 0 &&
+		    !(walk_flags & (BTW_INSERT | BTW_DELETE)) &&
+		    scoutfs_trigger(sb, LOG_MERGE_FORCE_PARTIAL)) {
+			ret = -ERANGE;
+			*next_ret = mitem->key;
+			goto out;
 		}
 	}
 

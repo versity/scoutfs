@@ -7,9 +7,9 @@ struct scoutfs_totl_merging {
 	u64 fs_seq;
 	u64 fs_total;
 	u64 fs_count;
-	u64 fin_seq;
-	u64 fin_total;
-	s64 fin_count;
+	u64 inp_seq;
+	u64 inp_total;
+	s64 inp_count;
 	u64 log_seq;
 	u64 log_total;
 	s64 log_count;
