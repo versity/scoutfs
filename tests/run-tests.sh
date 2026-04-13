@@ -694,8 +694,8 @@ for t in $tests; do
 		if [ "$sts" == "$T_PASS_STATUS" ]; then
 			dmesg | t_filter_dmesg > "$T_TMPDIR/dmesg.after"
 			diff --old-line-format="" --unchanged-line-format="" \
-				"$T_TMPDIR/dmesg.before" "$T_TMPDIR/dmesg.after" > \
-				"$T_TMPDIR/dmesg.new"
+				"$T_TMPDIR/dmesg.before" "$T_TMPDIR/dmesg.after" | \
+				grep -v '^$' > "$T_TMPDIR/dmesg.new"
 
 			if [ -s "$T_TMPDIR/dmesg.new" ]; then
 				message="unexpected messages in dmesg"
