@@ -838,6 +838,8 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 		bp = BLOCK_PRIVATE(bl);
 
 		if (block_is_dirty(bp)) {
+			if (ref_blkno)
+				*ref_blkno = 0;
 			ret = 0;
 			goto out;
 		}
