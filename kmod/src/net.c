@@ -525,7 +525,7 @@ static int process_response(struct scoutfs_net_connection *conn,
 	struct super_block *sb = conn->sb;
 	struct message_send *msend;
 	scoutfs_net_response_t resp_func = NULL;
-	void *resp_data;
+	void *resp_data = NULL;
 
 	spin_lock(&conn->lock);
 
