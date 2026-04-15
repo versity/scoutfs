@@ -630,7 +630,9 @@ static struct block_private *block_read(struct super_block *sb, u64 blkno)
 		}
 	}
 
-	wait_event(binf->waitq, uptodate_or_error(bp));
+	while (!wait_event_timeout(binf->waitq, uptodate_or_error(bp), 120 * HZ))
+		WARN(1, "block read blkno %llu waiting for bio completion\n",
+		     bp->bl.blkno);
 	if (test_bit(BLOCK_BIT_ERROR, &bp->bits))
 		ret = -EIO;
 	else
