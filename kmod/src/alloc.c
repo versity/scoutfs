@@ -24,6 +24,7 @@
 #include "trans.h"
 #include "alloc.h"
 #include "counters.h"
+#include "msg.h"
 #include "scoutfs_trace.h"
 
 /*
@@ -496,10 +497,11 @@ static int dirty_alloc_blocks(struct super_block *sb,
 	struct scoutfs_block *fr_bl = NULL;
 	struct scoutfs_block *bl;
 	bool link_orig = false;
+	__le32 orig_first_nr;
 	u64 av_peek;
-	u64 av_old;
+	u64 av_old = 0;
 	u64 fr_peek;
-	u64 fr_old;
+	u64 fr_old = 0;
 	int ret;
 
 	if (alloc->dirty_avail_bl != NULL)
@@ -509,6 +511,7 @@ static int dirty_alloc_blocks(struct super_block *sb,
 
 	/* undo dirty freed if we get an error after */
 	orig_freed = alloc->freed.ref;
+	orig_first_nr = alloc->freed.first_nr;
 
 	if (alloc->dirty_avail_bl != NULL) {
 		ret = 0;
@@ -562,6 +565,17 @@ static int dirty_alloc_blocks(struct super_block *sb,
 	/* sort dirty avail to encourage contiguous sorted meta blocks */
 	list_block_sort(av_bl->data);
 
+	lblk = fr_bl->data;
+	if (WARN_ON_ONCE(alloc->freed.ref.blkno != lblk->hdr.blkno)) {
+		scoutfs_err(sb, "dirty_alloc freed ref %llu hdr %llu av_old %llu fr_old %llu av_peek %llu fr_peek %llu link_orig %d",
+			    le64_to_cpu(alloc->freed.ref.blkno),
+			    le64_to_cpu(lblk->hdr.blkno),
+			    av_old, fr_old, av_peek, fr_peek, link_orig);
+		ret = -EIO;
+		goto out;
+	}
+	lblk = NULL;
+
 	if (av_old)
 		list_block_add(&alloc->freed, fr_bl->data, av_old);
 	if (fr_old)
@@ -578,6 +592,7 @@ out:
 		if (fr_bl)
 			scoutfs_block_writer_forget(sb, wri, fr_bl);
 		alloc->freed.ref = orig_freed;
+		alloc->freed.first_nr = orig_first_nr;
 	}
 
 	mutex_unlock(&alloc->mutex);
