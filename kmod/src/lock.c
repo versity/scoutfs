@@ -813,6 +813,7 @@ int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 
 out:
 	if (!lock) {
+		kfree(ireq);
 		ret = scoutfs_client_lock_response(sb, net_id, nl);
 		BUG_ON(ret); /* lock server doesn't fence timed out client requests */
 	}
