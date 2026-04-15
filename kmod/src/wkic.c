@@ -922,7 +922,7 @@ static int insert_read_pages(struct super_block *sb, struct wkic_info *winf,
 	struct wkic_page *wpage;
 	LIST_HEAD(pages);
 	u64 merge_input_seq;
-	u64 read_seq;
+	u64 read_seq = 0;
 	int ret;
 
 	ret = 0;
