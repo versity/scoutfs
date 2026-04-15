@@ -160,6 +160,33 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 }
 
 /*
+ * Remove all coverage items from the lock to tell users that their
+ * cache is stale.  This is lock-internal bookkeeping that is safe to
+ * call during shutdown and unmount.  The unconditional unlock/relock
+ * of cov_list_lock avoids sparse warnings from unbalanced locking in
+ * the trylock failure path.
+ */
+static void lock_clear_coverage(struct super_block *sb,
+				struct scoutfs_lock *lock)
+{
+	struct scoutfs_lock_coverage *cov;
+
+	spin_lock(&lock->cov_list_lock);
+	while ((cov = list_first_entry_or_null(&lock->cov_list,
+					       struct scoutfs_lock_coverage, head))) {
+		if (spin_trylock(&cov->cov_lock)) {
+			list_del_init(&cov->head);
+			cov->lock = NULL;
+			spin_unlock(&cov->cov_lock);
+			scoutfs_inc_counter(sb, lock_invalidate_coverage);
+		}
+		spin_unlock(&lock->cov_list_lock);
+		spin_lock(&lock->cov_list_lock);
+	}
+	spin_unlock(&lock->cov_list_lock);
+}
+
+/*
  * Invalidate caches associated with this lock.  Either we're
  * invalidating a write to a read or we're invalidating to null.  We
  * always have to write out dirty items if there are any.  We can only
@@ -168,7 +195,6 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 			   enum scoutfs_lock_mode prev, enum scoutfs_lock_mode mode)
 {
-	struct scoutfs_lock_coverage *cov;
 	u64 ino, last;
 	int ret = 0;
 
@@ -192,24 +218,7 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
-		/*
-		 * Remove cov items to tell users that their cache is
-		 * stale.  The unlock pattern comes from avoiding bad
-		 * sparse warnings when taking else in a failed trylock.
-		 */
-		spin_lock(&lock->cov_list_lock);
-		while ((cov = list_first_entry_or_null(&lock->cov_list,
-						       struct scoutfs_lock_coverage, head))) {
-			if (spin_trylock(&cov->cov_lock)) {
-				list_del_init(&cov->head);
-				cov->lock = NULL;
-				spin_unlock(&cov->cov_lock);
-				scoutfs_inc_counter(sb, lock_invalidate_coverage);
-			}
-			spin_unlock(&lock->cov_list_lock);
-			spin_lock(&lock->cov_list_lock);
-		}
-		spin_unlock(&lock->cov_list_lock);
+		lock_clear_coverage(sb, lock);
 
 		/* invalidate inodes after removing coverage so drop/evict aren't covered */
 		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
@@ -716,10 +725,13 @@ static void lock_invalidate_worker(struct work_struct *work)
 		ireq = list_first_entry(&lock->inv_list, struct inv_req, head);
 		nl = &ireq->nl;
 
-		/* only lock protocol, inv can't call subsystems after shutdown */
-		if (!linfo->shutdown) {
+		/* only lock protocol, inv can't call subsystems after shutdown or unmount */
+		if (!linfo->shutdown && !scoutfs_unmounting(sb)) {
 			ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
 			BUG_ON(ret < 0 && ret != -ENOLINK);
+		} else {
+			lock_clear_coverage(sb, lock);
+			scoutfs_item_invalidate(sb, &lock->start, &lock->end);
 		}
 
 		/* respond with the key and modes from the request, server might have died */
@@ -1663,6 +1675,7 @@ void scoutfs_lock_destroy(struct super_block *sb)
 			list_del_init(&lock->inv_head);
 			lock->invalidate_pending = 0;
 		}
+		lock_clear_coverage(sb, lock);
 		lock_remove(linfo, lock);
 		lock_free(linfo, lock);
 	}
