@@ -836,6 +836,9 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 	int ret;
 	int err;
 
+	if (ref_blkno)
+		*ref_blkno = 0;
+
 	/* read existing referenced block, if any */
 	blkno = le64_to_cpu(ref->blkno);
 	if (blkno) {
