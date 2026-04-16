@@ -50,6 +50,7 @@ struct print_args {
 	bool print_inode_index;
 	bool print_orphan;
 	bool print_quota;
+	bool print_xattr_values;
 };
 
 static struct print_args print_args = {
@@ -72,7 +73,8 @@ static struct print_args print_args = {
 	.print_indx	  = true,
 	.print_inode_index = true,
 	.print_orphan	  = true,
-	.print_quota	  = true
+	.print_quota	  = true,
+	.print_xattr_values = false
 };
 
 static void print_block_header(struct scoutfs_block_header *hdr, int size)
@@ -181,15 +183,42 @@ static u8 *global_printable_name(u8 *name, int name_len)
 static void print_xattr(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_xattr *xat = val;
+	unsigned int full_val_len;
+	int avail;
+	int show;
+	int i;
 
 	printf("    xattr: ino %llu name_hash %08x id %llu part %u\n",
 	       le64_to_cpu(key->skx_ino), (u32)le64_to_cpu(key->skx_name_hash),
 	       le64_to_cpu(key->skx_id), key->skx_part);
 
-	if (key->skx_part == 0)
-		printf("      name_len %u val_len %u name %s\n",
-		       xat->name_len, le16_to_cpu(xat->val_len),
-		       global_printable_name(xat->name, xat->name_len));
+	if (key->skx_part != 0)
+		return;
+
+	full_val_len = le16_to_cpu(xat->val_len);
+	printf("      name_len %u val_len %u name %s",
+	       xat->name_len, full_val_len,
+	       global_printable_name(xat->name, xat->name_len));
+
+	if (!print_args.print_xattr_values) {
+		putchar('\n');
+		return;
+	}
+
+	avail = val_len - (int)sizeof(*xat) - xat->name_len;
+	if (avail < 0)
+		avail = 0;
+	show = avail < (int)full_val_len ? avail : (int)full_val_len;
+
+	printf(" value ");
+	for (i = 0; i < show; i++) {
+		u8 c = xat->name[xat->name_len + i];
+
+		putchar(isprint(c) ? c : '.');
+	}
+	if (show < (int)full_val_len)
+		printf("...");
+	putchar('\n');
 }
 
 static void print_dirent(struct scoutfs_key *key, void *val, int val_len)
@@ -1331,6 +1360,10 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 		args->walk_allocs = true;
 		break;
 
+	case 'V':
+		args->print_xattr_values = true;
+		break;
+
 	case 'i':
 		/* Specific items being requested- clear them all to start */
 		if (!args->items_requested) {
@@ -1449,6 +1482,7 @@ static struct argp_option options[] = {
 	{ "items", 'i', "ITEMS", 0, "Item(s) to print (inode, xattr, dirent, symlink, backref, extent, totl, indx, inoindex, orphan, quota)" },
 	{ "roots", 'r', "ROOTS", 0, "Tree root(s) to walk (logs, srch, fs)" },
 	{ "skip-likely-huge", 'S', NULL, 0, "Skip allocs, srch root and fs root to minimize output size" },
+	{ "xattr-values", 'V', NULL, 0, "Print xattr values (non-printable bytes rendered as '.')" },
 	{ NULL }
 };
 

@@ -402,7 +402,7 @@ before destroying an old empty data device.
 .PD
 
 .TP
-.BI "print {-a|--allocs} {-i|--items ITEMS} {-r|--roots ROOTS} {-S|--skip-likely-huge} META-DEVICE"
+.BI "print {-a|--allocs} {-i|--items ITEMS} {-r|--roots ROOTS} {-S|--skip-likely-huge} {-V|--xattr-values} META-DEVICE"
 .sp
 Prints out some or all of the metadata in the file system.  This makes no effort
 to ensure that the structures are consistent as they're traversed and
@@ -429,6 +429,11 @@ selected btree roots. It is a comma-separated list containing one or
 more of the following items: inode, xattr, dirent, symlink, backref, extent,
 totl, indx, inoindex, orphan, quota.
 Default is all items.
+.TP
+.B "-V, --xattr-values"
+Print xattr values alongside the xattr item. Non-printable bytes are
+rendered as '.'. A trailing '...' indicates the value continues in
+additional item parts that aren't shown.
 .TP
 .B "-S, --skip-likely-huge"
 Skip printing structures that are likely to be very large.  The
