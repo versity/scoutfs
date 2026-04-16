@@ -45,6 +45,12 @@ struct print_args {
 	bool print_symlinks;
 	bool print_backrefs;
 	bool print_extents;
+	bool print_totl;
+	bool print_indx;
+	bool print_inode_index;
+	bool print_orphan;
+	bool print_quota;
+	bool print_xattr_values;
 };
 
 static struct print_args print_args = {
@@ -62,7 +68,13 @@ static struct print_args print_args = {
 	.print_dirents	  = true,
 	.print_symlinks	  = true,
 	.print_backrefs	  = true,
-	.print_extents	  = true
+	.print_extents	  = true,
+	.print_totl	  = true,
+	.print_indx	  = true,
+	.print_inode_index = true,
+	.print_orphan	  = true,
+	.print_quota	  = true,
+	.print_xattr_values = false
 };
 
 static void print_block_header(struct scoutfs_block_header *hdr, int size)
@@ -171,15 +183,42 @@ static u8 *global_printable_name(u8 *name, int name_len)
 static void print_xattr(struct scoutfs_key *key, void *val, int val_len)
 {
 	struct scoutfs_xattr *xat = val;
+	unsigned int full_val_len;
+	int avail;
+	int show;
+	int i;
 
 	printf("    xattr: ino %llu name_hash %08x id %llu part %u\n",
 	       le64_to_cpu(key->skx_ino), (u32)le64_to_cpu(key->skx_name_hash),
 	       le64_to_cpu(key->skx_id), key->skx_part);
 
-	if (key->skx_part == 0)
-		printf("      name_len %u val_len %u name %s\n",
-		       xat->name_len, le16_to_cpu(xat->val_len),
-		       global_printable_name(xat->name, xat->name_len));
+	if (key->skx_part != 0)
+		return;
+
+	full_val_len = le16_to_cpu(xat->val_len);
+	printf("      name_len %u val_len %u name %s",
+	       xat->name_len, full_val_len,
+	       global_printable_name(xat->name, xat->name_len));
+
+	if (!print_args.print_xattr_values) {
+		putchar('\n');
+		return;
+	}
+
+	avail = val_len - (int)sizeof(*xat) - xat->name_len;
+	if (avail < 0)
+		avail = 0;
+	show = avail < (int)full_val_len ? avail : (int)full_val_len;
+
+	printf(" value ");
+	for (i = 0; i < show; i++) {
+		u8 c = xat->name[xat->name_len + i];
+
+		putchar(isprint(c) ? c : '.');
+	}
+	if (show < (int)full_val_len)
+		printf("...");
+	putchar('\n');
 }
 
 static void print_dirent(struct scoutfs_key *key, void *val, int val_len)
@@ -235,22 +274,37 @@ static print_func_t find_printer(u8 zone, u8 type, bool *suppress)
 {
 	if (zone == SCOUTFS_INODE_INDEX_ZONE &&
 	    type >= SCOUTFS_INODE_INDEX_META_SEQ_TYPE  &&
-	    type <= SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE)
+	    type <= SCOUTFS_INODE_INDEX_DATA_SEQ_TYPE) {
+		if (!print_args.print_inode_index)
+			*suppress = true;
 		return print_inode_index;
-
-	if (zone == SCOUTFS_ORPHAN_ZONE) {
-		if (type == SCOUTFS_ORPHAN_TYPE)
-			return print_orphan;
 	}
 
-	if (zone == SCOUTFS_QUOTA_ZONE)
+	if (zone == SCOUTFS_ORPHAN_ZONE) {
+		if (type == SCOUTFS_ORPHAN_TYPE) {
+			if (!print_args.print_orphan)
+				*suppress = true;
+			return print_orphan;
+		}
+	}
+
+	if (zone == SCOUTFS_QUOTA_ZONE) {
+		if (!print_args.print_quota)
+			*suppress = true;
 		return print_quota;
+	}
 
-	if (zone == SCOUTFS_XATTR_TOTL_ZONE)
+	if (zone == SCOUTFS_XATTR_TOTL_ZONE) {
+		if (!print_args.print_totl)
+			*suppress = true;
 		return print_xattr_totl;
+	}
 
-	if (zone == SCOUTFS_XATTR_INDX_ZONE)
+	if (zone == SCOUTFS_XATTR_INDX_ZONE) {
+		if (!print_args.print_indx)
+			*suppress = true;
 		return print_xattr_indx;
+	}
 
 	if (zone == SCOUTFS_FS_ZONE) {
 		switch(type) {
@@ -1244,16 +1298,26 @@ enum {
 	DIRENT_OPT,
 	SYMLINK_OPT,
 	BACKREF_OPT,
-	EXTENT_OPT
+	EXTENT_OPT,
+	TOTL_OPT,
+	INDX_OPT,
+	INOINDEX_OPT,
+	ORPHAN_OPT,
+	QUOTA_OPT
 };
 
 static char *const item_tokens[] = {
-	[INODE_OPT] =   "inode",
-	[XATTR_OPT] =   "xattr",
-	[DIRENT_OPT] =  "dirent",
-	[SYMLINK_OPT] = "symlink",
-	[BACKREF_OPT] = "backref",
-	[EXTENT_OPT] =  "extent",
+	[INODE_OPT] =    "inode",
+	[XATTR_OPT] =    "xattr",
+	[DIRENT_OPT] =   "dirent",
+	[SYMLINK_OPT] =  "symlink",
+	[BACKREF_OPT] =  "backref",
+	[EXTENT_OPT] =   "extent",
+	[TOTL_OPT] =     "totl",
+	[INDX_OPT] =     "indx",
+	[INOINDEX_OPT] = "inoindex",
+	[ORPHAN_OPT] =   "orphan",
+	[QUOTA_OPT] =    "quota",
 	NULL
 };
 
@@ -1265,6 +1329,11 @@ static void clear_items(void)
 	print_args.print_symlinks = false;
 	print_args.print_backrefs = false;
 	print_args.print_extents = false;
+	print_args.print_totl = false;
+	print_args.print_indx = false;
+	print_args.print_inode_index = false;
+	print_args.print_orphan = false;
+	print_args.print_quota = false;
 }
 
 static void clear_roots(void)
@@ -1289,6 +1358,10 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 	case 'a':
 		args->allocs_requested = true;
 		args->walk_allocs = true;
+		break;
+
+	case 'V':
+		args->print_xattr_values = true;
 		break;
 
 	case 'i':
@@ -1320,6 +1393,21 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 				break;
 			case EXTENT_OPT:
 				args->print_extents = true;
+				break;
+			case TOTL_OPT:
+				args->print_totl = true;
+				break;
+			case INDX_OPT:
+				args->print_indx = true;
+				break;
+			case INOINDEX_OPT:
+				args->print_inode_index = true;
+				break;
+			case ORPHAN_OPT:
+				args->print_orphan = true;
+				break;
+			case QUOTA_OPT:
+				args->print_quota = true;
 				break;
 			default:
 				argp_usage(state);
@@ -1391,9 +1479,10 @@ static int parse_opt(int key, char *arg, struct argp_state *state)
 
 static struct argp_option options[] = {
 	{ "allocs", 'a', NULL, 0, "Print metadata and data alloc lists" },
-	{ "items", 'i', "ITEMS", 0, "Item(s) to print (inode, xattr, dirent, symlink, backref, extent)" },
+	{ "items", 'i', "ITEMS", 0, "Item(s) to print (inode, xattr, dirent, symlink, backref, extent, totl, indx, inoindex, orphan, quota)" },
 	{ "roots", 'r', "ROOTS", 0, "Tree root(s) to walk (logs, srch, fs)" },
 	{ "skip-likely-huge", 'S', NULL, 0, "Skip allocs, srch root and fs root to minimize output size" },
+	{ "xattr-values", 'V', NULL, 0, "Print xattr values (non-printable bytes rendered as '.')" },
 	{ NULL }
 };
 
