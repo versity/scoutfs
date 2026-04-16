@@ -804,7 +804,7 @@ static void scoutfs_net_recv_worker(struct work_struct *work)
 			if (invalid_message(conn, nh)) {
 				scoutfs_inc_counter(sb, net_recv_invalid_message);
 				ret = -EBADMSG;
-				break;
+				goto out;
 			}
 
 			data_len = le16_to_cpu(nh->data_len);
