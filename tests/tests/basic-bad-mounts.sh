@@ -30,4 +30,13 @@ mount_fail -o metadev_path=$T_EX_DATA_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$T_
 echo "== good volume, bad option and good options"
 mount_fail -o _bad,metadev_path=$T_EX_META_DEV,quorum_slot_nr=0 "$T_EX_DATA_DEV" "$T_MSCR"
 
+echo "== blocks_min greater than blocks"
+mount_fail -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0,data_prealloc_blocks=32,data_prealloc_blocks_min=33 "$T_EX_DATA_DEV" "$T_MSCR"
+
+echo "== blocks_min greater than default blocks"
+mount_fail -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0,data_prealloc_blocks_min=2049 "$T_EX_DATA_DEV" "$T_MSCR"
+
+echo "== blocks_min greater than blocks, reversed order"
+mount_fail -o metadev_path=$T_EX_META_DEV,quorum_slot_nr=0,data_prealloc_blocks_min=33,data_prealloc_blocks=32 "$T_EX_DATA_DEV" "$T_MSCR"
+
 t_pass

@@ -128,8 +128,10 @@ t_filter_dmesg()
 	re="$re|device-mapper:.*uevent:.*version"
 	re="$re|device-mapper:.*ioctl:.*initialised"
 
-	# some tests try invalid devices
+	# some tests try invalid devices and options
 	re="$re|scoutfs .* error reading super block"
+	re="$re|scoutfs .* error.*invalid data_prealloc_blocks"
+	re="$re|scoutfs .* error.*data_prealloc_blocks_min .* must not exceed"
 	re="$re| EXT4-fs (.*): get root inode failed"
 	re="$re| EXT4-fs (.*): mount failed"
 	re="$re| EXT4-fs (.*): no journal found"

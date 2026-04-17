@@ -4,3 +4,6 @@
 == both meta devices
 == both data devices
 == good volume, bad option and good options
+== blocks_min greater than blocks
+== blocks_min greater than default blocks
+== blocks_min greater than blocks, reversed order

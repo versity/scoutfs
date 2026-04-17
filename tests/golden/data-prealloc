@@ -24,6 +24,21 @@
 /mnt/test/test/data-prealloc/file-2: extents: 6
 /mnt/test/test/data-prealloc/file-1: extents: 3
 /mnt/test/test/data-prealloc/file-2: extents: 3
+== blocks_min rejects values greater than blocks
+blocks_min after rejected write: 0
+== blocks rejects values less than blocks_min
+blocks after rejected write: 32
+== blocks_min accepts value equal to blocks
+blocks_min after accepted write: 32
+== blocks_min suppresses prealloc for small files
+/mnt/test/test/data-prealloc/file-1: extents: 8
+/mnt/test/test/data-prealloc/file-2: extents: 8
+== blocks_min prealloc ramps up past threshold
+/mnt/test/test/data-prealloc/file-1: extents: 8
+/mnt/test/test/data-prealloc/file-2: extents: 8
+== blocks_min with region prealloc
+/mnt/test/test/data-prealloc/file-1: extents: 12
+/mnt/test/test/data-prealloc/file-2: extents: 12
 == block writes into region allocs hole
 wrote blk 24
 wrote blk 32
