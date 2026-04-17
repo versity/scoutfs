@@ -2075,6 +2075,14 @@ void scoutfs_inode_schedule_orphan_dwork(struct super_block *sb)
 }
 
 /*
+ * Generous per-RPC bound for the idempotent orphan scan worker.  A
+ * server that hasn't answered in this long is assumed to be broken;
+ * dropping the request lets the scan reschedule instead of blocking
+ * forever.
+ */
+#define ORPHAN_SCAN_RPC_TIMEOUT (5 * 60 * HZ)
+
+/*
  * Find and delete inodes whose only remaining reference is the
  * persistent orphan item that was created as they were unlinked.
  *
@@ -2128,7 +2136,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 	init_orphan_key(&last, U64_MAX);
 	omap.args.group_nr = cpu_to_le64(U64_MAX);
 
-	ret = scoutfs_client_get_roots(sb, &roots);
+	ret = scoutfs_client_get_roots_timeout(sb, &roots, ORPHAN_SCAN_RPC_TIMEOUT);
 	if (ret)
 		goto out;
 
@@ -2169,7 +2177,8 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		scoutfs_omap_calc_group_nrs(ino, &group_nr, &bit_nr);
 
 		if (le64_to_cpu(omap.args.group_nr) != group_nr) {
-			ret = scoutfs_client_open_ino_map(sb, group_nr, &omap);
+			ret = scoutfs_client_open_ino_map_timeout(sb, group_nr, &omap,
+								  ORPHAN_SCAN_RPC_TIMEOUT);
 			if (ret < 0)
 				goto out;
 		}

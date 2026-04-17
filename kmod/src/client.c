@@ -144,6 +144,23 @@ int scoutfs_client_get_roots(struct super_block *sb,
 				   NULL, 0, roots, sizeof(*roots));
 }
 
+/*
+ * Bounded-wait get_roots for the orphan scan worker.  The worker
+ * reschedules on error, so -ETIMEDOUT is treated like any other RPC
+ * failure and retries on the next scan.
+ */
+int scoutfs_client_get_roots_timeout(struct super_block *sb,
+				     struct scoutfs_net_roots *roots,
+				     unsigned long timeout_jiffies)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request_timeout(sb, client->conn,
+						SCOUTFS_NET_CMD_GET_ROOTS,
+						NULL, 0, roots, sizeof(*roots),
+						timeout_jiffies);
+}
+
 int scoutfs_client_get_last_seq(struct super_block *sb, u64 *seq)
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
@@ -229,6 +246,23 @@ int scoutfs_client_srch_get_compact(struct super_block *sb,
 				   NULL, 0, sc, sizeof(*sc));
 }
 
+/*
+ * Bounded-wait get_compact for the srch compact worker.  The worker
+ * reschedules on any error and the compact work is idempotent, so
+ * -ETIMEDOUT just defers this round.
+ */
+int scoutfs_client_srch_get_compact_timeout(struct super_block *sb,
+					    struct scoutfs_srch_compact *sc,
+					    unsigned long timeout_jiffies)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request_timeout(sb, client->conn,
+						SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
+						NULL, 0, sc, sizeof(*sc),
+						timeout_jiffies);
+}
+
 /* Commit the result of a srch file compaction. */
 int scoutfs_client_srch_commit_compact(struct super_block *sb,
 				       struct scoutfs_srch_compact *res)
@@ -238,6 +272,24 @@ int scoutfs_client_srch_commit_compact(struct super_block *sb,
 	return client_sync_request(sb, client->conn,
 				   SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
 				   res, sizeof(*res), NULL, 0);
+}
+
+/*
+ * Bounded-wait commit_compact for the srch compact worker.  The server
+ * ignores partial work flagged with ERROR, so a timed-out commit
+ * (marked ERROR on this side) lets the server reclaim our allocators
+ * and reassign the compact on the next scheduled attempt.
+ */
+int scoutfs_client_srch_commit_compact_timeout(struct super_block *sb,
+					       struct scoutfs_srch_compact *res,
+					       unsigned long timeout_jiffies)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+
+	return scoutfs_net_sync_request_timeout(sb, client->conn,
+						SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
+						res, sizeof(*res), NULL, 0,
+						timeout_jiffies);
 }
 
 int scoutfs_client_get_log_merge(struct super_block *sb,
@@ -291,6 +343,28 @@ int scoutfs_client_open_ino_map(struct super_block *sb, u64 group_nr,
 
 	return client_sync_request(sb, client->conn, SCOUTFS_NET_CMD_OPEN_INO_MAP,
 				   &args, sizeof(args), map, sizeof(*map));
+}
+
+/*
+ * Bounded-wait open_ino_map for the orphan scan worker.  The scan
+ * reschedules on error; the delete path callers keep the unbounded
+ * retry.
+ */
+int scoutfs_client_open_ino_map_timeout(struct super_block *sb, u64 group_nr,
+					struct scoutfs_open_ino_map *map,
+					unsigned long timeout_jiffies)
+{
+	struct client_info *client = SCOUTFS_SB(sb)->client_info;
+	struct scoutfs_open_ino_map_args args = {
+		.group_nr = cpu_to_le64(group_nr),
+		.req_id = 0,
+	};
+
+	return scoutfs_net_sync_request_timeout(sb, client->conn,
+						SCOUTFS_NET_CMD_OPEN_INO_MAP,
+						&args, sizeof(args),
+						map, sizeof(*map),
+						timeout_jiffies);
 }
 
 /* The client is asking the server for the current volume options */

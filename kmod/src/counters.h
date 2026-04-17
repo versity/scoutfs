@@ -62,6 +62,7 @@
 	EXPAND_COUNTER(btree_walk)				\
 	EXPAND_COUNTER(btree_walk_restart)			\
 	EXPAND_COUNTER(client_farewell_error)			\
+	EXPAND_COUNTER(client_rpc_timeout)			\
 	EXPAND_COUNTER(corrupt_btree_block_level)		\
 	EXPAND_COUNTER(corrupt_btree_no_child_ref)		\
 	EXPAND_COUNTER(corrupt_dirent_backref_name_len)		\

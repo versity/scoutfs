@@ -95,6 +95,13 @@ struct srch_info {
  */
 #define SRCH_COMPACT_DIRTY_LIMIT_BYTES (32 * 1024 * 1024)
 
+/*
+ * Generous per-RPC bound for the idempotent compact worker.  A server
+ * that hasn't answered in this long is assumed to be broken; dropping
+ * the request lets the worker reschedule instead of blocking forever.
+ */
+#define COMPACT_RPC_TIMEOUT (5 * 60 * HZ)
+
 static int sre_cmp(const struct scoutfs_srch_entry *a,
 		   const struct scoutfs_srch_entry *b)
 {
@@ -2256,7 +2263,8 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 
 	scoutfs_block_writer_init(sb, &wri);
 
-	ret = scoutfs_client_srch_get_compact(sb, sc);
+	ret = scoutfs_client_srch_get_compact_timeout(sb, sc,
+						      COMPACT_RPC_TIMEOUT);
 	if (ret >= 0)
 		trace_scoutfs_srch_compact_client_recv(sb, sc);
 	if (ret < 0 || sc->nr == 0)
@@ -2287,7 +2295,8 @@ static void scoutfs_srch_compact_worker(struct work_struct *work)
 	sc->flags |= ret < 0 ? SCOUTFS_SRCH_COMPACT_FLAG_ERROR : 0;
 
 	trace_scoutfs_srch_compact_client_send(sb, sc);
-	err = scoutfs_client_srch_commit_compact(sb, sc);
+	err = scoutfs_client_srch_commit_compact_timeout(sb, sc,
+							 COMPACT_RPC_TIMEOUT);
 	if (err < 0 && ret == 0)
 		ret = err;
 out:
