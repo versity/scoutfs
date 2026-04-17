@@ -60,6 +60,31 @@ struct client_info {
 };
 
 /*
+ * Reconnection to a new server completes pending sync requests with
+ * -ECONNRESET because their state in the old server was reclaimed at
+ * fence time.  Transparently retry so callers don't surface the
+ * reconnect as a failed RPC; preserve the pre-drain behavior where a
+ * sync request was silently resent across failover.  Shutdown paths
+ * break the loop via the errors that submit and wait already return.
+ */
+static int client_sync_request(struct super_block *sb,
+			       struct scoutfs_net_connection *conn,
+			       u8 cmd, void *arg, unsigned arg_len,
+			       void *resp, size_t resp_len)
+{
+	int ret;
+
+	for (;;) {
+		ret = scoutfs_net_sync_request(sb, conn, cmd, arg, arg_len,
+					       resp, resp_len);
+		if (ret != -ECONNRESET)
+			return ret;
+		if (scoutfs_unmounting(sb) || scoutfs_forcing_unmount(sb))
+			return -ESHUTDOWN;
+	}
+}
+
+/*
  * Ask for a new run of allocated inode numbers.  The server can return
  * fewer than @count.  It will success with nr == 0 if we've run out.
  */
@@ -72,10 +97,10 @@ int scoutfs_client_alloc_inodes(struct super_block *sb, u64 count,
 	u64 tmp;
 	int ret;
 
-	ret = scoutfs_net_sync_request(sb, client->conn,
-				       SCOUTFS_NET_CMD_ALLOC_INODES,
-				       &lecount, sizeof(lecount),
-				       &ial, sizeof(ial));
+	ret = client_sync_request(sb, client->conn,
+				  SCOUTFS_NET_CMD_ALLOC_INODES,
+				  &lecount, sizeof(lecount),
+				  &ial, sizeof(ial));
 	if (ret == 0) {
 		*ino = le64_to_cpu(ial.ino);
 		*nr = le64_to_cpu(ial.nr);
@@ -94,9 +119,9 @@ int scoutfs_client_get_log_trees(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn,
-					SCOUTFS_NET_CMD_GET_LOG_TREES,
-					NULL, 0, lt, sizeof(*lt));
+	return client_sync_request(sb, client->conn,
+				   SCOUTFS_NET_CMD_GET_LOG_TREES,
+				   NULL, 0, lt, sizeof(*lt));
 }
 
 int scoutfs_client_commit_log_trees(struct super_block *sb,
@@ -104,9 +129,9 @@ int scoutfs_client_commit_log_trees(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn,
-					SCOUTFS_NET_CMD_COMMIT_LOG_TREES,
-					lt, sizeof(*lt), NULL, 0);
+	return client_sync_request(sb, client->conn,
+				   SCOUTFS_NET_CMD_COMMIT_LOG_TREES,
+				   lt, sizeof(*lt), NULL, 0);
 }
 
 int scoutfs_client_get_roots(struct super_block *sb,
@@ -114,9 +139,9 @@ int scoutfs_client_get_roots(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn,
-					SCOUTFS_NET_CMD_GET_ROOTS,
-					NULL, 0, roots, sizeof(*roots));
+	return client_sync_request(sb, client->conn,
+				   SCOUTFS_NET_CMD_GET_ROOTS,
+				   NULL, 0, roots, sizeof(*roots));
 }
 
 int scoutfs_client_get_last_seq(struct super_block *sb, u64 *seq)
@@ -125,9 +150,9 @@ int scoutfs_client_get_last_seq(struct super_block *sb, u64 *seq)
 	__le64 last_seq;
 	int ret;
 
-	ret = scoutfs_net_sync_request(sb, client->conn,
-				       SCOUTFS_NET_CMD_GET_LAST_SEQ,
-				       NULL, 0, &last_seq, sizeof(last_seq));
+	ret = client_sync_request(sb, client->conn,
+				  SCOUTFS_NET_CMD_GET_LAST_SEQ,
+				  NULL, 0, &last_seq, sizeof(last_seq));
 	if (ret == 0)
 		*seq = le64_to_cpu(last_seq);
 
@@ -140,24 +165,34 @@ static int client_lock_response(struct super_block *sb,
 				void *resp, unsigned int resp_len,
 				int error, void *data)
 {
+	struct scoutfs_lock *lock = data;
+
+	if (error) {
+		scoutfs_lock_request_failed(sb, lock);
+		return 0;
+	}
+
 	if (resp_len != sizeof(struct scoutfs_net_lock))
 		return -EINVAL;
-
-	/* XXX error? */
 
 	return scoutfs_lock_grant_response(sb, resp);
 }
 
-/* Send a lock request to the server. */
+/*
+ * Send a lock request to the server.  The lock is anchored by
+ * request_pending so its address is stable until the response callback
+ * runs and clears request_pending on either the grant or error path.
+ */
 int scoutfs_client_lock_request(struct super_block *sb,
-				struct scoutfs_net_lock *nl)
+				struct scoutfs_net_lock *nl,
+				struct scoutfs_lock *lock)
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
 	return scoutfs_net_submit_request(sb, client->conn,
 					  SCOUTFS_NET_CMD_LOCK,
 					  nl, sizeof(*nl),
-					  client_lock_response, NULL, NULL);
+					  client_lock_response, lock, NULL);
 }
 
 /* Send a lock response to the server. */
@@ -189,9 +224,9 @@ int scoutfs_client_srch_get_compact(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn,
-					SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
-					NULL, 0, sc, sizeof(*sc));
+	return client_sync_request(sb, client->conn,
+				   SCOUTFS_NET_CMD_SRCH_GET_COMPACT,
+				   NULL, 0, sc, sizeof(*sc));
 }
 
 /* Commit the result of a srch file compaction. */
@@ -200,9 +235,9 @@ int scoutfs_client_srch_commit_compact(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn,
-					SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
-					res, sizeof(*res), NULL, 0);
+	return client_sync_request(sb, client->conn,
+				   SCOUTFS_NET_CMD_SRCH_COMMIT_COMPACT,
+				   res, sizeof(*res), NULL, 0);
 }
 
 int scoutfs_client_get_log_merge(struct super_block *sb,
@@ -210,9 +245,9 @@ int scoutfs_client_get_log_merge(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn,
-					SCOUTFS_NET_CMD_GET_LOG_MERGE,
-					NULL, 0, req, sizeof(*req));
+	return client_sync_request(sb, client->conn,
+				   SCOUTFS_NET_CMD_GET_LOG_MERGE,
+				   NULL, 0, req, sizeof(*req));
 }
 
 int scoutfs_client_commit_log_merge(struct super_block *sb,
@@ -220,9 +255,9 @@ int scoutfs_client_commit_log_merge(struct super_block *sb,
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn,
-					SCOUTFS_NET_CMD_COMMIT_LOG_MERGE,
-					comp, sizeof(*comp), NULL, 0);
+	return client_sync_request(sb, client->conn,
+				   SCOUTFS_NET_CMD_COMMIT_LOG_MERGE,
+				   comp, sizeof(*comp), NULL, 0);
 }
 
 int scoutfs_client_send_omap_response(struct super_block *sb, u64 id,
@@ -254,8 +289,8 @@ int scoutfs_client_open_ino_map(struct super_block *sb, u64 group_nr,
 		.req_id = 0,
 	};
 
-	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_OPEN_INO_MAP,
-					&args, sizeof(args), map, sizeof(*map));
+	return client_sync_request(sb, client->conn, SCOUTFS_NET_CMD_OPEN_INO_MAP,
+				   &args, sizeof(args), map, sizeof(*map));
 }
 
 /* The client is asking the server for the current volume options */
@@ -263,8 +298,8 @@ int scoutfs_client_get_volopt(struct super_block *sb, struct scoutfs_volume_opti
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_GET_VOLOPT,
-					NULL, 0, volopt, sizeof(*volopt));
+	return client_sync_request(sb, client->conn, SCOUTFS_NET_CMD_GET_VOLOPT,
+				   NULL, 0, volopt, sizeof(*volopt));
 }
 
 /* The client is asking the server to update volume options */
@@ -272,8 +307,8 @@ int scoutfs_client_set_volopt(struct super_block *sb, struct scoutfs_volume_opti
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_SET_VOLOPT,
-					volopt, sizeof(*volopt), NULL, 0);
+	return client_sync_request(sb, client->conn, SCOUTFS_NET_CMD_SET_VOLOPT,
+				   volopt, sizeof(*volopt), NULL, 0);
 }
 
 /* The client is asking the server to clear volume options */
@@ -281,24 +316,24 @@ int scoutfs_client_clear_volopt(struct super_block *sb, struct scoutfs_volume_op
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_CLEAR_VOLOPT,
-					volopt, sizeof(*volopt), NULL, 0);
+	return client_sync_request(sb, client->conn, SCOUTFS_NET_CMD_CLEAR_VOLOPT,
+				   volopt, sizeof(*volopt), NULL, 0);
 }
 
 int scoutfs_client_resize_devices(struct super_block *sb, struct scoutfs_net_resize_devices *nrd)
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_RESIZE_DEVICES,
-					nrd, sizeof(*nrd), NULL, 0);
+	return client_sync_request(sb, client->conn, SCOUTFS_NET_CMD_RESIZE_DEVICES,
+				   nrd, sizeof(*nrd), NULL, 0);
 }
 
 int scoutfs_client_statfs(struct super_block *sb, struct scoutfs_net_statfs *nst)
 {
 	struct client_info *client = SCOUTFS_SB(sb)->client_info;
 
-	return scoutfs_net_sync_request(sb, client->conn, SCOUTFS_NET_CMD_STATFS,
-					NULL, 0, nst, sizeof(*nst));
+	return client_sync_request(sb, client->conn, SCOUTFS_NET_CMD_STATFS,
+				   NULL, 0, nst, sizeof(*nst));
 }
 
 /*

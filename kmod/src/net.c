@@ -1750,8 +1750,10 @@ void scoutfs_net_client_greeting(struct super_block *sb,
 				 bool new_server)
 {
 	struct net_info *ninf = SCOUTFS_SB(sb)->net_info;
+	scoutfs_net_response_t resp_func;
 	struct message_send *msend;
 	struct message_send *tmp;
+	void *resp_data;
 
 	/* only called on client connections :/ */
 	BUG_ON(conn->listening_conn);
@@ -1760,9 +1762,31 @@ void scoutfs_net_client_greeting(struct super_block *sb,
 
 	if (new_server) {
 		atomic64_set(&conn->recv_seq, 0);
+
+		/* drop stale responses; old server's state is gone */
 		list_for_each_entry_safe(msend, tmp, &conn->resend_queue, head){
 			if (nh_is_response(&msend->nh))
 				free_msend(ninf, conn, msend);
+		}
+
+		/*
+		 * Complete pending requests with -ECONNRESET.  Any state
+		 * they depended on in the old server was reclaimed at
+		 * fence time, so resending is wrong.  Callers re-issue on
+		 * the new server if they still care.
+		 */
+		while ((msend = list_first_entry_or_null(&conn->resend_queue,
+							 struct message_send, head))) {
+			if (nh_is_response(&msend->nh))
+				break;
+			resp_func = msend->resp_func;
+			resp_data = msend->resp_data;
+			free_msend(ninf, conn, msend);
+			spin_unlock(&conn->lock);
+
+			call_resp_func(sb, conn, resp_func, resp_data, NULL, 0, -ECONNRESET);
+
+			spin_lock(&conn->lock);
 		}
 	}
 

@@ -654,6 +654,33 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 	return 0;
 }
 
+/*
+ * The lock request we sent to the server was dropped before we could
+ * receive a grant response.  This happens when the client reconnects to
+ * a new server and completes pending requests with an error, since the
+ * old server's pending-request state was reclaimed at fence time.
+ *
+ * Clear request_pending so that a waiter in lock_key_range re-evaluates
+ * and sends a fresh request to the new server, and symmetrically put
+ * the lock so shrink's lru state matches the grant_response path.
+ */
+void scoutfs_lock_request_failed(struct super_block *sb,
+				 struct scoutfs_lock *lock)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+
+	scoutfs_inc_counter(sb, lock_request_failed);
+
+	spin_lock(&linfo->lock);
+
+	BUG_ON(!lock->request_pending);
+	lock->request_pending = 0;
+	wake_up(&lock->waitq);
+	put_lock(linfo, lock);
+
+	spin_unlock(&linfo->lock);
+}
+
 struct inv_req {
 	struct list_head head;
 	struct scoutfs_lock *lock;
@@ -936,7 +963,7 @@ static bool try_shrink_lock(struct super_block *sb, struct lock_info *linfo, boo
 	spin_unlock(&linfo->lock);
 
 	if (lock) {
-		ret = scoutfs_client_lock_request(sb, &nl);
+		ret = scoutfs_client_lock_request(sb, &nl, lock);
 		if (ret < 0) {
 			scoutfs_inc_counter(sb, lock_shrink_request_failed);
 
@@ -1077,7 +1104,7 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 			nl.old_mode = lock->mode;
 			nl.new_mode = mode;
 
-			ret = scoutfs_client_lock_request(sb, &nl);
+			ret = scoutfs_client_lock_request(sb, &nl, lock);
 			if (ret) {
 				spin_lock(&linfo->lock);
 				lock->request_pending = 0;

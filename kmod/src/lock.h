@@ -60,6 +60,8 @@ struct scoutfs_lock_coverage {
 
 int scoutfs_lock_grant_response(struct super_block *sb,
 				struct scoutfs_net_lock *nl);
+void scoutfs_lock_request_failed(struct super_block *sb,
+				 struct scoutfs_lock *lock);
 int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 				    struct scoutfs_net_lock *nl);
 int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
