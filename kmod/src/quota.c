@@ -34,6 +34,7 @@
 #include "totl.h"
 #include "util.h"
 #include "quota.h"
+#include "trans.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
 
@@ -1086,6 +1087,10 @@ int scoutfs_quota_mod_rule(struct super_block *sb, bool is_add,
 	if (ret < 0)
 		goto out;
 
+	ret = scoutfs_hold_trans(sb, true);
+	if (ret < 0)
+		goto out;
+
 	down_write(&qtinf->rwsem);
 
 	if (is_add) {
@@ -1095,28 +1100,30 @@ int scoutfs_quota_mod_rule(struct super_block *sb, bool is_add,
 		else if (ret == 0)
 			ret = -EEXIST;
 		if (ret < 0)
-			goto unlock;
+			goto release;
 
 		rule_to_rule_val(&rv, &rule);
 		ret = scoutfs_item_create(sb, &key, &rv, sizeof(rv), lock);
 		if (ret < 0)
-			goto unlock;
+			goto release;
 
 	} else {
 		ret = find_rule(sb, &rule, &key, lock) ?:
 		      scoutfs_item_delete(sb, &key, lock);
 		if (ret < 0)
-			goto unlock;
+			goto release;
 	}
 
 	scoutfs_quota_invalidate(sb);
 	ret = 0;
 
-unlock:
+release:
 	up_write(&qtinf->rwsem);
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	scoutfs_release_trans(sb);
 
 out:
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+
 	if (is_add)
 		trace_scoutfs_quota_add_rule(sb, &rule, ret);
 	else
