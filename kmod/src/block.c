@@ -624,11 +624,15 @@ static struct block_private *block_read(struct super_block *sb, u64 blkno)
 	if (!test_bit(BLOCK_BIT_UPTODATE, &bp->bits) &&
 	     test_and_clear_bit(BLOCK_BIT_NEW, &bp->bits)) {
 		ret = block_submit_bio(sb, bp, REQ_OP_READ);
-		if (ret < 0)
+		if (ret < 0) {
+			set_bit(BLOCK_BIT_ERROR, &bp->bits);
 			goto out;
+		}
 	}
 
-	wait_event(binf->waitq, uptodate_or_error(bp));
+	while (!wait_event_timeout(binf->waitq, uptodate_or_error(bp), 120 * HZ))
+		WARN(1, "block read blkno %llu waiting for bio completion\n",
+		     bp->bl.blkno);
 	if (test_bit(BLOCK_BIT_ERROR, &bp->bits))
 		ret = -EIO;
 	else
@@ -836,6 +840,8 @@ int scoutfs_block_dirty_ref(struct super_block *sb, struct scoutfs_alloc *alloc,
 		bp = BLOCK_PRIVATE(bl);
 
 		if (block_is_dirty(bp)) {
+			if (ref_blkno)
+				*ref_blkno = 0;
 			ret = 0;
 			goto out;
 		}
