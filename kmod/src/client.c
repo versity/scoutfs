@@ -774,10 +774,16 @@ void scoutfs_client_destroy(struct super_block *sb)
 	/* make sure worker isn't using the conn */
 	cancel_delayed_work_sync(&client->connect_dwork);
 
-	/* make racing conn use explode */
+	/*
+	 * Drain the conn's workers before nulling client->conn.  In-flight
+	 * proc_workers dispatch request handlers that call back into client
+	 * response helpers (e.g. scoutfs_client_lock_recover_response) which
+	 * read client->conn; nulling it first races with those workers and
+	 * causes submit_send to dereference a NULL conn->lock.
+	 */
 	conn = client->conn;
-	client->conn = NULL;
 	scoutfs_net_free_conn(sb, conn);
+	client->conn = NULL;
 
 	if (client->workq)
 		destroy_workqueue(client->workq);
