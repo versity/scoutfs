@@ -1355,35 +1355,37 @@ DEFINE_EVENT(scoutfs_lock_class, scoutfs_lock_shrink,
 );
 
 DECLARE_EVENT_CLASS(scoutfs_net_class,
-        TP_PROTO(struct super_block *sb, struct sockaddr_in *name,
-		 struct sockaddr_in *peer, struct scoutfs_net_header *nh),
+        TP_PROTO(struct super_block *sb, struct sockaddr_storage *name,
+		 struct sockaddr_storage *peer, struct scoutfs_net_header *nh),
         TP_ARGS(sb, name, peer, nh),
         TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
-		si4_trace_define(name)
-		si4_trace_define(peer)
+		__field_struct(struct sockaddr_storage, name)
+		__field_struct(struct sockaddr_storage, peer)
 		snh_trace_define(nh)
         ),
         TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
-		si4_trace_assign(name, name);
-		si4_trace_assign(peer, peer);
+		memcpy(&__entry->name, name, sizeof(struct sockaddr_storage));
+		memcpy(&__entry->peer, peer, sizeof(struct sockaddr_storage));
 		snh_trace_assign(nh, nh);
         ),
-        TP_printk(SCSBF" name "SI4_FMT" peer "SI4_FMT" nh "SNH_FMT,
-		  SCSB_TRACE_ARGS, si4_trace_args(name), si4_trace_args(peer),
+        TP_printk(SCSBF" name "SIN_FMT" peer "SIN_FMT" nh "SNH_FMT,
+		  SCSB_TRACE_ARGS,
+		  &__entry->name,
+		  &__entry->peer,
 		  snh_trace_args(nh))
 );
 
 DEFINE_EVENT(scoutfs_net_class, scoutfs_net_send_message,
-        TP_PROTO(struct super_block *sb, struct sockaddr_in *name,
-		 struct sockaddr_in *peer, struct scoutfs_net_header *nh),
+        TP_PROTO(struct super_block *sb, struct sockaddr_storage *name,
+		 struct sockaddr_storage *peer, struct scoutfs_net_header *nh),
         TP_ARGS(sb, name, peer, nh)
 );
 
 DEFINE_EVENT(scoutfs_net_class, scoutfs_net_recv_message,
-        TP_PROTO(struct super_block *sb, struct sockaddr_in *name,
-		 struct sockaddr_in *peer, struct scoutfs_net_header *nh),
+        TP_PROTO(struct super_block *sb, struct sockaddr_storage *name,
+		 struct sockaddr_storage *peer, struct scoutfs_net_header *nh),
         TP_ARGS(sb, name, peer, nh)
 );
 
@@ -1416,8 +1418,8 @@ DECLARE_EVENT_CLASS(scoutfs_net_conn_class,
 		__field(void *, sock)
 		__field(__u64, c_rid)
 		__field(__u64, greeting_id)
-		si4_trace_define(sockname)
-		si4_trace_define(peername)
+		__field_struct(struct sockaddr_storage, sockname)
+		__field_struct(struct sockaddr_storage, peername)
 		__field(unsigned char, e_accepted_head)
 		__field(void *, listening_conn)
 		__field(unsigned char, e_accepted_list)
@@ -1435,8 +1437,8 @@ DECLARE_EVENT_CLASS(scoutfs_net_conn_class,
 		__entry->sock = conn->sock;
 		__entry->c_rid = conn->rid;
 		__entry->greeting_id = conn->greeting_id;
-		si4_trace_assign(sockname, &conn->sockname);
-		si4_trace_assign(peername, &conn->peername);
+		memcpy(&__entry->sockname, &conn->sockname, sizeof(struct sockaddr_storage));
+		memcpy(&__entry->peername, &conn->peername, sizeof(struct sockaddr_storage));
 		__entry->e_accepted_head = !!list_empty(&conn->accepted_head);
 		__entry->listening_conn = conn->listening_conn;
 		__entry->e_accepted_list = !!list_empty(&conn->accepted_list);
@@ -1446,7 +1448,7 @@ DECLARE_EVENT_CLASS(scoutfs_net_conn_class,
 		__entry->e_resend_queue = !!list_empty(&conn->resend_queue);
 		__entry->recv_seq = atomic64_read(&conn->recv_seq);
         ),
-        TP_printk(SCSBF" flags %s rc_dl %lu cto %lu sk %p rid %llu grid %llu sn "SI4_FMT" pn "SI4_FMT" eah %u lc %p eal %u nss %llu nsi %llu esq %u erq %u rs %llu",
+        TP_printk(SCSBF" flags %s rc_dl %lu cto %lu sk %p rid %llu grid %llu sn "SIN_FMT" pn "SIN_FMT" eah %u lc %p eal %u nss %llu nsi %llu esq %u erq %u rs %llu",
 		  SCSB_TRACE_ARGS,
 		  print_conn_flags(__entry->flags),
 		  __entry->reconn_deadline,
@@ -1454,8 +1456,8 @@ DECLARE_EVENT_CLASS(scoutfs_net_conn_class,
 		  __entry->sock,
 		  __entry->c_rid,
 		  __entry->greeting_id,
-		  si4_trace_args(sockname),
-		  si4_trace_args(peername),
+		  &__entry->sockname,
+		  &__entry->peername,
 		  __entry->e_accepted_head,
 		  __entry->listening_conn,
 		  __entry->e_accepted_list,
