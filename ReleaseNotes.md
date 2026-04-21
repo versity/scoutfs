@@ -2,6 +2,23 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.30
+\
+*Apr 21, 2026*
+
+Fix a problem reading the accumulated totals of contributing .totl.
+xattrs when log merging is in progress.  The problem would have readers
+of the totals calculate the sums incorrectly.
+
+Fix a problem updating quota rules.  There was a race where updates
+could be corrupted if they happened while a transaction was being
+written.
+
+Fix a problem deleting files with .indx. xattrs.  The internal indexing
+metadata wouldn't be properly deleted so the files would still claim to
+be present and visible in the index, though the file no longer existed.
+
+---
 v1.29
 \
 *Mar 25, 2026*
