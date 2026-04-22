@@ -1750,8 +1750,10 @@ void scoutfs_net_client_greeting(struct super_block *sb,
 				 bool new_server)
 {
 	struct net_info *ninf = SCOUTFS_SB(sb)->net_info;
+	scoutfs_net_response_t resp_func;
 	struct message_send *msend;
 	struct message_send *tmp;
+	void *resp_data;
 
 	/* only called on client connections :/ */
 	BUG_ON(conn->listening_conn);
@@ -1760,9 +1762,31 @@ void scoutfs_net_client_greeting(struct super_block *sb,
 
 	if (new_server) {
 		atomic64_set(&conn->recv_seq, 0);
+
+		/* drop stale responses; old server's state is gone */
 		list_for_each_entry_safe(msend, tmp, &conn->resend_queue, head){
 			if (nh_is_response(&msend->nh))
 				free_msend(ninf, conn, msend);
+		}
+
+		/*
+		 * Complete pending requests with -ECONNRESET.  Any state
+		 * they depended on in the old server was reclaimed at
+		 * fence time, so resending is wrong.  Callers re-issue on
+		 * the new server if they still care.
+		 */
+		while ((msend = list_first_entry_or_null(&conn->resend_queue,
+							 struct message_send, head))) {
+			if (nh_is_response(&msend->nh))
+				break;
+			resp_func = msend->resp_func;
+			resp_data = msend->resp_data;
+			free_msend(ninf, conn, msend);
+			spin_unlock(&conn->lock);
+
+			call_resp_func(sb, conn, resp_func, resp_data, NULL, 0, -ECONNRESET);
+
+			spin_lock(&conn->lock);
 		}
 	}
 
@@ -1990,8 +2014,9 @@ static int sync_response(struct super_block *sb,
  * buffer.  Errors returned can come from the remote request processing
  * or local failure to send.
  *
- * The wait for the response is interruptible and can return
- * -ERESTARTSYS if it is interrupted.
+ * The wait for the response uses a 60 second timeout loop that
+ * checks for unmount, returning -ESHUTDOWN if the mount is
+ * being torn down.
  *
  * -EOVERFLOW is returned if the response message's data_length doesn't
  * match the caller's resp_len buffer.
@@ -2002,6 +2027,7 @@ int scoutfs_net_sync_request(struct super_block *sb,
 			     void *resp, size_t resp_len)
 {
 	struct sync_request_completion sreq;
+	struct message_send *msend;
 	int ret;
 	u64 id;
 
@@ -2014,10 +2040,121 @@ int scoutfs_net_sync_request(struct super_block *sb,
 					 sync_response, &sreq, &id);
 
 	if (ret == 0) {
-		wait_for_completion(&sreq.comp);
-		ret = sreq.error;
+		while (!wait_for_completion_timeout(&sreq.comp, 60 * HZ)) {
+			if (scoutfs_unmounting(sb)) {
+				ret = -ESHUTDOWN;
+				break;
+			}
+		}
+		if (ret == -ESHUTDOWN) {
+			spin_lock(&conn->lock);
+			msend = find_request(conn, cmd, id);
+			if (msend)
+				queue_dead_free(conn, msend);
+			spin_unlock(&conn->lock);
+		} else {
+			ret = sreq.error;
+		}
 	}
 
+	return ret;
+}
+
+/*
+ * A bounded-wait variant of sync_request for idempotent background
+ * workers that must reschedule instead of blocking indefinitely on an
+ * unresponsive server.  Returns -ETIMEDOUT if the response doesn't
+ * arrive within timeout_jiffies; the caller then treats it like any
+ * other RPC failure and retries on its normal reschedule cadence.
+ *
+ * Response state lives in a refcounted heap allocation rather than on
+ * the caller's stack so a late callback can't scribble into freed
+ * memory if we give up waiting.  On timeout we race with an arriving
+ * response for the msend: if find_request wins we queue_dead_free and
+ * the callback won't fire (we drop its ref); otherwise the callback is
+ * already running so we wait for it to complete before returning.
+ */
+struct bounded_sync {
+	struct completion comp;
+	void *resp;
+	unsigned int resp_len;
+	int error;
+	atomic_t refs;
+};
+
+static void bounded_sync_put(struct bounded_sync *bs)
+{
+	if (atomic_dec_and_test(&bs->refs))
+		kfree(bs);
+}
+
+static int bounded_sync_response(struct super_block *sb,
+				 struct scoutfs_net_connection *conn,
+				 void *resp, unsigned int resp_len,
+				 int error, void *data)
+{
+	struct bounded_sync *bs = data;
+
+	if (error == 0 && resp_len != bs->resp_len)
+		error = -EMSGSIZE;
+
+	if (error)
+		bs->error = error;
+	else if (resp_len)
+		memcpy(bs->resp, resp, resp_len);
+
+	complete(&bs->comp);
+	bounded_sync_put(bs);
+	return 0;
+}
+
+int scoutfs_net_sync_request_timeout(struct super_block *sb,
+				     struct scoutfs_net_connection *conn,
+				     u8 cmd, void *arg, unsigned arg_len,
+				     void *resp, size_t resp_len,
+				     unsigned long timeout_jiffies)
+{
+	struct message_send *msend;
+	struct bounded_sync *bs;
+	int ret;
+	u64 id;
+
+	bs = kzalloc(sizeof(*bs), GFP_NOFS);
+	if (!bs)
+		return -ENOMEM;
+	init_completion(&bs->comp);
+	bs->resp = resp;
+	bs->resp_len = resp_len;
+	bs->error = 0;
+	atomic_set(&bs->refs, 2);
+
+	ret = scoutfs_net_submit_request(sb, conn, cmd, arg, arg_len,
+					 bounded_sync_response, bs, &id);
+	if (ret) {
+		bounded_sync_put(bs);
+		bounded_sync_put(bs);
+		return ret;
+	}
+
+	if (wait_for_completion_timeout(&bs->comp, timeout_jiffies) == 0) {
+		scoutfs_inc_counter(sb, client_rpc_timeout);
+
+		spin_lock(&conn->lock);
+		msend = find_request(conn, cmd, id);
+		if (msend)
+			queue_dead_free(conn, msend);
+		spin_unlock(&conn->lock);
+
+		if (msend)
+			bounded_sync_put(bs);
+		else
+			wait_for_completion(&bs->comp);
+		ret = -ETIMEDOUT;
+	} else {
+		ret = bs->error;
+	}
+
+	bounded_sync_put(bs);
 	return ret;
 }
 

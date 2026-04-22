@@ -195,7 +195,8 @@ static int retry_forever(struct super_block *sb, int (*func)(struct super_block 
 				retrying = true;
 			}
 
-			if (scoutfs_forcing_unmount(sb)) {
+			if (scoutfs_forcing_unmount(sb) ||
+			    scoutfs_unmounting(sb)) {
 				ret = -ENOLINK;
 				break;
 			}

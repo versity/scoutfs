@@ -71,6 +71,8 @@
  * relative to that lock state we resend.
  */
 
+#define CLIENT_LOCK_WAIT_TIMEOUT (60 * HZ)
+
 /*
  * allocated per-super, freed on unmount.
  */
@@ -158,6 +160,33 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 }
 
 /*
+ * Remove all coverage items from the lock to tell users that their
+ * cache is stale.  This is lock-internal bookkeeping that is safe to
+ * call during shutdown and unmount.  The unconditional unlock/relock
+ * of cov_list_lock avoids sparse warnings from unbalanced locking in
+ * the trylock failure path.
+ */
+static void lock_clear_coverage(struct super_block *sb,
+				struct scoutfs_lock *lock)
+{
+	struct scoutfs_lock_coverage *cov;
+
+	spin_lock(&lock->cov_list_lock);
+	while ((cov = list_first_entry_or_null(&lock->cov_list,
+					       struct scoutfs_lock_coverage, head))) {
+		if (spin_trylock(&cov->cov_lock)) {
+			list_del_init(&cov->head);
+			cov->lock = NULL;
+			spin_unlock(&cov->cov_lock);
+			scoutfs_inc_counter(sb, lock_invalidate_coverage);
+		}
+		spin_unlock(&lock->cov_list_lock);
+		spin_lock(&lock->cov_list_lock);
+	}
+	spin_unlock(&lock->cov_list_lock);
+}
+
+/*
  * Invalidate caches associated with this lock.  Either we're
  * invalidating a write to a read or we're invalidating to null.  We
  * always have to write out dirty items if there are any.  We can only
@@ -166,7 +195,6 @@ static void invalidate_inode(struct super_block *sb, u64 ino)
 static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 			   enum scoutfs_lock_mode prev, enum scoutfs_lock_mode mode)
 {
-	struct scoutfs_lock_coverage *cov;
 	u64 ino, last;
 	int ret = 0;
 
@@ -190,24 +218,7 @@ static int lock_invalidate(struct super_block *sb, struct scoutfs_lock *lock,
 
 	/* have to invalidate if we're not in the only usable case */
 	if (!(prev == SCOUTFS_LOCK_WRITE && mode == SCOUTFS_LOCK_READ)) {
-		/*
-		 * Remove cov items to tell users that their cache is
-		 * stale.  The unlock pattern comes from avoiding bad
-		 * sparse warnings when taking else in a failed trylock.
-		 */
-		spin_lock(&lock->cov_list_lock);
-		while ((cov = list_first_entry_or_null(&lock->cov_list,
-						       struct scoutfs_lock_coverage, head))) {
-			if (spin_trylock(&cov->cov_lock)) {
-				list_del_init(&cov->head);
-				cov->lock = NULL;
-				spin_unlock(&cov->cov_lock);
-				scoutfs_inc_counter(sb, lock_invalidate_coverage);
-			}
-			spin_unlock(&lock->cov_list_lock);
-			spin_lock(&lock->cov_list_lock);
-		}
-		spin_unlock(&lock->cov_list_lock);
+		lock_clear_coverage(sb, lock);
 
 		/* invalidate inodes after removing coverage so drop/evict aren't covered */
 		if (lock->start.sk_zone == SCOUTFS_FS_ZONE) {
@@ -643,6 +654,33 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 	return 0;
 }
 
+/*
+ * The lock request we sent to the server was dropped before we could
+ * receive a grant response.  This happens when the client reconnects to
+ * a new server and completes pending requests with an error, since the
+ * old server's pending-request state was reclaimed at fence time.
+ *
+ * Clear request_pending so that a waiter in lock_key_range re-evaluates
+ * and sends a fresh request to the new server, and symmetrically put
+ * the lock so shrink's lru state matches the grant_response path.
+ */
+void scoutfs_lock_request_failed(struct super_block *sb,
+				 struct scoutfs_lock *lock)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+
+	scoutfs_inc_counter(sb, lock_request_failed);
+
+	spin_lock(&linfo->lock);
+
+	BUG_ON(!lock->request_pending);
+	lock->request_pending = 0;
+	wake_up(&lock->waitq);
+	put_lock(linfo, lock);
+
+	spin_unlock(&linfo->lock);
+}
+
 struct inv_req {
 	struct list_head head;
 	struct scoutfs_lock *lock;
@@ -714,10 +752,13 @@ static void lock_invalidate_worker(struct work_struct *work)
 		ireq = list_first_entry(&lock->inv_list, struct inv_req, head);
 		nl = &ireq->nl;
 
-		/* only lock protocol, inv can't call subsystems after shutdown */
-		if (!linfo->shutdown) {
+		/* only lock protocol, inv can't call subsystems after shutdown or unmount */
+		if (!linfo->shutdown && !scoutfs_unmounting(sb)) {
 			ret = lock_invalidate(sb, lock, nl->old_mode, nl->new_mode);
 			BUG_ON(ret < 0 && ret != -ENOLINK);
+		} else {
+			lock_clear_coverage(sb, lock);
+			scoutfs_item_invalidate(sb, &lock->start, &lock->end);
 		}
 
 		/* respond with the key and modes from the request, server might have died */
@@ -922,7 +963,7 @@ static bool try_shrink_lock(struct super_block *sb, struct lock_info *linfo, boo
 	spin_unlock(&linfo->lock);
 
 	if (lock) {
-		ret = scoutfs_client_lock_request(sb, &nl);
+		ret = scoutfs_client_lock_request(sb, &nl, lock);
 		if (ret < 0) {
 			scoutfs_inc_counter(sb, lock_shrink_request_failed);
 
@@ -952,6 +993,9 @@ static bool lock_wait_cond(struct super_block *sb, struct scoutfs_lock *lock,
 	wake = linfo->shutdown || lock_modes_match(lock->mode, mode) ||
 	       !lock->request_pending;
 	spin_unlock(&linfo->lock);
+
+	if (!wake)
+		wake = scoutfs_unmounting(sb);
 
 	if (!wake)
 		scoutfs_inc_counter(sb, lock_wait);
@@ -997,8 +1041,10 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 		return -EINVAL;
 
 	/* maybe catch _setup() and _shutdown order mistakes */
-	if (WARN_ON_ONCE(!linfo || linfo->shutdown))
+	if (!linfo || linfo->shutdown) {
+		WARN_ON_ONCE(!scoutfs_unmounting(sb));
 		return -ENOLCK;
+	}
 
 	/* have to lock before entering transactions */
 	if (WARN_ON_ONCE(scoutfs_trans_held()))
@@ -1020,6 +1066,11 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 
 	for (;;) {
 		if (WARN_ON_ONCE(linfo->shutdown)) {
+			ret = -ESHUTDOWN;
+			break;
+		}
+
+		if (scoutfs_unmounting(sb)) {
 			ret = -ESHUTDOWN;
 			break;
 		}
@@ -1053,7 +1104,7 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 			nl.old_mode = lock->mode;
 			nl.new_mode = mode;
 
-			ret = scoutfs_client_lock_request(sb, &nl);
+			ret = scoutfs_client_lock_request(sb, &nl, lock);
 			if (ret) {
 				spin_lock(&linfo->lock);
 				lock->request_pending = 0;
@@ -1067,8 +1118,9 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 		if (flags & SCOUTFS_LKF_INTERRUPTIBLE) {
 			ret = wait_event_interruptible(lock->waitq,
 						       lock_wait_cond(sb, lock, mode));
-		} else {
-			wait_event(lock->waitq, lock_wait_cond(sb, lock, mode));
+		} else if (!wait_event_timeout(lock->waitq,
+					       lock_wait_cond(sb, lock, mode),
+					       CLIENT_LOCK_WAIT_TIMEOUT)) {
 			ret = 0;
 		}
 
@@ -1650,6 +1702,7 @@ void scoutfs_lock_destroy(struct super_block *sb)
 			list_del_init(&lock->inv_head);
 			lock->invalidate_pending = 0;
 		}
+		lock_clear_coverage(sb, lock);
 		lock_remove(linfo, lock);
 		lock_free(linfo, lock);
 	}

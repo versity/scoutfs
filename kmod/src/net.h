@@ -150,6 +150,11 @@ int scoutfs_net_sync_request(struct super_block *sb,
 			     struct scoutfs_net_connection *conn,
 			     u8 cmd, void *arg, unsigned arg_len,
 			     void *resp, size_t resp_len);
+int scoutfs_net_sync_request_timeout(struct super_block *sb,
+				     struct scoutfs_net_connection *conn,
+				     u8 cmd, void *arg, unsigned arg_len,
+				     void *resp, size_t resp_len,
+				     unsigned long timeout_jiffies);
 int scoutfs_net_response(struct super_block *sb,
 			 struct scoutfs_net_connection *conn,
 			 u8 cmd, u64 id, int error, void *resp, u16 resp_len);
