@@ -467,9 +467,6 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 	sector_t sector;
 	int ret = 0;
 
-	if (scoutfs_forcing_unmount(sb))
-		return -ENOLINK;
-
 	sector = bp->bl.blkno << (SCOUTFS_BLOCK_LG_SHIFT - 9);
 
 	WARN_ON_ONCE(bp->bl.blkno == U64_MAX);
@@ -479,6 +476,17 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 	atomic_inc(&bp->io_count);
 	set_bit(BLOCK_BIT_IO_BUSY, &bp->bits);
 	block_get(bp);
+
+	/*
+	 * A second thread may already be waiting on this block's completion
+	 * after this thread won the race to submit the block.  We exit through
+	 * the block_end_io error path which sets BLOCK_BIT_ERROR and assures
+	 * that other callers in the waitq get woken up.
+	 */
+	if (scoutfs_forcing_unmount(sb)) {
+		ret = -ENOLINK;
+		goto end_io;
+	}
 
 	blk_start_plug(&plug);
 
@@ -517,6 +525,7 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 
 	blk_finish_plug(&plug);
 
+end_io:
 	/* let racing end_io know we're done */
 	block_end_io(sb, opf, bp, ret);
 
