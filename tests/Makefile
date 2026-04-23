@@ -15,7 +15,9 @@ BIN := src/createmany			\
 	src/o_tmpfile_umask		\
 	src/o_tmpfile_linkat		\
 	src/mmap_stress			\
-	src/mmap_validate
+	src/mmap_validate		\
+	src/parallel_restore		\
+	src/restore_copy
 
 DEPS := $(wildcard src/*.d)
 
@@ -27,8 +29,13 @@ endif
 
 src/mmap_stress: LIBS+=-lpthread
 
+src/parallel_restore_cflags := ../utils/src/scoutfs_parallel_restore.a -lm
+src/parallel_restore: ../utils/src/scoutfs_parallel_restore.a
+src/restore_copy_cflags := ../utils/src/scoutfs_parallel_restore.a -lm
+src/restore_copy : ../utils/src/scoutfs_parallel_restore.a
+
 $(BIN): %: %.c Makefile
-	gcc $(CFLAGS) -MD -MP -MF $*.d $< -o $@ $(LIBS)
+	gcc $(CFLAGS) -MD -MP -MF $*.d $< -o $@ $(LIBS) $($(@)_cflags)
 
 .PHONY: clean
 clean:
