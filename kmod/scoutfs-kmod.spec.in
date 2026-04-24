@@ -4,9 +4,15 @@
 %define kmod_git_describe @@GITDESCRIBE@@
 %define pkg_date %(date +%%Y%%m%%d)
 
+# Package type: set --define 'per_kver 1' to tie the package to a specific kernel
+# version (per-kver mode); leave unset for the default per-minor-release behavior.
+
 # take kernel version or default to uname -r
 %{!?kversion: %global kversion %(uname -r)}
 %global kernel_version %{kversion}
+%if 0%{?per_kver}
+%define sanitized_kernel_version %(echo %{kernel_version} | tr - _ |sed -e 's/.x86_64//')
+%endif
 
 %if 0%{?el7}
 %global kernel_source() /usr/src/kernels/%{kernel_version}.$(arch)
@@ -17,16 +23,34 @@
 %{!?_release: %global _release 0.%{pkg_date}git%{kmod_git_hash}}
 
 %if 0%{?el7}
+%if 0%{?per_kver}
+Name:           %{kmod_name}-%{sanitized_kernel_version}
+Provides:       %{kmod_name} = %{kmod_version}
+%else
 Name:           %{kmod_name}
+%endif
+%else
+%if 0%{?per_kver}
+Name:           kmod-%{kmod_name}-%{sanitized_kernel_version}
+Provides:       kmod-%{kmod_name} = %{kmod_version}
 %else
 Name:           kmod-%{kmod_name}
 %endif
+%endif
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
+%if 0%{?per_kver}
+Release:        %{_release}
+%else
 Release:        %{_release}%{?dist}
+%endif
 License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
+%if 0%{?per_kver}
+Requires:       kernel-core-uname-r = %{kernel_version}
+Requires:       kernel-modules-uname-r = %{kernel_version}
+%endif
 
 %if 0%{?el7}
 BuildRequires:  %{kernel_module_package_buildreqs}
