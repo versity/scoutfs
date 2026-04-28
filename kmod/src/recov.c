@@ -103,7 +103,7 @@ int scoutfs_recov_prepare(struct super_block *sb, u64 rid, int which)
 	if (!alloc)
 		return -ENOMEM;
 
-	spin_lock(&recinf->lock);
+	spin_lock_bh(&recinf->lock);
 
 	pend = lookup_pending(recinf, rid, SCOUTFS_RECOV_ALL);
 	if (pend) {
@@ -116,7 +116,7 @@ int scoutfs_recov_prepare(struct super_block *sb, u64 rid, int which)
 		list_sort(NULL, &recinf->pending, cmp_pending_rid);
 	}
 
-	spin_unlock(&recinf->lock);
+	spin_unlock_bh(&recinf->lock);
 
 	kfree(alloc);
 	return 0;
@@ -153,7 +153,7 @@ int scoutfs_recov_begin(struct super_block *sb, void (*timeout_fn)(struct super_
 	DECLARE_RECOV_INFO(sb, recinf);
 	int ret;
 
-	spin_lock(&recinf->lock);
+	spin_lock_bh(&recinf->lock);
 
 	recinf->timeout_fn = timeout_fn;
 	recinf->timer.expires = jiffies + msecs_to_jiffies(timeout_ms);
@@ -161,7 +161,7 @@ int scoutfs_recov_begin(struct super_block *sb, void (*timeout_fn)(struct super_
 
 	ret = recov_finished(recinf);
 
-	spin_unlock(&recinf->lock);
+	spin_unlock_bh(&recinf->lock);
 
 	if (ret > 0)
 		del_timer_sync(&recinf->timer);
@@ -183,7 +183,7 @@ int scoutfs_recov_finish(struct super_block *sb, u64 rid, int which)
 	struct recov_pending *pend;
 	int ret = 0;
 
-	spin_lock(&recinf->lock);
+	spin_lock_bh(&recinf->lock);
 
 	pend = lookup_pending(recinf, rid, which);
 	if (pend) {
@@ -196,7 +196,7 @@ int scoutfs_recov_finish(struct super_block *sb, u64 rid, int which)
 		}
 	}
 
-	spin_unlock(&recinf->lock);
+	spin_unlock_bh(&recinf->lock);
 
 	if (ret > 0)
 		del_timer_sync(&recinf->timer);
@@ -215,9 +215,9 @@ bool scoutfs_recov_is_pending(struct super_block *sb, u64 rid, int which)
 	DECLARE_RECOV_INFO(sb, recinf);
 	bool is_pending;
 
-	spin_lock(&recinf->lock);
+	spin_lock_bh(&recinf->lock);
 	is_pending = lookup_pending(recinf, rid, which) != NULL;
-	spin_unlock(&recinf->lock);
+	spin_unlock_bh(&recinf->lock);
 
 	return is_pending;
 }
@@ -236,10 +236,10 @@ u64 scoutfs_recov_next_pending(struct super_block *sb, u64 rid, int which)
 	DECLARE_RECOV_INFO(sb, recinf);
 	struct recov_pending *pend;
 
-	spin_lock(&recinf->lock);
+	spin_lock_bh(&recinf->lock);
 	pend = next_pending(recinf, rid, which);
 	rid = pend ? pend->rid : 0;
-	spin_unlock(&recinf->lock);
+	spin_unlock_bh(&recinf->lock);
 
 	return rid;
 }
@@ -257,10 +257,10 @@ void scoutfs_recov_shutdown(struct super_block *sb)
 
 	del_timer_sync(&recinf->timer);
 
-	spin_lock(&recinf->lock);
+	spin_lock_bh(&recinf->lock);
 	list_splice_init(&recinf->pending, &list);
 	recinf->timeout_fn = NULL;
-	spin_unlock(&recinf->lock);
+	spin_unlock_bh(&recinf->lock);
 
 	list_for_each_entry_safe(pend, tmp, &list, head) {
 		list_del(&pend->head);
