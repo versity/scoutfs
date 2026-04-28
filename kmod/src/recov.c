@@ -21,6 +21,7 @@
 #include "super.h"
 #include "recov.h"
 #include "cmp.h"
+#include "scoutfs_trace.h"
 
 /*
  * There are a few server messages which can't be processed until they
@@ -119,6 +120,9 @@ int scoutfs_recov_prepare(struct super_block *sb, u64 rid, int which)
 	spin_unlock_bh(&recinf->lock);
 
 	kfree(alloc);
+
+	trace_scoutfs_recov_prepare(sb, rid, which);
+
 	return 0;
 }
 
@@ -135,6 +139,15 @@ static int recov_finished(struct recov_info *recinf)
 static void timer_callback(struct timer_list *timer)
 {
 	struct recov_info *recinf = timer_container_of(recinf, timer, timer);
+	struct recov_pending *pend;
+	int nr = 0;
+
+	spin_lock(&recinf->lock);
+	list_for_each_entry(pend, &recinf->pending, head)
+		nr++;
+	spin_unlock(&recinf->lock);
+
+	trace_scoutfs_recov_timeout_fire(recinf->sb, nr);
 
 	recinf->timeout_fn(recinf->sb);
 }
@@ -181,6 +194,8 @@ int scoutfs_recov_finish(struct super_block *sb, u64 rid, int which)
 {
 	DECLARE_RECOV_INFO(sb, recinf);
 	struct recov_pending *pend;
+	struct recov_pending *iter;
+	int remaining = 0;
 	int ret = 0;
 
 	spin_lock_bh(&recinf->lock);
@@ -196,7 +211,12 @@ int scoutfs_recov_finish(struct super_block *sb, u64 rid, int which)
 		}
 	}
 
+	list_for_each_entry(iter, &recinf->pending, head)
+		remaining++;
+
 	spin_unlock_bh(&recinf->lock);
+
+	trace_scoutfs_recov_finish(sb, rid, which, remaining);
 
 	if (ret > 0)
 		del_timer_sync(&recinf->timer);
