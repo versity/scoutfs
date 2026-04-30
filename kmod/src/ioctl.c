@@ -1739,6 +1739,43 @@ out:
 	return ret;
 }
 
+static long scoutfs_ioc_inject_totl_delta(struct file *file, unsigned long arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct scoutfs_ioctl_inject_totl_delta __user *uitd = (void __user *)arg;
+	struct scoutfs_ioctl_inject_totl_delta itd;
+	struct scoutfs_xattr_totl_val tval;
+	struct scoutfs_lock *lock = NULL;
+	struct scoutfs_key key;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (copy_from_user(&itd, uitd, sizeof(itd)))
+		return -EFAULT;
+
+	scoutfs_xattr_init_totl_key(&key, itd.name);
+	tval.total = cpu_to_le64((u64)itd.total);
+	tval.count = cpu_to_le64((u64)itd.count);
+
+	ret = scoutfs_lock_xattr_totl(sb, SCOUTFS_LOCK_WRITE_ONLY, 0, &lock);
+	if (ret < 0)
+		goto out;
+
+	ret = scoutfs_hold_trans(sb, false);
+	if (ret < 0)
+		goto unlock;
+
+	ret = scoutfs_item_delta(sb, &key, &tval, sizeof(tval), lock);
+
+	scoutfs_release_trans(sb);
+unlock:
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE_ONLY);
+out:
+	return ret;
+}
+
 long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1790,6 +1827,8 @@ long scoutfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return scoutfs_ioc_read_xattr_index(file, arg);
 	case SCOUTFS_IOC_PUNCH_OFFLINE:
 		return scoutfs_ioc_punch_offline(file, arg);
+	case SCOUTFS_IOC_INJECT_TOTL_DELTA:
+		return scoutfs_ioc_inject_totl_delta(file, arg);
 	}
 
 	return -ENOTTY;
