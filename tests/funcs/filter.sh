@@ -3,7 +3,8 @@
 t_filter_fs()
 {
 	sed -e 's@mnt/test\.[0-9]*@mnt/test@g' \
-	    -e 's@Device: [a-fA-F0-9]*h/[0-9]*d@Device: 0h/0d@g'
+	    -e 's@Device: [a-fA-F0-9]*h/[0-9]*d@Device: 0h/0d@g' \
+	    -e 's@Device: [0-9]*,[0-9]*@Device: 0h/0d@g'
 }
 
 #
@@ -224,7 +225,7 @@ t_filter_dmesg()
 	# lockdep or kasan warnings can cause this
 	re="$re|Disabling lock debugging due to kernel taint"
 
-	egrep -v "($re)" | \
+	grep -v -E "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob | \
 		ignore_harmless_xfs_lockdep_warning
 }
