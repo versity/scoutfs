@@ -30,6 +30,7 @@ basic-xattr-indx.sh
 quota.sh
 totl-merge-read.sh
 quota-invalidate-race.sh
+totl-delta-inject.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
 lock-shrink-read-race.sh
