@@ -876,4 +876,17 @@ struct scoutfs_ioctl_punch_offline {
 #define SCOUTFS_IOC_PUNCH_OFFLINE \
 	_IOW(SCOUTFS_IOCTL_MAGIC, 24, struct scoutfs_ioctl_punch_offline)
 
+/*
+ * Inject a signed (total, count) delta at the totl key @name (a, b, c
+ * match the trailing dotted u64s of a totl xattr name).
+ */
+struct scoutfs_ioctl_inject_totl_delta {
+	__u64	name[SCOUTFS_IOCTL_XATTR_TOTAL_NAME_NR];
+	__s64	total;
+	__s64	count;
+};
+
+#define SCOUTFS_IOC_INJECT_TOTL_DELTA \
+	_IOW(SCOUTFS_IOCTL_MAGIC, 25, struct scoutfs_ioctl_inject_totl_delta)
+
 #endif
