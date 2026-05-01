@@ -1,0 +1,6 @@
+== setup
+== concurrent quota mod and check across mounts
+== verify quota rules are consistent after race
+== verify file creation still works under quota
+file visible on mount 1
+== cleanup
