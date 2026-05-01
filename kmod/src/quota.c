@@ -1114,6 +1114,7 @@ int scoutfs_quota_mod_rule(struct super_block *sb, bool is_add,
 			goto release;
 	}
 
+	wait_event(qtinf->waitq, !ruleset_is_busy(qtinf));
 	scoutfs_quota_invalidate(sb);
 	ret = 0;
 
@@ -1142,12 +1143,17 @@ void scoutfs_quota_get_lock_range(struct scoutfs_key *start, struct scoutfs_key 
 }
 
 /*
- * This is called during cluster lock invalidation to indicate that the
- * ruleset is no longer protected by cluster locking and might have been
- * modified.  We mark the ruleset invalid and free it once all readers
- * drain.  The next check will acquire the cluster lock and read the
- * rules.  Because this is called during invalidation this is serialized
- * with write holders of cluster locks so we can never see -EBUSY here.
+ * Mark the cached ruleset invalid and free the previous one once readers
+ * drain.  Called from cluster lock invalidation and from quota rule
+ * modification.
+ *
+ * Cluster lock invalidation runs only after the lock layer has drained
+ * local READ users.  Since EBUSY is set only while a reader holds READ,
+ * the reader has already published by the time we run.
+ *
+ * Quota rule modification waits on the waitq for any in-flight reader
+ * to publish before calling here, so the next check rebuilds against
+ * the newly written rules rather than the reader's stale result.
  */
 void scoutfs_quota_invalidate(struct super_block *sb)
 {
@@ -1161,12 +1167,9 @@ void scoutfs_quota_invalidate(struct super_block *sb)
 
 	spin_lock(&qtinf->lock);
 	rs = rcu_dereference_protected(qtinf->ruleset, lockdep_is_held(&qtinf->lock));
-	if (rs != ERR_PTR(-EINVAL))
+	if (rs == ERR_PTR(-ENOENT) || !IS_ERR(rs))
 		rcu_assign_pointer(qtinf->ruleset, ERR_PTR(-EINVAL));
 	spin_unlock(&qtinf->lock);
-
-	/* cluster locking should have prevented this */
-	BUG_ON(rs == ERR_PTR(-EBUSY));
 
 	if (!IS_ERR(rs))
 		call_rcu(&rs->rcu, free_ruleset_rcu);
