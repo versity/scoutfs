@@ -29,6 +29,7 @@ totl-xattr-tag.sh
 basic-xattr-indx.sh
 quota.sh
 totl-merge-read.sh
+quota-invalidate-race.sh
 lock-refleak.sh
 lock-shrink-consistency.sh
 lock-shrink-read-race.sh
