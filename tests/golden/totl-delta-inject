@@ -1,0 +1,10 @@
+== setup three files contributing to totl 8888.0.0
+== merge baseline into fs_root
+8888.0.0 = 42, 3
+== inject (+128, +2) unbalances totl 8888.0.0
+8888.0.0 = 170, 5
+== unlink f3 (value 32) produces a -32/-1 delta
+8888.0.0 = 138, 4
+== inject (-128, -2) restores accounting for the remaining files
+8888.0.0 = 10, 2
+== cleanup
