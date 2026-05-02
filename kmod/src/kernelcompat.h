@@ -207,32 +207,6 @@ unsigned long kc_list_lru_shrink_walk(struct list_lru *lru, struct shrink_contro
 #define kc_list_lru_shrink_walk list_lru_shrink_walk
 #endif
 
-#ifndef KC_STACK_TRACE_SAVE
-#include <linux/stacktrace.h>
-static inline unsigned int stack_trace_save(unsigned long *store, unsigned int size,
-					    unsigned int skipnr)
-{
-        struct stack_trace trace = {
-                .entries        = store,
-                .max_entries    = size,
-                .skip           = skipnr,
-        };
-
-        save_stack_trace(&trace);
-        return trace.nr_entries;
-}
-
-static inline void stack_trace_print(unsigned long *entries, unsigned int nr_entries, int spaces)
-{
-        struct stack_trace trace = {
-                .entries        = entries,
-                .nr_entries     = nr_entries,
-        };
-
-	print_stack_trace(&trace, spaces);
-}
-#endif
-
 #ifndef KC_TIMER_CONTAINER_OF
 #define timer_container_of(var, callback_timer, timer_fieldname) \
 	from_timer(var, callback_timer, timer_fieldname)
