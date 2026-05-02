@@ -1618,6 +1618,9 @@ static int scoutfs_rename_common(KC_VFS_NS_DEF
 	int ret;
 	int err;
 
+	if (flags & ~RENAME_NOREPLACE)
+		return -EINVAL;
+
 	trace_scoutfs_rename(sb, old_dir, old_dentry, new_dir, new_dentry);
 
 	old_hash = dirent_name_hash(old_dentry->d_name.name,
@@ -1864,18 +1867,6 @@ out_unlock:
 }
 
 
-static int scoutfs_rename2(KC_VFS_NS_DEF
-			  struct inode *old_dir,
-			  struct dentry *old_dentry, struct inode *new_dir,
-			  struct dentry *new_dentry, unsigned int flags)
-{
-	if (flags & ~RENAME_NOREPLACE)
-		return -EINVAL;
-
-	return scoutfs_rename_common(KC_VFS_NS
-				     old_dir, old_dentry, new_dir, new_dentry, flags);
-}
-
 
 static int scoutfs_tmpfile(KC_VFS_NS_DEF
 			   struct inode *dir,
@@ -1994,5 +1985,5 @@ const struct inode_operations scoutfs_dir_iops = {
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
 	.tmpfile	= scoutfs_tmpfile,
-	.rename		= scoutfs_rename2,
+	.rename		= scoutfs_rename_common,
 };
