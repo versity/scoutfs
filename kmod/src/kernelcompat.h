@@ -184,16 +184,6 @@ static inline int kc_tcp_sock_set_nodelay(struct socket *sock)
 }
 #endif
 
-#ifndef KC_MM_VM_FAULT_T
-typedef unsigned int vm_fault_t;
-static inline vm_fault_t vmf_error(int err)
-{
-	if (err == -ENOMEM)
-		return VM_FAULT_OOM;
-	return VM_FAULT_SIGBUS;
-}
-#endif
-
 #include <linux/list_lru.h>
 
 #ifndef KC_LIST_LRU_ADD_OBJ

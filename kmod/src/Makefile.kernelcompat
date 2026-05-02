@@ -179,15 +179,6 @@ ccflags-y += -DKC_BDEV_FILE_OPEN_BY_PATH
 endif
 
 #
-# v5.0-6476-g3d3539018d2c
-#
-# page fault handlers return a bitmask vm_fault_t instead
-# Note: el8's header has a slightly modified prefix here
-ifneq (,$(shell grep 'typedef.*__bitwise unsigned.*int vm_fault_t' include/linux/mm_types.h))
-ccflags-y += -DKC_MM_VM_FAULT_T
-endif
-
-#
 # v6.7-rc4-153-g0a97c01cd20b
 #
 # list_lru_{add,del} -> list_lru_{add,del}_obj
