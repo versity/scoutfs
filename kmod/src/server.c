@@ -1077,8 +1077,7 @@ static int next_log_merge_range(struct super_block *sb, struct scoutfs_btree_roo
 	struct scoutfs_key key;
 	int ret;
 
-	key = *start;
-	key.sk_zone = SCOUTFS_LOG_MERGE_RANGE_ZONE;
+	init_log_merge_key(&key, SCOUTFS_LOG_MERGE_RANGE_ZONE, 0, 0);
 	scoutfs_key_set_ones(&rng->start);
 
 	do {
