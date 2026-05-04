@@ -218,6 +218,7 @@ static void block_free_work(struct work_struct *work)
 
 	llist_for_each_entry_safe(bp, tmp, deleted, free_node) {
 		block_free(sb, bp);
+		cond_resched();
 	}
 }
 
