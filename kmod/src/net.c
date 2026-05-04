@@ -525,7 +525,7 @@ static int process_response(struct scoutfs_net_connection *conn,
 	struct super_block *sb = conn->sb;
 	struct message_send *msend;
 	scoutfs_net_response_t resp_func = NULL;
-	void *resp_data;
+	void *resp_data = NULL;
 
 	spin_lock(&conn->lock);
 
@@ -804,7 +804,7 @@ static void scoutfs_net_recv_worker(struct work_struct *work)
 			if (invalid_message(conn, nh)) {
 				scoutfs_inc_counter(sb, net_recv_invalid_message);
 				ret = -EBADMSG;
-				break;
+				goto out;
 			}
 
 			data_len = le16_to_cpu(nh->data_len);
