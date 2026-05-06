@@ -2,6 +2,21 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.31
+\
+*May 5, 2026*
+
+Fix race between modifying quota rules and internal reading of the rules
+that tripped an assertion.
+
+Fix a bug that could skip merging totl items under specific heavy write
+loads.  This could lead to merged totl items incorrectly tracking the
+sum of all the contributing totl xattrs.
+
+Fix many small low risk bugs in error paths that were found with code
+analysis and testing.
+
+---
 v1.30
 \
 *Apr 21, 2026*
