@@ -980,7 +980,7 @@ static bool lock_flags_invalid(int flags)
  */
 static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
 			  struct scoutfs_key *start, struct scoutfs_key *end,
-			  struct scoutfs_lock **ret_lock)
+			  u64 ino, struct scoutfs_lock **ret_lock)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_lock *lock;
@@ -1028,6 +1028,8 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 		/* the fast path where we can use the granted mode */
 		if (lock_modes_match(lock->mode, mode)) {
 			lock_inc_count(lock->users, mode);
+			lock->last_user_pid[mode] = task_pid_nr(current);
+			lock->last_user_ino[mode] = ino;
 			*ret_lock = lock;
 			ret = 0;
 			break;
@@ -1108,7 +1110,7 @@ int scoutfs_lock_ino(struct super_block *sb, enum scoutfs_lock_mode mode, int fl
 	end.sk_zone = SCOUTFS_FS_ZONE;
 	end.ski_ino = cpu_to_le64(ino | SCOUTFS_LOCK_INODE_GROUP_MASK);
 
-	return lock_key_range(sb, mode, flags, &start, &end, ret_lock);
+	return lock_key_range(sb, mode, flags, &start, &end, ino, ret_lock);
 }
 
 /*
@@ -1238,7 +1240,7 @@ int scoutfs_lock_rename(struct super_block *sb, enum scoutfs_lock_mode mode, int
 		.sk_type = SCOUTFS_RENAME_TYPE,
 	};
 
-	return lock_key_range(sb, mode, flags, &key, &key, lock);
+	return lock_key_range(sb, mode, flags, &key, &key, 0, lock);
 }
 
 /*
@@ -1286,7 +1288,7 @@ int scoutfs_lock_inode_index(struct super_block *sb, enum scoutfs_lock_mode mode
 
 	scoutfs_lock_get_index_item_range(type, major, ino, &start, &end);
 
-	return lock_key_range(sb, mode, 0, &start, &end, ret_lock);
+	return lock_key_range(sb, mode, 0, &start, &end, ino, ret_lock);
 }
 
 /*
@@ -1313,7 +1315,7 @@ int scoutfs_lock_orphan(struct super_block *sb, enum scoutfs_lock_mode mode, int
 	end.sko_ino = cpu_to_le64(U64_MAX);
 	end.sk_type = SCOUTFS_ORPHAN_TYPE;
 
-	return lock_key_range(sb, mode, flags, &start, &end, lock);
+	return lock_key_range(sb, mode, flags, &start, &end, ino, lock);
 }
 
 int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
@@ -1324,7 +1326,7 @@ int scoutfs_lock_xattr_totl(struct super_block *sb, enum scoutfs_lock_mode mode,
 
 	scoutfs_totl_set_range(&start, &end);
 
-	return lock_key_range(sb, mode, flags, &start, &end, lock);
+	return lock_key_range(sb, mode, flags, &start, &end, 0, lock);
 }
 
 int scoutfs_lock_xattr_indx(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
@@ -1335,7 +1337,7 @@ int scoutfs_lock_xattr_indx(struct super_block *sb, enum scoutfs_lock_mode mode,
 
 	scoutfs_xattr_indx_get_range(&start, &end);
 
-	return lock_key_range(sb, mode, flags, &start, &end, lock);
+	return lock_key_range(sb, mode, flags, &start, &end, 0, lock);
 }
 
 int scoutfs_lock_quota(struct super_block *sb, enum scoutfs_lock_mode mode, int flags,
@@ -1346,7 +1348,7 @@ int scoutfs_lock_quota(struct super_block *sb, enum scoutfs_lock_mode mode, int 
 
 	scoutfs_quota_get_lock_range(&start, &end);
 
-	return lock_key_range(sb, mode, flags, &start, &end, lock);
+	return lock_key_range(sb, mode, flags, &start, &end, 0, lock);
 }
 
 void scoutfs_unlock(struct super_block *sb, struct scoutfs_lock *lock, enum scoutfs_lock_mode mode)
@@ -1463,7 +1465,7 @@ static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
 	struct scoutfs_lock *lock =
 		container_of(ent, struct scoutfs_lock, tseq_entry);
 
-	seq_printf(m, "start "SK_FMT" end "SK_FMT" refresh_gen %llu mode %d waiters: rd %u wr %u wo %u users: rd %u wr %u wo %u\n",
+	seq_printf(m, "start "SK_FMT" end "SK_FMT" refresh_gen %llu mode %d waiters: rd %u wr %u wo %u users: rd %u wr %u wo %u ino: rd %llu wr %llu wo %llu pid: rd %d wr %d wo %d\n",
 			   SK_ARG(&lock->start), SK_ARG(&lock->end),
 			   lock->refresh_gen, lock->mode,
 			   lock->waiters[SCOUTFS_LOCK_READ],
@@ -1471,7 +1473,13 @@ static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
 			   lock->waiters[SCOUTFS_LOCK_WRITE_ONLY],
 			   lock->users[SCOUTFS_LOCK_READ],
 			   lock->users[SCOUTFS_LOCK_WRITE],
-			   lock->users[SCOUTFS_LOCK_WRITE_ONLY]);
+			   lock->users[SCOUTFS_LOCK_WRITE_ONLY],
+			   lock->last_user_ino[SCOUTFS_LOCK_READ],
+			   lock->last_user_ino[SCOUTFS_LOCK_WRITE],
+			   lock->last_user_ino[SCOUTFS_LOCK_WRITE_ONLY],
+			   lock->last_user_pid[SCOUTFS_LOCK_READ],
+			   lock->last_user_pid[SCOUTFS_LOCK_WRITE],
+			   lock->last_user_pid[SCOUTFS_LOCK_WRITE_ONLY]);
 }
 
 /*

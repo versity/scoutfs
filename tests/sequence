@@ -32,6 +32,7 @@ totl-merge-read.sh
 quota-invalidate-race.sh
 totl-delta-inject.sh
 lock-refleak.sh
+lock-pid-ino.sh
 lock-shrink-consistency.sh
 lock-shrink-read-race.sh
 lock-pr-cw-conflict.sh

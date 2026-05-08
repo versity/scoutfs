@@ -42,6 +42,8 @@ struct scoutfs_lock {
 	enum scoutfs_lock_mode invalidating_mode;
 	unsigned int waiters[SCOUTFS_LOCK_NR_MODES];
 	unsigned int users[SCOUTFS_LOCK_NR_MODES];
+	pid_t last_user_pid[SCOUTFS_LOCK_NR_MODES];
+	u64 last_user_ino[SCOUTFS_LOCK_NR_MODES];
 
 	struct scoutfs_tseq_entry tseq_entry;
 
