@@ -1730,12 +1730,30 @@ int scoutfs_net_connect(struct super_block *sb,
 
 static void set_valid_greeting(struct scoutfs_net_connection *conn)
 {
+	struct net_info *ninf = SCOUTFS_SB(conn->sb)->net_info;
+	struct message_send *msend;
+	struct message_send *tmp;
+
 	assert_spin_locked(&conn->lock);
 
 	/* recv should have dropped invalid duplicate greeting messages */
 	BUG_ON(test_conn_fl(conn, valid_greeting));
 
 	set_conn_fl(conn, valid_greeting);
+
+	/*
+	 * Drop greetings from the resend_queue before splicing it into
+	 * the send_queue. We might have a greeting left in the resend
+	 * queue at the moment that we reach this point. A duplicate
+	 * greeting is treated as fatal and causes a stall and fence.
+	 */
+	list_for_each_entry_safe(msend, tmp, &conn->resend_queue, head) {
+		if (msend->nh.cmd == SCOUTFS_NET_CMD_GREETING) {
+			msend->dead = 1;
+			free_msend(ninf, conn, msend);
+		}
+	}
+
 	list_splice_tail_init(&conn->resend_queue, &conn->send_queue);
 	queue_work(conn->workq, &conn->send_work);
 }
