@@ -1244,6 +1244,7 @@ static int verify_quorum_slots(struct super_block *sb, struct quorum_info *qinf,
 	struct sockaddr_in *other4;
 	struct sockaddr_in6 *sin6;
 	struct sockaddr_in6 *other6;
+	__le16 family = cpu_to_le16(SCOUTFS_AF_NONE);
 	int found = 0;
 	int ret;
 	int i;
@@ -1255,6 +1256,14 @@ static int verify_quorum_slots(struct super_block *sb, struct quorum_info *qinf,
 			continue;
 
 		if (quorum_slot_ipv4(qconf, i)) {
+			if (family == cpu_to_le16(SCOUTFS_AF_NONE)) {
+				family = cpu_to_le16(SCOUTFS_AF_IPV4);
+			} else if (family != cpu_to_le16(SCOUTFS_AF_IPV4)) {
+				scoutfs_err(sb, "quorum slot #%d is IPv4 but earlier slots are IPv6; mixed IPv4/IPv6 quorum is not supported",
+					    i);
+				return -EINVAL;
+			}
+
 			scoutfs_quorum_slot_sin(qconf, i, &sin);
 			sin4 = (struct sockaddr_in *)&sin;
 
@@ -1287,6 +1296,14 @@ static int verify_quorum_slots(struct super_block *sb, struct quorum_info *qinf,
 
 			found++;
 		} else if (quorum_slot_ipv6(qconf, i)) {
+			if (family == cpu_to_le16(SCOUTFS_AF_NONE)) {
+				family = cpu_to_le16(SCOUTFS_AF_IPV6);
+			} else if (family != cpu_to_le16(SCOUTFS_AF_IPV6)) {
+				scoutfs_err(sb, "quorum slot #%d is IPv6 but earlier slots are IPv4; mixed IPv4/IPv6 quorum is not supported",
+					    i);
+				return -EINVAL;
+			}
+
 			quorum_slot_sin(qconf, i, &sin);
 			sin6 = (struct sockaddr_in6 *)&sin;
 

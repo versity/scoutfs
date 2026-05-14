@@ -20,11 +20,20 @@ bool valid_quorum_slots(struct scoutfs_quorum_slot *slots)
 	bool valid = true;
 	char *addr;
 	char ip6addr[INET6_ADDRSTRLEN];
+	__le16 family = cpu_to_le16(SCOUTFS_AF_NONE);
 	int i;
 	int j;
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (slots[i].addr.v4.family == cpu_to_le16(SCOUTFS_AF_IPV4)) {
+			if (family == cpu_to_le16(SCOUTFS_AF_NONE)) {
+				family = cpu_to_le16(SCOUTFS_AF_IPV4);
+			} else if (family != cpu_to_le16(SCOUTFS_AF_IPV4)) {
+				fprintf(stderr, "quorum slot nr %u is IPv4 but earlier slots are IPv6; mixed IPv4/IPv6 quorum is not supported\n",
+					i);
+				valid = false;
+			}
+
 			for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
 				if (slots[i].addr.v4.addr == slots[j].addr.v4.addr &&
 				    slots[i].addr.v4.port == slots[j].addr.v4.port) {
@@ -38,6 +47,14 @@ bool valid_quorum_slots(struct scoutfs_quorum_slot *slots)
 				}
 			}
 		} else if (slots[i].addr.v6.family == cpu_to_le16(SCOUTFS_AF_IPV6)) {
+			if (family == cpu_to_le16(SCOUTFS_AF_NONE)) {
+				family = cpu_to_le16(SCOUTFS_AF_IPV6);
+			} else if (family != cpu_to_le16(SCOUTFS_AF_IPV6)) {
+				fprintf(stderr, "quorum slot nr %u is IPv6 but earlier slots are IPv4; mixed IPv4/IPv6 quorum is not supported\n",
+					i);
+				valid = false;
+			}
+
 			for (j = i + 1; j < SCOUTFS_QUORUM_MAX_SLOTS; j++) {
 				if ((IN6_ARE_ADDR_EQUAL(slots[i].addr.v6.addr, slots[j].addr.v6.addr)) &&
 				    (slots[i].addr.v6.port == slots[j].addr.v6.port)) {
