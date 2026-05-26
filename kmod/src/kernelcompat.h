@@ -489,4 +489,9 @@ static inline void stack_trace_print(unsigned long *entries, unsigned int nr_ent
 }
 #endif
 
+#ifndef KC_TIMER_CONTAINER_OF
+#define timer_container_of(var, callback_timer, timer_fieldname) \
+	from_timer(var, callback_timer, timer_fieldname)
+#endif
+
 #endif

@@ -222,7 +222,7 @@ static struct attribute *fence_attrs[] = {
 
 static void fence_timeout(struct timer_list *timer)
 {
-	struct pending_fence *fence = from_timer(fence, timer, timer);
+	struct pending_fence *fence = timer_container_of(fence, timer, timer);
 	struct super_block *sb = fence->sb;
 	DECLARE_FENCE_INFO(sb, fi);
 

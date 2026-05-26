@@ -134,7 +134,7 @@ static int recov_finished(struct recov_info *recinf)
 
 static void timer_callback(struct timer_list *timer)
 {
-	struct recov_info *recinf = from_timer(recinf, timer, timer);
+	struct recov_info *recinf = timer_container_of(recinf, timer, timer);
 
 	recinf->timeout_fn(recinf->sb);
 }
