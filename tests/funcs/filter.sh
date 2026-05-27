@@ -171,6 +171,13 @@ t_filter_dmesg()
 	# orphan log trees reclaim is handled, not an error
 	re="$re|scoutfs .* reclaiming orphan log trees"
 
+	# nfs can emit a whole range of messages we can ignore
+	re="$re|Installing knfsd .*"
+	re="$re|nfsd: .*"
+	re="$re|NFSD: .*"
+	re="$re|RPC: .*"
+	re="$re|FS-Cache: .*"
+
 	# fencing tests force unmounts and trigger timeouts
 	re="$re|scoutfs .* forcing unmount"
 	re="$re|scoutfs .* reconnect timed out"
