@@ -480,6 +480,16 @@ ccflags-y += -DKC_STACK_TRACE_SAVE
 endif
 
 #
+# v3.14-rc1-7-g4e34e719e457
+#
+# .set_acl callback added to struct inode_operations.  Most kernels
+# we target have it, but el7 (3.10 base) does not, so detect.
+#
+ifneq (,$(shell grep 'int ..set_acl..struct' include/linux/fs.h))
+ccflags-y += -DKC_HAS_SET_ACL
+endif
+
+#
 # v6.1-rc1-2-g138060ba92b3
 #
 # set_acl now passed a struct dentry instead of inode.
