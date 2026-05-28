@@ -496,3 +496,12 @@ endif
 ifneq (,$(shell grep 'struct posix_acl.*get_inode_acl' include/linux/fs.h))
 ccflags-y += -DKC_GET_INODE_ACL
 endif
+
+#
+# v6.15-13744-g41cb08555c41
+#
+# from_timer renamed to timer_container_of.
+#
+ifneq (,$(shell grep 'define timer_container_of' include/linux/timer.h))
+ccflags-y += -DKC_TIMER_CONTAINER_OF
+endif
