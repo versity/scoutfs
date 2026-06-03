@@ -1,0 +1,32 @@
+== write via NFS, read both sides
+== POSIX ACL set via NFS, read both sides
+user::rw-
+user:22222:rw-
+group::r--
+mask::rw-
+other::r--
+
+user::rw-
+user:22222:rw-
+group::r--
+mask::rw-
+other::r--
+
+== POSIX ACL set on scoutfs, read via NFS
+user::rw-
+user:22222:rw-
+group::r--
+group:44444:r--
+mask::rw-
+other::r--
+
+== default ACL inheritance via NFS
+user::rw-
+user:22222:rwx	#effective:rw-
+group::r-x	#effective:r--
+mask::rw-
+other::r--
+
+== NFS read demand-stages a released file
+1
+== cleanup

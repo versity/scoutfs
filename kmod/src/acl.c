@@ -216,7 +216,8 @@ int scoutfs_set_acl(KC_VFS_NS_DEF
 {
 	struct inode *inode = dentry->d_inode;
 #else
-int scoutfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
+int scoutfs_set_acl(KC_VFS_NS_DEF
+		    struct inode *inode, struct posix_acl *acl, int type)
 {
 #endif
 	struct super_block *sb = inode->i_sb;
@@ -309,7 +310,7 @@ int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *v
 #ifdef KC_SET_ACL_DENTRY
 	ret = scoutfs_set_acl(KC_VFS_INIT_NS dentry, acl, type);
 #else
-	ret = scoutfs_set_acl(dentry->d_inode, acl, type);
+	ret = scoutfs_set_acl(KC_VFS_INIT_NS dentry->d_inode, acl, type);
 #endif
 out:
 	posix_acl_release(acl);

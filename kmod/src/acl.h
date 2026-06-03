@@ -5,7 +5,8 @@
 int scoutfs_set_acl(KC_VFS_NS_DEF
 		    struct dentry *dentry, struct posix_acl *acl, int type);
 #else
-int scoutfs_set_acl(struct inode *inode, struct posix_acl *acl, int type);
+int scoutfs_set_acl(KC_VFS_NS_DEF
+		    struct inode *inode, struct posix_acl *acl, int type);
 #endif
 #ifdef KC_GET_INODE_ACL
 struct posix_acl *scoutfs_get_acl(struct inode *inode, int type, bool rcu);

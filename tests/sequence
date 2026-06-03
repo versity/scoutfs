@@ -3,6 +3,7 @@ basic-block-counts.sh
 basic-bad-mounts.sh
 basic-posix-acl.sh
 basic-acl-consistency.sh
+basic-nfs.sh
 inode-items-updated.sh
 simple-inode-index.sh
 simple-staging.sh
