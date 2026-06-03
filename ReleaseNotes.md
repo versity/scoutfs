@@ -2,6 +2,20 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.32
+\
+*June 2, 2026*
+
+Fix writing POSIX ACLs over NFS mounts that export the scoutfs
+filesystem.
+
+Add support for kernels in the RHEL 9.8 minor release.
+
+Reduce unneeded block allocation when data\_prealloc\_contig\_only was
+set to 0. This will help achieve more efficient data space usage when
+writing small files.
+
+---
 v1.31
 \
 *May 5, 2026*
