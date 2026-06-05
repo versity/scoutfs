@@ -28,6 +28,7 @@
 #include "srch.h"
 #include "leaf_item_hash.h"
 #include "dev.h"
+#include "quorum.h"
 
 static void print_block_header(struct scoutfs_block_header *hdr, int size)
 {
@@ -400,12 +401,20 @@ static int print_mounted_client_entry(struct scoutfs_key *key, u64 seq, u8 flags
 {
 	struct scoutfs_mounted_client_btree_val *mcv = val;
 	struct in_addr in;
+	char ip6addr[INET6_ADDRSTRLEN];
 
 	memset(&in, 0, sizeof(in));
-	in.s_addr = htonl(le32_to_cpu(mcv->addr.v4.addr));
+	if (mcv->addr.v4.family == cpu_to_le16(SCOUTFS_AF_IPV4)) {
+		in.s_addr = htonl(le32_to_cpu(mcv->addr.v4.addr));
 
-	printf("    rid %016llx ipv4_addr %s flags 0x%x\n",
-	       le64_to_cpu(key->skmc_rid), inet_ntoa(in), mcv->flags);
+		printf("    rid %016llx ipv4_addr %s flags 0x%x\n",
+		       le64_to_cpu(key->skmc_rid), inet_ntoa(in), mcv->flags);
+	} else if (mcv->addr.v6.family == cpu_to_le16(SCOUTFS_AF_IPV6)) {
+		printf("    rid %016llx ipv6_addr %s flags 0x%x\n",
+		       le64_to_cpu(key->skmc_rid),
+		       inet_ntop(AF_INET, mcv->addr.v6.addr, ip6addr, INET6_ADDRSTRLEN),
+		       mcv->flags);
+	}
 
 	return 0;
 }
@@ -891,26 +900,40 @@ static int print_btree_leaf_items(int fd, struct scoutfs_super_block *super,
 static char *alloc_addr_str(union scoutfs_inet_addr *ia)
 {
 	struct in_addr addr;
+	char ip6addr[INET6_ADDRSTRLEN];
 	char *quad;
 	char *str;
 	int len;
 
-	memset(&addr, 0, sizeof(addr));
-	addr.s_addr = htonl(le32_to_cpu(ia->v4.addr));
-	quad = inet_ntoa(addr);
-	if (quad == NULL)
-		return NULL;
+	if (le16_to_cpu(ia->v4.family) == SCOUTFS_AF_IPV4) {
+		memset(&addr, 0, sizeof(addr));
+		addr.s_addr = htonl(le32_to_cpu(ia->v4.addr));
+		quad = inet_ntoa(addr);
+		if (quad == NULL)
+			return NULL;
 
-	len = snprintf(NULL, 0, "%s:%u", quad, le16_to_cpu(ia->v4.port));
-	if (len < 1 || len > 22)
-		return NULL;
+		len = snprintf(NULL, 0, "%s:%u", quad, le16_to_cpu(ia->v4.port));
+		if (len < 1 || len > 22)
+			return NULL;
 
-	len++; /* null */
-	str = malloc(len);
-	if (!str)
-		return NULL;
+		len++; /* null */
+		str = malloc(len);
+		if (!str)
+			return NULL;
 
-	snprintf(str, len, "%s:%u", quad, le16_to_cpu(ia->v4.port));
+		snprintf(str, len, "%s:%u", quad, le16_to_cpu(ia->v4.port));
+	} else if (le16_to_cpu(ia->v6.family) == SCOUTFS_AF_IPV6) {
+		if (inet_ntop(AF_INET6, ia->v6.addr, ip6addr, INET6_ADDRSTRLEN) == NULL)
+			return NULL;
+
+		len = strlen(ip6addr) + 9; /* "[]:\0" (4) plus max strlen(u16) (5) */
+		str = malloc(len);
+		if (!str)
+			return NULL;
+
+		snprintf(str, len, "[%s]:%u", ip6addr, le16_to_cpu(ia->v6.port));
+	} else
+		return NULL;
 	return str;
 }
 
@@ -1026,7 +1049,7 @@ static void print_super_block(struct scoutfs_super_block *super, u64 blkno)
 	printf("  quorum config version %llu\n",
 		le64_to_cpu(super->qconf.version));
 	for (i = 0; i < array_size(super->qconf.slots); i++) {
-		if (super->qconf.slots[i].addr.v4.family != cpu_to_le16(SCOUTFS_AF_IPV4))
+		if (!quorum_slot_present(super, i))
 			continue;
 
 		addr = alloc_addr_str(&super->qconf.slots[i].addr);
