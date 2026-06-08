@@ -150,9 +150,7 @@ static const struct inode_operations scoutfs_file_iops = {
 #else
 	.get_acl	= scoutfs_get_acl,
 #endif
-#ifdef KC_HAS_SET_ACL
 	.set_acl	= scoutfs_set_acl,
-#endif
 	.fiemap		= scoutfs_data_fiemap,
 };
 
@@ -165,9 +163,7 @@ static const struct inode_operations scoutfs_special_iops = {
 #else
 	.get_acl	= scoutfs_get_acl,
 #endif
-#ifdef KC_HAS_SET_ACL
 	.set_acl	= scoutfs_set_acl,
-#endif
 };
 
 /*

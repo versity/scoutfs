@@ -1979,9 +1979,7 @@ const struct inode_operations scoutfs_dir_iops = {
 #else
 	.get_acl	= scoutfs_get_acl,
 #endif
-#ifdef KC_HAS_SET_ACL
 	.set_acl	= scoutfs_set_acl,
-#endif
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
 	.tmpfile	= scoutfs_tmpfile,
