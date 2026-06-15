@@ -238,6 +238,25 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 	struct pending_fence *fence;
 	int ret;
 
+	/*
+	 * A node only needs to be fenced once.  A given rid can be submitted
+	 * for fencing more than once: the previous quorum leader is fenced as
+	 * it's removed from the quorum, and that same rid can also be a
+	 * mounted client that fails to recover in time.  The reclaim path
+	 * keys off the rid, not the reason, so a single pending fence is
+	 * sufficient.  Skip creating a duplicate, which would otherwise
+	 * collide on the rid-named sysfs dir and return -EEXIST to the caller,
+	 * shutting the server down.
+	 */
+	spin_lock(&fi->lock);
+	list_for_each_entry(fence, &fi->list, entry) {
+		if (fence->rid == rid) {
+			spin_unlock(&fi->lock);
+			return 0;
+		}
+	}
+	spin_unlock(&fi->lock);
+
 	fence = kzalloc(sizeof(struct pending_fence), GFP_NOFS);
 	if (!fence) {
 		ret = -ENOMEM;
@@ -258,6 +277,9 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 						&fence->ssa, fence_attrs,
 						"%016llx", rid);
 	if (ret < 0) {
+		/* highly unlikely race collision */
+		if (ret == -EEXIST)
+			ret = 0;
 		kfree(fence);
 		goto out;
 	}
