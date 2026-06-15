@@ -419,8 +419,17 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 	struct scoutfs_log_merge_complete *comp;
 	struct scoutfs_log_merge_freeing *fr;
 
+	/*
+	 * Parent block items reference child blocks and have no value;
+	 * print_block_ref() calls us with a NULL val just to print the key.
+	 */
+	if (!val)
+		return 0;
+
 	switch (key->sk_zone) {
 	case SCOUTFS_LOG_MERGE_STATUS_ZONE:
+		if (val_len < sizeof(*stat))
+			goto bad_len;
 		stat = val;
 		printf("    status: next_range_key "SK_FMT" nr_req %llu nr_comp %llu seq %llu\n",
 		       SK_ARG(&stat->next_range_key),
@@ -429,12 +438,16 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       le64_to_cpu(stat->seq));
 		break;
 	case SCOUTFS_LOG_MERGE_RANGE_ZONE:
+		if (val_len < sizeof(*rng))
+			goto bad_len;
 		rng = val;
 		printf("    range: start "SK_FMT" end "SK_FMT"\n",
 		       SK_ARG(&rng->start),
 		       SK_ARG(&rng->end));
 		break;
 	case SCOUTFS_LOG_MERGE_REQUEST_ZONE:
+		if (val_len < sizeof(*req))
+			goto bad_len;
 		req = val;
 		printf("    request: logs_root "BTROOT_F" logs_root "BTROOT_F" start "SK_FMT
 		       " end "SK_FMT" input_seq %llu rid %016llx seq %llu flags 0x%llx\n",
@@ -448,6 +461,8 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       le64_to_cpu(req->flags));
 		break;
 	case SCOUTFS_LOG_MERGE_COMPLETE_ZONE:
+		if (val_len < sizeof(*comp))
+			goto bad_len;
 		comp = val;
 		printf("    complete: root "BTROOT_F" start "SK_FMT" end "SK_FMT
 		       " remain "SK_FMT" rid %016llx seq %llu flags %llx\n",
@@ -460,6 +475,8 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       le64_to_cpu(comp->flags));
 		break;
 	case SCOUTFS_LOG_MERGE_FREEING_ZONE:
+		if (val_len < sizeof(*fr))
+			goto bad_len;
 		fr = val;
 		printf("    freeing: root "BTROOT_F" key "SK_FMT" seq %llu\n",
 		       BTROOT_A(&fr->root),
@@ -471,6 +488,11 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		break;
 	}
 
+	return 0;
+
+bad_len:
+	printf("    (short log merge value: zone %u val_len %u)\n",
+	       key->sk_zone, val_len);
 	return 0;
 }
 
