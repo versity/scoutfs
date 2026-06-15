@@ -235,8 +235,11 @@ static void fence_timeout(struct timer_list *timer)
 int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int reason)
 {
 	DECLARE_FENCE_INFO(sb, fi);
+	struct pending_fence *existing;
 	struct pending_fence *fence;
-	int ret;
+	bool on_list = false;
+	bool duplicate = false;
+	int ret = 0;
 
 	fence = kzalloc(sizeof(struct pending_fence), GFP_NOFS);
 	if (!fence) {
@@ -253,23 +256,54 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 	fence->error = false;
 	fence->reason = reason;
 	fence->rid = rid;
+	/* init the timer before list_add so a racing fence_stop can del_timer_sync it */
+	timer_setup(&fence->timer, fence_timeout, 0);
+
+	/*
+	 * A node only needs to be fenced once.  A given rid can be submitted
+	 * for fencing more than once: the previous quorum leader is fenced as
+	 * it's removed from the quorum, and that same rid can also be a
+	 * mounted client that fails to recover in time.  The reclaim path
+	 * keys off the rid, not the reason, so a single pending fence is
+	 * sufficient.  Check for an existing entry and reserve the rid by
+	 * adding our fence to the list under the same lock so a concurrent
+	 * caller for the same rid sees it and skips.
+	 */
+	spin_lock(&fi->lock);
+	list_for_each_entry(existing, &fi->list, entry) {
+		if (existing->rid == rid) {
+			duplicate = true;
+			break;
+		}
+	}
+	if (!duplicate) {
+		list_add_tail(&fence->entry, &fi->list);
+		on_list = true;
+	}
+	spin_unlock(&fi->lock);
+
+	if (duplicate)
+		goto out;
 
 	ret = scoutfs_sysfs_create_attrs_parent(sb, &fi->kset->kobj,
 						&fence->ssa, fence_attrs,
 						"%016llx", rid);
-	if (ret < 0) {
-		kfree(fence);
+	if (ret < 0)
 		goto out;
-	}
 
-	timer_setup(&fence->timer, fence_timeout, 0);
 	fence->timer.expires = jiffies + msecs_to_jiffies(FENCE_TIMEOUT_MS);
 	add_timer(&fence->timer);
 
-	spin_lock(&fi->lock);
-	list_add_tail(&fence->entry, &fi->list);
-	spin_unlock(&fi->lock);
+	fence = NULL;
 out:
+	if (fence) {
+		if (on_list) {
+			spin_lock(&fi->lock);
+			list_del(&fence->entry);
+			spin_unlock(&fi->lock);
+		}
+		kfree(fence);
+	}
 	return ret;
 }
 
