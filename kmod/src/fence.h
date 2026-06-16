@@ -12,6 +12,7 @@ int scoutfs_fence_next(struct super_block *sb, u64 *rid, int *reason, bool *erro
 int scoutfs_fence_reason_pending(struct super_block *sb, int reason);
 int scoutfs_fence_free(struct super_block *sb, u64 rid);
 int scoutfs_fence_wait_fenced(struct super_block *sb, long timeout_jiffies);
+bool scoutfs_fence_drained(struct super_block *sb, bool *error);
 
 int scoutfs_fence_setup(struct super_block *sb);
 void scoutfs_fence_stop(struct super_block *sb);

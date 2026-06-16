@@ -4368,6 +4368,14 @@ void scoutfs_server_recov_finish(struct super_block *sb, u64 rid, int which)
 #define SERVER_RECOV_TIMEOUT_MS (30 * MSEC_PER_SEC)
 
 /*
+ * Upper bound on how long startup waits for pre-existing fences to drain
+ * before starting recovery.  Each fence request errors out on its own
+ * timeout (raising -EIO here) well before this fires; this is only a
+ * backstop against a reclaim that's wedged without erroring.
+ */
+#define SERVER_FENCE_DRAIN_TIMEOUT_MS (60 * MSEC_PER_SEC)
+
+/*
  * Not all clients recovered in time.  We fence them and reclaim
  * whatever resources they were using.  If we see a rid here then we're
  * going to fence it, regardless of if it manages to finish recovery
@@ -4477,6 +4485,53 @@ static void queue_reclaim_work(struct server_info *server, unsigned long delay)
 {
 	if (!server_is_stopping(server))
 		queue_delayed_work(server->wq, &server->reclaim_dwork, delay);
+}
+
+/*
+ * Wait for pending fences to be fully reclaimed before we start recovery, so
+ * a fenced rid is out of the mounted client btree and won't be prepared for
+ * recovery and then fenced a second time when the recovery timeout fires.
+ *
+ * We own the wait here rather than in the fence layer so we can also break on
+ * the server stopping.  The fence list is drained by the reclaim worker; we
+ * block on server->waitq, which stop_server() wakes, and otherwise poll the
+ * drain state on a short interval.
+ *
+ * Draining is only an optimization: the fence dedup already makes a double
+ * fence non-fatal, so this just avoids requesting the second fence at all.
+ * The backstop timeout is therefore best effort -- on a large system a single
+ * reclaim can legitimately run longer than the timeout, and aborting a
+ * healthy reclaim would recreate the recovery-failure loop we're avoiding.
+ * On timeout we warn and proceed; reclaim keeps running in the background and
+ * dedup covers any double-submit.  We only abort startup if a fence errored
+ * (the node couldn't be fenced, so recovery isn't safe) or the server is
+ * already stopping.
+ */
+static int wait_for_fence_drain(struct super_block *sb)
+{
+	DECLARE_SERVER_INFO(sb, server);
+	unsigned long deadline = jiffies +
+		msecs_to_jiffies(SERVER_FENCE_DRAIN_TIMEOUT_MS);
+	bool error;
+
+	while (!scoutfs_fence_drained(sb, &error)) {
+		if (error)
+			return -EIO;
+		if (server_is_stopping(server))
+			return -ESHUTDOWN;
+		if (time_after_eq(jiffies, deadline)) {
+			scoutfs_warn(sb, "fences not drained after %lu ms, starting recovery anyway",
+				     SERVER_FENCE_DRAIN_TIMEOUT_MS);
+			return 0;
+		}
+
+		wait_event_timeout(server->waitq,
+				   server_is_stopping(server) ||
+				   scoutfs_fence_drained(sb, &error),
+				   msecs_to_jiffies(MSEC_PER_SEC));
+	}
+
+	return 0;
 }
 
 #define RECLAIM_WORK_DELAY_MS	MSEC_PER_SEC
@@ -4631,6 +4686,22 @@ static void scoutfs_server_worker(struct work_struct *work)
 		goto shutdown;
 	}
 
+	/*
+	 * Reclaim any rids that were already fenced as we were elected
+	 * (notably the previous quorum leader) and wait for those fences to
+	 * drain fully before starting recovery.  Reclaim removes a fenced rid
+	 * from the mounted client btree, so draining first ensures
+	 * start_recovery() won't scan that rid, prepare it for recovery, and
+	 * then fence it a second time when the recovery timeout expires.
+	 */
+	queue_reclaim_work(server, 0);
+
+	ret = wait_for_fence_drain(sb);
+	if (ret) {
+		scoutfs_err(sb, "server error %d draining fences before recovery", ret);
+		goto shutdown;
+	}
+
 	ret = start_recovery(sb);
 	if (ret) {
 		scoutfs_err(sb, "server error %d starting client recovery", ret);
@@ -4643,8 +4714,6 @@ static void scoutfs_server_worker(struct work_struct *work)
 
 	scoutfs_info(sb, "server ready at "SIN_FMT, SIN_ARG(&sin));
 	server_up(server);
-
-	queue_reclaim_work(server, 0);
 
 	/* interruptible mostly to avoid stuck messages */
 	wait_event_interruptible(server->waitq, server_is_stopping(server));

@@ -410,6 +410,36 @@ int scoutfs_fence_wait_fenced(struct super_block *sb, long timeout_jiffies)
 }
 
 /*
+ * True once every fence request has been fully reclaimed off the list, not
+ * merely fenced.  Reclaim is what removes a fenced rid from the mounted
+ * client btree, so an empty list is the point at which those rids are gone.
+ * If any request errored we surface that so the caller stops waiting for a
+ * reclaim that won't make progress.
+ *
+ * This is a non-blocking check.  The caller owns the wait so it can also
+ * break on its own state; the list is woken on fi->waitq as it drains, but
+ * draining is inherently a multi-second operation so a polled wait is fine.
+ */
+bool scoutfs_fence_drained(struct super_block *sb, bool *error)
+{
+	DECLARE_FENCE_INFO(sb, fi);
+	struct pending_fence *fence;
+	bool drained;
+
+	*error = false;
+
+	spin_lock(&fi->lock);
+	list_for_each_entry(fence, &fi->list, entry) {
+		if (fence->error)
+			*error = true;
+	}
+	drained = list_empty(&fi->list);
+	spin_unlock(&fi->lock);
+
+	return drained;
+}
+
+/*
  * This must be called early during startup so that it is guaranteed that
  * no other subsystems will try and call fence_start while we're waiting
  * for testing fence requests to complete.
