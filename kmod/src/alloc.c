@@ -25,6 +25,7 @@
 #include "alloc.h"
 #include "counters.h"
 #include "scoutfs_trace.h"
+#include "triggers.h"
 
 /*
  * The core allocator uses extent items in btrees rooted in the super.
@@ -1239,6 +1240,62 @@ int scoutfs_alloc_fill_list(struct super_block *sb,
 out:
 	scoutfs_block_put(sb, bl);
 	return ret;
+}
+
+/*
+ * Test: stuff a freed list head to nearly full with real free blocks.
+ *
+ * Destructive: bypass filesystem consistency. Claim free blocks, append
+ * them into the head block via list_block_add (bypassing free_meta and
+ * its active-head-only path), and leak whatever we don't use.
+ *
+ * The caller can stuff both meta_freed heads in a single commits, allowing
+ * to reproduce the wedge condition. A counter validates we did the stuffing
+ * on both heads (increased twice - once for each head). An unfixed kernel
+ * will hang on mount.
+ */
+int scoutfs_alloc_fill_freed_list(struct super_block *sb, struct scoutfs_alloc *alloc,
+				  struct scoutfs_block_writer *wri,
+				  struct scoutfs_alloc_root *root,
+				  struct scoutfs_alloc_list_head *lh)
+{
+	struct alloc_ext_args args = {
+		.alloc = alloc,
+		.wri = wri,
+		.root = root,
+		.zone = SCOUTFS_FREE_EXTENT_ORDER_ZONE,
+	};
+	const u32 target = SCOUTFS_ALLOC_LIST_MAX_BLOCKS - 8;
+	struct scoutfs_alloc_list_block *lblk;
+	struct scoutfs_block *bl = NULL;
+	struct scoutfs_extent ext;
+	int ret = 0;
+	u64 old; /* leaked */
+	u64 i;
+	u32 want;
+
+	while (le32_to_cpu(lh->first_nr) < target) {
+		want = target - le32_to_cpu(lh->first_nr) + 1;
+		ret = scoutfs_ext_alloc(sb, &alloc_ext_ops, &args, 0, 0, want, &ext);
+		if (ret < 0)
+			break;
+
+		ret = dirty_list_block(sb, alloc, wri, &lh->ref, ext.start, &old, &bl);
+		if (ret < 0)
+			break;
+		lblk = bl->data;
+
+		for (i = 1; i < ext.len && le32_to_cpu(lh->first_nr) < target; i++)
+			list_block_add(lh, lblk, ext.start + i);
+
+		scoutfs_block_put(sb, bl);
+		bl = NULL;
+	}
+
+	scoutfs_block_put(sb, bl);
+	if (ret == 0 && le32_to_cpu(lh->first_nr) >= target)
+		scoutfs_inc_counter(sb, alloc_freed_fill);
+	return ret < 0 ? ret : 0;
 }
 
 /*
