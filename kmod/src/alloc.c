@@ -1150,13 +1150,20 @@ static bool list_has_blocks(struct super_block *sb, struct scoutfs_alloc *alloc,
 {
 	u32 tree_blocks = extent_mod_blocks(root->root.height) * extents;
 	u32 most = 1 + tree_blocks + addl_blocks;
+	u32 avail;
+	u32 freed;
 
-	if (le32_to_cpu(alloc->avail.first_nr) < most) {
+	/* use the same room accounting as the commit hold gate, including the
+	 * pending freed-head rotation, so a clean nearly-full freed head can't
+	 * stop fill_list()/empty_list() from making progress */
+	scoutfs_alloc_meta_remaining(alloc, &avail, &freed);
+
+	if (avail < most) {
 		scoutfs_inc_counter(sb, alloc_list_avail_lo);
 		return false;
 	}
 
-	if (list_block_space(alloc->freed.first_nr) < most) {
+	if (freed < most) {
 		scoutfs_inc_counter(sb, alloc_list_freed_hi);
 		return false;
 	}
@@ -1384,14 +1391,35 @@ bool scoutfs_alloc_meta_low(struct super_block *sb,
 	return lo;
 }
 
+/*
+ * Report the metadata allocator room a transaction will actually have.
+ *
+ * If the freed list hasn't been dirtied yet, the first dirtying allocation
+ * rotates in a fresh head block when the current head is under
+ * EMPTY_FREED_THRESH (see dirty_alloc_blocks()).  A clean but nearly-full
+ * head then has a fresh block's worth of room as soon as it's touched, so
+ * report that; otherwise the commit hold gate and the fill/empty drains read
+ * it as no room and refuse to make progress.  The rotation frees the old
+ * avail and freed head blocks into the fresh block, so the room it leaves is
+ * MAX - 2.
+ *
+ * dirty_freed_bl isn't covered by the seqlock, but it only transitions
+ * NULL->set on a transaction's first allocation and back to NULL at
+ * prepare_commit; a stale read predicts the rotation one allocation early or
+ * late, which still gates correctly.
+ */
 void scoutfs_alloc_meta_remaining(struct scoutfs_alloc *alloc, u32 *avail_total, u32 *freed_space)
 {
 	unsigned int seq;
+	u32 fr;
 
 	do {
 		seq = read_seqbegin(&alloc->seqlock);
 		*avail_total = le32_to_cpu(alloc->avail.first_nr);
-		*freed_space = list_block_space(alloc->freed.first_nr);
+		fr = list_block_space(alloc->freed.first_nr);
+		if (!alloc->dirty_freed_bl && fr < EMPTY_FREED_THRESH)
+			fr = SCOUTFS_ALLOC_LIST_MAX_BLOCKS - 2;
+		*freed_space = fr;
 	} while (read_seqretry(&alloc->seqlock, seq));
 }
 
