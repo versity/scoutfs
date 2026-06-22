@@ -18,6 +18,7 @@
 #include <linux/xattr.h>
 #include <linux/namei.h>
 #include <linux/mm.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "file.h"
@@ -422,18 +423,7 @@ out:
 	else
 		inode = scoutfs_iget(sb, ino, 0, 0);
 
-	/*
-	 * We can't splice dir aliases into the dcache.  dir entries
-	 * might have changed on other nodes so our dcache could still
-	 * contain them, rather than having been moved in rename.  For
-	 * dirs, we use d_materialize_unique to remove any existing
-	 * aliases which must be stale.  Our inode numbers aren't reused
-	 * so inodes pointed to by entries can't change types.
-	 */
-	if (!IS_ERR_OR_NULL(inode) && S_ISDIR(inode->i_mode))
-		return d_materialise_unique(dentry, inode);
-	else
-		return d_splice_alias(inode, dentry);
+	return d_splice_alias(inode, dentry);
 }
 
 /*
@@ -962,7 +952,7 @@ static int scoutfs_unlink(struct inode *dir, struct dentry *dentry)
 {
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode = dentry->d_inode;
-	struct kc_timespec ts = current_time(inode);
+	struct timespec64 ts = current_time(inode);
 	struct scoutfs_lock *inode_lock = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_lock *dir_lock = NULL;
@@ -1197,24 +1187,6 @@ out:
 	return path;
 }
 
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-static void *scoutfs_follow_link(struct dentry *dentry, struct nameidata *nd)
-{
-	char *path;
-
-	path = scoutfs_get_link_target(dentry);
-	if (!IS_ERR_OR_NULL(path))
-		nd_set_link(nd, path);
-	return path;
-}
-
-static void scoutfs_put_link(struct dentry *dentry, struct nameidata *nd,
-			     void *cookie)
-{
-	if (!IS_ERR_OR_NULL(cookie))
-		kfree(cookie);
-}
-#else
 static const char *scoutfs_get_link(struct dentry *dentry, struct inode *inode, struct delayed_call *done)
 {
 	char *path;
@@ -1225,7 +1197,6 @@ static const char *scoutfs_get_link(struct dentry *dentry, struct inode *inode, 
 
 	return path;
 }
-#endif
 
 /*
  * Symlink target paths can be annoyingly large.  We store relatively
@@ -1635,7 +1606,7 @@ static int scoutfs_rename_common(KC_VFS_NS_DEF
 	struct scoutfs_lock *orph_lock = NULL;
 	struct scoutfs_dirent new_dent;
 	struct scoutfs_dirent old_dent;
-	struct kc_timespec now;
+	struct timespec64 now;
 	bool ins_new = false;
 	bool del_new = false;
 	bool ins_old = false;
@@ -1646,6 +1617,9 @@ static int scoutfs_rename_common(KC_VFS_NS_DEF
 	u64 new_pos;
 	int ret;
 	int err;
+
+	if (flags & ~RENAME_NOREPLACE)
+		return -EINVAL;
 
 	trace_scoutfs_rename(sb, old_dir, old_dentry, new_dir, new_dentry);
 
@@ -1892,36 +1866,7 @@ out_unlock:
 	return ret;
 }
 
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-static int scoutfs_rename(struct inode *old_dir,
-			  struct dentry *old_dentry, struct inode *new_dir,
-			  struct dentry *new_dentry)
-{
-	return scoutfs_rename_common(KC_VFS_INIT_NS
-				     old_dir, old_dentry, new_dir, new_dentry, 0);
-}
-#endif
 
-static int scoutfs_rename2(KC_VFS_NS_DEF
-			  struct inode *old_dir,
-			  struct dentry *old_dentry, struct inode *new_dir,
-			  struct dentry *new_dentry, unsigned int flags)
-{
-	if (flags & ~RENAME_NOREPLACE)
-		return -EINVAL;
-
-	return scoutfs_rename_common(KC_VFS_NS
-				     old_dir, old_dentry, new_dir, new_dentry, flags);
-}
-
-#ifdef KC_FMODE_KABI_ITERATE
-/* we only need this to set the iterate flag for kabi :/ */
-static int scoutfs_dir_open(struct inode *inode, struct file *file)
-{
-        file->f_mode |= FMODE_KABI_ITERATE;
-        return 0;
-}
-#endif
 
 static int scoutfs_tmpfile(KC_VFS_NS_DEF
 			   struct inode *dir,
@@ -1991,29 +1936,15 @@ out:
 }
 
 const struct inode_operations scoutfs_symlink_iops = {
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-	.readlink       = generic_readlink,
-	.follow_link    = scoutfs_follow_link,
-	.put_link       = scoutfs_put_link,
-#else
 	.get_link	= scoutfs_get_link,
-#endif
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
-#endif
 	.listxattr	= scoutfs_listxattr,
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-	.removexattr	= generic_removexattr,
-#endif
 #ifdef KC_GET_INODE_ACL
 	.get_inode_acl	= scoutfs_get_acl,
 #else
 	.get_acl	= scoutfs_get_acl,
 #endif
-#ifndef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
 	.tmpfile	= scoutfs_tmpfile,
 	.rename		= scoutfs_rename_common,
 	.symlink	= scoutfs_symlink,
@@ -2022,26 +1953,17 @@ const struct inode_operations scoutfs_symlink_iops = {
 	.mkdir		= scoutfs_mkdir,
 	.create		= scoutfs_create,
 	.lookup		= scoutfs_lookup,
-#endif
 };
 
 const struct file_operations scoutfs_dir_fops = {
 	.iterate	= scoutfs_readdir,
-#ifdef KC_FMODE_KABI_ITERATE
-	.open		= scoutfs_dir_open,
-#endif
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= generic_file_llseek,
 };
 
 
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-const struct inode_operations_wrapper scoutfs_dir_iops = {
-	.ops = {
-#else
 const struct inode_operations scoutfs_dir_iops = {
-#endif
 	.lookup		= scoutfs_lookup,
 	.mknod		= scoutfs_mknod,
 	.create		= scoutfs_create,
@@ -2051,30 +1973,15 @@ const struct inode_operations scoutfs_dir_iops = {
 	.rmdir		= scoutfs_unlink,
 	.getattr	= scoutfs_getattr,
 	.setattr	= scoutfs_setattr,
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-	.rename		= scoutfs_rename,
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
-	.removexattr	= generic_removexattr,
-#endif
 	.listxattr	= scoutfs_listxattr,
 #ifdef KC_GET_INODE_ACL
 	.get_inode_acl	= scoutfs_get_acl,
 #else
 	.get_acl	= scoutfs_get_acl,
 #endif
-#ifdef KC_HAS_SET_ACL
 	.set_acl	= scoutfs_set_acl,
-#endif
 	.symlink	= scoutfs_symlink,
 	.permission	= scoutfs_permission,
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-	},
-#endif
 	.tmpfile	= scoutfs_tmpfile,
-#ifdef KC_LINUX_HAVE_RHEL_IOPS_WRAPPER
-	.rename2	= scoutfs_rename2,
-#else
-	.rename		= scoutfs_rename2,
-#endif
+	.rename		= scoutfs_rename_common,
 };

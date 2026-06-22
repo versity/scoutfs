@@ -16,6 +16,7 @@
 #include <linux/xattr.h>
 #include <linux/posix_acl.h>
 #include <linux/posix_acl_xattr.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "super.h"
@@ -69,15 +70,6 @@ struct posix_acl *scoutfs_get_acl_locked(struct inode *inode, int type, struct s
 	char *name;
 	int ret;
 
-#ifndef KC___POSIX_ACL_CREATE
-	if (!IS_POSIXACL(inode))
-		return NULL;
-
-	acl = get_cached_acl(inode, type);
-	if (acl != ACL_NOT_CACHED)
-		return acl;
-#endif
-
 	ret = acl_xattr_name_len(type, &name, NULL);
 	if (ret < 0)
 		return ERR_PTR(ret);
@@ -121,11 +113,6 @@ struct posix_acl *scoutfs_get_acl(struct inode *inode, int type)
 #ifdef KC_GET_INODE_ACL
 	if (rcu)
 		return ERR_PTR(-ECHILD);
-#endif
-
-#ifndef KC___POSIX_ACL_CREATE
-	if (!IS_POSIXACL(inode))
-		return NULL;
 #endif
 
 	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
@@ -240,17 +227,11 @@ int scoutfs_set_acl(KC_VFS_NS_DEF
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 	return ret;
 }
-#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
 int scoutfs_acl_get_xattr(const struct xattr_handler *handler, struct dentry *dentry,
 			  struct inode *inode, const char *name, void *value,
 			  size_t size)
 {
 	int type = handler->flags;
-#else
-int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, size_t size,
-			  int type)
-{
-#endif
 	struct posix_acl *acl;
 	int ret = 0;
 
@@ -273,7 +254,6 @@ int scoutfs_acl_get_xattr(struct dentry *dentry, const char *name, void *value, 
 	return ret;
 }
 
-#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
 int scoutfs_acl_set_xattr(const struct xattr_handler *handler,
 			  KC_VFS_NS_DEF
 			  struct dentry *dentry,
@@ -281,11 +261,6 @@ int scoutfs_acl_set_xattr(const struct xattr_handler *handler,
 			  size_t size, int flags)
 {
 	int type = handler->flags;
-#else
-int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *value, size_t size,
-			  int flags, int type)
-{
-#endif
 	struct posix_acl *acl = NULL;
 	int ret;
 
@@ -301,7 +276,7 @@ int scoutfs_acl_set_xattr(struct dentry *dentry, const char *name, const void *v
 			return PTR_ERR(acl);
 
 		if (acl) {
-			ret = kc_posix_acl_valid(&init_user_ns, acl);
+			ret = posix_acl_valid(&init_user_ns, acl);
 			if (ret)
 				goto out;
 		}

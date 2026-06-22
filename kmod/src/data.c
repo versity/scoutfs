@@ -23,6 +23,7 @@
 #include <linux/fiemap.h>
 #include <linux/writeback.h>
 #include <linux/overflow.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "super.h"
@@ -757,54 +758,6 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	return ret;
 }
 
-#ifndef KC_FILE_AOPS_READAHEAD
-/*
- * This is used for opportunistic read-ahead which can throw the pages
- * away if it needs to.  If the caller didn't deal with offline extents
- * then we drop those pages rather than trying to wait.  Whoever is
- * staging offline extents should be doing it in enormous chunks so that
- * read-ahead can ramp up within each staged region.  The check for
- * offline extents is cheap when the inode has no offline extents.
- */
-static int scoutfs_readpages(struct file *file, struct address_space *mapping,
-			     struct list_head *pages, unsigned nr_pages)
-{
-	struct inode *inode = file->f_inode;
-	struct super_block *sb = inode->i_sb;
-	struct scoutfs_lock *inode_lock = NULL;
-	struct page *page;
-	struct page *tmp;
-	int ret;
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
-	if (ret)
-		goto out;
-
-	list_for_each_entry_safe(page, tmp, pages, lru) {
-		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_SIZE, SEF_OFFLINE,
-					      SCOUTFS_IOC_DWO_READ, NULL,
-					      inode_lock);
-		if (ret < 0)
-			goto out;
-		if (ret > 0) {
-			list_del(&page->lru);
-			put_page(page);
-			if (--nr_pages == 0) {
-				ret = 0;
-				goto out;
-			}
-		}
-	}
-
-	ret = mpage_readpages(mapping, pages, nr_pages, scoutfs_get_block_read);
-out:
-	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
-	BUG_ON(!list_empty(pages));
-	return ret;
-}
-#else
 static void scoutfs_readahead(struct readahead_control *rac)
 {
 	struct inode *inode = rac->file->f_inode;
@@ -826,7 +779,6 @@ static void scoutfs_readahead(struct readahead_control *rac)
 
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 }
-#endif
 
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
 {
@@ -1267,7 +1219,7 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 	struct data_ext_args from_args;
 	struct data_ext_args to_args;
 	struct scoutfs_extent ext;
-	struct kc_timespec cur_time;
+	struct timespec64 cur_time;
 	LIST_HEAD(locks);
 	bool done = false;
 	loff_t from_size;
@@ -2063,15 +2015,9 @@ int scoutfs_data_waiting(struct super_block *sb, u64 ino, u64 iblock,
 	return ret;
 }
 
-#ifdef KC_MM_VM_FAULT_T
 static vm_fault_t scoutfs_data_page_mkwrite(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
-#else
-static int scoutfs_data_page_mkwrite(struct vm_area_struct *vma,
-				     struct vm_fault *vmf)
-{
-#endif
 	struct page *page = vmf->page;
 	struct file *file = vma->vm_file;
 	struct inode *inode = file_inode(file);
@@ -2213,14 +2159,9 @@ out:
 	return ret;
 }
 
-#ifdef KC_MM_VM_FAULT_T
 static vm_fault_t scoutfs_data_filemap_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
-#else
-static int scoutfs_data_filemap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
-{
-#endif
 	struct file *file = vma->vm_file;
 	struct inode *inode = file_inode(file);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
@@ -2255,15 +2196,11 @@ retry:
 		}
 	}
 
-#ifdef KC_MM_VM_FAULT_T
 	ret = filemap_fault(vmf);
-#else
-	ret = filemap_fault(vma, vmf);
-#endif
 
 out:
 	if (scoutfs_per_task_del(&si->pt_data_lock, &pt_ent))
-		kc_inode_dio_end(inode);
+		inode_dio_end(inode);
 	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	if (scoutfs_data_wait_found(&dw)) {
 		err = scoutfs_data_wait(inode, &dw);
@@ -2281,9 +2218,6 @@ out:
 static const struct vm_operations_struct scoutfs_data_file_vm_ops = {
 	.fault		= scoutfs_data_filemap_fault,
 	.page_mkwrite	= scoutfs_data_page_mkwrite,
-#ifdef KC_MM_REMAP_PAGES
-	.remap_pages	= generic_file_remap_pages,
-#endif
 };
 
 static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
@@ -2301,11 +2235,7 @@ const struct address_space_operations scoutfs_file_aops = {
 #else
 	.readpage		= scoutfs_readpage,
 #endif
-#ifndef KC_FILE_AOPS_READAHEAD
-	.readpages		= scoutfs_readpages,
-#else
 	.readahead		= scoutfs_readahead,
-#endif
 	.writepage		= scoutfs_writepage,
 	.writepages		= scoutfs_writepages,
 	.write_begin		= scoutfs_write_begin,
@@ -2313,17 +2243,10 @@ const struct address_space_operations scoutfs_file_aops = {
 };
 
 const struct file_operations scoutfs_file_fops = {
-#ifdef KC_LINUX_HAVE_FOP_AIO_READ
-	.read		= do_sync_read,
-	.write		= do_sync_write,
-	.aio_read	= scoutfs_file_aio_read,
-	.aio_write	= scoutfs_file_aio_write,
-#else
 	.read_iter	= scoutfs_file_read_iter,
 	.write_iter	= scoutfs_file_write_iter,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
-#endif
 	.mmap		= scoutfs_file_mmap,
 	.unlocked_ioctl	= scoutfs_ioctl,
 	.fsync		= scoutfs_file_fsync,

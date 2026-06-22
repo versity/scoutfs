@@ -4751,7 +4751,7 @@ int scoutfs_server_setup(struct super_block *sb)
 	INIT_DELAYED_WORK(&server->reclaim_dwork, reclaim_worker);
 
 	server->wq = alloc_workqueue("scoutfs_server",
-				     WQ_UNBOUND | WQ_NON_REENTRANT, 0);
+				     WQ_UNBOUND, 0);
 	if (!server->wq) {
 		kfree(server);
 		return -ENOMEM;

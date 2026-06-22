@@ -489,6 +489,7 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	struct scoutfs_lock *lock = NULL;
 	struct kiocb kiocb;
 	struct iovec iov;
+	struct iov_iter iter;
 	size_t written;
 	loff_t end_size;
 	loff_t isize;
@@ -514,10 +515,6 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	/* the iocb is really only used for the file pointer :P */
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = args.offset;
-#ifdef KC_LINUX_AIO_KI_LEFT
-	kiocb.ki_left = args.length;
-	kiocb.ki_nbytes = args.length;
-#endif
 	iov.iov_base = (void __user *)(unsigned long)args.buf_ptr;
 	iov.iov_len = args.length;
 
@@ -559,8 +556,9 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	pos = args.offset;
 	written = 0;
 	do {
-		ret = generic_file_buffered_write(&kiocb, &iov, 1, pos, &pos,
-						  args.length, written);
+		iov_iter_init(&iter, WRITE, &iov, 1, args.length);
+		ret = kc_generic_perform_write(&kiocb, &iter, pos);
+
 		BUG_ON(ret == -EIOCBQUEUED);
 		if (ret > 0)
 			written += ret;

@@ -1113,11 +1113,11 @@ static int sock_opts_and_names(struct super_block *sb,
 	if (ret)
 		goto out;
 
-	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
 	if (ret < 0)
 		goto out;
 
-	ret = kc_kernel_getpeername(sock, (struct sockaddr *)&conn->peername);
+	ret = kernel_getpeername(sock, (struct sockaddr *)&conn->peername);
 	if (ret < 0)
 		goto out;
 
@@ -1218,7 +1218,7 @@ static void scoutfs_net_connect_worker(struct work_struct *work)
 
 	trace_scoutfs_net_connect_work_enter(sb, 0, 0);
 
-	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 
@@ -1517,8 +1517,7 @@ scoutfs_net_alloc_conn(struct super_block *sb,
 		conn->ordered_proc_wlists = kmalloc_array(nr, sizeof(struct scoutfs_work_list),
 							  GFP_NOFS);
 		conn->workq = alloc_workqueue("scoutfs_net_%s",
-					      WQ_UNBOUND | WQ_NON_REENTRANT, 0,
-					      name_suffix);
+					      WQ_UNBOUND, 0, name_suffix);
 	}
 	if (!conn || (info_size && !conn->info) || !conn->workq || !conn->ordered_proc_wlists) {
 		if (conn) {
@@ -1630,7 +1629,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	if (WARN_ON_ONCE(conn->sock))
 		return -EINVAL;
 
-	ret = kc_sock_create_kern(AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret)
 		goto out;
 
@@ -1651,7 +1650,7 @@ int scoutfs_net_bind(struct super_block *sb,
 	if (ret < 0)
 		goto out;
 
-	ret = kc_kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
+	ret = kernel_getsockname(sock, (struct sockaddr *)&conn->sockname);
 	if (ret < 0)
 		goto out;
 
@@ -2099,11 +2098,9 @@ int scoutfs_net_setup(struct super_block *sb)
 	scoutfs_tseq_tree_init(&ninf->msg_tseq_tree, net_tseq_show_msg);
 
 	ninf->shutdown_workq = alloc_workqueue("scoutfs_net_shutdown",
-					       WQ_UNBOUND | WQ_NON_REENTRANT,
-					       0);
+					       WQ_UNBOUND, 0);
 	ninf->destroy_workq = alloc_workqueue("scoutfs_net_destroy",
-					       WQ_UNBOUND | WQ_NON_REENTRANT,
-					       0);
+					       WQ_UNBOUND, 0);
 	if (!ninf->shutdown_workq || !ninf->destroy_workq) {
 		ret = -ENOMEM;
 		goto out;

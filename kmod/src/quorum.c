@@ -183,7 +183,7 @@ static int create_socket(struct super_block *sb)
 	int addrlen;
 	int ret;
 
-	ret = kc_sock_create_kern(PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	ret = sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
 	if (ret) {
 		scoutfs_err(sb, "quorum couldn't create udp socket: %d", ret);
 		goto out;
@@ -1332,8 +1332,7 @@ int scoutfs_quorum_setup(struct super_block *sb)
 
 	/* a high priority single threaded context without mem reclaim */
 	qinf->workq = alloc_workqueue("scoutfs_quorum_work",
-				       WQ_NON_REENTRANT | WQ_UNBOUND |
-				       WQ_HIGHPRI, 1);
+				       WQ_UNBOUND | WQ_HIGHPRI, 1);
 	if (!qinf->workq) {
 		ret = -ENOMEM;
 		goto out;

@@ -424,8 +424,7 @@ int scoutfs_fence_setup(struct super_block *sb)
 		goto out;
 	}
 
-	fi->wq = alloc_workqueue("scoutfs_fence",
-				 WQ_UNBOUND | WQ_NON_REENTRANT, 0);
+	fi->wq = alloc_workqueue("scoutfs_fence", WQ_UNBOUND, 0);
 	if (!fi->wq) {
 		ret = -ENOMEM;
 		goto out;

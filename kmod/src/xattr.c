@@ -16,6 +16,7 @@
 #include <linux/xattr.h>
 #include <linux/crc32c.h>
 #include <linux/posix_acl.h>
+#include <linux/iversion.h>
 
 #include "format.h"
 #include "inode.h"
@@ -994,38 +995,17 @@ unlock:
 	return ret;
 }
 
-#ifndef KC_XATTR_STRUCT_XATTR_HANDLER
-/*
- * Future kernels have this amazing hack to rewind the name to get the
- * skipped prefix.  We're back in the stone ages without the handler
- * arg, so we Just Know that this is possible.  This will become a
- * compat hook to either call the kernel's xattr_full_name(handler), or
- * our hack to use the flags as the prefix length.
- */
-static const char *full_name_hack(const char *name, int len)
-{
-	return name - len;
-}
-#endif
 
 static int scoutfs_xattr_get_handler
-#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
 		(const struct xattr_handler *handler, struct dentry *dentry,
 		 struct inode *inode, const char *name, void *value,
 		 size_t size)
 {
 	name = xattr_full_name(handler, name);
-#else
-		(struct dentry *dentry, const char *name,
-		 void *value, size_t size, int handler_flags)
-{
-	name = full_name_hack(name, handler_flags);
-#endif
 	return scoutfs_xattr_get(dentry, name, value, size);
 }
 
 static int scoutfs_xattr_set_handler
-#ifdef KC_XATTR_STRUCT_XATTR_HANDLER
 		(const struct xattr_handler *handler,
 		 KC_VFS_NS_DEF
 		 struct dentry *dentry,
@@ -1033,12 +1013,6 @@ static int scoutfs_xattr_set_handler
 		 size_t size, int flags)
 {
 	name = xattr_full_name(handler, name);
-#else
-		(struct dentry *dentry, const char *name,
-		 const void *value, size_t size, int flags, int handler_flags)
-{
-	name = full_name_hack(name, handler_flags);
-#endif
 	return scoutfs_xattr_set(dentry, name, value, size, flags);
 }
 
@@ -1071,22 +1045,14 @@ static const struct xattr_handler scoutfs_xattr_security_handler = {
 };
 
 static const struct xattr_handler scoutfs_xattr_acl_access_handler = {
-#ifdef KC_XATTR_HANDLER_NAME
 	.name   = XATTR_NAME_POSIX_ACL_ACCESS,
-#else
-	.prefix = XATTR_NAME_POSIX_ACL_ACCESS,
-#endif
 	.flags  = ACL_TYPE_ACCESS,
 	.get    = scoutfs_acl_get_xattr,
 	.set    = scoutfs_acl_set_xattr,
 };
 
 static const struct xattr_handler scoutfs_xattr_acl_default_handler = {
-#ifdef KC_XATTR_HANDLER_NAME
 	.name   = XATTR_NAME_POSIX_ACL_DEFAULT,
-#else
-	.prefix = XATTR_NAME_POSIX_ACL_DEFAULT,
-#endif
 	.flags  = ACL_TYPE_DEFAULT,
 	.get    = scoutfs_acl_get_xattr,
 	.set    = scoutfs_acl_set_xattr,

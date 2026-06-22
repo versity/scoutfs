@@ -444,13 +444,13 @@ static void block_end_io(struct super_block *sb, blk_opf_t opf,
 		wake_up(&binf->waitq);
 }
 
-static void KC_DECLARE_BIO_END_IO(block_bio_end_io, struct bio *bio)
+static void block_bio_end_io(struct bio *bio)
 {
 	struct block_private *bp = bio->bi_private;
 	struct super_block *sb = bp->sb;
 
 	TRACE_BLOCK(end_io, bp);
-	block_end_io(sb, kc_bio_get_opf(bio), bp, kc_bio_get_errno(bio));
+	block_end_io(sb, bio->bi_opf, bp, blk_status_to_errno(bio->bi_status));
 	bio_put(bio);
 }
 
@@ -499,7 +499,7 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 				break;
 			}
 
-			kc_bio_set_sector(bio, sector + (off >> 9));
+			bio->bi_iter.bi_sector = sector + (off >> 9);
 			bio->bi_end_io = block_bio_end_io;
 			bio->bi_private = bp;
 
@@ -516,13 +516,13 @@ static int block_submit_bio(struct super_block *sb, struct block_private *bp,
 			BUG();
 
 		if (!bio_add_page(bio, page, PAGE_SIZE, 0)) {
-			kc_submit_bio(bio);
+			submit_bio(bio);
 			bio = NULL;
 		}
 	}
 
 	if (bio)
-		kc_submit_bio(bio);
+		submit_bio(bio);
 
 	blk_finish_plug(&plug);
 
@@ -1179,11 +1179,11 @@ struct sm_block_completion {
 	int err;
 };
 
-static void KC_DECLARE_BIO_END_IO(sm_block_bio_end_io, struct bio *bio)
+static void sm_block_bio_end_io(struct bio *bio)
 {
 	struct sm_block_completion *sbc = bio->bi_private;
 
-	sbc->err = kc_bio_get_errno(bio);
+	sbc->err = blk_status_to_errno(bio->bi_status);
 	complete(&sbc->comp);
 	bio_put(bio);
 }
@@ -1236,7 +1236,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_op
 		goto out;
 	}
 
-	kc_bio_set_sector(bio, blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9));
+	bio->bi_iter.bi_sector = blkno << (SCOUTFS_BLOCK_SM_SHIFT - 9);
 	bio->bi_end_io = sm_block_bio_end_io;
 	bio->bi_private = &sbc;
 	bio_add_page(bio, page, SCOUTFS_BLOCK_SM_SIZE, 0);
@@ -1244,7 +1244,7 @@ static int sm_block_io(struct super_block *sb, struct block_device *bdev, blk_op
 	init_completion(&sbc.comp);
 	sbc.err = 0;
 
-	kc_submit_bio(bio);
+	submit_bio(bio);
 
 	wait_for_completion(&sbc.comp);
 	ret = sbc.err;
