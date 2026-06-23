@@ -1,0 +1,6 @@
+== set up file
+== exercise read, write, and write-only modes
+== verify FS-zone lock recorded read and write ino+pid
+== verify orphan-zone lock recorded write-only ino+pid
+== contend on a single inode with concurrent read and write loops
+== verify both rd and wr slots populated by concurrent contention
