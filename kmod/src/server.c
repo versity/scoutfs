@@ -4315,7 +4315,8 @@ static void server_notify_down(struct super_block *sb,
 		spin_unlock(&server->lock);
 
 		free_farewell_requests(sb, rid);
-	} else {
+	} else if (!conn->listening_conn) {
+		/* only the listener going down should stop the server */
 		stop_server(server);
 	}
 }
