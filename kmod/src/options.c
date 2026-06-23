@@ -136,7 +136,7 @@ static void free_options(struct scoutfs_mount_options *opts)
 #define MIN_DATA_PREALLOC_BLOCKS	1ULL
 #define MAX_DATA_PREALLOC_BLOCKS	((unsigned long long)SCOUTFS_BLOCK_SM_MAX)
 
-#define DEFAULT_TCP_KEEPALIVE_TIMEOUT_MS	(60 * MSEC_PER_SEC)
+#define DEFAULT_TCP_KEEPALIVE_TIMEOUT_MS	(24 * MSEC_PER_SEC)
 
 static void init_default_options(struct scoutfs_mount_options *opts)
 {
