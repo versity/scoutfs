@@ -4386,6 +4386,8 @@ static void fence_pending_recov_worker(struct work_struct *work)
 		scoutfs_err(sb, "%lu ms recovery timeout expired for client rid %016llx, fencing",
 			    SERVER_RECOV_TIMEOUT_MS, rid);
 
+		trace_scoutfs_recov_fence_rid(sb, rid);
+
 		ret = lookup_mounted_client_addr(sb, rid, &addr);
 		if (ret < 0) {
 			scoutfs_err(sb, "client rid addr lookup err %d, shutting down server", ret);
