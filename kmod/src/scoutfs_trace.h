@@ -102,7 +102,7 @@ TRACE_EVENT(scoutfs_setattr,
 		SCSB_TRACE_ASSIGN(dentry->d_inode->i_sb);
 		__entry->ino = scoutfs_ino(dentry->d_inode);
 		__entry->d_len = dentry->d_name.len;
-		__assign_str(d_name, dentry->d_name.name);
+		kc__assign_str(d_name, dentry->d_name.name);
 		__entry->ia_valid = attr->ia_valid;
 		__entry->size_change = !!(attr->ia_valid & ATTR_SIZE);
 		__entry->ia_size = attr->ia_size;
@@ -1638,9 +1638,9 @@ TRACE_EVENT(scoutfs_rename,
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->old_dir_ino = scoutfs_ino(old_dir);
-		__assign_str(old_name, old_dentry->d_name.name)
+		kc__assign_str(old_name, old_dentry->d_name.name);
 		__entry->new_dir_ino = scoutfs_ino(new_dir);
-		__assign_str(new_name, new_dentry->d_name.name)
+		kc__assign_str(new_name, new_dentry->d_name.name);
 		__entry->new_inode_ino = new_dentry->d_inode ?
 					 scoutfs_ino(new_dentry->d_inode) : 0;
 	),
@@ -1670,7 +1670,7 @@ TRACE_EVENT(scoutfs_d_revalidate,
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->dentry = dentry;
-		__assign_str(name, dentry->d_name.name)
+		kc__assign_str(name, dentry->d_name.name);
 		__entry->ino = dentry->d_inode ? scoutfs_ino(dentry->d_inode) : 0;
 		__entry->dir_ino = dir_ino;
 		__entry->flags = flags;
@@ -1705,7 +1705,7 @@ TRACE_EVENT(scoutfs_validate_dentry,
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->dentry = dentry;
 		__entry->dir_ino = dir_ino;
-		__assign_str(name, dentry->d_name.name)
+		kc__assign_str(name, dentry->d_name.name);
 		__entry->dentry_ino = dentry_ino;
 		__entry->dent_ino = dent_ino;
 		__entry->fsdata_gen = (unsigned long long)dentry->d_fsdata;
@@ -1827,7 +1827,7 @@ TRACE_EVENT(scoutfs_get_name,
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->parent_ino = scoutfs_ino(parent);
 		__entry->child_ino = scoutfs_ino(child);
-		__assign_str(name, name);
+		kc__assign_str(name, name);
 	),
 
 	TP_printk(SCSBF" parent %llu child %llu name: %s",

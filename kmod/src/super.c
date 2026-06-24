@@ -283,7 +283,7 @@ int scoutfs_write_super(struct super_block *sb,
 static bool small_bdev(struct super_block *sb, char *which, u64 blocks,
 		       struct block_device *bdev, int shift)
 {
-	u64 size = (u64)i_size_read(bdev->bd_inode);
+	u64 size = (u64)i_size_read(KC_BDEV_INODE(bdev));
 	u64 count = size >> shift;
 
 	if (blocks > count) {
@@ -508,7 +508,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_time_gran = 1;
 
 	/* btree blocks use long lived bh->b_data refs */
-	mapping_set_gfp_mask(sb->s_bdev->bd_inode->i_mapping, GFP_NOFS);
+	mapping_set_gfp_mask(KC_BDEV_MAPPING(sb->s_bdev), GFP_NOFS);
 
 	sbi = kzalloc(sizeof(struct scoutfs_sb_info), GFP_KERNEL);
 	sb->s_fs_info = sbi;
@@ -552,6 +552,7 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	}
 	sbi->meta_bdev_file = meta_bdev_file;
 	sbi->meta_bdev = file_bdev(meta_bdev_file);
+
 #else
 #ifdef KC_BLKDEV_PUT_HOLDER_ARG
 	meta_bdev = blkdev_get_by_path(opts.metadev_path, SCOUTFS_META_BDEV_MODE, sb, NULL);
@@ -567,7 +568,11 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->meta_bdev = meta_bdev;
 #endif
 
+#ifdef KC_BLKDEV_SET_BLOCKSIZE_FILE
+	ret = set_blocksize(sbi->meta_bdev_file, SCOUTFS_BLOCK_SM_SIZE);
+#else
 	ret = set_blocksize(sbi->meta_bdev, SCOUTFS_BLOCK_SM_SIZE);
+#endif
 	if (ret != 0) {
 		scoutfs_err(sb, "failed to set metadev blocksize, returned %d",
 			    ret);

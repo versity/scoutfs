@@ -103,8 +103,8 @@ int scoutfs_get_attr_x(struct inode *inode, struct scoutfs_ioctl_inode_attr_x *i
 		size = fill_attr(size, iax, SCOUTFS_IOC_IAX_OFFLINE_BLOCKS,
 				 offline_blocks, offline);
 	}
-	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CTIME, ctime_sec, inode->i_ctime.tv_sec);
-	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CTIME, ctime_nsec, inode->i_ctime.tv_nsec);
+	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CTIME, ctime_sec, inode_get_ctime_sec(inode));
+	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CTIME, ctime_nsec, inode_get_ctime_nsec(inode));
 	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CRTIME, crtime_sec, si->crtime.tv_sec);
 	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_CRTIME, crtime_nsec, si->crtime.tv_nsec);
 	size = fill_attr(size, iax, SCOUTFS_IOC_IAX_SIZE, size, i_size_read(inode));
@@ -223,10 +223,8 @@ int scoutfs_set_attr_x(struct inode *inode, struct scoutfs_ioctl_inode_attr_x *i
 		scoutfs_inode_set_data_version(inode, iax->data_version);
 	if (iax->x_mask & SCOUTFS_IOC_IAX_SIZE)
 		i_size_write(inode, iax->size);
-	if (iax->x_mask & SCOUTFS_IOC_IAX_CTIME) {
-		inode->i_ctime.tv_sec = iax->ctime_sec;
-		inode->i_ctime.tv_nsec = iax->ctime_nsec;
-	}
+	if (iax->x_mask & SCOUTFS_IOC_IAX_CTIME)
+		inode_set_ctime(inode, iax->ctime_sec, iax->ctime_nsec);
 	if (iax->x_mask & SCOUTFS_IOC_IAX_CRTIME) {
 		si->crtime.tv_sec = iax->crtime_sec;
 		si->crtime.tv_nsec = iax->crtime_nsec;
