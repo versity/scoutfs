@@ -490,7 +490,7 @@ static int dirty_alloc_blocks(struct super_block *sb,
 			      struct scoutfs_alloc *alloc,
 			      struct scoutfs_block_writer *wri)
 {
-	struct scoutfs_block_ref orig_freed;
+	struct scoutfs_alloc_list_head orig_freed;
 	struct scoutfs_alloc_list_block *lblk;
 	struct scoutfs_block *av_bl = NULL;
 	struct scoutfs_block *fr_bl = NULL;
@@ -508,7 +508,7 @@ static int dirty_alloc_blocks(struct super_block *sb,
 	mutex_lock(&alloc->mutex);
 
 	/* undo dirty freed if we get an error after */
-	orig_freed = alloc->freed.ref;
+	orig_freed = alloc->freed;
 
 	if (alloc->dirty_avail_bl != NULL) {
 		ret = 0;
@@ -549,7 +549,7 @@ static int dirty_alloc_blocks(struct super_block *sb,
 	if (link_orig) {
 		/* .. and point the new block at the rest of the list */
 		lblk = fr_bl->data;
-		lblk->next = orig_freed;
+		lblk->next = orig_freed.ref;
 		lblk = NULL;
 	}
 
@@ -574,10 +574,10 @@ static int dirty_alloc_blocks(struct super_block *sb,
 	ret = 0;
 
 out:
-	if (ret < 0 && alloc->freed.ref.blkno != orig_freed.blkno) {
+	if (ret < 0 && alloc->freed.ref.blkno != orig_freed.ref.blkno) {
 		if (fr_bl)
 			scoutfs_block_writer_forget(sb, wri, fr_bl);
-		alloc->freed.ref = orig_freed;
+		alloc->freed = orig_freed;
 	}
 
 	mutex_unlock(&alloc->mutex);
