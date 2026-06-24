@@ -207,6 +207,10 @@ unsigned long kc_list_lru_shrink_walk(struct list_lru *lru, struct shrink_contro
 #define kc_list_lru_shrink_walk list_lru_shrink_walk
 #endif
 
+#ifndef KC_HAVE_GET_RANDOM_U32_BELOW
+#define get_random_u32_below prandom_u32_max
+#endif
+
 #ifndef KC_TIMER_CONTAINER_OF
 #define timer_container_of(var, callback_timer, timer_fieldname) \
 	from_timer(var, callback_timer, timer_fieldname)
