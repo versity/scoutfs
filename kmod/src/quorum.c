@@ -162,7 +162,7 @@ static void quorum_slot_sin(struct scoutfs_quorum_config *qconf, int i, struct s
 static ktime_t election_timeout(void)
 {
 	return ktime_add_ms(ktime_get(), SCOUTFS_QUORUM_ELECT_MIN_MS +
-				 prandom_u32_max(SCOUTFS_QUORUM_ELECT_VAR_MS));
+				 get_random_u32_below(SCOUTFS_QUORUM_ELECT_VAR_MS));
 }
 
 static ktime_t heartbeat_interval(void)
