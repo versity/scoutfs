@@ -67,7 +67,15 @@
  *
  * It's critical to raft elections that a participant's term not go
  * backwards in time so each mount also uses its quorum block to store
- * the greatest term it has used in messages.
+ * the greatest term it has used in messages.  A candidate only records
+ * an increased term once another member has responded to its election,
+ * though.  A mount that has lost contact increments its term every
+ * election timeout with nobody answering; if it wrote each increase to
+ * its block it would return after a reboot or fence with a wildly
+ * inflated term, ignore the current leader's smaller term, and need-
+ * lessly fence it.  Any member that does respond has already recorded
+ * the term as it adopted it, and a winner records it in its elect event,
+ * so a term that mattered is never lost.
  *
  * The quorum work still runs in the background while the server is
  * running.  The leader quorum work will regularly send heartbeat
@@ -114,6 +122,7 @@ struct quorum_status {
 	int server_event;
 	int vote_for;
 	unsigned long vote_bits;
+	bool term_persisted;
 	ktime_t timeout;
 };
 
@@ -828,10 +837,16 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			qst.timeout = election_timeout();
 			scoutfs_inc_counter(sb, quorum_send_request);
 
-			/* store our increased term */
-			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_TERM, qst.term, true);
-			if (ret < 0)
-				goto out;
+			/*
+			 * Don't persist this increased term yet.  A mount that
+			 * has lost all contact increments its term every timeout
+			 * with nobody answerings. Persisting each increase would
+			 * let it return after a reboot or fence with a wildly
+			 * inflated term and fence the current leader.  We record
+			 * term increase when another member responds, which proves
+			 * the term is actively in circulation.
+			 */
+			qst.term_persisted = false;
 		}
 
 		/* candidates count votes in their term */
@@ -842,6 +857,18 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 					     msg.from, qst.term, msg.from);
 			}
 			scoutfs_inc_counter(sb, quorum_recv_vote);
+
+			/*
+			 * Another member answered our election, so the term is
+			 * now real and should be persisted.
+			 */
+			if (!qst.term_persisted) {
+				ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_TERM,
+							  qst.term, true);
+				if (ret < 0)
+					goto out;
+				qst.term_persisted = true;
+			}
 		}
 
 		/*
