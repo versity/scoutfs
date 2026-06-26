@@ -173,15 +173,20 @@
 	EXPAND_COUNTER(quorum_recv_error)			\
 	EXPAND_COUNTER(quorum_recv_heartbeat)			\
 	EXPAND_COUNTER(quorum_recv_invalid)			\
+	EXPAND_COUNTER(quorum_recv_prevote)			\
+	EXPAND_COUNTER(quorum_recv_prevote_request)		\
 	EXPAND_COUNTER(quorum_recv_resignation)			\
 	EXPAND_COUNTER(quorum_recv_vote)			\
 	EXPAND_COUNTER(quorum_send_heartbeat)			\
 	EXPAND_COUNTER(quorum_send_heartbeat_dropped)		\
+	EXPAND_COUNTER(quorum_send_prevote)			\
+	EXPAND_COUNTER(quorum_send_prevote_request)		\
 	EXPAND_COUNTER(quorum_send_resignation)			\
 	EXPAND_COUNTER(quorum_send_request)			\
 	EXPAND_COUNTER(quorum_send_vote)			\
 	EXPAND_COUNTER(quorum_server_shutdown)			\
 	EXPAND_COUNTER(quorum_term_follower)			\
+	EXPAND_COUNTER(quorum_term_from_prevote)		\
 	EXPAND_COUNTER(reclaimed_open_logs)			\
 	EXPAND_COUNTER(server_commit_hold)			\
 	EXPAND_COUNTER(server_commit_queue)			\

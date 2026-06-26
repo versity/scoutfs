@@ -69,6 +69,24 @@
  * backwards in time so each mount also uses its quorum block to store
  * the greatest term it has used in messages.
  *
+ * Before a member increases and persists its term to stand for election
+ * it first runs a raft pre-vote round: as a pre-candidate it asks the
+ * others to support its prospective next term without adopting that term
+ * itself.  Peers only grant a pre-vote when they don't currently see a
+ * live leader.  A partitioned member can't reach a majority, never
+ * collects enough pre-votes, and so never inflates its persistent term
+ * while it's isolated.  This keeps an old leader that was network
+ * partitioned during a slow fence from returning with a wildly greater
+ * term and needlessly fencing the leader that legitimately replaced it.
+ *
+ * A pre-vote request does prove that its sender currently holds the term
+ * one less than the prospective term it probes.  Members adopt a proven
+ * term greater than their own, just as they do for any other message.
+ * This lets a member that already persisted an inflated term pull the
+ * cluster up to its term and rejoin after a single election, rather than
+ * being stuck looping pre-vote rounds that peers refuse for as long as
+ * the lower-term leader stays alive.
+ *
  * The quorum work still runs in the background while the server is
  * running.  The leader quorum work will regularly send heartbeat
  * messages to the other quorum members to keep them from electing a new
@@ -105,7 +123,7 @@ struct count_recent {
 	ktime_t recent;
 };
 
-enum quorum_role { FOLLOWER, CANDIDATE, LEADER };
+enum quorum_role { FOLLOWER, CANDIDATE, LEADER, PRE_CANDIDATE };
 
 struct quorum_status {
 	enum quorum_role role;
@@ -114,7 +132,10 @@ struct quorum_status {
 	int server_event;
 	int vote_for;
 	unsigned long vote_bits;
+	unsigned long prevote_bits;
 	ktime_t timeout;
+	/* when we last heard a leader heartbeat, zeroed when it's known gone */
+	ktime_t last_hb;
 };
 
 #define HB_DELAY_NR		(SCOUTFS_QUORUM_MAX_HB_TIMEO_MS / MSEC_PER_SEC)
@@ -173,6 +194,19 @@ static ktime_t heartbeat_interval(void)
 static ktime_t heartbeat_timeout(struct scoutfs_mount_options *opts)
 {
 	return ktime_add_ms(ktime_get(), opts->quorum_heartbeat_timeout_ms);
+}
+
+/*
+ * We believe a leader is alive if we heard its heartbeat within the
+ * heartbeat timeout.  A zeroed last_hb records that we know the leader
+ * is gone, it's also checked explicitly because shortly after boot a
+ * zero plus the timeout can still land beyond a small ktime_get().
+ */
+static bool saw_live_leader(struct quorum_status *qst, struct scoutfs_mount_options *opts)
+{
+	return ktime_to_ns(qst->last_hb) != 0 &&
+	       ktime_after(ktime_add_ms(qst->last_hb, opts->quorum_heartbeat_timeout_ms),
+			   ktime_get());
 }
 
 static int create_socket(struct super_block *sb)
@@ -712,6 +746,7 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	struct quorum_host_msg msg;
 	struct quorum_status qst = {0,};
 	struct hb_recording hbr;
+	u64 proven_term;
 	bool record_hb;
 	int ret;
 	int err;
@@ -731,10 +766,13 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	read_greatest_term(sb, &qst.term);
 
 	/* see if there's a server to chose heartbeat or election timeout */
-	if (scoutfs_quorum_server_sin(sb, &unused) == 0)
+	if (scoutfs_quorum_server_sin(sb, &unused) == 0) {
 		qst.timeout = heartbeat_timeout(&opts);
-	else
+		qst.last_hb = ktime_get();
+	} else {
 		qst.timeout = election_timeout();
+		qst.last_hb = ns_to_ktime(0);
+	}
 
 	/* record that we're up and running, readers check that it isn't updated */
 	ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_BEGIN, qst.term, false);
@@ -767,24 +805,56 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		trace_scoutfs_quorum_loop(sb, qst.role, qst.term, qst.vote_for,
 					  qst.vote_bits, ktime_to_ns(qst.timeout));
 
-		/* receiving greater terms resets term, becomes follower */
-		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
-		    msg.term > qst.term) {
+		/*
+		 * Messages prove that their sender currently holds a term.
+		 * Most types carry it directly, but a pre-vote request
+		 * probes at the sender's term + 1 before the sender adopts
+		 * it, so it only proves one less than it carries.  A
+		 * pre-vote grant echoes the request's term and proves
+		 * nothing.
+		 */
+		if (msg.type == SCOUTFS_QUORUM_MSG_INVALID ||
+		    msg.type == SCOUTFS_QUORUM_MSG_PREVOTE)
+			proven_term = 0;
+		else if (msg.type == SCOUTFS_QUORUM_MSG_REQUEST_PREVOTE)
+			proven_term = msg.term ? msg.term - 1 : 0;
+		else
+			proven_term = msg.term;
+
+		/*
+		 * Receiving proof of a greater term resets our term and
+		 * makes us a follower.  Granting pre-votes never advances
+		 * terms, but adopting a pre-vote requester's proven term
+		 * frees a member whose persisted term was inflated before
+		 * pre-voting existed: its probes pull the cluster up to
+		 * its term, at the cost of one election, instead of it
+		 * looping pre-vote rounds that a live leader's peers
+		 * always refuse.  An ordinary timed-out member only proves
+		 * the term the cluster already holds, so its probes still
+		 * can't disrupt a live leader.
+		 */
+		if (proven_term > qst.term) {
 			if (qst.role == LEADER) {
-				scoutfs_warn(sb, "saw msg type %u from %u for term %llu while leader in term %llu, shutting down server.",
-					     msg.type, msg.from, msg.term, qst.term);
+				scoutfs_warn(sb, "saw msg type %u from %u proving term %llu while leader in term %llu, shutting down server.",
+					     msg.type, msg.from, proven_term, qst.term);
 				clear_hb_delay(qinf);
 			}
 			qst.role = FOLLOWER;
-			qst.term = msg.term;
+			qst.term = proven_term;
 			qst.vote_for = -1;
 			qst.vote_bits = 0;
+			qst.prevote_bits = 0;
 			scoutfs_inc_counter(sb, quorum_term_follower);
+			if (msg.type == SCOUTFS_QUORUM_MSG_REQUEST_PREVOTE)
+				scoutfs_inc_counter(sb, quorum_term_from_prevote);
 
-			if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT)
+			if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
 				qst.timeout = heartbeat_timeout(&opts);
-			else
+				qst.last_hb = ktime_get();
+			} else {
 				qst.timeout = election_timeout();
+				qst.last_hb = ns_to_ktime(0);
+			}
 
 			/* store our increased term */
 			ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_TERM, qst.term, true);
@@ -794,7 +864,13 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 		/* receiving heartbeats extends timeout, delaying elections */
 		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
+			/* a live leader ends any pre-vote campaign of ours */
+			if (qst.role == PRE_CANDIDATE) {
+				qst.role = FOLLOWER;
+				qst.prevote_bits = 0;
+			}
 			qst.timeout = heartbeat_timeout(&opts);
+			qst.last_hb = ktime_get();
 			scoutfs_inc_counter(sb, quorum_recv_heartbeat);
 			record_hb = true;
 		}
@@ -804,10 +880,46 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		    qst.role == FOLLOWER &&
 		    msg.term == qst.term) {
 			qst.timeout = election_timeout();
+			qst.last_hb = ns_to_ktime(0);
 			scoutfs_inc_counter(sb, quorum_recv_resignation);
 		}
 
-		/* followers and candidates start new election on timeout */
+		/*
+		 * Grant a pre-vote for a higher prospective term as long as
+		 * we don't currently see a live leader.  Pre-votes don't
+		 * change our term, role, or recorded vote so we can grant
+		 * them freely.  Refusing while a leader is heartbeating keeps
+		 * a spuriously timed-out member from disrupting a healthy
+		 * leader.
+		 */
+		if (msg.type == SCOUTFS_QUORUM_MSG_REQUEST_PREVOTE) {
+			scoutfs_inc_counter(sb, quorum_recv_prevote_request);
+			if (qst.role != LEADER && msg.term > qst.term &&
+			    !saw_live_leader(&qst, &opts)) {
+				send_msg_to(sb, SCOUTFS_QUORUM_MSG_PREVOTE,
+					    msg.term, msg.from);
+				scoutfs_inc_counter(sb, quorum_send_prevote);
+			}
+		}
+
+		/* pre-candidates collect pre-votes for their prospective term */
+		if (qst.role == PRE_CANDIDATE &&
+		    msg.type == SCOUTFS_QUORUM_MSG_PREVOTE &&
+		    msg.term == qst.term + 1) {
+			set_bit(msg.from, &qst.prevote_bits);
+			scoutfs_inc_counter(sb, quorum_recv_prevote);
+		}
+
+		/*
+		 * Followers and candidates that time out start a pre-vote
+		 * round instead of immediately increasing their term.  As a
+		 * pre-candidate we probe for support at our prospective next
+		 * term without adopting or persisting it.  A pre-candidate
+		 * that times out without a majority of pre-votes starts
+		 * another round at the same term.  A partitioned mount
+		 * can't reach a majority, so it never collects enough
+		 * pre-votes and never inflates its term while isolated.
+		 */
 		if (qst.role != LEADER &&
 		    msg.type == SCOUTFS_QUORUM_MSG_INVALID &&
 		    ktime_after(ktime_get(), qst.timeout)) {
@@ -818,6 +930,30 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 				continue;
 			}
 
+			/*
+			 * Our term doesn't change becoming a pre-candidate, so
+			 * vote_for must be preserved: clearing it here would
+			 * let us vote twice in the same term if a heartbeat
+			 * returns us to follower.
+			 */
+			qst.role = PRE_CANDIDATE;
+			qst.prevote_bits = 0;
+			set_bit(qinf->our_quorum_slot_nr, &qst.prevote_bits);
+			send_msg_others(sb, SCOUTFS_QUORUM_MSG_REQUEST_PREVOTE,
+					qst.term + 1);
+			qst.timeout = election_timeout();
+			scoutfs_inc_counter(sb, quorum_send_prevote_request);
+		}
+
+		/*
+		 * A pre-candidate with a majority of pre-votes has confirmed
+		 * that a majority is reachable and willing to elect.  Only now
+		 * does it increase and persist its term and stand for election
+		 * for real.  A lone pre-candidate in a single-vote majority
+		 * elects itself here just as it did before pre-voting.
+		 */
+		if (qst.role == PRE_CANDIDATE &&
+		    hweight_long(qst.prevote_bits) >= qinf->votes_needed) {
 			qst.role = CANDIDATE;
 			qst.term++;
 			qst.vote_for = -1;
@@ -1060,6 +1196,7 @@ static char *role_str(int role)
 		[FOLLOWER] = "follower",
 		[CANDIDATE] = "candidate",
 		[LEADER] = "leader",
+		[PRE_CANDIDATE] = "pre_candidate",
 	};
 
 	if (role < 0 || role >= ARRAY_SIZE(roles) || !roles[role])
@@ -1122,6 +1259,8 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 	ts = ktime_to_timespec64(ktime_sub(qst.timeout, now));
 	snprintf_ret(buf, size, &ret, "timeout_in_secs %lld.%09u\n",
 		     (s64)ts.tv_sec, (int)ts.tv_nsec);
+	snprintf_ret(buf, size, &ret, "prevote_bits 0x%lx (count %lu)\n",
+		     qst.prevote_bits, hweight_long(qst.prevote_bits));
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		spin_lock(&qinf->show_lock);

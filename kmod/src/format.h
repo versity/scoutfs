@@ -763,7 +763,11 @@ struct scoutfs_quorum_message {
 #define SCOUTFS_QUORUM_MSG_HEARTBEAT	2
 /* leaders broadcast as they leave to break heartbeat timeout */
 #define SCOUTFS_QUORUM_MSG_RESIGNATION	3
-#define SCOUTFS_QUORUM_MSG_INVALID	4
+/* a pre-candidate probes for support at its prospective next term */
+#define SCOUTFS_QUORUM_MSG_REQUEST_PREVOTE	4
+/* peers grant pre-votes when they don't see a live leader */
+#define SCOUTFS_QUORUM_MSG_PREVOTE	5
+#define SCOUTFS_QUORUM_MSG_INVALID	6
 
 /*
  * The version is currently always 0, but will be used by mounts to
