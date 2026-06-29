@@ -95,6 +95,8 @@ static void scoutfs_inode_ctor(void *obj)
 	seqlock_init(&si->seqlock);
 	si->staging = false;
 	scoutfs_per_task_init(&si->pt_data_lock);
+	scoutfs_per_task_init(&si->pt_inode_locks);
+	scoutfs_per_task_init(&si->pt_extent_sem);
 	atomic64_set(&si->data_waitq.changed, 0);
 	init_waitqueue_head(&si->data_waitq.waitq);
 	init_rwsem(&si->xattr_rwsem);
@@ -398,7 +400,9 @@ static int set_inode_size(struct inode *inode, struct scoutfs_lock *lock,
 	if (ret)
 		return ret;
 
-	scoutfs_per_task_add(&si->pt_data_lock, &pt_ent, lock);
+	if (!scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, lock))
+		WARN_ON_ONCE(true);
+
 	ret = block_truncate_page(inode->i_mapping, new_size, scoutfs_get_block_write);
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	if (ret < 0)

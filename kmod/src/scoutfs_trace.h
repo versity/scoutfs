@@ -3269,6 +3269,40 @@ TRACE_EVENT(scoutfs_trigger_fired,
 	TP_printk(SCSBF" %s", SCSB_TRACE_ARGS, __entry->name)
 );
 
+TRACE_EVENT(scoutfs_set_iomap,
+	TP_PROTO(struct super_block *sb, u64 ino, u64 iblock, loff_t length,
+		 unsigned int type, unsigned int iflags, loff_t ioffset, loff_t ilength,
+		 u64 map),
+
+	TP_ARGS(sb, ino, iblock, length, type, iflags, ioffset, ilength, map),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(u64, ino)
+		__field(u64, iblock)
+		__field(loff_t, length)
+		__field(unsigned int, type)
+		__field(loff_t, ioffset)
+		__field(loff_t, ilength)
+		__field(u64, map)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->ino = ino;
+		__entry->iblock = iblock;
+		__entry->length = length;
+		__entry->type = type;
+		__entry->ioffset = ioffset;
+		__entry->ilength = ilength;
+		__entry->map = map;
+	),
+
+	TP_printk(SCSBF" ino %llu iblock %llu len %llu type %d ioff %llu ilen %llu map %llu", SCSB_TRACE_ARGS,
+		  __entry->ino, __entry->iblock, __entry->length, __entry->type,
+		  __entry->ioffset, __entry->ilength, __entry->map)
+);
+
 #endif /* _TRACE_SCOUTFS_H */
 
 /* This part must be outside protection */

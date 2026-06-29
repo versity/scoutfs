@@ -49,6 +49,7 @@
 #include "quota.h"
 #include "scoutfs_trace.h"
 #include "util.h"
+#include "msg.h"
 
 /*
  * We make inode index items coherent by locking fixed size regions of
@@ -529,7 +530,8 @@ static long scoutfs_ioc_stage(struct file *file, unsigned long arg)
 	if (ret)
 		goto out;
 
-	scoutfs_per_task_add(&si->pt_data_lock, &pt_ent, lock);
+	if (!scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, lock))
+		WARN_ON_ONCE(true);
 
 	isize = i_size_read(inode);
 
