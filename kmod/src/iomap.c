@@ -124,6 +124,12 @@ static int scoutfs_iomap_begin_report(struct inode *inode, loff_t offset, loff_t
 	return ret;
 }
 
+const struct iomap_ops scoutfs_iomap_report_ops = {
+	.iomap_begin    = scoutfs_iomap_begin_report,
+};
+
+#ifdef KC_USE_IOMAP_FOR_IO
+
 static int scoutfs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 			       unsigned int flags, struct iomap *iomap,
 			       struct iomap *srcmap)
@@ -261,11 +267,8 @@ static int scoutfs_iomap_end(struct inode *inode, loff_t offset, loff_t length,
 	return ret;
 }
 
-const struct iomap_ops scoutfs_iomap_report_ops = {
-	.iomap_begin    = scoutfs_iomap_begin_report,
-};
-
 const struct iomap_ops scoutfs_iomap_ops = {
 	.iomap_begin	= scoutfs_iomap_begin,
 	.iomap_end	= scoutfs_iomap_end,
 };
+#endif
