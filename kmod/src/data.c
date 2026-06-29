@@ -21,6 +21,7 @@
 #include <linux/log2.h>
 #include <linux/falloc.h>
 #include <linux/fiemap.h>
+#include <linux/iomap.h>
 #include <linux/writeback.h>
 #include <linux/overflow.h>
 #include <linux/iversion.h>
@@ -42,6 +43,7 @@
 #include "msg.h"
 #include "ext.h"
 #include "util.h"
+#include "iomap.h"
 
 /*
  * We want to amortize work done after dirtying the shared transaction
@@ -62,12 +64,6 @@ struct data_info {
 
 #define DECLARE_DATA_INFO(sb, name) \
 	struct data_info *name = SCOUTFS_SB(sb)->data_info
-
-struct data_ext_args {
-	u64 ino;
-	struct inode *inode;
-	struct scoutfs_lock *lock;
-};
 
 static void item_from_extent(struct scoutfs_key *key,
 			     struct scoutfs_data_extent_val *dv, u64 ino,
@@ -181,7 +177,7 @@ static int data_ext_remove(struct super_block *sb, void *arg, u64 start,
 	return ret;
 }
 
-static struct scoutfs_ext_ops data_ext_ops = {
+struct scoutfs_ext_ops data_ext_ops = {
 	.next = data_ext_next,
 	.insert = data_ext_insert,
 	.remove = data_ext_remove,
@@ -386,9 +382,9 @@ static inline u64 ext_last(struct scoutfs_extent *ext)
  * reasonable when a file population is known to be large and dense but
  * known to be written with non-streaming write patterns.
  */
-static int alloc_block(struct super_block *sb, struct inode *inode,
-		       struct scoutfs_extent *ext, u64 iblock,
-		       struct scoutfs_lock *lock)
+int scoutfs_data_alloc_block(struct super_block *sb, struct inode *inode,
+			     struct scoutfs_extent *ext, u64 iblock,
+			     struct scoutfs_lock *lock)
 {
 	DECLARE_DATA_INFO(sb, datinf);
 	struct scoutfs_mount_options opts;
@@ -611,6 +607,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 		un.len = 1;
 		un.map = ext.map + (iblock - ext.start);
 		un.flags = ext.flags & ~(SEF_OFFLINE|SEF_UNWRITTEN);
+
 		ret = scoutfs_ext_set(sb, &data_ext_ops, &args,
 				      un.start, un.len, un.map, un.flags);
 		if (ret == 0) {
@@ -622,7 +619,7 @@ static int scoutfs_get_block(struct inode *inode, sector_t iblock,
 
 	/* allocate and map blocks containing our logical block */
 	if (create && !ext.map) {
-		ret = alloc_block(sb, inode, &ext, iblock, lock);
+		ret = scoutfs_data_alloc_block(sb, inode, &ext, iblock, lock);
 		if (ret == 0)
 			set_buffer_new(bh);
 	} else {
@@ -653,11 +650,17 @@ static int scoutfs_get_block_read(struct inode *inode, sector_t iblock,
 				  struct buffer_head *bh, int create)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	void *extent_sem; /* Just a pointer */
 	int ret;
 
-	down_read(&si->extent_sem);
+	extent_sem = scoutfs_per_task_get(&si->pt_extent_sem);
+	if (extent_sem == NULL)
+		down_read(&si->extent_sem);
+
 	ret = scoutfs_get_block(inode, iblock, bh, create);
-	up_read(&si->extent_sem);
+
+	if (extent_sem == NULL)
+		up_read(&si->extent_sem);
 
 	return ret;
 }
@@ -706,44 +709,55 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	struct scoutfs_lock *inode_lock = NULL;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	DECLARE_DATA_WAIT(dw);
+	bool locked;
 	int flags;
 	int ret;
 
-	flags = SCOUTFS_LKF_REFRESH_INODE | SCOUTFS_LKF_NONBLOCK;
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, flags, inode,
-				 &inode_lock);
-	if (ret < 0) {
-		unlock_page(page);
-		if (ret == -EAGAIN) {
-			flags &= ~SCOUTFS_LKF_NONBLOCK;
-			ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, flags,
-						 inode, &inode_lock);
-			if (ret == 0) {
-				scoutfs_unlock(sb, inode_lock,
-					       SCOUTFS_LOCK_READ);
-				ret = AOP_TRUNCATED_PAGE;
-			}
-		}
-		return ret;
-	}
-
-	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
-		ret = scoutfs_data_wait_check(inode, page_offset(page),
-					      PAGE_SIZE, SEF_OFFLINE,
-					      SCOUTFS_IOC_DWO_READ, &dw,
-					      inode_lock);
-		if (ret != 0) {
+	inode_lock = scoutfs_per_task_get(&si->pt_data_lock);
+	if (!inode_lock) {
+		flags = SCOUTFS_LKF_REFRESH_INODE | SCOUTFS_LKF_NONBLOCK;
+		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, flags, inode,
+					 &inode_lock);
+		if (ret < 0) {
 			unlock_page(page);
-			scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
-			scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
-		}
-		if (ret > 0) {
-			ret = scoutfs_data_wait(inode, &dw);
-			if (ret == 0)
-				ret = AOP_TRUNCATED_PAGE;
-		}
-		if (ret != 0)
+			if (ret == -EAGAIN) {
+				flags &= ~SCOUTFS_LKF_NONBLOCK;
+				ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, flags,
+						inode, &inode_lock);
+				if (ret == 0) {
+					scoutfs_unlock(sb, inode_lock,
+							SCOUTFS_LOCK_READ);
+					ret = AOP_TRUNCATED_PAGE;
+				}
+			}
 			return ret;
+		}
+
+		locked = true;
+
+		if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
+			ret = scoutfs_data_wait_check(inode, page_offset(page),
+					PAGE_SIZE, SEF_OFFLINE,
+					SCOUTFS_IOC_DWO_READ, &dw,
+					inode_lock);
+			if (ret != 0) {
+				unlock_page(page);
+				scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+				scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+				locked = false;
+			}
+			if (ret > 0) {
+				ret = scoutfs_data_wait(inode, &dw);
+				if (ret == 0)
+					ret = AOP_TRUNCATED_PAGE;
+			}
+			if (ret != 0)
+				return ret;
+		} else {
+			WARN_ON_ONCE(true);
+		}
+	} else {
+		locked = false;
 	}
 
 #ifdef KC_MPAGE_READ_FOLIO
@@ -752,8 +766,10 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 	ret = mpage_readpage(page, scoutfs_get_block_read);
 #endif
 
-	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
-	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	if (locked) {
+		scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+		scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	}
 
 	return ret;
 }
@@ -761,14 +777,22 @@ static int scoutfs_readpage(struct file *file, struct page *page)
 static void scoutfs_readahead(struct readahead_control *rac)
 {
 	struct inode *inode = rac->file->f_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
+	bool found_lock;
 	int ret;
 
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
-	if (ret)
-		return;
+	inode_lock = scoutfs_per_task_get(&si->pt_data_lock);
+	if (!inode_lock) {
+		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+					 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+		if (ret)
+			return;
+		found_lock = false;
+	} else {
+		found_lock = true;
+	}
 
 	ret = scoutfs_data_wait_check(inode, readahead_pos(rac),
 				      readahead_length(rac), SEF_OFFLINE,
@@ -777,7 +801,8 @@ static void scoutfs_readahead(struct readahead_control *rac)
 	if (ret == 0)
 		mpage_readahead(rac, scoutfs_get_block_read);
 
-	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	if (!found_lock)
+		scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 }
 
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
@@ -866,8 +891,8 @@ out:
 }
 
 /* kinda like __filemap_fdatawrite_range! :P */
-static int writepages_sync_none(struct address_space *mapping, loff_t start,
-				loff_t end)
+int scoutfs_writepages_sync_none(struct address_space *mapping,
+					loff_t start, loff_t end)
 {
         struct writeback_control wbc = {
                 .sync_mode = WB_SYNC_NONE,
@@ -879,12 +904,26 @@ static int writepages_sync_none(struct address_space *mapping, loff_t start,
 	return mapping->a_ops->writepages(mapping, &wbc);
 }
 
+void scoutfs_do_write_end(struct inode *inode, struct scoutfs_lock *data_lock,
+			  struct list_head *ind_locks)
+{
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+
+	if (!si->staging) {
+		scoutfs_inode_set_data_seq(inode);
+		scoutfs_inode_inc_data_version(inode);
+	}
+
+	inode_inc_iversion(inode);
+	scoutfs_update_inode_item(inode, data_lock, ind_locks);
+	scoutfs_inode_queue_writeback(inode);
+}
+
 static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 			     loff_t pos, unsigned len, unsigned copied,
 			     struct page *page, void *fsdata)
 {
 	struct inode *inode = mapping->host;
-	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct write_begin_data *wbd = fsdata;
 	int ret;
@@ -893,16 +932,9 @@ static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 				len, copied);
 
 	ret = generic_write_end(file, mapping, pos, len, copied, page, fsdata);
-	if (ret > 0) {
-		if (!si->staging) {
-			scoutfs_inode_set_data_seq(inode);
-			scoutfs_inode_inc_data_version(inode);
-		}
+	if (ret > 0)
+		scoutfs_do_write_end(inode, wbd->lock, &wbd->ind_locks);
 
-		inode_inc_iversion(inode);
-		scoutfs_update_inode_item(inode, wbd->lock, &wbd->ind_locks);
-		scoutfs_inode_queue_writeback(inode);
-	}
 	scoutfs_release_trans(sb);
 	scoutfs_inode_index_unlock(sb, &wbd->ind_locks);
 	kfree(wbd);
@@ -914,18 +946,16 @@ static int scoutfs_write_end(struct file *file, struct address_space *mapping,
 	 * to very long commit latencies with lots of dirty file data.
 	 *
 	 * This hack tries to minimize these writeback latencies while
-	 * keeping concurrent large file strreaming writes from
+	 * keeping concurrent large file streaming writes from
 	 * suffering too terribly.  Every N bytes we kick off background
-	 * writbeack on the previous N bytes.  By the time transaction
+	 * writeback on the previous N bytes.  By the time transaction
 	 * commit comes along it will find that dirty file blocks have
 	 * already been written.
 	 */
-#define BACKGROUND_WRITEBACK_BYTES (16 * 1024 * 1024)
-#define BACKGROUND_WRITEBACK_MASK (BACKGROUND_WRITEBACK_BYTES - 1)
 	if (ret > 0 && ((pos + ret) & BACKGROUND_WRITEBACK_MASK) == 0)
-		writepages_sync_none(mapping,
-				     pos + ret - BACKGROUND_WRITEBACK_BYTES,
-				     pos + ret - 1);
+		scoutfs_writepages_sync_none(mapping,
+					     pos + ret - BACKGROUND_WRITEBACK_BYTES,
+					     pos + ret - 1);
 
 	return ret;
 }
@@ -1439,7 +1469,6 @@ int scoutfs_data_move_blocks(struct inode *from, u64 from_off,
 				from_start += len;
 		}
 
-
 		up_write(&from_si->extent_sem);
 		up_write(&to_si->extent_sem);
 
@@ -1572,163 +1601,47 @@ out:
 	return ret;
 }
 
-/*
- * This copies to userspace :/
- */
-static int fill_extent(struct fiemap_extent_info *fieinfo,
-		       struct scoutfs_extent *ext, u32 fiemap_flags)
-{
-	u32 flags;
-
-	if (ext->len == 0)
-		return 0;
-
-	flags = fiemap_flags;
-	if (ext->flags & SEF_OFFLINE)
-		flags |= FIEMAP_EXTENT_UNKNOWN;
-	else if (ext->flags & SEF_UNWRITTEN)
-		flags |= FIEMAP_EXTENT_UNWRITTEN;
-
-	return fiemap_fill_next_extent(fieinfo,
-				       ext->start << SCOUTFS_BLOCK_SM_SHIFT,
-				       ext->map << SCOUTFS_BLOCK_SM_SHIFT,
-				       ext->len << SCOUTFS_BLOCK_SM_SHIFT,
-				       flags);
-}
-
-/*
- * Return all the file's extents whose blocks overlap with the caller's
- * byte region.  We set _LAST on the last extent and _UNKNOWN on offline
- * extents.
- */
 int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 			u64 start, u64 len)
 {
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
-	const u64 ino = scoutfs_ino(inode);
 	struct scoutfs_lock *lock = NULL;
-	struct scoutfs_extent *info = NULL;
-	struct page *page = NULL;
-	struct scoutfs_extent ext;
-	struct scoutfs_extent cur;
-	struct data_ext_args args;
-	u32 last_flags;
-	u64 iblock;
-	u64 last;
-	int entries = 0;
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
 	int ret;
-	int complete = 0;
 
 	if (len == 0) {
-		ret = 0;
+		ret = -EINVAL;
 		goto out;
 	}
 
-	ret = fiemap_prep(inode, fieinfo, start, &len, FIEMAP_FLAG_SYNC);
+	/*
+	 * We don't support xattrs stored in extents. The magic incantation
+	 * to communicate this to the caller is to reset fi_flags to
+	 * FIEMAP_FLAG_XATTR and return -EBADR.
+	 */
+	if (fieinfo->fi_flags & FIEMAP_FLAG_XATTR) {
+		fieinfo->fi_flags = FIEMAP_FLAG_XATTR;
+		ret = -EBADR;
+		goto out;
+	}
+
+	inode_lock(inode);
+
+	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
 	if (ret)
 		goto out;
 
-	page = alloc_page(GFP_KERNEL);
-	if (!page) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, lock);
 
-	/* use a dummy extent to track */
-	memset(&cur, 0, sizeof(cur));
-	last_flags = 0;
+	ret = iomap_fiemap(inode, fieinfo, start, len, &scoutfs_iomap_report_ops);
 
-	iblock = start >> SCOUTFS_BLOCK_SM_SHIFT;
-	last = (start + len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
+	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 
-	args.ino = ino;
-	args.inode = inode;
-
-	/* outer loop */
-	while (iblock <= last) {
-		/* lock */
-		inode_lock(inode);
-		down_read(&si->extent_sem);
-
-		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
-		if (ret) {
-			up_read(&si->extent_sem);
-			inode_unlock(inode);
-			break;
-		}
-
-		args.lock = lock;
-
-		/* collect entries */
-		info = page_address(page);
-		memset(info, 0, PAGE_SIZE);
-		while (entries < (PAGE_SIZE / sizeof(struct fiemap_extent)) - 1) {
-			ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
-					       iblock, 1, &ext);
-			if (ret < 0) {
-				if (ret == -ENOENT)
-					ret = 0;
-				complete = 1;
-				last_flags = FIEMAP_EXTENT_LAST;
-				break;
-			}
-
-			trace_scoutfs_data_fiemap_extent(sb, ino, &ext);
-
-			if (ext.start > last) {
-				/* not setting _LAST, it's for end of file */
-				ret = 0;
-				complete = 1;
-				break;
-			}
-
-			if (scoutfs_ext_can_merge(&cur, &ext)) {
-				/* merged extents could be greater than input len */
-				cur.len += ext.len;
-			} else {
-				/* fill it */
-				memcpy(info, &cur, sizeof(cur));
-
-				entries++;
-				info++;
-
-				cur = ext;
-			}
-
-			iblock = ext.start + ext.len;
-		}
-
-		/* unlock */
-		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
-		up_read(&si->extent_sem);
-		inode_unlock(inode);
-
-		if (ret)
-			break;
-
-		/* emit entries */
-		info = page_address(page);
-		for (; entries > 0; entries--) {
-			ret = fill_extent(fieinfo, info, 0);
-			if (ret != 0)
-				goto out;
-			info++;
-		}
-
-		if (complete)
-			break;
-	}
-
-	/* still one left, it's in cur */
-	if (cur.len)
-		ret = fill_extent(fieinfo, &cur, last_flags);
+	inode_unlock(inode);
 
 out:
-	if (ret == 1)
-		ret = 0;
-	if (page)
-		__free_page(page);
 	trace_scoutfs_data_fiemap(sb, start, len, ret);
 
 	return ret;
@@ -1845,7 +1758,7 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 		goto out;
 	}
 
-	if ((sef & SEF_OFFLINE)) {
+	if (sef & SEF_OFFLINE) {
 		scoutfs_inode_get_onoff(inode, &on, &off);
 		if (off == 0) {
 			ret = 0;
@@ -1858,7 +1771,7 @@ int scoutfs_data_wait_check(struct inode *inode, loff_t pos, loff_t len,
 	iblock = pos >> SCOUTFS_BLOCK_SM_SHIFT;
 	last_block = (pos + len - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
 
-	while(iblock <= last_block) {
+	while (iblock <= last_block) {
 		ret = scoutfs_ext_next(sb, &data_ext_ops, &args,
 				       iblock, 1, &ext);
 		if (ret < 0) {
@@ -2168,40 +2081,70 @@ static vm_fault_t scoutfs_data_filemap_fault(struct vm_fault *vmf)
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_sem);
 	DECLARE_DATA_WAIT(dw);
 	loff_t pos;
 	int err;
 	vm_fault_t ret = VM_FAULT_SIGBUS;
+	void *semlock;
+	bool found_lock;
 
 	pos = vmf->pgoff;
 	pos <<= PAGE_SHIFT;
 
 retry:
-	err = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
-	if (err < 0)
-		return vmf_error(err);
+	inode_lock = scoutfs_per_task_get(&si->pt_data_lock);
+	if (!inode_lock) {
+		found_lock = false;
 
-	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
-		/* protect checked extents from stage/release */
-		atomic_inc(&inode->i_dio_count);
+		err = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ,
+					 SCOUTFS_LKF_REFRESH_INODE, inode, &inode_lock);
+		if (err < 0)
+			return vmf_error(err);
 
-		err = scoutfs_data_wait_check(inode, pos, PAGE_SIZE,
-					      SEF_OFFLINE, SCOUTFS_IOC_DWO_READ,
-					      &dw, inode_lock);
-		if (err != 0) {
-			if (err < 0)
-				ret = vmf_error(err);
-			goto out;
+		if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, inode_lock)) {
+			/* protect checked extents from stage/release */
+			atomic_inc(&inode->i_dio_count);
+
+			err = scoutfs_data_wait_check(inode, pos, PAGE_SIZE,
+						      SEF_OFFLINE, SCOUTFS_IOC_DWO_READ,
+						      &dw, inode_lock);
+			if (err != 0) {
+				if (err < 0)
+					ret = vmf_error(err);
+				goto out;
+			}
+		} else {
+			WARN_ON_ONCE(true);
 		}
+	} else {
+		found_lock = true;
+	}
+
+	semlock = scoutfs_per_task_get(&si->pt_extent_sem);
+	if (semlock == NULL) {
+		down_read(&si->extent_sem);
+		if (!scoutfs_per_task_add_excl(&si->pt_extent_sem, &pt_sem, &semlock))
+			WARN_ON_ONCE(true);
 	}
 
 	ret = filemap_fault(vmf);
 
+	if (semlock == NULL) {
+		up_read(&si->extent_sem);
+		scoutfs_per_task_del(&si->pt_extent_sem, &pt_sem);
+	}
+
 out:
-	if (scoutfs_per_task_del(&si->pt_data_lock, &pt_ent))
-		inode_dio_end(inode);
-	scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	if (!found_lock) {
+		if (scoutfs_per_task_del(&si->pt_data_lock, &pt_ent))
+			inode_dio_end(inode);
+		else
+			WARN_ON_ONCE(true);
+
+		scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	}
+
 	if (scoutfs_data_wait_found(&dw)) {
 		err = scoutfs_data_wait(inode, &dw);
 		if (err == 0)
@@ -2229,6 +2172,7 @@ static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 
 const struct address_space_operations scoutfs_file_aops = {
 #ifdef KC_MPAGE_READ_FOLIO
+	.direct_IO		= noop_direct_IO,
 	.dirty_folio		= block_dirty_folio,
 	.invalidate_folio	= block_invalidate_folio,
 	.read_folio		= scoutfs_read_folio,
