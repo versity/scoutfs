@@ -330,7 +330,6 @@ int scoutfs_trans_sync(struct super_block *sb, int wait)
 	struct write_attempt attempt = { .ret = 0 };
 	int ret;
 
-
 	if (!wait) {
 		queue_trans_work(sb);
 		return 0;

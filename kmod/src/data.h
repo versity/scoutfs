@@ -38,10 +38,30 @@ struct scoutfs_data_wait {
 		.err = 0,						\
 	}
 
+struct data_ext_args {
+	u64 ino;
+	struct inode *inode;
+	struct scoutfs_lock *lock;
+};
+
 extern const struct address_space_operations scoutfs_file_aops;
 extern const struct file_operations scoutfs_file_fops;
+extern struct scoutfs_ext_ops data_ext_ops;
+
 struct scoutfs_alloc;
 struct scoutfs_block_writer;
+struct scoutfs_extent;
+
+#define BACKGROUND_WRITEBACK_BYTES (16 * 1024 * 1024)
+#define BACKGROUND_WRITEBACK_MASK (BACKGROUND_WRITEBACK_BYTES - 1)
+int scoutfs_writepages_sync_none(struct address_space *mapping, loff_t start, loff_t end);
+
+void scoutfs_do_write_end(struct inode *inode, struct scoutfs_lock *data_lock,
+			  struct list_head *ind_locks);
+
+int scoutfs_data_alloc_block(struct super_block *sb, struct inode *inode,
+			     struct scoutfs_extent *ext, u64 iblock,
+			     struct scoutfs_lock *lock);
 
 int scoutfs_get_block_write(struct inode *inode, sector_t iblock, struct buffer_head *bh,
 			    int create);
