@@ -1173,6 +1173,7 @@ out:
 	return ret;
 }
 
+#ifdef KC_USE_IOMAP_FOR_IO
 static int scoutfs_fadvise(struct file *file, loff_t start, loff_t end, int advice)
 {
 	struct inode *inode = file_inode(file);
@@ -1203,6 +1204,7 @@ static int scoutfs_fadvise(struct file *file, loff_t start, loff_t end, int advi
 
 	return ret;
 }
+#endif
 
 /*
  * A special case of initializing a single large offline extent.  This
@@ -2122,7 +2124,9 @@ static vm_fault_t scoutfs_data_filemap_fault(struct vm_fault *vmf)
 	loff_t pos;
 	int err;
 	vm_fault_t ret = VM_FAULT_SIGBUS;
+#ifdef KC_USE_IOMAP_FOR_IO
 	void *semlock;
+#endif
 	bool found_lock;
 
 	pos = vmf->pgoff;
@@ -2157,19 +2161,23 @@ retry:
 		found_lock = true;
 	}
 
+#ifdef KC_USE_IOMAP_FOR_IO
 	semlock = scoutfs_per_task_get(&si->pt_extent_sem);
 	if (semlock == NULL) {
 		down_read(&si->extent_sem);
 		if (!scoutfs_per_task_add_excl(&si->pt_extent_sem, &pt_sem, &semlock))
 			WARN_ON_ONCE(true);
 	}
+#endif
 
 	ret = filemap_fault(vmf);
 
+#ifdef KC_USE_IOMAP_FOR_IO
 	if (semlock == NULL) {
 		up_read(&si->extent_sem);
 		scoutfs_per_task_del(&si->pt_extent_sem, &pt_sem);
 	}
+#endif
 
 out:
 	if (!found_lock) {
@@ -2232,7 +2240,9 @@ const struct file_operations scoutfs_file_fops = {
 	.fsync		= scoutfs_file_fsync,
 	.llseek		= scoutfs_file_llseek,
 	.fallocate	= scoutfs_fallocate,
+#ifdef KC_USE_IOMAP_FOR_IO
 	.fadvise	= scoutfs_fadvise,
+#endif
 };
 
 void scoutfs_data_init_btrees(struct super_block *sb,

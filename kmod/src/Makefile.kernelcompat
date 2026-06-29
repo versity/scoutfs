@@ -222,3 +222,13 @@ endif
 ifneq (,$(shell grep 'define timer_container_of' include/linux/timer.h))
 ccflags-y += -DKC_TIMER_CONTAINER_OF
 endif
+
+#
+# v6.4-rc1-4f80818b4a58c
+#
+# iomap needs iterator nofault support in the read/write paths. We can still
+# use iomap for fiemap and llseek though.
+#
+ifneq (,$(shell grep 'copy_page_to_iter_nofault' include/linux/uio.h))
+ccflags-y += -DKC_USE_IOMAP_FOR_IO
+endif

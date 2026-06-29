@@ -34,6 +34,8 @@
 #include "trans.h"
 #include "msg.h"
 
+#ifdef KC_USE_IOMAP_FOR_IO
+
 static int lock_for_iomap_read(struct inode *inode, bool nowait,
 			       struct scoutfs_per_task_entry *pt_extent_ent)
 {
@@ -65,7 +67,6 @@ static void unlock_for_iomap_read(struct inode *inode,
 #endif
 }
 
-#ifdef KC_USE_IOMAP_FOR_IO
 static bool scoutfs_should_use_dio(struct kiocb *iocb, struct iov_iter *iter)
 {
 	/* Current offset must be aligned */
@@ -712,14 +713,10 @@ ssize_t scoutfs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *scoutfs_inode_lock = NULL;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_ent);
-	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_extent_ent);
 	DECLARE_DATA_WAIT(dw);
-	bool locked;
 	int ret;
 
 retry:
-	locked = false;
-
 	/* protect checked extents from release */
 	inode_lock(inode);
 	atomic_inc(&inode->i_dio_count);
@@ -729,12 +726,6 @@ retry:
 				 SCOUTFS_LKF_REFRESH_INODE, inode, &scoutfs_inode_lock);
 	if (ret)
 		goto out;
-
-	ret = lock_for_iomap_read(inode, false, &pt_extent_ent);
-	if (ret)
-		return ret;
-
-	locked = true;
 
 	if (scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_ent, scoutfs_inode_lock)) {
 		ret = scoutfs_data_wait_check(inode, iocb->ki_pos, iov_iter_count(to), SEF_OFFLINE,
@@ -748,11 +739,6 @@ retry:
 	ret = generic_file_read_iter(iocb, to);
 
 out:
-	if (locked) {
-		unlock_for_iomap_read(inode, &pt_extent_ent);
-		locked = false;
-	}
-
 	inode_dio_end(inode);
 	scoutfs_per_task_del(&si->pt_data_lock, &pt_ent);
 	scoutfs_unlock(sb, scoutfs_inode_lock, SCOUTFS_LOCK_READ);
