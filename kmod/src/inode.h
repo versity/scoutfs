@@ -51,6 +51,8 @@ struct scoutfs_inode_info {
 	seqlock_t seqlock;
 	bool staging;			/* holder of i_mutex is staging */
 	struct scoutfs_per_task pt_data_lock;
+	struct scoutfs_per_task pt_inode_locks;
+	struct scoutfs_per_task pt_extent_sem;
 	struct scoutfs_data_waitq data_waitq;
 	struct rw_semaphore xattr_rwsem;
 	struct list_head writeback_entry;

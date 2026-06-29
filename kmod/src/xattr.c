@@ -517,14 +517,22 @@ unlock:
 static int scoutfs_xattr_get(struct dentry *dentry, const char *name, void *buffer, size_t size)
 {
 	struct inode *inode = dentry->d_inode;
+	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *lock = NULL;
-	int ret;
+	bool found_lock = false;
+	int ret = 0;
 
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
+	lock = scoutfs_per_task_get(&si->pt_data_lock);
+	if (lock) {
+		found_lock = true;
+	} else {
+		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, 0, inode, &lock);
+	}
 	if (ret == 0) {
 		ret = scoutfs_xattr_get_locked(inode, name, buffer, size, lock);
-		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
+		if (!found_lock)
+			scoutfs_unlock(sb, lock, SCOUTFS_LOCK_READ);
 	}
 
 	return ret;
