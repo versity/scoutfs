@@ -375,6 +375,11 @@ static int print_srch_root_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 	if (val) {
 		if (key->sk_type == SCOUTFS_SRCH_PENDING_TYPE ||
 		    key->sk_type == SCOUTFS_SRCH_BUSY_TYPE) {
+			if (val_len < sizeof(*sc)) {
+				printf("      (short srch compact value: val_len %u)\n",
+				       val_len);
+				return 0;
+			}
 			sc = val;
 			printf("      compact %s: nr %u flags 0x%x\n",
 			       key->sk_type == SCOUTFS_SRCH_PENDING_TYPE ?
@@ -387,6 +392,11 @@ static int print_srch_root_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 				       SRF_A(&sc->in[i].sfl));
 			}
 		} else {
+			if (val_len < sizeof(*sfl)) {
+				printf("      (short srch file value: val_len %u)\n",
+				       val_len);
+				return 0;
+			}
 			sfl = val;
 			printf("      "SRF_FMT"\n", SRF_A(sfl));
 		}
@@ -398,9 +408,25 @@ static int print_srch_root_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 static int print_mounted_client_entry(struct scoutfs_key *key, u64 seq, u8 flags, void *val,
 				      unsigned val_len, void *arg)
 {
-	struct scoutfs_mounted_client_btree_val *mcv = val;
+	struct scoutfs_mounted_client_btree_val *mcv;
 	struct in_addr in;
 
+	/*
+	 * Parent block items reference child blocks and have no value;
+	 * print_block_ref() calls us with a NULL val just to print the key.
+	 */
+	if (!val) {
+		printf("    rid %016llx\n", le64_to_cpu(key->skmc_rid));
+		return 0;
+	}
+
+	if (val_len < sizeof(*mcv)) {
+		printf("    rid %016llx (short mounted client value: val_len %u)\n",
+		       le64_to_cpu(key->skmc_rid), val_len);
+		return 0;
+	}
+
+	mcv = val;
 	memset(&in, 0, sizeof(in));
 	in.s_addr = htonl(le32_to_cpu(mcv->addr.v4.addr));
 
@@ -419,8 +445,17 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 	struct scoutfs_log_merge_complete *comp;
 	struct scoutfs_log_merge_freeing *fr;
 
+	/*
+	 * Parent block items reference child blocks and have no value;
+	 * print_block_ref() calls us with a NULL val just to print the key.
+	 */
+	if (!val)
+		return 0;
+
 	switch (key->sk_zone) {
 	case SCOUTFS_LOG_MERGE_STATUS_ZONE:
+		if (val_len < sizeof(*stat))
+			goto bad_len;
 		stat = val;
 		printf("    status: next_range_key "SK_FMT" nr_req %llu nr_comp %llu seq %llu\n",
 		       SK_ARG(&stat->next_range_key),
@@ -429,12 +464,16 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       le64_to_cpu(stat->seq));
 		break;
 	case SCOUTFS_LOG_MERGE_RANGE_ZONE:
+		if (val_len < sizeof(*rng))
+			goto bad_len;
 		rng = val;
 		printf("    range: start "SK_FMT" end "SK_FMT"\n",
 		       SK_ARG(&rng->start),
 		       SK_ARG(&rng->end));
 		break;
 	case SCOUTFS_LOG_MERGE_REQUEST_ZONE:
+		if (val_len < sizeof(*req))
+			goto bad_len;
 		req = val;
 		printf("    request: logs_root "BTROOT_F" logs_root "BTROOT_F" start "SK_FMT
 		       " end "SK_FMT" input_seq %llu rid %016llx seq %llu flags 0x%llx\n",
@@ -448,6 +487,8 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       le64_to_cpu(req->flags));
 		break;
 	case SCOUTFS_LOG_MERGE_COMPLETE_ZONE:
+		if (val_len < sizeof(*comp))
+			goto bad_len;
 		comp = val;
 		printf("    complete: root "BTROOT_F" start "SK_FMT" end "SK_FMT
 		       " remain "SK_FMT" rid %016llx seq %llu flags %llx\n",
@@ -460,6 +501,8 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		       le64_to_cpu(comp->flags));
 		break;
 	case SCOUTFS_LOG_MERGE_FREEING_ZONE:
+		if (val_len < sizeof(*fr))
+			goto bad_len;
 		fr = val;
 		printf("    freeing: root "BTROOT_F" key "SK_FMT" seq %llu\n",
 		       BTROOT_A(&fr->root),
@@ -471,6 +514,11 @@ static int print_log_merge_item(struct scoutfs_key *key, u64 seq, u8 flags, void
 		break;
 	}
 
+	return 0;
+
+bad_len:
+	printf("    (short log merge value: zone %u val_len %u)\n",
+	       key->sk_zone, val_len);
 	return 0;
 }
 
