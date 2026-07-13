@@ -320,10 +320,8 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 	if (WARN_ON_ONCE(last < iblock))
 		return -EINVAL;
 
-	if (inode) {
+	if (inode)
 		si = SCOUTFS_I(inode);
-		down_write(&si->extent_sem);
-	}
 
 	while (iblock <= last) {
 		if (inode)
@@ -333,10 +331,12 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		if (ret)
 			break;
 
-		if (inode)
+		if (inode) {
+			down_write(&si->extent_sem);
 			ret = scoutfs_dirty_inode_item(inode, lock);
-		else
+		} else {
 			ret = 0;
+		}
 
 		if (ret == 0)
 			ret = truncate_extents(sb, inode, ino, iblock, last,
@@ -345,8 +345,10 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		if (inode)
 			scoutfs_update_inode_item(inode, lock, &ind_locks);
 		scoutfs_release_trans(sb);
-		if (inode)
+		if (inode) {
+			up_write(&si->extent_sem);
 			scoutfs_inode_index_unlock(sb, &ind_locks);
+		}
 
 		if (ret <= 0)
 			break;
@@ -354,9 +356,6 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		iblock = ret;
 		ret = 0;
 	}
-
-	if (si)
-		up_write(&si->extent_sem);
 
 	return ret;
 }
@@ -1110,13 +1109,11 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 
 	inode_dio_wait(inode);
 
-	down_write(&si->extent_sem);
-
 	if (!(mode & FALLOC_FL_KEEP_SIZE) &&
 	    (offset + len > i_size_read(inode))) {
                 ret = inode_newsize_ok(inode, offset + len);
                 if (ret)
-                        goto out_extent;
+                        goto out_mutex;
         }
 
 	iblock = offset >> SCOUTFS_BLOCK_SM_SHIFT;
@@ -1126,11 +1123,13 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 
 		ret = scoutfs_quota_check_data(sb, inode);
 		if (ret)
-			goto out_extent;
+			goto out_mutex;
 
 		ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, false, true);
 		if (ret)
-			goto out_extent;
+			goto out_mutex;
+
+		down_write(&si->extent_sem);
 
 		ret = fallocate_extents(sb, inode, iblock, last, lock);
 
@@ -1147,6 +1146,7 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		if (ret >= 0)
 			scoutfs_update_inode_item(inode, lock, &ind_locks);
 		scoutfs_release_trans(sb);
+		up_write(&si->extent_sem);
 		scoutfs_inode_index_unlock(sb, &ind_locks);
 
 		/* txn couldn't meet the request. Let's try with a new txn */
@@ -1156,14 +1156,12 @@ long scoutfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 		}
 
 		if (ret <= 0)
-			goto out_extent;
+			goto out_mutex;
 
 		iblock += ret;
 		ret = 0;
 	}
 
-out_extent:
-	up_write(&si->extent_sem);
 out_mutex:
 	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
 	inode_unlock(inode);
