@@ -27,9 +27,7 @@ sleep 1
 jobs | wc -l
 scoutfs stage "${F}-stage" "$F" -V "$vers" -o 0 -l 8192
 # xfs_io thread <here> will output 16 bytes of read data
-sleep 1
-# should be 0 - no more waiting jobs, xfs_io should have exited
-jobs | wc -l
+wait
 scoutfs get-fiemap -L "$F"
 
 echo "== mmap write to an offline extent"
@@ -43,9 +41,7 @@ sleep 1
 jobs | wc -l
 scoutfs stage "${F}-stage" "$F" -V "$vers" -o 0 -l 8192
 # no output here from write
-sleep 1
-# should be 0 - no more waiting jobs, xfs_io should have exited
-jobs | wc -l
+wait
 scoutfs get-fiemap -L "$F"
 # read back contents to assure write changed the file
 dd status=none if="$F" bs=1 count=48 skip=512 | hexdump -C
