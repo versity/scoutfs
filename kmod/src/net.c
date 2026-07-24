@@ -1452,15 +1452,23 @@ restart:
 			set_conn_fl(acc, reconn_freeing);
 			spin_unlock(&conn->lock);
 			if (!test_conn_fl(conn, shutting_down)) {
-				scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
-					     SIN_ARG(&acc->last_peername));
-				ret = scoutfs_fence_start(sb, acc->rid,
-						acc->last_peername.sin_addr.s_addr,
-						SCOUTFS_FENCE_CLIENT_RECONNECT);
-				if (ret) {
-					scoutfs_err(sb, "client fence returned err %d, shutting down server",
-						    ret);
-					scoutfs_server_stop(sb);
+				/*
+				 * Connections that never completed a valid greeting
+				 * (port scans, malformed traffic, half-open peers)
+				 * haven't progressed far enough to warrant fencing.
+				 * Drop them. Any real client will reconnect.
+				 */
+				if (test_conn_fl(acc, valid_greeting)) {
+					scoutfs_info(sb, "client "SIN_FMT" reconnect timed out, fencing",
+						     SIN_ARG(&acc->last_peername));
+					ret = scoutfs_fence_start(sb, acc->rid,
+							acc->last_peername.sin_addr.s_addr,
+							SCOUTFS_FENCE_CLIENT_RECONNECT);
+					if (ret) {
+						scoutfs_err(sb, "client fence returned err %d, shutting down server",
+							    ret);
+						scoutfs_server_stop(sb);
+					}
 				}
 			}
 			destroy_conn(acc);

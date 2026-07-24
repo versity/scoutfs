@@ -65,4 +65,5 @@ block-stale-reads.sh
 freed-list-wedge.sh
 inode-deletion.sh
 renameat2-noreplace.sh
+portscan.sh
 xfstests.sh
