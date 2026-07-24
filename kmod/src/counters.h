@@ -16,6 +16,7 @@
 	EXPAND_COUNTER(alloc_alloc_meta)			\
 	EXPAND_COUNTER(alloc_free_data)				\
 	EXPAND_COUNTER(alloc_free_meta)				\
+	EXPAND_COUNTER(alloc_freed_fill)			\
 	EXPAND_COUNTER(alloc_list_avail_lo)			\
 	EXPAND_COUNTER(alloc_list_freed_hi)			\
 	EXPAND_COUNTER(alloc_move)				\

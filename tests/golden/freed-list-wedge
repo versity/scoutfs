@@ -1,0 +1,8 @@
+== make throwaway scratch fs
+== stuff both server freed heads full in one commit
+== confirm both heads were stuffed (not a no-op)
+both freed heads stuffed
+== a fixed server drains them and keeps making progress
+one
+two
+== cleanup scratch fs

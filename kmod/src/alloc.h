@@ -152,6 +152,10 @@ int scoutfs_alloc_splice_list(struct super_block *sb,
 			      struct scoutfs_block_writer *wri,
 			      struct scoutfs_alloc_list_head *dst,
 			      struct scoutfs_alloc_list_head *src);
+int scoutfs_alloc_fill_freed_list(struct super_block *sb, struct scoutfs_alloc *alloc,
+				  struct scoutfs_block_writer *wri,
+				  struct scoutfs_alloc_root *root,
+				  struct scoutfs_alloc_list_head *lh);
 
 bool scoutfs_alloc_meta_low(struct super_block *sb,
 			    struct scoutfs_alloc *alloc, u32 nr);

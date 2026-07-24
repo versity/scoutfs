@@ -623,6 +623,16 @@ static void scoutfs_server_commit_func(struct work_struct *work)
 		goto out;
 	}
 
+	/* test-only: manufacture the deadlock by stuffing both freed heads full
+	 * in this one commit, so there's no window for empty_list to drain one
+	 * before the other fills */
+	if (scoutfs_trigger(sb, ALLOC_FILL_FREED_LIST)) {
+		scoutfs_alloc_fill_freed_list(sb, &server->alloc, &server->wri,
+					      server->meta_avail, &server->alloc.freed);
+		scoutfs_alloc_fill_freed_list(sb, &server->alloc, &server->wri,
+					      server->meta_avail, server->other_freed);
+	}
+
 	/* make sure next avail has sufficient blocks */
 	ret = scoutfs_alloc_fill_list(sb, &server->alloc, &server->wri,
 				      server->other_avail,

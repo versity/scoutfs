@@ -47,6 +47,7 @@ static char *names[] = {
 	[SCOUTFS_TRIGGER_STATFS_LOCK_PURGE] = "statfs_lock_purge",
 	[SCOUTFS_TRIGGER_RECLAIM_SKIP_FINALIZE] = "reclaim_skip_finalize",
 	[SCOUTFS_TRIGGER_LOG_MERGE_FORCE_PARTIAL] = "log_merge_force_partial",
+	[SCOUTFS_TRIGGER_ALLOC_FILL_FREED_LIST] = "alloc_fill_freed_list",
 };
 
 bool scoutfs_trigger_test_and_clear(struct super_block *sb, unsigned int t)

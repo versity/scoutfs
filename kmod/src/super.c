@@ -627,6 +627,19 @@ static int scoutfs_fill_super(struct super_block *sb, void *data, int silent)
 	scoutfs_trans_restart_sync_deadline(sb);
 	ret = 0;
 out:
+	if (ret) {
+		/*
+		 * The mount failed and we're about to tear down, either here
+		 * or via generic_shutdown_super if s_root was set. Any worker
+		 * started during fill_super can be blocked in an uninterruptible
+		 * net request to a server that will never respond. Force the
+		 * client connection down so those pending requests abort with
+		 * -ECONNABORTED before teardown.
+		 */
+		SCOUTFS_SB(sb)->forced_unmount = true;
+		scoutfs_client_net_shutdown(sb);
+	}
+
 	/* on error, generic_shutdown_super calls put_super if s_root */
 	if (ret && !sb->s_root)
 		scoutfs_put_super(sb);

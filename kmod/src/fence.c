@@ -18,6 +18,7 @@
 #include <linux/sysfs.h>
 #include <linux/device.h>
 #include <linux/timer.h>
+#include <linux/mutex.h>
 #include <asm/barrier.h>
 
 #include "super.h"
@@ -65,6 +66,7 @@ struct fence_info {
 	struct kobject fence_dir_kobj;
 	struct workqueue_struct *wq;
 	wait_queue_head_t waitq;
+	struct mutex mutex;
 	spinlock_t lock;
 	struct list_head list;
 };
@@ -235,8 +237,10 @@ static void fence_timeout(struct timer_list *timer)
 int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int reason)
 {
 	DECLARE_FENCE_INFO(sb, fi);
+	struct pending_fence *existing;
 	struct pending_fence *fence;
-	int ret;
+	bool duplicate = false;
+	int ret = 0;
 
 	fence = kzalloc(sizeof(struct pending_fence), GFP_NOFS);
 	if (!fence) {
@@ -246,6 +250,7 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 
 	fence->sb = sb;
 	scoutfs_sysfs_init_attrs(sb, &fence->ssa);
+	timer_setup(&fence->timer, fence_timeout, 0);
 
 	fence->start_kt = ktime_get();
 	fence->ipv4_addr = ipv4_addr;
@@ -254,22 +259,39 @@ int scoutfs_fence_start(struct super_block *sb, u64 rid, __be32 ipv4_addr, int r
 	fence->reason = reason;
 	fence->rid = rid;
 
+	mutex_lock(&fi->mutex);
+
+	spin_lock(&fi->lock);
+	list_for_each_entry(existing, &fi->list, entry) {
+		if (existing->rid == rid) {
+			duplicate = true;
+			break;
+		}
+	}
+	spin_unlock(&fi->lock);
+
+	if (duplicate)
+		goto unlock;
+
 	ret = scoutfs_sysfs_create_attrs_parent(sb, &fi->kset->kobj,
 						&fence->ssa, fence_attrs,
 						"%016llx", rid);
-	if (ret < 0) {
-		kfree(fence);
-		goto out;
-	}
+	if (ret < 0)
+		goto unlock;
 
-	timer_setup(&fence->timer, fence_timeout, 0);
 	fence->timer.expires = jiffies + msecs_to_jiffies(FENCE_TIMEOUT_MS);
 	add_timer(&fence->timer);
 
 	spin_lock(&fi->lock);
 	list_add_tail(&fence->entry, &fi->list);
 	spin_unlock(&fi->lock);
+
+	fence = NULL;
+unlock:
+	mutex_unlock(&fi->mutex);
 out:
+	if (fence)
+		destroy_fence(fence);
 	return ret;
 }
 
@@ -324,6 +346,8 @@ int scoutfs_fence_free(struct super_block *sb, u64 rid)
 	struct pending_fence *fence;
 	int ret = -ENOENT;
 
+	mutex_lock(&fi->mutex);
+
 	spin_lock(&fi->lock);
 	list_for_each_entry(fence, &fi->list, entry) {
 		if (fence->rid == rid) {
@@ -338,6 +362,8 @@ int scoutfs_fence_free(struct super_block *sb, u64 rid)
 		destroy_fence(fence);
 		wake_up(&fi->waitq);
 	}
+
+	mutex_unlock(&fi->mutex);
 
 	return ret;
 }
@@ -413,6 +439,7 @@ int scoutfs_fence_setup(struct super_block *sb)
 	}
 
 	init_waitqueue_head(&fi->waitq);
+	mutex_init(&fi->mutex);
 	spin_lock_init(&fi->lock);
 	INIT_LIST_HEAD(&fi->list);
 
@@ -446,6 +473,7 @@ void scoutfs_fence_stop(struct super_block *sb)
 	DECLARE_FENCE_INFO(sb, fi);
 	struct pending_fence *fence;
 
+	mutex_lock(&fi->mutex);
 	do {
 		spin_lock(&fi->lock);
 		fence = list_first_entry_or_null(&fi->list, struct pending_fence, entry);
@@ -458,20 +486,18 @@ void scoutfs_fence_stop(struct super_block *sb)
 			wake_up(&fi->waitq);
 		}
 	} while (fence);
+	mutex_unlock(&fi->mutex);
 }
 
 void scoutfs_fence_destroy(struct super_block *sb)
 {
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct fence_info *fi = SCOUTFS_SB(sb)->fence_info;
-	struct pending_fence *fence;
-	struct pending_fence *tmp;
 
 	if (fi) {
 		if (fi->wq)
 			destroy_workqueue(fi->wq);
-		list_for_each_entry_safe(fence, tmp, &fi->list, entry)
-			destroy_fence(fence);
+		scoutfs_fence_stop(sb);
 		if (fi->kset)
 			kset_unregister(fi->kset);
 		kfree(fi);

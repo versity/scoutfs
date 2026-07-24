@@ -62,6 +62,7 @@ client-unmount-recovery.sh
 createmany-parallel-mounts.sh
 archive-light-cycle.sh
 block-stale-reads.sh
+freed-list-wedge.sh
 inode-deletion.sh
 renameat2-noreplace.sh
 xfstests.sh
