@@ -1,6 +1,25 @@
 Versity ScoutFS Release Notes
 =============================
 
+
+---
+v1.33
+\
+*July 24, 2026*
+
+Remove support for RHEL 7 kernels.
+
+Reduce the default TCP client timeout value to 24 seconds. This value
+results in a more stable leader transition, especially when multiple
+scoutfs filesystems are deployed on the same nodes.
+
+Fix a potential commit stall when both meta allocator freed head
+blocks are near full. The commit would stall an active mount and
+wedge at mount time with the same condition.
+
+Fix locking in handling fence requests and fence lifecycle, and
+gracefully handle multiple incoming fence requests for the same RID.
+
 ---
 v1.32
 \
