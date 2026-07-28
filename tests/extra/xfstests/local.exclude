@@ -1,9 +1,11 @@
 generic/003	# missing atime update in buffered read
 generic/075	# file content mismatch failures (fds, etc)
+generic/094	# preallocation generates an unwritten block where a hole is expected
 generic/103	# enospc causes trans commit failures
 generic/108	# mount fails on failing device?
 generic/112	# file content mismatch failures (fds, etc)
 generic/213	# enospc causes trans commit failures
+generic/225	# preallocation generates an unwritten block where a hole is expected
 generic/318	# can't support user namespaces until v5.11
 generic/321	# requires selinux enabled for '+' in ls?
 generic/338	# BUG_ON update inode error handling
@@ -37,6 +39,7 @@ generic/565	# xfs_io copy_range missing in el7
 generic/568	# falloc not resulting in block count increase
 generic/569	# swap
 generic/570	# swap
+generic/591	# do we care if splice() and O_DIRECT works on pipes?
 generic/620	# dm-hugedisk
 generic/633	# id-mapped mounts missing in el7
 generic/636	# swap

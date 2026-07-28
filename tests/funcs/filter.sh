@@ -231,6 +231,11 @@ t_filter_dmesg()
 	# lockdep or kasan warnings can cause this
 	re="$re|Disabling lock debugging due to kernel taint"
 
+	# mixing mmap and direct I/O can generate a warning
+	re="$re|Page cache invalidation failure on direct I/O.  Possible data corruption due to collision with buffered I/O!"
+	re="$re|File: /mnt/test.* PID:.* Comm: dd"
+	re="$re|dio_warn_stale_pagecache*"
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob | \
 		ignore_harmless_xfs_lockdep_warning

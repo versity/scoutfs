@@ -116,7 +116,14 @@ awk '
 grep -E "^(Ran|Not run|Failures):" "$T_TMPDIR/results" | fmt -w 1 > "$T_TMPDIR/results.fmt"
 grep -E "^(Passed|Failed).*tests$" "$T_TMPDIR/results" >> "$T_TMPDIR/results.fmt"
 
-diff -u "$T_EXTRA/expected-results" "$T_TMPDIR/results.fmt" > "$T_TMPDIR/results.diff"
+if grep -q copy_page_to_iter_nofault /lib/modules/$(uname -r)/build/include/linux/uio.h
+then
+	diff -u "$T_EXTRA/expected-results" "$T_TMPDIR/results.fmt" > "$T_TMPDIR/results.diff"
+else
+	# no direct I/O
+	diff -u "$T_EXTRA/expected-results.nodio" "$T_TMPDIR/results.fmt" > "$T_TMPDIR/results.diff"
+fi
+
 if [ -s "$T_TMPDIR/results.diff" ]; then
 	echo "tests that were skipped/run differed from expected:"
 	cat "$T_TMPDIR/results.diff"

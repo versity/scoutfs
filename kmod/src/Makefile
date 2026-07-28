@@ -25,6 +25,7 @@ scoutfs-y +=			\
 	forest.o		\
 	inode.o			\
 	ioctl.o			\
+	iomap.o			\
 	item.o			\
 	kernelcompat.o		\
 	lock.o			\

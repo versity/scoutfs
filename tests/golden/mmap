@@ -10,14 +10,12 @@ thread 4 complete
 extents: 1
 1
 00000200:  ea ea ea ea ea ea ea ea ea ea ea ea ea ea ea ea  ................
-0
 0: offset: 0 length: 2 flags: ..L
 extents: 1
 == mmap write to an offline extent
 0: offset: 0 length: 2 flags: O.L
 extents: 1
 1
-0
 0: offset: 0 length: 2 flags: ..L
 extents: 1
 00000000  ea ea ea ea ea ea ea ea  ea ea ea ea ea ea ea ea  |................|

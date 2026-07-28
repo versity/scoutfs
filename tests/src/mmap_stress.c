@@ -80,7 +80,7 @@ static void *run_test_func(void *ptr)
 			for (read = 0; read < size;) {
 				ret = pread(fd, buf, size - read, read);
 				if (ret < 0) {
-					perror("pwrite");
+					perror("pread");
 					exit(-1);
 				}
 				read += ret;
