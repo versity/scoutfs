@@ -2238,7 +2238,9 @@ static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 
 const struct address_space_operations scoutfs_file_aops = {
 #ifdef KC_MPAGE_READ_FOLIO
+#ifdef KC_USE_IOMAP_FOR_IO
 	.direct_IO		= noop_direct_IO,
+#endif
 	.dirty_folio		= block_dirty_folio,
 	.invalidate_folio	= block_invalidate_folio,
 	.read_folio		= scoutfs_read_folio,
