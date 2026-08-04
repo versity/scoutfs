@@ -627,7 +627,7 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 
 	bug_on_inconsistent_grant_cache(sb, lock, nl->old_mode, nl->new_mode);
 
-	if (!lock_mode_can_read(nl->old_mode) && lock_mode_can_read(nl->new_mode))
+	if (!lock_mode_can_read(lock->mode) && lock_mode_can_read(nl->new_mode))
 		lock->refresh_gen = atomic64_inc_return(&linfo->next_refresh_gen);
 
 	lock->request_pending = 0;
