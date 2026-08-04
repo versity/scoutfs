@@ -779,6 +779,7 @@ static void scoutfs_readahead(struct readahead_control *rac)
 {
 	struct inode *inode = rac->file->f_inode;
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_data_ent);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_lock *inode_lock = NULL;
 	bool found_lock;
@@ -791,6 +792,7 @@ static void scoutfs_readahead(struct readahead_control *rac)
 		if (ret)
 			return;
 		found_lock = false;
+		scoutfs_per_task_add(&si->pt_data_lock, &pt_data_ent, inode_lock);
 	} else {
 		found_lock = true;
 	}
@@ -799,11 +801,14 @@ static void scoutfs_readahead(struct readahead_control *rac)
 				      readahead_length(rac), SEF_OFFLINE,
 				      SCOUTFS_IOC_DWO_READ, NULL,
 				      inode_lock);
+
 	if (ret == 0)
 		mpage_readahead(rac, scoutfs_get_block_read);
 
-	if (!found_lock)
+	if (!found_lock) {
+		scoutfs_per_task_del(&si->pt_data_lock, &pt_data_ent);
 		scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
+	}
 }
 
 static int scoutfs_writepage(struct page *page, struct writeback_control *wbc)
@@ -1177,21 +1182,35 @@ static int scoutfs_fadvise(struct file *file, loff_t start, loff_t end, int advi
 {
 	struct inode *inode = file_inode(file);
 	struct scoutfs_inode_info *si = SCOUTFS_I(inode);
+	struct super_block *sb = inode->i_sb;
 	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_extent_ent);
+	SCOUTFS_DECLARE_PER_TASK_ENTRY(pt_data_ent);
+	struct scoutfs_lock *inode_lock = NULL;
 	bool locked = false;
 	int ret;
 
 	/*
 	 * We need to get the extent_sem now, or we'll be out of order with the
-	 * mapping.invalidate_lock.
+	 * mapping.invalidate_lock. This also means we need to get the cluster
+	 * read lock now, or we'll be out of order with it in scoutfs_readahead().
 	 */
 	if (advice == POSIX_FADV_WILLNEED) {
+		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_READ, SCOUTFS_LKF_REFRESH_INODE,
+					 inode, &inode_lock);
+		if (ret)
+			return ret;
+
+		if (!scoutfs_per_task_add_excl(&si->pt_data_lock, &pt_data_ent,
+					       inode_lock))
+			WARN_ON_ONCE(true);
+
 		down_read(&si->extent_sem);
-		locked = true;
 
 		if (!scoutfs_per_task_add_excl(&si->pt_extent_sem, &pt_extent_ent,
 					       &pt_extent_ent))
 			WARN_ON_ONCE(true);
+
+		locked = true;
 	}
 
 	ret = generic_fadvise(file, start, end, advice);
@@ -1199,6 +1218,9 @@ static int scoutfs_fadvise(struct file *file, loff_t start, loff_t end, int advi
 	if (locked) {
 		scoutfs_per_task_del(&si->pt_extent_sem, &pt_extent_ent);
 		up_read(&si->extent_sem);
+
+		scoutfs_per_task_del(&si->pt_data_lock, &pt_data_ent);
+		scoutfs_unlock(sb, inode_lock, SCOUTFS_LOCK_READ);
 	}
 
 	return ret;
@@ -2216,7 +2238,9 @@ static int scoutfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 
 const struct address_space_operations scoutfs_file_aops = {
 #ifdef KC_MPAGE_READ_FOLIO
+#ifdef KC_USE_IOMAP_FOR_IO
 	.direct_IO		= noop_direct_IO,
+#endif
 	.dirty_folio		= block_dirty_folio,
 	.invalidate_folio	= block_invalidate_folio,
 	.read_folio		= scoutfs_read_folio,
