@@ -906,7 +906,11 @@ static bool try_shrink_lock(struct super_block *sb, struct lock_info *linfo, boo
 	               READ_ONCE(linfo->nr_locks) <= opts.lock_idle_count))
 		return false;
 
-	spin_lock(&linfo->lock);
+	/* Shrinking is best-effort housekeeping unless forced. */
+	if (force)
+		spin_lock(&linfo->lock);
+	else if (!spin_trylock(&linfo->lock))
+		return false;
 
 	lock = list_first_entry_or_null(&linfo->lru_list, struct scoutfs_lock, lru_head);
 	if (lock && (force || (linfo->nr_locks > opts.lock_idle_count))) {
