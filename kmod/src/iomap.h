@@ -3,6 +3,5 @@
 
 extern const struct iomap_ops scoutfs_iomap_report_ops;
 extern const struct iomap_ops scoutfs_iomap_ops;
-extern const struct iomap_page_ops scoutfs_iomap_page_ops;
 
 #endif

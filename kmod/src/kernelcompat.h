@@ -374,6 +374,26 @@ static inline long inode_get_atime_nsec(const struct inode *inode)
 #define KC_PAGE_OR_FOLIO(p, f) p
 #endif
 
+/*
+ * We don't have any per-iter state or write ops of our own, so we just
+ * pass in nulls for the newer arguments.
+ */
+#ifdef KC_IOMAP_DIO_RW_PRIVATE
+#define KC_IOMAP_DIO_RW(iocb, iter, ops, dops, dio_flags, done_before)	\
+	iomap_dio_rw(iocb, iter, ops, dops, dio_flags, NULL, done_before)
+#else
+#define KC_IOMAP_DIO_RW(iocb, iter, ops, dops, dio_flags, done_before)	\
+	iomap_dio_rw(iocb, iter, ops, dops, dio_flags, done_before)
+#endif
+
+#ifdef KC_IOMAP_WRITE_OPS
+#define KC_IOMAP_FILE_BUFFERED_WRITE(iocb, iter, ops)			\
+	iomap_file_buffered_write(iocb, iter, ops, NULL, NULL)
+#else
+#define KC_IOMAP_FILE_BUFFERED_WRITE(iocb, iter, ops)			\
+	iomap_file_buffered_write(iocb, iter, ops)
+#endif
+
 #ifndef KC_TIMER_CONTAINER_OF
 #define timer_container_of(var, callback_timer, timer_fieldname) \
 	from_timer(var, callback_timer, timer_fieldname)

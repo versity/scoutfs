@@ -361,3 +361,24 @@ endif
 ifneq (,$(shell grep 'copy_page_to_iter_nofault' include/linux/uio.h))
 ccflags-y += -DKC_USE_IOMAP_FOR_IO
 endif
+
+#
+# v5.18-rc7-162-g786f847f43a5
+#
+# iomap_dio_rw() takes a private pointer that it stores in the iomap_iter
+# for the filesystem's use.
+#
+ifneq (,$(shell grep 'unsigned int dio_flags, void .private' include/linux/iomap.h))
+ccflags-y += -DKC_IOMAP_DIO_RW_PRIVATE
+endif
+
+#
+# v6.16-rc1-11-g2a5574fc57d1
+#
+# The iomap_folio_ops that used to hang off the iomap are replaced by
+# iomap_write_ops which are passed to iomap_file_buffered_write() along
+# with a private pointer.
+#
+ifneq (,$(shell grep 'const struct iomap_write_ops .write_ops, void .private' include/linux/iomap.h))
+ccflags-y += -DKC_IOMAP_WRITE_OPS
+endif
