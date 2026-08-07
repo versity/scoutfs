@@ -3,7 +3,8 @@
 t_filter_fs()
 {
 	sed -e 's@mnt/test\.[0-9]*@mnt/test@g' \
-	    -e 's@Device: [a-fA-F0-9]*h/[0-9]*d@Device: 0h/0d@g'
+	    -e 's@Device: [a-fA-F0-9]*h/[0-9]*d@Device: 0h/0d@g' \
+	    -e 's@Device: [0-9]*,[0-9]*@Device: 0h/0d@g'
 }
 
 #
@@ -236,7 +237,12 @@ t_filter_dmesg()
 	re="$re|File: /mnt/test.* PID:.* Comm: dd"
 	re="$re|dio_warn_stale_pagecache*"
 
-	egrep -v "($re)" | \
+	# xfstests probing our devices
+	re="$re|ISOFS"
+	re="$re|FAT-fs"
+	re="$re|XFS"
+
+	grep -v -E "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob | \
 		ignore_harmless_xfs_lockdep_warning
 }
