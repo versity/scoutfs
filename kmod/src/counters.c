@@ -34,6 +34,17 @@ static struct attribute scoutfs_counter_attrs[] = {
 #define NR_ATTRS ARRAY_SIZE(scoutfs_counter_attrs)
 static struct attribute *scoutfs_counter_attr_ptrs[NR_ATTRS + 1];
 
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+static struct attribute_group scoutfs_counter_attr_group = {
+	.attrs = scoutfs_counter_attr_ptrs,
+};
+
+static const struct attribute_group *scoutfs_counter_attr_groups[] = {
+	&scoutfs_counter_attr_group,
+	NULL,
+};
+#endif
+
 static ssize_t scoutfs_counter_attr_show(struct kobject *kobj,
 				         struct attribute *attr, char *buf)
 {
@@ -45,7 +56,6 @@ static ssize_t scoutfs_counter_attr_show(struct kobject *kobj,
 	counters = container_of(kobj, struct scoutfs_counters, kobj);
 	index = attr - scoutfs_counter_attrs;
 	pcpu = &counters->FIRST_COUNTER + index;
-
 	return snprintf(buf, PAGE_SIZE, "%lld\n", percpu_counter_sum(pcpu));
 }
 
@@ -63,7 +73,7 @@ static const struct sysfs_ops scoutfs_counter_attr_ops = {
 };
 
 static struct kobj_type scoutfs_counters_ktype = {
-	.default_attrs  = scoutfs_counter_attr_ptrs,
+	.KC_KOBJ_DEFAULT_OP = KC_KOBJ_DEFAULT_PICK(scoutfs_counter_attr_groups, scoutfs_counter_attr_ptrs),
 	.sysfs_ops      = &scoutfs_counter_attr_ops,
 	.release        = scoutfs_counters_kobj_release,
 };

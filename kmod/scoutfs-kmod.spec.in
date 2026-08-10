@@ -8,19 +8,11 @@
 %{!?kversion: %global kversion %(uname -r)}
 %global kernel_version %{kversion}
 
-%if 0%{?el7}
-%global kernel_source() /usr/src/kernels/%{kernel_version}.$(arch)
-%else
 %global kernel_source() /usr/src/kernels/%{kernel_version}
-%endif
 
 %{!?_release: %global _release 0.%{pkg_date}git%{kmod_git_hash}}
 
-%if 0%{?el7}
-Name:           %{kmod_name}
-%else
 Name:           kmod-%{kmod_name}
-%endif
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
 Release:        %{_release}%{?dist}
@@ -28,11 +20,7 @@ License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
 
-%if 0%{?el7}
-BuildRequires:  %{kernel_module_package_buildreqs}
-%else
 BuildRequires:  elfutils-libelf-devel
-%endif
 BuildRequires:  kernel-devel-uname-r = %{kernel_version}
 BuildRequires:  git
 BuildRequires:  module-init-tools
@@ -41,17 +29,9 @@ ExclusiveArch:  x86_64
 
 Source:		%{kmod_name}-kmod-%{kmod_version}.tar
 
-%if 0%{?el7}
-# Build only for standard kernel variant(s); for debug packages, append "debug"
-# after "default" (separated by space)
-%kernel_module_package default
-%endif
-
 %global install_mod_dir extra/%{kmod_name}
 
-%if ! 0%{?el7}
 %global flavors_to_build x86_64
-%endif
 
 # el9 sanity: make sure we lock to the minor release we built for and block upgrades
 %{lua:
@@ -100,14 +80,12 @@ done
 # mark modules executable so that strip-to-file can strip them
 find %{buildroot} -type f -name \*.ko -exec %{__chmod} u+x \{\} \;
 
-%if ! 0%{?el7}
 %files
 /lib/modules
 
 %post
 echo /lib/modules/%{kversion}/%{install_mod_dir}/scoutfs.ko | weak-modules --add-modules --no-initramfs
 depmod -a
-%endif
 
 %clean
 rm -rf %{buildroot}

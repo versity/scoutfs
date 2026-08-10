@@ -138,7 +138,9 @@ echo "--- can't overwrite non-empty dir"
 mkdir "$T_D0/dir/a/dir"
 touch "$T_D0/dir/a/dir/nope"
 mkdir "$T_D1/dir/c/clobber"
-mv -T "$T_D1/dir/c/clobber" "$T_D1/dir/a/dir" 2>&1 | t_filter_fs
+mv -T "$T_D1/dir/c/clobber" "$T_D1/dir/a/dir" 2>&1 | \
+		sed "s@mv: cannot move '.*' to '\(.*\)': Directory not empty@mv: cannot overwrite '\1': Directory not empty@g" | \
+		t_filter_fs
 find "$T_D0/dir" -ls 2>&1 | t_filter_fs > "$T_TMP.0"
 find "$T_D1/dir" -ls 2>&1 | t_filter_fs > "$T_TMP.1"
 diff -u "$T_TMP.0" "$T_TMP.1"

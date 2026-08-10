@@ -30,7 +30,7 @@ struct scoutfs_btree_item_list {
 	u64 seq;
 	u8 flags;
 	int val_len;
-	u8 val[0];
+	u8 val[];
 };
 
 int scoutfs_btree_lookup(struct super_block *sb,

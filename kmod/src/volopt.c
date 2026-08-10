@@ -52,6 +52,15 @@ static struct volopt_nr_name {
 /* initialized by setup, pointer array is null terminated */
 static struct kobj_attribute volopt_attrs[ARRAY_SIZE(volopt_table)];
 static struct attribute *volopt_attr_ptrs[ARRAY_SIZE(volopt_table) + 1];
+#ifdef KC_KOBJECT_DEFAULT_GROUPS
+static const struct attribute_group volopt_group = {
+	.attrs = volopt_attr_ptrs,
+};
+static const struct attribute_group *volopt_groups[] = {
+	&volopt_group,
+	NULL,
+};
+#endif
 
 static void get_opt_data(struct kobj_attribute *attr, struct scoutfs_volume_options *volopt,
 			 u64 *bit, __le64 **opt)
@@ -164,7 +173,9 @@ int scoutfs_volopt_setup(struct super_block *sb)
 	BUILD_BUG_ON(ARRAY_SIZE(volopt_table) != ARRAY_SIZE(volopt_attr_ptrs) - 1);
 	volopt_attr_ptrs[i] = NULL;
 
-	ret = scoutfs_sysfs_create_attrs(sb, &vinf->ssa, volopt_attr_ptrs, "volume_options");
+	ret = scoutfs_sysfs_create_attrs(sb, &vinf->ssa,
+					 KC_KOBJ_DEFAULT_PICK(volopt_groups, volopt_attr_ptrs),
+					 "volume_options");
 	if (ret < 0)
 		goto out;
 

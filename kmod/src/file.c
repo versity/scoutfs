@@ -154,7 +154,7 @@ static ssize_t scoutfs_file_direct_read(struct kiocb *iocb, struct iov_iter *to,
 retry:
 	pagefault_disable();
 	to->nofault = true;
-	ret = iomap_dio_rw(iocb, to, &scoutfs_iomap_ops, NULL, IOMAP_DIO_PARTIAL, read);
+	ret = KC_IOMAP_DIO_RW(iocb, to, &scoutfs_iomap_ops, NULL, IOMAP_DIO_PARTIAL, read);
 	to->nofault = false;
 	pagefault_enable();
 
@@ -336,9 +336,9 @@ retry:
 	 * any needed pages later on.
 	 */
 	from->nofault = true;
-	ret = iomap_dio_rw(iocb, from, &scoutfs_iomap_ops, NULL,
-			   IOMAP_DIO_PARTIAL | IOMAP_DIO_FORCE_WAIT,
-			   written);
+	ret = KC_IOMAP_DIO_RW(iocb, from, &scoutfs_iomap_ops, NULL,
+			      IOMAP_DIO_PARTIAL | IOMAP_DIO_FORCE_WAIT,
+			      written);
 	from->nofault = false;
 
 	if (ret <= 0) {
@@ -410,7 +410,7 @@ retry:
 	locked = true;
 
 	pagefault_disable();
-	ret = iomap_file_buffered_write(iocb, from, &scoutfs_iomap_ops);
+	ret = KC_IOMAP_FILE_BUFFERED_WRITE(iocb, from, &scoutfs_iomap_ops);
 	pagefault_enable();
 
 	/* Accumulate the count of what's been written so far */
