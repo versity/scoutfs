@@ -178,6 +178,7 @@ t_filter_dmesg()
 	re="$re|NFSD: .*"
 	re="$re|RPC: .*"
 	re="$re|FS-Cache: .*"
+	re="$re|netfs: .*"
 
 	# fencing tests force unmounts and trigger timeouts
 	re="$re|scoutfs .* forcing unmount"
