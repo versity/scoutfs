@@ -1010,10 +1010,6 @@ static void scoutfs_net_destroy_worker(struct work_struct *work)
 	if (conn->listening_conn && conn->notify_down)
 		conn->notify_down(sb, conn, conn->info, conn->rid);
 
-	list_splice_init(&conn->resend_queue, &conn->send_queue);
-	list_for_each_entry_safe(msend, tmp, &conn->send_queue, head)
-		free_msend(ninf, conn, msend);
-
 	/* accepted sockets are removed from their listener's list */
 	if (conn->listening_conn) {
 		listener = conn->listening_conn;
@@ -1024,6 +1020,13 @@ static void scoutfs_net_destroy_worker(struct work_struct *work)
 			wake_up(&listener->waitq);
 		spin_unlock(&listener->lock);
 	}
+
+	/* locked drain to prevent concurrent senders list_add_tail */
+	spin_lock(&conn->lock);
+	list_splice_init(&conn->resend_queue, &conn->send_queue);
+	list_for_each_entry_safe(msend, tmp, &conn->send_queue, head)
+		free_msend(ninf, conn, msend);
+	spin_unlock(&conn->lock);
 
 	destroy_workqueue(conn->workq);
 	scoutfs_tseq_del(&ninf->conn_tseq_tree, &conn->tseq_entry);
