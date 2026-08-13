@@ -1,0 +1,7 @@
+== mkfs rejects mixed v4/v6 quorum
+rc: 64
+== mkfs all-v4, mount three members, cross-mount signature visible
+== change-quorum-config rejects mixed v4/v6 quorum
+rc: 64
+== switch v4 -> v6, signature survives, cross-mount write again
+== switch v6 -> v4, signatures survive
