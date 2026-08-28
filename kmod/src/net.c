@@ -344,7 +344,7 @@ static inline u8 net_err_from_host(struct super_block *sb, int error)
 
 /*
  * Shutdown the connection.   This is called by many contexts including
- * work that most complete to finish shutting down.  We queue specific
+ * work that must complete to finish shutting down.  We queue specific
  * shutdown work that can wait on all the connection's other work.
  * We're sure to only queue the shutdown work once.
  */
