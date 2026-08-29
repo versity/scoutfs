@@ -31,8 +31,8 @@ trap restore_compact_delay EXIT
 
 echo "== arm compaction triggers"
 for nr in $(t_fs_nrs); do
-	t_trigger_arm srch_compact_logs_pad_safe $nr
-	t_trigger_arm srch_merge_stop_safe $nr
+	t_trigger_arm_silent srch_compact_logs_pad_safe $nr
+	t_trigger_arm_silent srch_merge_stop_safe $nr
 done
 
 echo "== compact more often"
@@ -44,11 +44,12 @@ echo "== create padded sorted inputs by forcing log rotation"
 sv=$(t_server_nr)
 for i in $(seq 1 $COMPACT_NR); do
 	for j in $(seq 1 $COMPACT_NR); do
-		t_trigger_arm srch_force_log_rotate $sv
-
 		seq -f "f-$i-$j-$SEQF" 1 10 | \
 			bulk_create_paths -X "scoutfs.srch.t-srch-safe-merge-pos" -d "$T_D0" > \
 			/dev/null
+
+		t_trigger_arm_silent srch_force_log_rotate $sv
+
 		sync
 
 		test "$(t_trigger_get srch_force_log_rotate $sv)" == "0" || \
@@ -59,7 +60,7 @@ for i in $(seq 1 $COMPACT_NR); do
 	while test $padded == 0 && sleep .5; do
 		for nr in $(t_fs_nrs); do
 			if [ "$(t_trigger_get srch_compact_logs_pad_safe $nr)" == "0" ]; then
-				t_trigger_arm srch_compact_logs_pad_safe $nr
+				t_trigger_arm_silent srch_compact_logs_pad_safe $nr
 				padded=1
 				break
 			fi
