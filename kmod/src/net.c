@@ -344,7 +344,7 @@ static inline u8 net_err_from_host(struct super_block *sb, int error)
 
 /*
  * Shutdown the connection.   This is called by many contexts including
- * work that most complete to finish shutting down.  We queue specific
+ * work that must complete to finish shutting down.  We queue specific
  * shutdown work that can wait on all the connection's other work.
  * We're sure to only queue the shutdown work once.
  */
@@ -1007,7 +1007,7 @@ static void scoutfs_net_destroy_worker(struct work_struct *work)
 	WARN_ON_ONCE(!list_empty(&conn->accepted_list));
 
 	/* tell callers that accepted connection finally done */
-	if (conn->listening_conn && conn->notify_down)
+	if (conn->listening_conn && conn->notify_down && test_conn_fl(conn, valid_greeting))
 		conn->notify_down(sb, conn, conn->info, conn->rid);
 
 	list_splice_init(&conn->resend_queue, &conn->send_queue);
@@ -1179,10 +1179,6 @@ static void scoutfs_net_listen_worker(struct work_struct *work)
 			continue;
 		}
 
-		scoutfs_info(sb, "server accepted "SIN_FMT" -> "SIN_FMT,
-			     SIN_ARG(&acc_conn->sockname),
-			     SIN_ARG(&acc_conn->peername));
-
 		/* acc_conn isn't visible, conn unlock orders stores */
 		spin_lock(&conn->lock);
 
@@ -1303,13 +1299,15 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 	trace_scoutfs_net_shutdown_work_enter(sb, 0, 0);
 	trace_scoutfs_conn_shutdown_start(conn);
 
-	/* connected and accepted conns print a message */
-	if (conn->peername.sin_port != 0)
+	/* (racy) connected client and accepted server with greeting print a message */
+	if (conn->peername.sin_port != 0 &&
+	    (!conn->listening_conn || test_conn_fl(conn, valid_greeting))) {
 		scoutfs_info(sb, "%s "SIN_FMT" -> "SIN_FMT,
 			     conn->listening_conn ? "server closing" :
 			                            "client disconnected",
 			     SIN_ARG(&conn->sockname),
 			     SIN_ARG(&conn->peername));
+	}
 
 	/* ensure that sockets return errors, wakes blocked socket work */
 	if (conn->sock)
@@ -1386,9 +1384,10 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 	/* resolve racing with listener shutdown with locked shutting_down */
 	if (conn->listening_conn &&
 	    (test_conn_fl(conn->listening_conn, shutting_down) ||
-	     test_conn_fl(conn, saw_farewell))) {
+	     test_conn_fl(conn, saw_farewell) ||
+	     !test_conn_fl(conn, valid_greeting))) {
 
-		/* free accepted sockets after farewell or listener shutdown */
+		/* free accepted sockets after farewell, listener shutdown, or invalid greeting */
 		spin_unlock(&conn->lock);
 		destroy_conn(conn);
 
@@ -1885,6 +1884,9 @@ restart:
 	set_valid_greeting(conn);
 
 	spin_unlock(&conn->lock);
+
+	scoutfs_info(sb, "server accepted "SIN_FMT" -> "SIN_FMT,
+		     SIN_ARG(&conn->sockname), SIN_ARG(&conn->peername));
 
 	/* only call notify_up the first time we see the rid */
 	if (conn->notify_up && first_contact)

@@ -3897,7 +3897,7 @@ static void queue_farewell_work(struct server_info *server)
  * response shuts down the connection.
  *
  * If a client reconnects they'll send their previously received
- * serer_term in their greeting request.
+ * server_term in their greeting request.
  *
  * XXX The logic of this has gotten convoluted.  The lock server can
  * send a recovery request so it needs to be called after the core net
