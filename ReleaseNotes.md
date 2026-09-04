@@ -1,6 +1,18 @@
 Versity ScoutFS Release Notes
 =============================
 
+---
+v1.34
+\
+*Sep 3, 2026*
+
+Fix the server's incoming connection handling so that it doesn't trigger
+fencing or shutdown from connections that don't get far enough in the
+protocol negotiation to be associated with a client.  This stops port
+scanners from disrupting service.
+
+Add support for O\_DIRECT writes by using the iomap facility for IO.
+This can significantly improve large write performance.
 
 ---
 v1.33
