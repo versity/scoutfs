@@ -3,6 +3,25 @@
 %define kmod_git_hash @@GITHASH@@
 %define kmod_git_describe @@GITDESCRIBE@@
 %define pkg_date %(date +%%Y%%m%%d)
+%if "%{?_os_version_id}" == ""
+  %define _os_version_id %(. /etc/os-release 2>/dev/null; echo "${VERSION_ID:-0.0}")
+%endif
+%define os_major %(echo %{_os_version_id} | cut -d. -f1)
+%define os_minor %(echo %{_os_version_id} | grep -q '\\.' && echo %{_os_version_id} | cut -d. -f2 || echo "")
+%global pointrel_pkgs   redhat-release rocky-release almalinux-release oraclelinux-release cloudlinux-release virtuozzo-release
+%global majoronly_pkgs  centos-stream-release
+
+# --- Build the Boolean requires expression at spec-parse time ---
+%global relreq %(
+  clauses=""
+  for p in %{pointrel_pkgs}; do
+    clauses="${clauses}${p} = %{os_major}.%{os_minor} or "
+  done
+  for p in %{majoronly_pkgs}; do
+    clauses="${clauses}${p} = %{os_major}"
+  done
+  echo "(${clauses%})"
+)
 
 # Package type: set --define 'per_kver 1' to tie the package to a specific kernel
 # version (per-kver mode); leave unset for the default per-minor-release behavior.
@@ -27,18 +46,22 @@
 Name:           %{kmod_name}-%{sanitized_kernel_version}
 Provides:       %{kmod_name} = %{kmod_version}
 %else
-Name:           %{kmod_name}
+Name:           %{kmod_name}-%{os_major}.%{os_minor}
+Provides:       kmod-scoutfs
 %endif
 %else
 %if 0%{?per_kver}
 Name:           kmod-%{kmod_name}-%{sanitized_kernel_version}
 Provides:       kmod-%{kmod_name} = %{kmod_version}
 %else
-Name:           kmod-%{kmod_name}
+Name:           kmod-%{kmod_name}-%{os_major}.%{os_minor}
+Provides:       kmod-%{kmod_name} = %{kmod_version}
 %endif
 %endif
+
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
+
 %if 0%{?per_kver}
 Release:        %{_release}
 %else
@@ -47,9 +70,12 @@ Release:        %{_release}%{?dist}
 License:        GPLv2
 Group:          System/Kernel
 URL:            http://scoutfs.org/
+
 %if 0%{?per_kver}
 Requires:       kernel-core-uname-r = %{kernel_version}
 Requires:       kernel-modules-uname-r = %{kernel_version}
+%else
+Requires:       %{relreq}
 %endif
 
 %if 0%{?el7}
