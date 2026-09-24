@@ -7,7 +7,7 @@ t_require_mounts 2
 
 time_ms()
 {
-	# time_t in seconds, then trunate nanoseconds to 3 most dig digits
+	# time_t in seconds, then truncate nanoseconds to 3 most sig digits
 	date +%s%3N
 }
 
