@@ -25,6 +25,16 @@ t_require_mounts() {
 }
 
 #
+# make sure we have at least this many quorum members
+#
+t_require_quorum() {
+	local req="$1"
+
+	test "$T_QUORUM" -ge "$req" || \
+		t_skip "$req quorum members required, only have $T_QUORUM"
+}
+
+#
 # Require that the meta device be at least the size string argument, as
 # parsed by numfmt using single char base 2 suffixes (iec).. 64G, etc.
 #
