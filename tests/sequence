@@ -45,6 +45,7 @@ stage-release-race-alloc.sh
 stage-multi-part.sh
 o_tmpfile.sh
 basic-posix-consistency.sh
+block-quorum-port.sh
 dirent-consistency.sh
 mkdir-rename-rmdir.sh
 lock-ex-race-processes.sh
