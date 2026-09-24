@@ -1,0 +1,8 @@
+== disabling quorum port
+== waiting for victim's term to advance
+== sleeping for 3s
+== enabling quorum port
+== sleeping for 20s
+== make sure the victim won the election
+== make sure the original leader was fenced
+== remount the fenced leader
