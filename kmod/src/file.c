@@ -382,6 +382,7 @@ static ssize_t scoutfs_file_buffered_write(struct kiocb *iocb, struct iov_iter *
 	size_t prev_count = 0;
 	size_t window_size = 0;
 	size_t orig_count = iov_iter_count(from);
+	loff_t orig_pos = iocb->ki_pos;
 	size_t written = 0;
 	bool locked;
 	ssize_t ret;
@@ -434,6 +435,12 @@ retry:
 out:
 	if (locked) {
 		unlock_for_iomap_write(inode, scoutfs_inode_lock, &ind_locks, written);
+	}
+
+	if (written > 0 && ((orig_pos + written) & BACKGROUND_WRITEBACK_MASK) == 0) {
+		scoutfs_writepages_sync_none(file->f_mapping,
+					     orig_pos + written - BACKGROUND_WRITEBACK_BYTES,
+					     orig_pos + written - 1);
 	}
 
 	from->count = orig_count - written;
