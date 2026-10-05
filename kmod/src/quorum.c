@@ -536,17 +536,21 @@ static int update_quorum_block(struct super_block *sb, int event, u64 term, bool
  *
  * Quorum will be sending heartbeats while we wait for fencing.  That
  * keeps us from being fenced while we allow userspace fencing to take a
- * reasonably long time.  We still want to timeout eventually.
+ * reasonably long time.  We still want to time out eventually.
  */
+
+#define SCOUTFS_OLD_LEADER_GRACE_PERIOD	((time64_t)10)	/* arbitrary number of seconds */
+
 int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_config *qconf,
 				 u64 term)
 {
 #define NR_OLD 2
-	struct scoutfs_quorum_block_event old[SCOUTFS_QUORUM_MAX_SLOTS][NR_OLD] = {{{0,}}};
+	struct scoutfs_quorum_block_event old[SCOUTFS_QUORUM_MAX_SLOTS][NR_OLD];
 	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
 	struct scoutfs_quorum_block blk;
 	struct sockaddr_in sin;
 	const __le64 lefsid = cpu_to_le64(sbi->fsid);
+	time64_t start = ktime_get_seconds();
 	const u64 rid = sbi->rid;
 	bool fence_started = false;
 	u64 fenced = 0;
@@ -557,6 +561,9 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 	int j;
 
 	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
+
+restart:
+	memset(old, 0, sizeof(old));
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(qconf, i))
@@ -590,6 +597,10 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 			    le64_to_cpu(old[i][j].term) > term ||	/* newer than us */
 			    le64_to_cpu(old[i][j].rid) == rid)		/* us */
 				continue;
+
+			/* Give any previous leader(s) a grace period before fencing */
+			if (ktime_get_seconds() - start < SCOUTFS_OLD_LEADER_GRACE_PERIOD)
+				goto restart;
 
 			scoutfs_inc_counter(sb, quorum_fence_leader);
 			quorum_slot_sin(qconf, i, &sin);
