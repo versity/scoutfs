@@ -517,6 +517,37 @@ static int update_quorum_block(struct super_block *sb, int event, u64 term, bool
 	return ret;
 }
 
+static bool scoutfs_old_leader_running(struct super_block *sb,
+				       struct scoutfs_quorum_config *qconf)
+{
+	struct scoutfs_sb_info *sbi = SCOUTFS_SB(sb);
+	struct scoutfs_quorum_block blk;
+	const u64 rid = sbi->rid;
+	int ret;
+	int i;
+
+	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
+		if (!quorum_slot_present(qconf, i))
+			continue;
+
+		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + i, &blk, false);
+		if (ret) {
+			scoutfs_warn(sb, "checking for old leader: error %d reading "
+				     "quorum block in slot %d", ret, i);
+			continue;
+		}
+
+		/* is there an elected leader still running that isn't us? */
+		if ((le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].term) >
+		     le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_STOP].term)) &&
+		    (le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].rid) != rid)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /*
  * The calling server has been elected and has started running but can't
  * yet assume that it has exclusive access to the metadata device.  We
@@ -536,8 +567,11 @@ static int update_quorum_block(struct super_block *sb, int event, u64 term, bool
  *
  * Quorum will be sending heartbeats while we wait for fencing.  That
  * keeps us from being fenced while we allow userspace fencing to take a
- * reasonably long time.  We still want to timeout eventually.
+ * reasonably long time.  We still want to time out eventually.
  */
+
+#define SCOUTFS_OLD_LEADER_GRACE_PERIOD	30	/* some arbitrary number of 1s sleeps */
+
 int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_config *qconf,
 				 u64 term)
 {
@@ -557,6 +591,16 @@ int scoutfs_quorum_fence_leaders(struct super_block *sb, struct scoutfs_quorum_c
 	int j;
 
 	BUILD_BUG_ON(SCOUTFS_QUORUM_BLOCKS < SCOUTFS_QUORUM_MAX_SLOTS);
+
+	/*
+	 * If there's a previously elected leader still running, give it a chance to
+	 * shut down cleanly before fencing it.
+	 */
+	for (i = 0; i < SCOUTFS_OLD_LEADER_GRACE_PERIOD; ++i) {
+		if (!scoutfs_old_leader_running(sb, qconf))
+			break;
+		ssleep(1);
+	}
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		if (!quorum_slot_present(qconf, i))
