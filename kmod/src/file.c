@@ -368,7 +368,11 @@ retry:
 out:
 	if (locked) {
 		unlock_for_iomap_write(inode, scoutfs_inode_lock, &ind_locks, written);
+		locked = false;
 	}
+
+	if (ret == -ENOBUFS)
+		goto retry;
 
 	return ret < 0 ? ret : written;
 }
@@ -435,7 +439,11 @@ retry:
 out:
 	if (locked) {
 		unlock_for_iomap_write(inode, scoutfs_inode_lock, &ind_locks, written);
+		locked = false;
 	}
+
+	if (ret == -ENOBUFS)
+		goto retry;
 
 	if (written > 0 && ((orig_pos + written) & BACKGROUND_WRITEBACK_MASK) == 0) {
 		scoutfs_writepages_sync_none(file->f_mapping,
