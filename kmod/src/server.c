@@ -1635,6 +1635,7 @@ static int server_get_log_trees(struct super_block *sb,
 	DECLARE_SERVER_INFO(sb, server);
 	__le64 exclusive[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
 	__le64 vacant[SCOUTFS_DATA_ALLOC_ZONE_LE64S];
+	struct scoutfs_mount_options opts;
 	struct alloc_extent_cb_args cba;
 	struct scoutfs_log_trees lt;
 	struct scoutfs_key key;
@@ -1645,6 +1646,8 @@ static int server_get_log_trees(struct super_block *sb,
 	u64 nr;
 	int ret;
 	int err;
+
+	scoutfs_options_read(sb, &opts);
 
 	if (arg_len != 0) {
 		ret = -EINVAL;
@@ -1752,14 +1755,15 @@ static int server_get_log_trees(struct super_block *sb,
 		lt.meta_avail.flags &= ~cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
 
 	ret = alloc_move_refill_zoned(sb, &lt.data_avail, &super->data_alloc,
-				      SCOUTFS_SERVER_DATA_FILL_LO, SCOUTFS_SERVER_DATA_FILL_TARGET,
+				      scoutfs_opt_server_data_fill_low(&opts),
+				      opts.server_data_fill_target,
 				      exclusive, vacant, data_zone_blocks);
 	if (ret < 0) {
 		err_str = "refilling data_avail";
 		goto update;
 	}
 
-	if (le64_to_cpu(lt.data_avail.total_len) < SCOUTFS_SERVER_DATA_FILL_LO)
+	if (le64_to_cpu(lt.data_avail.total_len) < scoutfs_opt_server_data_fill_low(&opts))
 		lt.data_avail.flags |= cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
 	else
 		lt.data_avail.flags &= ~cpu_to_le32(SCOUTFS_ALLOC_FLAG_LOW);
@@ -3363,10 +3367,13 @@ static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connecti
 	DECLARE_SERVER_INFO(sb, server);
 	struct scoutfs_super_block *super = DIRTY_SUPER_SB(sb);
 	struct scoutfs_volume_options *volopt;
+	struct scoutfs_mount_options opts;
 	COMMIT_HOLD(hold);
 	u64 opt;
 	u64 nr;
 	int ret = 0;
+
+	scoutfs_options_read(sb, &opts);
 
 	if (arg_len != sizeof(struct scoutfs_volume_options)) {
 		ret = -EINVAL;
@@ -3385,9 +3392,9 @@ static int server_set_volopt(struct super_block *sb, struct scoutfs_net_connecti
 
 	if (le64_to_cpu(volopt->set_bits) & SCOUTFS_VOLOPT_DATA_ALLOC_ZONE_BLOCKS_BIT) {
 		opt = le64_to_cpu(volopt->data_alloc_zone_blocks);
-		if (opt < SCOUTFS_SERVER_DATA_FILL_TARGET) {
+		if (opt < opts.server_data_fill_target) {
 			scoutfs_err(sb, "setting data_alloc_zone_blocks to '%llu' failed, must be at least %llu mount data allocation target blocks",
-				    opt, SCOUTFS_SERVER_DATA_FILL_TARGET);
+				    opt, opts.server_data_fill_target);
 			ret = -EINVAL;
 			goto apply;
 		}

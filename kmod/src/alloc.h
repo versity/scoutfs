@@ -35,10 +35,6 @@
 #define SCOUTFS_ALLOC_DATA_LG_THRESH \
 	(8ULL * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
-/* the client will force commits if data allocators get too low */
-#define SCOUTFS_ALLOC_DATA_REFILL_THRESH \
-	((256ULL * 1024 * 1024) >> SCOUTFS_BLOCK_SM_SHIFT)
-
 /*
  * Fill client alloc roots to the target when they fall below the lo
  * threshold.
@@ -51,11 +47,28 @@
 	SCOUTFS_ALLOC_LIST_MAX_BLOCKS
 #define SCOUTFS_SERVER_META_FILL_LO \
 	(SCOUTFS_ALLOC_LIST_MAX_BLOCKS / 2)
-#define SCOUTFS_SERVER_DATA_FILL_TARGET \
-	(4ULL * 1024 * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
-#define SCOUTFS_SERVER_DATA_FILL_LO \
-	(1ULL * 1024 * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
+/*
+ * server_data_fill_target: During transaction commit processing, the
+ * server will try to fill the client transaction's data allocator with
+ * this many blocks when it decides to fill.
+ *
+ * server_data_fill_low: _target / 4.  The server will try to fill the
+ * client transaction's data allocator to _target if the current size
+ * falls under _low.
+ *
+ * client_data_fill_low:  _target / 16.  A client writing transaction
+ * holder will trigger a commit if the client transaction's data
+ * allocator falls under _low.  It's attempting to avoid returning ENOSPC
+ * as the allocator drains while there was still global free space at
+ * the server.
+ */
+#define SCOUTFS_SERVER_DATA_FILL_TARGET_DEFAULT \
+	(4ULL * 1024 * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
+#define SCOUTFS_SERVER_DATA_FILL_TARGET_MIN \
+	(1ULL * 1024 * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
+#define SCOUTFS_SERVER_DATA_FILL_TARGET_MAX \
+	(256ULL * 1024 * 1024 * 1024 >> SCOUTFS_BLOCK_SM_SHIFT)
 
 /*
  * Log merge meta allocations are only used for one request and will
