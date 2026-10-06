@@ -38,3 +38,12 @@ t_require_meta_size() {
 	test "$dev_bytes" -ge "$req_bytes" || \
 		t_skip "$dev must be at least $req_iec, is $dev_iec"
 }
+
+#
+# Filter out direct I/O tests on platforms where we don't support it
+#
+t_require_o_direct() {
+	dd if=/dev/zero of="$T_D0/dio_test_file" count=0 oflag=direct status=none
+	test "$?" -eq "0" || \
+		t_skip_permitted "direct I/O not supported"
+}

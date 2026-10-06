@@ -744,6 +744,15 @@ int scoutfs_alloc_data(struct super_block *sb, struct scoutfs_alloc *alloc,
 	u64 len;
 	int ret;
 
+	/*
+	 * Force an ENOBUFS error below by pretending we got -ENOENT back from
+	 * the extent allocator.
+	 */
+	if (unlikely(scoutfs_trigger(sb, ALLOC_DATA_ENOBUFS))) {
+		ret = -ENOENT;
+		goto out;
+	}
+
 	/* large allocations come straight from the allocator */
 	if (count >= SCOUTFS_ALLOC_DATA_LG_THRESH) {
 		ret = scoutfs_ext_alloc(sb, &alloc_ext_ops, &args,
