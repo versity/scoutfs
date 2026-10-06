@@ -288,8 +288,8 @@ if [ -n "$local_start" -a -n "$local_end" -a "$local_start" -lt "$local_end" ]; 
 	fi
 fi
 
-# permute sequence?
 T_SEQUENCE=sequence
+
 if [ -n "$T_SHUF" ]; then
 	msg "shuffling test order"
 	shuf sequence -o sequence.shuf

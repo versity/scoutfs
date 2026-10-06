@@ -1,0 +1,7 @@
+== arm trigger
+== generate some direct I/O
+== confirm trigger fired
+== arm trigger
+== generate some buffered I/O
+== confirm trigger fired
+== cleanup
