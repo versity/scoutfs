@@ -1450,6 +1450,19 @@ bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 					  &lock->start, &lock->end) == 0;
 }
 
+/*
+ * Returns true if there is an invalidation pending on the lock.
+ *
+ * This is racey and doesn't test modes.  But it can still be useful for
+ * writers who will take non-destructive action if there's an
+ * invalidation pending that must necessarily be incompatible with their
+ * hold.
+ */
+bool scoutfs_lock_invalidate_pending(struct scoutfs_lock *lock)
+{
+	return lock->invalidate_pending;
+}
+
 void scoutfs_free_unused_locks(struct super_block *sb)
 {
 	DECLARE_LOCK_INFO(sb, linfo);

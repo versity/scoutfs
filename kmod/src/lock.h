@@ -103,6 +103,7 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
 			       struct scoutfs_lock_coverage *cov);
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 			    enum scoutfs_lock_mode mode);
+bool scoutfs_lock_invalidate_pending(struct scoutfs_lock *lock);
 
 u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino);
 
