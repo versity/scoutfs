@@ -298,6 +298,61 @@ out:
 	return ret;
 }
 
+static int release_range(struct super_block *sb, struct inode *inode, u64 data_version,
+			 u64 sblock, u64 eblock, int dti)
+{
+	struct scoutfs_lock *lock = NULL;
+	bool unlock = false;
+	int ret;
+
+	while (sblock <= eblock) {
+
+		inode_lock(inode);
+		unlock = true;
+
+		ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
+					 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
+		if (ret < 0)
+			goto out;
+
+		if (!S_ISREG(inode->i_mode)) {
+			ret = -EINVAL;
+			goto out;
+		}
+
+		if (scoutfs_inode_data_version(inode) != data_version) {
+			ret = -ESTALE;
+			goto out;
+		}
+
+		inode_dio_wait(inode);
+
+		/* drop all clean and dirty cached blocks in the range */
+		truncate_inode_pages_range(&inode->i_data,
+					   sblock << SCOUTFS_BLOCK_SM_SHIFT,
+					   ((eblock + 1) << SCOUTFS_BLOCK_SM_SHIFT) - 1);
+
+		ret = scoutfs_data_truncate_items(sb, inode, scoutfs_ino(inode), sblock, eblock,
+						  dti | DTI_PARTIAL_INVALIDATE, lock);
+
+		scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+		lock = NULL;
+		inode_unlock(inode);
+		unlock = false;
+
+		if (ret <= 0)
+			goto out;
+		sblock = ret;
+	}
+
+	ret = 0;
+out:
+	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
+	if (unlock)
+		inode_unlock(inode);
+	return ret;
+}
+
 /*
  * The caller has a version of the data available in the given byte
  * range in an external archive.  As long as the data version still
@@ -306,23 +361,23 @@ out:
  * recall from the archive.
  *
  * If the file's online blocks drop to 0 then we also truncate any
- * blocks beyond i_size.  This honors the intent of fully releasing a file
- * without the user needing to know to release past i_size or truncate.
+ * blocks beyond i_size.  This honors the intent of fully releasing a
+ * file without the user needing to know to release past i_size or
+ * truncate.
  *
- * XXX permissions?
- * XXX a lot of this could be generic file write prep
+ * The inode's cluster lock can be unlocked multiple times while the
+ * region is released.  This allows concurrent release operations to
+ * interleave.  Normal data plane operations that would change
+ * data_version will block while there are offline blocks so they likely
+ * won't be concurrent with release.
  */
 static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 {
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
 	struct scoutfs_ioctl_release args;
-	struct scoutfs_lock *lock = NULL;
 	u64 sblock;
 	u64 eblock;
-	u64 online;
-	u64 offline;
-	u64 isize;
 	__u64 tmp;
 	int ret;
 
@@ -338,60 +393,20 @@ static long scoutfs_ioc_release(struct file *file, unsigned long arg)
 	    (args.length & SCOUTFS_BLOCK_SM_MASK))
 		return -EINVAL;
 
+	if (!(file->f_mode & FMODE_WRITE))
+		return -EINVAL;
+
 	ret = mnt_want_write_file(file);
 	if (ret)
 		return ret;
 
-	inode_lock(inode);
-
-	ret = scoutfs_lock_inode(sb, SCOUTFS_LOCK_WRITE,
-				 SCOUTFS_LKF_REFRESH_INODE, inode, &lock);
-	if (ret)
-		goto out;
-
-	if (!S_ISREG(inode->i_mode)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	if (!(file->f_mode & FMODE_WRITE)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	if (scoutfs_inode_data_version(inode) != args.data_version) {
-		ret = -ESTALE;
-		goto out;
-	}
-
-	inode_dio_wait(inode);
-
-	/* drop all clean and dirty cached blocks in the range */
-	truncate_inode_pages_range(&inode->i_data, args.offset,
-				   args.offset + args.length - 1);
-
 	sblock = args.offset >> SCOUTFS_BLOCK_SM_SHIFT;
 	eblock = (args.offset + args.length - 1) >> SCOUTFS_BLOCK_SM_SHIFT;
-	ret = scoutfs_data_truncate_items(sb, inode, scoutfs_ino(inode),
-					  sblock,
-					  eblock, true,
-					  lock);
-	if (ret == 0) {
-		scoutfs_inode_get_onoff(inode, &online, &offline);
-		isize = i_size_read(inode);
-		if (online == 0 && isize) {
-			sblock = (isize + SCOUTFS_BLOCK_SM_SIZE - 1)
-					>> SCOUTFS_BLOCK_SM_SHIFT;
-			ret = scoutfs_data_truncate_items(sb, inode,
-							  scoutfs_ino(inode),
-							  sblock, U64_MAX,
-							  false, lock);
-		}
-	}
+	ret = release_range(sb, inode, args.data_version, sblock, eblock, DTI_OFFLINE);
+	if (ret == 0)
+		ret = release_range(sb, inode, args.data_version, 0, U64_MAX,
+				    DTI_START_ISIZE | DTI_ONLINE_DONE);
 
-out:
-	scoutfs_unlock(sb, lock, SCOUTFS_LOCK_WRITE);
-	inode_unlock(inode);
 	mnt_drop_write_file(file);
 
 	trace_scoutfs_ioc_release_ret(sb, scoutfs_ino(inode), ret);
