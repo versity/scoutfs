@@ -66,8 +66,32 @@ int scoutfs_data_alloc_block(struct super_block *sb, struct inode *inode,
 int scoutfs_get_block_write(struct inode *inode, sector_t iblock, struct buffer_head *bh,
 			    int create);
 
-int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
-				u64 ino, u64 iblock, u64 last, bool offline,
+enum {
+	/*
+	 * Set offline flag in extents when blocks are freed.
+	 */
+	DTI_OFFLINE		= (1 << 0),
+	/*
+	 * Set the starting block to the block after isize, only if the
+	 * initial starting block is less.  Requires a valid inode
+	 * pointer.
+	 */
+	DTI_START_ISIZE		= (1 << 1),
+	/*
+	 * Stop and return 0 if there are any online blocks.  Requires
+	 * a valid inode pointer.
+	 */
+	DTI_ONLINE_DONE		= (1 << 2),
+	/*
+	 * Allow partial progress when there's an invalidation pending
+	 * on the inode lock.  Will always make at least a transaction's
+	 * worth of progress truncating.  If partial progress was made
+	 * then the next block to resume truncating from is returned.
+	 */
+	DTI_PARTIAL_INVALIDATE	= (1 << 3),
+};
+s64 scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
+				u64 ino, u64 iblock, u64 last, int dti,
 				struct scoutfs_lock *lock);
 int scoutfs_data_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 			u64 start, u64 len);

@@ -378,26 +378,26 @@ DEFINE_EVENT(scoutfs_data_file_extent_class, scoutfs_data_fiemap_extent,
 );
 
 TRACE_EVENT(scoutfs_data_truncate_items,
-	TP_PROTO(struct super_block *sb, __u64 iblock, __u64 last, int offline),
+	TP_PROTO(struct super_block *sb, __u64 iblock, __u64 last, int dti),
 
-	TP_ARGS(sb, iblock, last, offline),
+	TP_ARGS(sb, iblock, last, dti),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, iblock)
 		__field(__u64, last)
-		__field(int, offline)
+		__field(int, dti)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->iblock = iblock;
 		__entry->last = last;
-		__entry->offline = offline;
+		__entry->dti = dti;
 	),
 
-	TP_printk(SCSBF" iblock %llu last %llu offline %u", SCSB_TRACE_ARGS,
-		  __entry->iblock, __entry->last, __entry->offline)
+	TP_printk(SCSBF" iblock %llu last %llu dti %x", SCSB_TRACE_ARGS,
+		  __entry->iblock, __entry->last, __entry->dti)
 );
 
 TRACE_EVENT(scoutfs_data_wait_check,
@@ -1211,7 +1211,7 @@ TRACE_EVENT(scoutfs_delete_inode,
 );
 
 TRACE_EVENT(scoutfs_delete_inode_end,
-	TP_PROTO(struct super_block *sb, u64 ino, umode_t mode, u64 size, int ret),
+	TP_PROTO(struct super_block *sb, u64 ino, umode_t mode, u64 size, s64 ret),
 
 	TP_ARGS(sb, ino, mode, size, ret),
 
@@ -1220,7 +1220,7 @@ TRACE_EVENT(scoutfs_delete_inode_end,
 		__field(__u64, ino)
 		__field(umode_t, mode)
 		__field(__u64, size)
-		__field(int, ret)
+		__field(__s64, ret)
 	),
 
 	TP_fast_assign(
@@ -1231,7 +1231,7 @@ TRACE_EVENT(scoutfs_delete_inode_end,
 		__entry->ret = ret;
 	),
 
-	TP_printk("dev %d,%d ino %llu, mode 0x%x size %llu, ret %d",
+	TP_printk("dev %d,%d ino %llu, mode 0x%x size %llu, ret %lld",
 		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->ino,
 		  __entry->mode, __entry->size, __entry->ret)
 );

@@ -195,7 +195,7 @@ struct scoutfs_ext_ops data_ext_ops = {
  *  - +iblock of next logical block to truncate the next block from
  */
 static s64 truncate_extents(struct super_block *sb, struct inode *inode,
-			    u64 ino, u64 iblock, u64 last, bool offline,
+			    u64 ino, u64 iblock, u64 last, int dti,
 			    struct scoutfs_lock *lock)
 {
 	DECLARE_DATA_INFO(sb, datinf);
@@ -212,7 +212,7 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
 	int err;
 	int i;
 
-	flags = offline ? SEF_OFFLINE : 0;
+	flags = (dti & DTI_OFFLINE) ? SEF_OFFLINE : 0;
 	ret = 0;
 
 	for (i = 0; iblock <= last; i++) {
@@ -236,7 +236,7 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
 		}
 
 		/* nothing to do when already offline and unmapped */
-		if ((offline && (ext.flags & SEF_OFFLINE)) && !ext.map) {
+		if (((dti & DTI_OFFLINE) && (ext.flags & SEF_OFFLINE)) && !ext.map) {
 			iblock = ext.start + ext.len;
 			continue;
 		}
@@ -288,26 +288,32 @@ static s64 truncate_extents(struct super_block *sb, struct inode *inode,
  * Free blocks inside the logical block range from 'iblock' to 'last',
  * inclusive.
  *
- * If 'offline' is given then blocks are freed an offline mapping is
- * left behind.  Only blocks that have been allocated can be marked
- * offline.
+ * The DTI_ flags change behavior as described at their definition.
  *
- * If the inode is provided then we update its tracking of the online
- * and offline blocks.  If it's not provided then the inode is being
- * destroyed and isn't reachable, we don't need to update it.
+ * If the inode is provided then we update its item and the tracking of
+ * online and offline blocks.  If it's not provided then the inode is
+ * being destroyed and isn't reachable, we don't need to update it.
  *
- * The caller is in charge of locking the inode and data, but we may
- * have to modify far more items than fit in a transaction so we're in
- * charge of batching updates into transactions.  If the inode is
- * provided then we're responsible for updating its item as we go.
+ * The caller is in charge of locking the inode and data while we manage
+ * transactions.  dti flags can have us return partial progress so the
+ * caller can drop locks.
  */
-int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
-				u64 ino, u64 iblock, u64 last, bool offline,
+s64 scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
+				u64 ino, u64 iblock, u64 last, int dti,
 				struct scoutfs_lock *lock)
 {
 	struct scoutfs_inode_info *si = NULL;
 	LIST_HEAD(ind_locks);
+	u64 after_isize;
+	u64 offline;
+	u64 online;
 	s64 ret = 0;
+	u64 seq;
+
+	if (WARN_ON_ONCE((dti & (DTI_START_ISIZE|DTI_ONLINE_DONE)) && !inode)) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	WARN_ON_ONCE(inode && !inode_is_locked(inode));
 
@@ -315,7 +321,22 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 	if (last > SCOUTFS_BLOCK_SM_MAX)
 		last = SCOUTFS_BLOCK_SM_MAX;
 
-	trace_scoutfs_data_truncate_items(sb, iblock, last, offline);
+	if (dti & DTI_START_ISIZE) {
+		after_isize = (i_size_read(inode) + SCOUTFS_BLOCK_SM_SIZE - 1)
+				>> SCOUTFS_BLOCK_SM_SHIFT;
+		if (iblock < after_isize)
+			iblock = min(after_isize, last);
+	}
+
+	if (dti & DTI_ONLINE_DONE) {
+		scoutfs_inode_get_onoff(inode, &online, &offline);
+		if (online > 0) {
+			ret = 0;
+			goto out;
+		}
+	}
+
+	trace_scoutfs_data_truncate_items(sb, iblock, last, dti);
 
 	if (WARN_ON_ONCE(last < iblock))
 		return -EINVAL;
@@ -323,7 +344,16 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 	if (inode)
 		si = SCOUTFS_I(inode);
 
+	if (dti & DTI_PARTIAL_INVALIDATE)
+		seq = scoutfs_trans_sample_seq(sb);
+
 	while (iblock <= last) {
+		if ((dti & DTI_PARTIAL_INVALIDATE) && iblock > 0 &&
+		    scoutfs_lock_invalidate_pending(lock) && scoutfs_trans_sample_seq(sb) != seq) {
+			ret = iblock;
+			break;
+		}
+
 		if (inode)
 			ret = scoutfs_inode_index_lock_hold(inode, &ind_locks, true, false);
 		else
@@ -339,8 +369,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		}
 
 		if (ret == 0)
-			ret = truncate_extents(sb, inode, ino, iblock, last,
-					       offline, lock);
+			ret = truncate_extents(sb, inode, ino, iblock, last, dti, lock);
 
 		if (inode)
 			scoutfs_update_inode_item(inode, lock, &ind_locks);
@@ -356,7 +385,7 @@ int scoutfs_data_truncate_items(struct super_block *sb, struct inode *inode,
 		iblock = ret;
 		ret = 0;
 	}
-
+out:
 	return ret;
 }
 
