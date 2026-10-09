@@ -140,12 +140,10 @@ static int client_lock_response(struct super_block *sb,
 				void *resp, unsigned int resp_len,
 				int error, void *data)
 {
-	if (resp_len != sizeof(struct scoutfs_net_lock))
+	if (error == 0 && resp_len != sizeof(struct scoutfs_net_lock))
 		return -EINVAL;
 
-	/* XXX error? */
-
-	return scoutfs_lock_grant_response(sb, resp);
+	return scoutfs_lock_grant_response(sb, error, resp);
 }
 
 /* Send a lock request to the server. */

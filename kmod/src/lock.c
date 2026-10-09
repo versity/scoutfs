@@ -617,8 +617,7 @@ static void bug_on_inconsistent_grant_cache(struct super_block *sb,
  * after sending this grant response.   We won't process the incoming
  * invalidate request until after processing this grant response.
  */
-int scoutfs_lock_grant_response(struct super_block *sb,
-				struct scoutfs_net_lock *nl)
+int scoutfs_lock_grant_response(struct super_block *sb, int error, struct scoutfs_net_lock *nl)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_lock *lock;
@@ -633,6 +632,13 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 	trace_scoutfs_lock_grant_response(sb, lock);
 	BUG_ON(!lock->request_pending);
 
+	/* error responses are nops, requests retried indefinitely */
+	if (error) {
+		lock->last_error = error;
+		lock->request_pending = 0;
+		goto out;
+	}
+
 	bug_on_inconsistent_grant_cache(sb, lock, nl->old_mode, nl->new_mode);
 
 	if (!lock_mode_can_read(nl->old_mode) && lock_mode_can_read(nl->new_mode))
@@ -643,6 +649,7 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 	lock->write_seq = le64_to_cpu(nl->write_seq);
 
 	trace_scoutfs_lock_granted(sb, lock);
+out:
 	wake_up(&lock->waitq);
 	put_lock(linfo, lock);
 

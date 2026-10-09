@@ -40,6 +40,7 @@ struct scoutfs_lock {
 
 	enum scoutfs_lock_mode mode;
 	enum scoutfs_lock_mode invalidating_mode;
+	int last_error;
 	unsigned int waiters[SCOUTFS_LOCK_NR_MODES];
 	unsigned int users[SCOUTFS_LOCK_NR_MODES];
 
@@ -58,8 +59,7 @@ struct scoutfs_lock_coverage {
 	struct list_head head;
 };
 
-int scoutfs_lock_grant_response(struct super_block *sb,
-				struct scoutfs_net_lock *nl);
+int scoutfs_lock_grant_response(struct super_block *sb, int error, struct scoutfs_net_lock *nl);
 int scoutfs_lock_invalidate_request(struct super_block *sb, u64 net_id,
 				    struct scoutfs_net_lock *nl);
 int scoutfs_lock_recover_request(struct super_block *sb, u64 net_id,
