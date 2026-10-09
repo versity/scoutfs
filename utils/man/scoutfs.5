@@ -155,6 +155,23 @@ The assigned number must match one of the slots defined with \-Q options
 when the filesystem was created with mkfs.  If the number assigned
 doesn't match a number created during mkfs then the mount will fail.
 .TP
+.B server_data_fill_target=<number>
+Sets the number of 4KiB blocks that the server will try to make
+available to client transactions.  The server only tries to refill the
+data allocators to this number when the current data allocator size
+falls under 1/4 of this number.  The client also will force commits to
+refill the data allocators when the current data allocator size falls
+under 1/16th of this number.
+.sp
+This must not be set less than 1GiB in KiB blocks (524288) or greater
+than 256GiB (67108864).
+.sp
+Setting this too large can store free space in client transactions that
+is unavailable to others, possibly causing premature ENOSPC errors.
+Setting this too low can cause exessive commits of client transactions
+that tree to refill the data allocators, causing low performance of
+heavy writes.
+.TP
 .B tcp_keepalive_timeout_ms=<number>
 This option sets the amount of time, in milliseconds, that a client
 connection will wait for active TCP packets, before deciding that

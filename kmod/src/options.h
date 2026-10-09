@@ -15,6 +15,7 @@ struct scoutfs_mount_options {
 	unsigned int orphan_scan_delay_ms;
 	int quorum_slot_nr;
 	u64 quorum_heartbeat_timeout_ms;
+	u64 server_data_fill_target;
 	int tcp_keepalive_timeout_ms;
 };
 
@@ -27,5 +28,15 @@ int scoutfs_options_early_setup(struct super_block *sb, char *options);
 int scoutfs_options_setup(struct super_block *sb);
 void scoutfs_options_stop(struct super_block *sb);
 void scoutfs_options_destroy(struct super_block *sb);
+
+static inline u64 scoutfs_opt_server_data_fill_low(struct scoutfs_mount_options *opts)
+{
+	return opts->server_data_fill_target / 4;
+}
+
+static inline u64 scoutfs_opt_client_data_fill_low(struct scoutfs_mount_options *opts)
+{
+	return opts->server_data_fill_target / 16;
+}
 
 #endif	/* _SCOUTFS_OPTIONS_H_ */

@@ -443,6 +443,10 @@ static void release_holders(struct super_block *sb)
  */
 static bool commit_before_hold(struct super_block *sb, struct trans_info *tri)
 {
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
 	/*
 	 * In theory each dirty item page could be straddling two full
 	 * blocks, requiring 4 allocations for each item cache page.
@@ -470,7 +474,7 @@ static bool commit_before_hold(struct super_block *sb, struct trans_info *tri)
 	}
 
 	/* if we're low and can't refill then alloc could empty and return enospc */
-	if (scoutfs_data_alloc_should_refill(sb, SCOUTFS_ALLOC_DATA_REFILL_THRESH)) {
+	if (scoutfs_data_alloc_should_refill(sb, scoutfs_opt_client_data_fill_low(&opts))) {
 		scoutfs_inc_counter(sb, trans_commit_data_alloc_low);
 		return true;
 	}
