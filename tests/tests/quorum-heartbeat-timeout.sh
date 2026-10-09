@@ -7,7 +7,7 @@ t_require_mounts 2
 
 time_ms()
 {
-	# time_t in seconds, then trunate nanoseconds to 3 most dig digits
+	# time_t in seconds, then truncate nanoseconds to 3 most sig digits
 	date +%s%3N
 }
 
@@ -78,7 +78,12 @@ test_timeout()
 
 	# make sure the new leader delay was reasonable, allowing for some slack
 	low=$((to - 1000))
-	high=$((to + 5000))
+
+	# There's a race with the old server shutting down and writing its
+	# STOP record, which will trigger a delay (SCOUTFS_OLD_LEADER_GRACE_PERIOD)
+	# while the new server gives the old one a grace period. That duration needs
+	# to be included in the upper limit.
+	high=$((to + 35000))
 
 	# make sure the new leader delay was reasonable
 	test "$delay" -lt "$low" && t_fail "delay $delay < low $low (to $to)"

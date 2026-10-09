@@ -122,7 +122,7 @@ t_quorum_nrs()
 #
 t_fs_is_leader()
 {
-	if [ "$(cat $(t_sysfs_path $i)/quorum/is_leader 2>/dev/null)" == "1" ]; then
+	if [ "$(cat $(t_sysfs_path $1)/quorum/is_leader 2>/dev/null)" == "1" ]; then
 		echo "1"
 	else
 		echo "0"
