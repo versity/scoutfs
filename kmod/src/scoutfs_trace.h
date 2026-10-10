@@ -378,26 +378,26 @@ DEFINE_EVENT(scoutfs_data_file_extent_class, scoutfs_data_fiemap_extent,
 );
 
 TRACE_EVENT(scoutfs_data_truncate_items,
-	TP_PROTO(struct super_block *sb, __u64 iblock, __u64 last, int offline),
+	TP_PROTO(struct super_block *sb, __u64 iblock, __u64 last, int dti),
 
-	TP_ARGS(sb, iblock, last, offline),
+	TP_ARGS(sb, iblock, last, dti),
 
 	TP_STRUCT__entry(
 		SCSB_TRACE_FIELDS
 		__field(__u64, iblock)
 		__field(__u64, last)
-		__field(int, offline)
+		__field(int, dti)
 	),
 
 	TP_fast_assign(
 		SCSB_TRACE_ASSIGN(sb);
 		__entry->iblock = iblock;
 		__entry->last = last;
-		__entry->offline = offline;
+		__entry->dti = dti;
 	),
 
-	TP_printk(SCSBF" iblock %llu last %llu offline %u", SCSB_TRACE_ARGS,
-		  __entry->iblock, __entry->last, __entry->offline)
+	TP_printk(SCSBF" iblock %llu last %llu dti %x", SCSB_TRACE_ARGS,
+		  __entry->iblock, __entry->last, __entry->dti)
 );
 
 TRACE_EVENT(scoutfs_data_wait_check,
@@ -1211,7 +1211,7 @@ TRACE_EVENT(scoutfs_delete_inode,
 );
 
 TRACE_EVENT(scoutfs_delete_inode_end,
-	TP_PROTO(struct super_block *sb, u64 ino, umode_t mode, u64 size, int ret),
+	TP_PROTO(struct super_block *sb, u64 ino, umode_t mode, u64 size, s64 ret),
 
 	TP_ARGS(sb, ino, mode, size, ret),
 
@@ -1220,7 +1220,7 @@ TRACE_EVENT(scoutfs_delete_inode_end,
 		__field(__u64, ino)
 		__field(umode_t, mode)
 		__field(__u64, size)
-		__field(int, ret)
+		__field(__s64, ret)
 	),
 
 	TP_fast_assign(
@@ -1231,7 +1231,7 @@ TRACE_EVENT(scoutfs_delete_inode_end,
 		__entry->ret = ret;
 	),
 
-	TP_printk("dev %d,%d ino %llu, mode 0x%x size %llu, ret %d",
+	TP_printk("dev %d,%d ino %llu, mode 0x%x size %llu, ret %lld",
 		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->ino,
 		  __entry->mode, __entry->size, __entry->ret)
 );
@@ -1276,6 +1276,7 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		__field(unsigned char, invalidate_pending)
 		__field(int, mode)
 		__field(int, invalidating_mode)
+		__field(int, last_error)
 		__field(unsigned int, waiters_cw)
 		__field(unsigned int, waiters_pr)
 		__field(unsigned int, waiters_ex)
@@ -1294,6 +1295,7 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		__entry->invalidate_pending = lck->invalidate_pending;
 		__entry->mode = lck->mode;
 		__entry->invalidating_mode = lck->invalidating_mode;
+		__entry->last_error = lck->last_error;
 		__entry->waiters_pr = lck->waiters[SCOUTFS_LOCK_READ];
 		__entry->waiters_ex = lck->waiters[SCOUTFS_LOCK_WRITE];
 		__entry->waiters_cw = lck->waiters[SCOUTFS_LOCK_WRITE_ONLY];
@@ -1301,11 +1303,11 @@ DECLARE_EVENT_CLASS(scoutfs_lock_class,
 		__entry->users_ex = lck->users[SCOUTFS_LOCK_WRITE];
 		__entry->users_cw = lck->users[SCOUTFS_LOCK_WRITE_ONLY];
         ),
-        TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" mode %u invmd %u reqp %u invp %u refg %llu wris %llu dts %llu waiters: pr %u ex %u cw %u users: pr %u ex %u cw %u",
+        TP_printk(SCSBF" start "SK_FMT" end "SK_FMT" mode %u invmd %u reqp %u invp %u refg %llu wris %llu dts %llu lerr %d waiters: pr %u ex %u cw %u users: pr %u ex %u cw %u",
 		  SCSB_TRACE_ARGS, sk_trace_args(start), sk_trace_args(end),
 		  __entry->mode, __entry->invalidating_mode, __entry->request_pending,
 		  __entry->invalidate_pending, __entry->refresh_gen, __entry->write_seq,
-		  __entry->dirty_trans_seq,
+		  __entry->dirty_trans_seq, __entry->last_error,
 		  __entry->waiters_pr, __entry->waiters_ex, __entry->waiters_cw,
 		  __entry->users_pr, __entry->users_ex, __entry->users_cw)
 );

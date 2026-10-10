@@ -460,8 +460,7 @@ int scoutfs_complete_truncate(struct inode *inode, struct scoutfs_lock *lock)
 	start = (i_size_read(inode) + SCOUTFS_BLOCK_SM_SIZE - 1) >>
 		SCOUTFS_BLOCK_SM_SHIFT;
 	ret = scoutfs_data_truncate_items(inode->i_sb, inode,
-					  scoutfs_ino(inode), start, ~0ULL,
-					  false, lock);
+					  scoutfs_ino(inode), start, U64_MAX, 0, lock);
 	err = clear_truncate_flag(inode, lock);
 
 	return ret ? ret : err;
@@ -1635,16 +1634,20 @@ int scoutfs_inode_orphan_delete(struct super_block *sb, u64 ino, struct scoutfs_
 }
 
 /*
- * Remove all the items associated with a given inode.  This is only
- * called once nlink has dropped to zero and nothing has the inode open
- * so we don't have to worry about dirents referencing the inode or link
+ * Remove the items associated with a given inode.  This is only called
+ * once nlink has dropped to zero and nothing has the inode open so we
+ * don't have to worry about dirents referencing the inode or link
  * backrefs.  Dropping nlink to 0 also created an orphan item.  That
  * orphan item will continue triggering attempts to finish previous
  * partial deletion until all deletion is complete and the orphan item
  * is removed.
+ *
+ * Returns a positive block number if data extent removal made partial
+ * progress and could be continued from that block number.
  */
-static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_inode *sinode,
-			      struct scoutfs_lock *lock, struct scoutfs_lock *orph_lock)
+static s64 delete_inode_items(struct super_block *sb, u64 ino, u64 sblock,
+			      struct scoutfs_inode *sinode, struct scoutfs_lock *lock,
+			      struct scoutfs_lock *orph_lock)
 {
 	struct scoutfs_key key;
 	LIST_HEAD(ind_locks);
@@ -1652,7 +1655,7 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_in
 	umode_t mode;
 	u64 ind_seq;
 	u64 size;
-	int ret;
+	s64 ret;
 
 	scoutfs_inode_init_key(&key, ino);
 
@@ -1662,9 +1665,9 @@ static int delete_inode_items(struct super_block *sb, u64 ino, struct scoutfs_in
 
 	/* remove data items in their own transactions */
 	if (S_ISREG(mode)) {
-		ret = scoutfs_data_truncate_items(sb, NULL, ino, 0, ~0ULL,
-						  false, lock);
-		if (ret)
+		ret = scoutfs_data_truncate_items(sb, NULL, ino, sblock, U64_MAX,
+						  DTI_PARTIAL_INVALIDATE, lock);
+		if (ret != 0)
 			goto out;
 	}
 
@@ -1787,7 +1790,7 @@ out:
 }
 
 /*
- * Try to delete all the items for an unused inode number.  This is the
+ * Try to delete the items for an unused inode number.  This is the
  * relatively slow path that uses cluster locks, network requests, and
  * IO to ensure correctness.  Callers should try hard to avoid calling
  * when there's no work to do.
@@ -1811,10 +1814,14 @@ out:
  * on a bit in the lock data so that we only have one deletion attempt
  * per inode under this mount's cluster lock.
  *
- * Returns -EAGAIN if we either did some cleanup work or are unable to finish
- * cleaning up this inode right now.
+ * Returns -EAGAIN if we either did some cleanup work or are unable to
+ * finish cleaning up this inode right now.
+ *
+ * This can make partial progress if it had to drop the inode lock while
+ * removing extent items.  In this case it returns the postive starting
+ * data block number that truncate could resume from.
  */
-static int try_delete_inode_items(struct super_block *sb, u64 ino)
+static s64 try_delete_inode_items(struct super_block *sb, u64 ino, u64 sblock)
 {
 	struct inode_deletion_lock_data *ldata = NULL;
 	struct scoutfs_lock *orph_lock = NULL;
@@ -1824,7 +1831,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	bool clear_trying = false;
 	u64 group_nr;
 	int bit_nr;
-	int ret;
+	s64 ret;
 
 	trace_scoutfs_try_delete(sb, ino);
 
@@ -1873,7 +1880,7 @@ static int try_delete_inode_items(struct super_block *sb, u64 ino)
 	if (ret < 0)
 		goto out;
 
-	ret = delete_inode_items(sb, ino, &sinode, lock, orph_lock);
+	ret = delete_inode_items(sb, ino, sblock, &sinode, lock, orph_lock);
 	if (ret == 0) {
 		ret = -EAGAIN;
 		scoutfs_inc_counter(sb, inode_deleted);
@@ -1890,12 +1897,30 @@ out:
 }
 
 /*
- * As we evicted an inode we need to decide to try and delete its items
- * or not, which is expensive.  We only try when we have lock coverage
- * and the inode has been unlinked.  This catches the common case of
- * regular deletion so deletion will be performed in the final unlink
- * task.  It also catches open-unlink or o_tmpfile that aren't cached on
- * other nodes.
+ * Keep deleting the inode's items as long as we make partial progress
+ * deleting extent items.
+ */
+static int try_delete_inode(struct super_block *sb, u64 ino)
+{
+	u64 sblock = 0;
+	s64 ret;
+
+	do {
+		ret = try_delete_inode_items(sb, ino, sblock);
+		if (ret > 0)
+			sblock = ret;
+	} while (ret > 0);
+
+	return ret;
+}
+
+/*
+ * As we evict an inode we decide if we should delete its items or not,
+ * which is expensive.  We only try when we have lock coverage and the
+ * inode has been unlinked.  This catches the common case of regular
+ * deletion so deletion will be performed in the final unlink task.  It
+ * also catches open-unlink or o_tmpfile that aren't cached on other
+ * nodes.
  *
  * Inodes being evicted outside of lock coverage, by referenced dentries
  * or inodes that survived the attempt to drop them as their lock was
@@ -1918,7 +1943,7 @@ void scoutfs_evict_inode(struct inode *inode)
 		scoutfs_omap_clear(sb, ino);
 
 		if (scoutfs_lock_is_covered(sb, &si->ino_lock_cov) && inode->i_nlink == 0)
-			try_delete_inode_items(sb, scoutfs_ino(inode));
+			try_delete_inode(sb, scoutfs_ino(inode));
 	}
 
 	clear_inode(inode);
@@ -2164,7 +2189,7 @@ static void inode_orphan_scan_worker(struct work_struct *work)
 		scoutfs_inc_counter(sb, orphan_scan_attempts);
 		trace_scoutfs_orphan_scan_work(sb, ino);
 
-		ret = try_delete_inode_items(sb, ino);
+		ret = try_delete_inode(sb, ino);
 		if (ret == -EAGAIN) {
 			work_todo = true;
 			ret = 0;

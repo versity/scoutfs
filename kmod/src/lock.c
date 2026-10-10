@@ -321,21 +321,29 @@ static bool lock_counts_match(int granted, unsigned int *counts)
 	return true;
 }
 
+static bool lock_counts_zero(unsigned int *counts)
+{
+	enum scoutfs_lock_mode mode;
+
+	for (mode = 0; mode < SCOUTFS_LOCK_NR_MODES; mode++) {
+		if (counts[mode])
+			return false;
+	}
+
+	return true;
+}
+
 /*
  * An idle lock has nothing going on.  It can be present in the lru and
  * can be freed by the final put when it has a null mode.
  */
 static bool lock_idle(struct scoutfs_lock *lock)
 {
-	enum scoutfs_lock_mode mode;
-
 	if (lock->request_pending || lock->invalidate_pending)
 		return false;
 
-	for (mode = 0; mode < SCOUTFS_LOCK_NR_MODES; mode++) {
-		if (lock->waiters[mode] || lock->users[mode])
-			return false;
-	}
+	if (!lock_counts_zero(lock->waiters) || !lock_counts_zero(lock->users))
+		return false;
 
 	return true;
 }
@@ -609,8 +617,7 @@ static void bug_on_inconsistent_grant_cache(struct super_block *sb,
  * after sending this grant response.   We won't process the incoming
  * invalidate request until after processing this grant response.
  */
-int scoutfs_lock_grant_response(struct super_block *sb,
-				struct scoutfs_net_lock *nl)
+int scoutfs_lock_grant_response(struct super_block *sb, int error, struct scoutfs_net_lock *nl)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
 	struct scoutfs_lock *lock;
@@ -625,6 +632,13 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 	trace_scoutfs_lock_grant_response(sb, lock);
 	BUG_ON(!lock->request_pending);
 
+	/* error responses are nops, requests retried indefinitely */
+	if (error) {
+		lock->last_error = error;
+		lock->request_pending = 0;
+		goto out;
+	}
+
 	bug_on_inconsistent_grant_cache(sb, lock, nl->old_mode, nl->new_mode);
 
 	if (!lock_mode_can_read(nl->old_mode) && lock_mode_can_read(nl->new_mode))
@@ -635,6 +649,7 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 	lock->write_seq = le64_to_cpu(nl->write_seq);
 
 	trace_scoutfs_lock_granted(sb, lock);
+out:
 	wake_up(&lock->waitq);
 	put_lock(linfo, lock);
 
@@ -757,6 +772,26 @@ static void lock_invalidate_worker(struct work_struct *work)
 	}
 
 	spin_unlock(&linfo->lock);
+}
+
+/*
+ * Returns true if the requested mode doesn't match the next mode that
+ * would result after the next invalidation is processed.
+ *
+ * We have to be careful not to cause deadlocks by having a lock attempt
+ * wait for invalidation while the invalidation is waiting for the lock
+ * attempt to unlock any previous locks it might have.  This can get
+ * gnarly when there are multiple invalidations queued and requests
+ * pending for elevated modes.  We avoid all that and never let
+ * invalidations block lock attempts when there are any other users of
+ * the lock.
+ */
+static bool next_invalidate_blocks(struct scoutfs_lock *lock, u8 requested)
+{
+	struct inv_req *ireq = list_first_entry_or_null(&lock->inv_list, struct inv_req, head);
+
+	return ireq && lock_counts_zero(lock->users) &&
+	       !lock_modes_match(ireq->nl.new_mode, requested);
 }
 
 /*
@@ -950,7 +985,8 @@ static bool lock_wait_cond(struct super_block *sb, struct scoutfs_lock *lock,
 	bool wake;
 
 	spin_lock(&linfo->lock);
-	wake = linfo->shutdown || lock_modes_match(lock->mode, mode) ||
+	wake = linfo->shutdown ||
+	       (lock_modes_match(lock->mode, mode) && !next_invalidate_blocks(lock, mode)) ||
 	       !lock->request_pending;
 	spin_unlock(&linfo->lock);
 
@@ -1026,7 +1062,7 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 		}
 
 		/* the fast path where we can use the granted mode */
-		if (lock_modes_match(lock->mode, mode)) {
+		if (lock_modes_match(lock->mode, mode) && !next_invalidate_blocks(lock, mode)) {
 			lock_inc_count(lock->users, mode);
 			*ret_lock = lock;
 			ret = 0;
@@ -1040,7 +1076,7 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 			break;
 		}
 
-		if (!lock->request_pending) {
+		if (!lock_modes_match(lock->mode, mode) && !lock->request_pending) {
 			lock->request_pending = 1;
 			should_send = true;
 		} else {
@@ -1448,6 +1484,19 @@ bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 	return lock_modes_match(lock_mode, mode) &&
 	       scoutfs_key_compare_ranges(key, key,
 					  &lock->start, &lock->end) == 0;
+}
+
+/*
+ * Returns true if there is an invalidation pending on the lock.
+ *
+ * This is racey and doesn't test modes.  But it can still be useful for
+ * writers who will take non-destructive action if there's an
+ * invalidation pending that must necessarily be incompatible with their
+ * hold.
+ */
+bool scoutfs_lock_invalidate_pending(struct scoutfs_lock *lock)
+{
+	return lock->invalidate_pending;
 }
 
 void scoutfs_free_unused_locks(struct super_block *sb)
