@@ -61,6 +61,7 @@ Provides:       kmod-%{kmod_name} = %{kmod_version}
 
 Summary:        %{kmod_name} kernel module
 Version:        %{kmod_version}
+Obsoletes:      kmod-%{kmod_name} < %{kmod_version}
 
 %if 0%{?per_kver}
 Release:        %{_release}
