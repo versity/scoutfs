@@ -31,6 +31,7 @@
 
 enum {
 	Opt_acl,
+	Opt_server_data_fill_target,
 	Opt_data_prealloc_blocks,
 	Opt_data_prealloc_contig_only,
 	Opt_ino_alloc_per_lock,
@@ -47,6 +48,7 @@ enum {
 
 static const match_table_t tokens = {
 	{Opt_acl, "acl"},
+	{Opt_server_data_fill_target, "server_data_fill_target=%s"},
 	{Opt_data_prealloc_blocks, "data_prealloc_blocks=%s"},
 	{Opt_data_prealloc_contig_only, "data_prealloc_contig_only=%s"},
 	{Opt_ino_alloc_per_lock, "ino_alloc_per_lock=%s"},
@@ -142,6 +144,7 @@ static void init_default_options(struct scoutfs_mount_options *opts)
 {
 	memset(opts, 0, sizeof(*opts));
 
+	opts->server_data_fill_target = SCOUTFS_SERVER_DATA_FILL_TARGET_DEFAULT;
 	opts->data_prealloc_blocks = SCOUTFS_DATA_PREALLOC_DEFAULT_BLOCKS;
 	opts->data_prealloc_contig_only = 1;
 	opts->ino_alloc_per_lock = SCOUTFS_LOCK_INODE_GROUP_NR;
@@ -213,6 +216,19 @@ static int verify_tcp_keepalive_timeout_ms(struct super_block *sb, int ret, int 
 	return 0;
 }
 
+static bool invalid_server_data_fill_target(struct super_block *sb, bool force, u64 val)
+{
+	if (force || val < SCOUTFS_SERVER_DATA_FILL_TARGET_MIN ||
+	    val > SCOUTFS_SERVER_DATA_FILL_TARGET_MAX) {
+		scoutfs_err(sb, "invalid server_data_fill_target option, must be between %llu and %llu",
+			    SCOUTFS_SERVER_DATA_FILL_TARGET_MIN,
+			    SCOUTFS_SERVER_DATA_FILL_TARGET_MAX);
+		return true;
+	}
+
+	return false;
+}
+
 /*
  * Parse the option string into our options struct.   This can allocate
  * memory in the struct.  The caller is responsible for always calling
@@ -237,6 +253,13 @@ static int parse_options(struct super_block *sb, char *options, struct scoutfs_m
 
 		case Opt_acl:
 			sb->s_flags |= SB_POSIXACL;
+			break;
+
+		case Opt_server_data_fill_target:
+			ret = match_u64(args, &nr64);
+			if (invalid_server_data_fill_target(sb, ret < 0, nr64))
+				return -EINVAL;
+			opts->server_data_fill_target = nr64;
 			break;
 
 		case Opt_data_prealloc_blocks:
@@ -436,6 +459,7 @@ int scoutfs_options_show(struct seq_file *seq, struct dentry *root)
 
 	if (is_acl)
 		seq_puts(seq, ",acl");
+	seq_printf(seq, ",server_data_fill_target=%llu", opts.server_data_fill_target);
 	seq_printf(seq, ",data_prealloc_blocks=%llu", opts.data_prealloc_blocks);
 	seq_printf(seq, ",data_prealloc_contig_only=%u", opts.data_prealloc_contig_only);
 	seq_printf(seq, ",ino_alloc_per_lock=%u", opts.ino_alloc_per_lock);
@@ -740,6 +764,42 @@ static ssize_t quorum_slot_nr_show(struct kobject *kobj, struct kobj_attribute *
 }
 SCOUTFS_ATTR_RO(quorum_slot_nr);
 
+static ssize_t server_data_fill_target_show(struct kobject *kobj, struct kobj_attribute *attr,
+					    char *buf)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	struct scoutfs_mount_options opts;
+
+	scoutfs_options_read(sb, &opts);
+
+	return snprintf(buf, PAGE_SIZE, "%llu", opts.server_data_fill_target);
+}
+static ssize_t server_data_fill_target_store(struct kobject *kobj, struct kobj_attribute *attr,
+					     const char *buf, size_t count)
+{
+	struct super_block *sb = SCOUTFS_SYSFS_ATTRS_SB(kobj);
+	DECLARE_OPTIONS_INFO(sb, optinf);
+	char nullterm[30]; /* more than enough for octal -U64_MAX */
+	u64 val;
+	int len;
+	int ret;
+
+	len = min(count, sizeof(nullterm) - 1);
+	memcpy(nullterm, buf, len);
+	nullterm[len] = '\0';
+
+	ret = kstrtoll(nullterm, 0, &val);
+	if (invalid_server_data_fill_target(sb, ret < 0, val))
+		return -EINVAL;
+
+	write_seqlock(&optinf->seqlock);
+	optinf->opts.server_data_fill_target = val;
+	write_sequnlock(&optinf->seqlock);
+
+	return count;
+}
+SCOUTFS_ATTR_RW(server_data_fill_target);
+
 static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(data_prealloc_blocks),
 	SCOUTFS_ATTR_PTR(data_prealloc_contig_only),
@@ -750,6 +810,7 @@ static struct attribute *options_attrs[] = {
 	SCOUTFS_ATTR_PTR(orphan_scan_delay_ms),
 	SCOUTFS_ATTR_PTR(quorum_heartbeat_timeout_ms),
 	SCOUTFS_ATTR_PTR(quorum_slot_nr),
+	SCOUTFS_ATTR_PTR(server_data_fill_target),
 	NULL,
 };
 
