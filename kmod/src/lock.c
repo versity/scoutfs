@@ -78,7 +78,6 @@ struct lock_info {
 	struct super_block *sb;
 	spinlock_t lock;
 	bool shutdown;
-	bool unmounting;
 	struct rb_root lock_tree;
 	struct rb_root lock_range_tree;
 	u64 nr_locks;
@@ -1514,21 +1513,6 @@ static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
 			   lock->users[SCOUTFS_LOCK_READ],
 			   lock->users[SCOUTFS_LOCK_WRITE],
 			   lock->users[SCOUTFS_LOCK_WRITE_ONLY]);
-}
-
-/*
- * shrink_dcache_for_umount() tears down dentries with no locking.  We
- * need to make sure that our invalidation won't touch dentries before
- * we return and the caller calls the generic vfs unmount path.
- */
-void scoutfs_lock_unmount_begin(struct super_block *sb)
-{
-	DECLARE_LOCK_INFO(sb, linfo);
-
-	if (linfo) {
-		linfo->unmounting = true;
-		flush_work(&linfo->inv_work);
-	}
 }
 
 void scoutfs_lock_flush_invalidate(struct super_block *sb)
