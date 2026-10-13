@@ -111,6 +111,7 @@ void scoutfs_free_unused_locks(struct super_block *sb);
 
 int scoutfs_lock_setup(struct super_block *sb);
 void scoutfs_lock_flush_invalidate(struct super_block *sb);
+void scoutfs_lock_kick_waiters(struct super_block *sb);
 void scoutfs_lock_shutdown(struct super_block *sb);
 void scoutfs_lock_destroy(struct super_block *sb);
 

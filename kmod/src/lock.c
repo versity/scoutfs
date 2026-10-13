@@ -977,7 +977,7 @@ static bool lock_wait_cond(struct super_block *sb, struct scoutfs_lock *lock,
 	bool wake;
 
 	spin_lock(&linfo->lock);
-	wake = linfo->shutdown ||
+	wake = scoutfs_forcing_unmount(sb) || linfo->shutdown ||
 	       (lock_modes_match(lock->mode, mode) && !next_invalidate_blocks(lock, mode)) ||
 	       !lock->request_pending;
 	spin_unlock(&linfo->lock);
@@ -1048,6 +1048,16 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 	lock_inc_count(lock->waiters, mode);
 
 	for (;;) {
+		/*
+		 * Lock grant request error response handling is
+		 * non-functional.  We directly return when forcing
+		 * unmount rather than via errors network requests.
+		 */
+		if (scoutfs_forcing_unmount(sb)) {
+			ret = -ENOLINK;
+			break;
+		}
+
 		if (WARN_ON_ONCE(linfo->shutdown)) {
 			ret = -ESHUTDOWN;
 			break;
@@ -1523,6 +1533,32 @@ void scoutfs_lock_flush_invalidate(struct super_block *sb)
 		flush_work(&linfo->inv_work);
 }
 
+static void wake_all_locks(struct lock_info *linfo)
+{
+	struct scoutfs_lock *lock;
+	struct rb_node *node;
+
+	spin_lock(&linfo->lock);
+	for (node = rb_first(&linfo->lock_tree); node; node = rb_next(node)) {
+		lock = rb_entry(node, struct scoutfs_lock, node);
+		wake_up(&lock->waitq);
+	}
+	spin_unlock(&linfo->lock);
+}
+
+/*
+ * Used to break waiting lock attempts that should fail during forced
+ * unmount but which aren't connected to error responses from the
+ * canceled net requests.
+ */
+void scoutfs_lock_kick_waiters(struct super_block *sb)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+
+	if (linfo)
+		wake_all_locks(linfo);
+}
+
 static u64 get_held_lock_refresh_gen(struct super_block *sb, struct scoutfs_key *start)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
@@ -1579,8 +1615,6 @@ u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino)
 void scoutfs_lock_shutdown(struct super_block *sb)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
-	struct scoutfs_lock *lock;
-	struct rb_node *node;
 
 	if (!linfo)
 		return;
@@ -1590,11 +1624,9 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 	/* cause current and future lock calls to return errors */
 	spin_lock(&linfo->lock);
 	linfo->shutdown = true;
-	for (node = rb_first(&linfo->lock_tree); node; node = rb_next(node)) {
-		lock = rb_entry(node, struct scoutfs_lock, node);
-		wake_up(&lock->waitq);
-	}
 	spin_unlock(&linfo->lock);
+
+	wake_all_locks(linfo);
 }
 
 /*

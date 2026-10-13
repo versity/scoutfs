@@ -249,6 +249,7 @@ static void scoutfs_umount_begin(struct super_block *sb)
 	sbi->forced_unmount = true;
 
 	scoutfs_client_net_shutdown(sb);
+	scoutfs_lock_kick_waiters(sb);
 }
 
 static const struct super_operations scoutfs_super_ops = {
