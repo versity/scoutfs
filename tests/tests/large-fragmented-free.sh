@@ -19,4 +19,12 @@ rm -f "$T_D0/move"
 echo "== cleanup"
 rm -f "$T_D0/alloc"
 
+#
+# If the inodes were picked up by the scanners then extent freeing by
+# final deletion could continune long after this text exited.  Make sure
+# the scanners are idle before finish so later tests don't have
+# surprising background work.
+#
+t_wait_for_no_orphans
+
 t_pass
