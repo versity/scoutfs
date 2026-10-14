@@ -115,6 +115,10 @@ struct quorum_status {
 	int vote_for;
 	unsigned long vote_bits;
 	ktime_t timeout;
+	/* last leader heartbeat we heard and the slot that sent it, cleared
+	 * when the leader is known gone */
+	ktime_t last_hb;
+	int last_hb_from;
 };
 
 #define HB_DELAY_NR		(SCOUTFS_QUORUM_MAX_HB_TIMEO_MS / MSEC_PER_SEC)
@@ -173,6 +177,16 @@ static ktime_t heartbeat_interval(void)
 static ktime_t heartbeat_timeout(struct scoutfs_mount_options *opts)
 {
 	return ktime_add_ms(ktime_get(), opts->quorum_heartbeat_timeout_ms);
+}
+
+/*
+ * Assume leader is alive if we heard its heartbeat before the timeout.
+ */
+static bool saw_live_leader(struct quorum_status *qst, struct scoutfs_mount_options *opts)
+{
+	return ktime_to_ns(qst->last_hb) != 0 &&
+	       ktime_after(ktime_add_ms(qst->last_hb, opts->quorum_heartbeat_timeout_ms),
+			   ktime_get());
 }
 
 static int create_socket(struct super_block *sb)
@@ -458,6 +472,64 @@ static void read_greatest_term(struct super_block *sb, u64 *term)
 	}
 }
 
+/*
+ * A timed-out member normally stands for election, but a member whose
+ * term was inflated by failed campaigns during a partition would usurp
+ * the healthy leader that replaced it. Once it tries to rejoin the
+ * cluster, the leader's heartbeats were discarded as stale, but they
+ * do prove that a leader is alive.
+ *
+ * We defer to an existing leader during rejoin when the quorum blocks
+ * agree with what we hear: the heartbeats come from the slot holding
+ * the greatest elected term that hasn't stopped, that election hasn't
+ * been fenced by a later one, and our own block shows no election win
+ * at our current term.
+ */
+static bool defer_to_heard_leader(struct super_block *sb, struct quorum_info *qinf,
+				  struct quorum_status *qst)
+{
+	struct scoutfs_quorum_block blk;
+	u64 greatest_elect = 0;
+	u64 greatest_fence = 0;
+	u64 our_elect = 0;
+	int elect_slot = -1;
+	u64 elect;
+	int ret;
+	int s;
+
+	if (qst->last_hb_from < 0)
+		return false;
+
+	for (s = 0; s < SCOUTFS_QUORUM_MAX_SLOTS; s++) {
+		if (!quorum_slot_present(&qinf->qconf, s))
+			continue;
+
+		ret = read_quorum_block(sb, SCOUTFS_QUORUM_BLKNO + s, &blk, false);
+		if (ret < 0)
+			return false;
+
+		greatest_fence = max(greatest_fence,
+				     le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_FENCE].term));
+
+		elect = le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_ELECT].term);
+		if (s == qinf->our_quorum_slot_nr)
+			our_elect = elect;
+
+		if (elect > le64_to_cpu(blk.events[SCOUTFS_QUORUM_EVENT_STOP].term) &&
+		    elect > greatest_elect) {
+			greatest_elect = elect;
+			elect_slot = s;
+		}
+	}
+
+	/* we won at our term, reassert it rather than defer */
+	if (our_elect >= qst->term)
+		return false;
+
+	/* only defer to the unfenced leader that the blocks record */
+	return elect_slot == qst->last_hb_from && greatest_elect >= greatest_fence;
+}
+
 static void set_quorum_block_event(struct super_block *sb, struct scoutfs_quorum_block *blk,
 				   int event, u64 term)
 {
@@ -731,10 +803,14 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 	read_greatest_term(sb, &qst.term);
 
 	/* see if there's a server to chose heartbeat or election timeout */
-	if (scoutfs_quorum_server_sin(sb, &unused) == 0)
+	if (scoutfs_quorum_server_sin(sb, &unused) == 0) {
 		qst.timeout = heartbeat_timeout(&opts);
-	else
+		qst.last_hb = ktime_get();
+	} else {
 		qst.timeout = election_timeout();
+		qst.last_hb = ns_to_ktime(0);
+	}
+	qst.last_hb_from = -1;
 
 	/* record that we're up and running, readers check that it isn't updated */
 	ret = update_quorum_block(sb, SCOUTFS_QUORUM_EVENT_BEGIN, qst.term, false);
@@ -758,6 +834,29 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 
 		scoutfs_options_read(sb, &opts);
 		record_hb = false;
+
+		/*
+		 * Record the heartbeats to aid determining whether to stand
+		 * for election when rejoining. As long as we're hearing heartbeats
+		 * and the quorum blocks agree that a leader is in place we
+		 * will not replace it.
+		 */
+		if (msg.type == SCOUTFS_QUORUM_MSG_HEARTBEAT) {
+			qst.last_hb = ktime_get();
+			qst.last_hb_from = msg.from;
+		}
+		/*
+		 * Record when we see a server resign. If we were holding an
+		 * election due to seeing an active leader when rejoining, this
+		 * will allow us to start an election proper.
+		 */
+		if (msg.type == SCOUTFS_QUORUM_MSG_RESIGNATION &&
+		    qst.role != LEADER && msg.from == qst.last_hb_from) {
+			qst.last_hb = ns_to_ktime(0);
+			qst.last_hb_from = -1;
+			if (msg.term < qst.term)
+				qst.timeout = election_timeout();
+		}
 
 		/* ignore messages from older terms */
 		if (msg.type != SCOUTFS_QUORUM_MSG_INVALID &&
@@ -804,6 +903,8 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 		    qst.role == FOLLOWER &&
 		    msg.term == qst.term) {
 			qst.timeout = election_timeout();
+			qst.last_hb = ns_to_ktime(0);
+			qst.last_hb_from = -1;
 			scoutfs_inc_counter(sb, quorum_recv_resignation);
 		}
 
@@ -815,6 +916,26 @@ static void scoutfs_quorum_worker(struct work_struct *work)
 			if (!scoutfs_server_is_down(sb)) {
 				qst.timeout = election_timeout();
 				scoutfs_inc_counter(sb, quorum_candidate_server_stopping);
+				continue;
+			}
+
+			/*
+			 * Don't disrupt a leader we can currently hear just
+			 * because our term is higher.  A member returning after
+			 * a partition can carry a term inflated by failed
+			 * campaigns, and that term has no election win behind
+			 * it, so it must not fence the healthy leader that
+			 * replaced it.  We stay a follower, re-checking each
+			 * heartbeat timeout, until the leader's heartbeats
+			 * stop, it resigns, or the quorum blocks stop naming
+			 * it as the unfenced elected leader.
+			 */
+			if (saw_live_leader(&qst, &opts) &&
+			    defer_to_heard_leader(sb, qinf, &qst)) {
+				qst.role = FOLLOWER;
+				qst.vote_bits = 0;
+				qst.timeout = ktime_add_ms(qst.last_hb,
+							   opts.quorum_heartbeat_timeout_ms);
 				continue;
 			}
 
@@ -1122,6 +1243,11 @@ static ssize_t status_show(struct kobject *kobj, struct kobj_attribute *attr,
 	ts = ktime_to_timespec64(ktime_sub(qst.timeout, now));
 	snprintf_ret(buf, size, &ret, "timeout_in_secs %lld.%09u\n",
 		     (s64)ts.tv_sec, (int)ts.tv_nsec);
+	if (ktime_to_ns(qst.last_hb) != 0) {
+		ts = ktime_to_timespec64(ktime_sub(now, qst.last_hb));
+		snprintf_ret(buf, size, &ret, "last_hb from %d secs_since %lld.%09u\n",
+			     qst.last_hb_from, (s64)ts.tv_sec, (int)ts.tv_nsec);
+	}
 
 	for (i = 0; i < SCOUTFS_QUORUM_MAX_SLOTS; i++) {
 		spin_lock(&qinf->show_lock);
