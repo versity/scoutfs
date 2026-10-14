@@ -236,6 +236,9 @@ t_filter_dmesg()
 	re="$re|File: /mnt/test.* PID:.* Comm: dd"
 	re="$re|dio_warn_stale_pagecache*"
 
+	# block-quorum-port expects the disconnected client to advance the term
+	re="$re|scoutfs .* warning: saw msg type 0 from .* while leader in term"
+
 	egrep -v "($re)" | \
 		ignore_harmless_unwind_kasan_stack_oob | \
 		ignore_harmless_xfs_lockdep_warning

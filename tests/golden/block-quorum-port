@@ -1,0 +1,5 @@
+== disabling quorum port
+== waiting for victim's term to advance
+== enabling quorum port
+== wait for a new leader
+== make sure the original leader was not fenced
