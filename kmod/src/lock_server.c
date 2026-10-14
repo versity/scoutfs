@@ -626,9 +626,14 @@ out:
 int scoutfs_lock_server_greeting(struct super_block *sb, u64 rid)
 {
 	struct scoutfs_key key;
+	bool pending;
 	int ret;
 
-	if (scoutfs_recov_is_pending(sb, rid, SCOUTFS_RECOV_LOCKS)) {
+	pending = scoutfs_recov_is_pending(sb, rid, SCOUTFS_RECOV_LOCKS);
+
+	trace_scoutfs_lock_server_greeting(sb, rid, pending);
+
+	if (pending) {
 		scoutfs_key_set_zeros(&key);
 		ret = scoutfs_server_lock_recover_request(sb, rid, &key);
 	} else {

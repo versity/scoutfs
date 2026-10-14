@@ -2121,6 +2121,110 @@ DEFINE_EVENT(scoutfs_server_client_count_class, scoutfs_server_client_down,
 	TP_ARGS(sb, rid, nr_clients)
 );
 
+TRACE_EVENT(scoutfs_recov_prepare,
+	TP_PROTO(struct super_block *sb, u64 rid, int which),
+
+	TP_ARGS(sb, rid, which),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(int, which)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->which = which;
+	),
+
+	TP_printk(SCSBF" rid %016llx which 0x%x",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->which)
+);
+
+TRACE_EVENT(scoutfs_recov_finish,
+	TP_PROTO(struct super_block *sb, u64 rid, int which, int remaining),
+
+	TP_ARGS(sb, rid, which, remaining),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(int, which)
+		__field(int, remaining)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->which = which;
+		__entry->remaining = remaining;
+	),
+
+	TP_printk(SCSBF" rid %016llx which 0x%x remaining %d",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->which,
+		  __entry->remaining)
+);
+
+TRACE_EVENT(scoutfs_recov_timeout_fire,
+	TP_PROTO(struct super_block *sb, int nr_pending),
+
+	TP_ARGS(sb, nr_pending),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(int, nr_pending)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->nr_pending = nr_pending;
+	),
+
+	TP_printk(SCSBF" nr_pending %d",
+		  SCSB_TRACE_ARGS, __entry->nr_pending)
+);
+
+TRACE_EVENT(scoutfs_recov_fence_rid,
+	TP_PROTO(struct super_block *sb, u64 rid),
+
+	TP_ARGS(sb, rid),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+	),
+
+	TP_printk(SCSBF" rid %016llx",
+		  SCSB_TRACE_ARGS, __entry->c_rid)
+);
+
+TRACE_EVENT(scoutfs_lock_server_greeting,
+	TP_PROTO(struct super_block *sb, u64 rid, bool recov_pending),
+
+	TP_ARGS(sb, rid, recov_pending),
+
+	TP_STRUCT__entry(
+		SCSB_TRACE_FIELDS
+		__field(__u64, c_rid)
+		__field(bool, recov_pending)
+	),
+
+	TP_fast_assign(
+		SCSB_TRACE_ASSIGN(sb);
+		__entry->c_rid = rid;
+		__entry->recov_pending = recov_pending;
+	),
+
+	TP_printk(SCSBF" rid %016llx recov_pending %d",
+		  SCSB_TRACE_ARGS, __entry->c_rid, __entry->recov_pending)
+);
+
 DECLARE_EVENT_CLASS(scoutfs_server_commit_users_class,
         TP_PROTO(struct super_block *sb, int holding, int applying,
 		 int nr_holders, u32 budget,
