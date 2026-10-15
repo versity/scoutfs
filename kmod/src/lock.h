@@ -103,14 +103,15 @@ void scoutfs_lock_del_coverage(struct super_block *sb,
 			       struct scoutfs_lock_coverage *cov);
 bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 			    enum scoutfs_lock_mode mode);
+bool scoutfs_lock_invalidate_pending(struct scoutfs_lock *lock);
 
 u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino);
 
 void scoutfs_free_unused_locks(struct super_block *sb);
 
 int scoutfs_lock_setup(struct super_block *sb);
-void scoutfs_lock_unmount_begin(struct super_block *sb);
 void scoutfs_lock_flush_invalidate(struct super_block *sb);
+void scoutfs_lock_kick_waiters(struct super_block *sb);
 void scoutfs_lock_shutdown(struct super_block *sb);
 void scoutfs_lock_destroy(struct super_block *sb);
 

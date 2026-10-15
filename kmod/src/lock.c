@@ -78,7 +78,6 @@ struct lock_info {
 	struct super_block *sb;
 	spinlock_t lock;
 	bool shutdown;
-	bool unmounting;
 	struct rb_root lock_tree;
 	struct rb_root lock_range_tree;
 	u64 nr_locks;
@@ -321,21 +320,29 @@ static bool lock_counts_match(int granted, unsigned int *counts)
 	return true;
 }
 
+static bool lock_counts_zero(unsigned int *counts)
+{
+	enum scoutfs_lock_mode mode;
+
+	for (mode = 0; mode < SCOUTFS_LOCK_NR_MODES; mode++) {
+		if (counts[mode])
+			return false;
+	}
+
+	return true;
+}
+
 /*
  * An idle lock has nothing going on.  It can be present in the lru and
  * can be freed by the final put when it has a null mode.
  */
 static bool lock_idle(struct scoutfs_lock *lock)
 {
-	enum scoutfs_lock_mode mode;
-
 	if (lock->request_pending || lock->invalidate_pending)
 		return false;
 
-	for (mode = 0; mode < SCOUTFS_LOCK_NR_MODES; mode++) {
-		if (lock->waiters[mode] || lock->users[mode])
-			return false;
-	}
+	if (!lock_counts_zero(lock->waiters) || !lock_counts_zero(lock->users))
+		return false;
 
 	return true;
 }
@@ -760,6 +767,26 @@ static void lock_invalidate_worker(struct work_struct *work)
 }
 
 /*
+ * Returns true if the requested mode doesn't match the next mode that
+ * would result after the next invalidation is processed.
+ *
+ * We have to be careful not to cause deadlocks by having a lock attempt
+ * wait for invalidation while the invalidation is waiting for the lock
+ * attempt to unlock any previous locks it might have.  This can get
+ * gnarly when there are multiple invalidations queued and requests
+ * pending for elevated modes.  We avoid all that and never let
+ * invalidations block lock attempts when there are any other users of
+ * the lock.
+ */
+static bool next_invalidate_blocks(struct scoutfs_lock *lock, u8 requested)
+{
+	struct inv_req *ireq = list_first_entry_or_null(&lock->inv_list, struct inv_req, head);
+
+	return ireq && lock_counts_zero(lock->users) &&
+	       !lock_modes_match(ireq->nl.new_mode, requested);
+}
+
+/*
  * Add an incoming invalidation request to the end of the list on the
  * lock and queue it for blocking invalidation work.   This is being
  * called synchronously in the net recv path to avoid reordering with
@@ -950,7 +977,8 @@ static bool lock_wait_cond(struct super_block *sb, struct scoutfs_lock *lock,
 	bool wake;
 
 	spin_lock(&linfo->lock);
-	wake = linfo->shutdown || lock_modes_match(lock->mode, mode) ||
+	wake = scoutfs_forcing_unmount(sb) || linfo->shutdown ||
+	       (lock_modes_match(lock->mode, mode) && !next_invalidate_blocks(lock, mode)) ||
 	       !lock->request_pending;
 	spin_unlock(&linfo->lock);
 
@@ -1020,13 +1048,23 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 	lock_inc_count(lock->waiters, mode);
 
 	for (;;) {
+		/*
+		 * Lock grant request error response handling is
+		 * non-functional.  We directly return when forcing
+		 * unmount rather than via errors network requests.
+		 */
+		if (scoutfs_forcing_unmount(sb)) {
+			ret = -ENOLINK;
+			break;
+		}
+
 		if (WARN_ON_ONCE(linfo->shutdown)) {
 			ret = -ESHUTDOWN;
 			break;
 		}
 
 		/* the fast path where we can use the granted mode */
-		if (lock_modes_match(lock->mode, mode)) {
+		if (lock_modes_match(lock->mode, mode) && !next_invalidate_blocks(lock, mode)) {
 			lock_inc_count(lock->users, mode);
 			*ret_lock = lock;
 			ret = 0;
@@ -1040,7 +1078,7 @@ static int lock_key_range(struct super_block *sb, enum scoutfs_lock_mode mode, i
 			break;
 		}
 
-		if (!lock->request_pending) {
+		if (!lock_modes_match(lock->mode, mode) && !lock->request_pending) {
 			lock->request_pending = 1;
 			should_send = true;
 		} else {
@@ -1450,6 +1488,19 @@ bool scoutfs_lock_protected(struct scoutfs_lock *lock, struct scoutfs_key *key,
 					  &lock->start, &lock->end) == 0;
 }
 
+/*
+ * Returns true if there is an invalidation pending on the lock.
+ *
+ * This is racey and doesn't test modes.  But it can still be useful for
+ * writers who will take non-destructive action if there's an
+ * invalidation pending that must necessarily be incompatible with their
+ * hold.
+ */
+bool scoutfs_lock_invalidate_pending(struct scoutfs_lock *lock)
+{
+	return lock->invalidate_pending;
+}
+
 void scoutfs_free_unused_locks(struct super_block *sb)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
@@ -1474,27 +1525,38 @@ static void lock_tseq_show(struct seq_file *m, struct scoutfs_tseq_entry *ent)
 			   lock->users[SCOUTFS_LOCK_WRITE_ONLY]);
 }
 
-/*
- * shrink_dcache_for_umount() tears down dentries with no locking.  We
- * need to make sure that our invalidation won't touch dentries before
- * we return and the caller calls the generic vfs unmount path.
- */
-void scoutfs_lock_unmount_begin(struct super_block *sb)
-{
-	DECLARE_LOCK_INFO(sb, linfo);
-
-	if (linfo) {
-		linfo->unmounting = true;
-		flush_work(&linfo->inv_work);
-	}
-}
-
 void scoutfs_lock_flush_invalidate(struct super_block *sb)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
 
 	if (linfo)
 		flush_work(&linfo->inv_work);
+}
+
+static void wake_all_locks(struct lock_info *linfo)
+{
+	struct scoutfs_lock *lock;
+	struct rb_node *node;
+
+	spin_lock(&linfo->lock);
+	for (node = rb_first(&linfo->lock_tree); node; node = rb_next(node)) {
+		lock = rb_entry(node, struct scoutfs_lock, node);
+		wake_up(&lock->waitq);
+	}
+	spin_unlock(&linfo->lock);
+}
+
+/*
+ * Used to break waiting lock attempts that should fail during forced
+ * unmount but which aren't connected to error responses from the
+ * canceled net requests.
+ */
+void scoutfs_lock_kick_waiters(struct super_block *sb)
+{
+	DECLARE_LOCK_INFO(sb, linfo);
+
+	if (linfo)
+		wake_all_locks(linfo);
 }
 
 static u64 get_held_lock_refresh_gen(struct super_block *sb, struct scoutfs_key *start)
@@ -1553,8 +1615,6 @@ u64 scoutfs_lock_ino_refresh_gen(struct super_block *sb, u64 ino)
 void scoutfs_lock_shutdown(struct super_block *sb)
 {
 	DECLARE_LOCK_INFO(sb, linfo);
-	struct scoutfs_lock *lock;
-	struct rb_node *node;
 
 	if (!linfo)
 		return;
@@ -1564,11 +1624,9 @@ void scoutfs_lock_shutdown(struct super_block *sb)
 	/* cause current and future lock calls to return errors */
 	spin_lock(&linfo->lock);
 	linfo->shutdown = true;
-	for (node = rb_first(&linfo->lock_tree); node; node = rb_next(node)) {
-		lock = rb_entry(node, struct scoutfs_lock, node);
-		wake_up(&lock->waitq);
-	}
 	spin_unlock(&linfo->lock);
+
+	wake_all_locks(linfo);
 }
 
 /*

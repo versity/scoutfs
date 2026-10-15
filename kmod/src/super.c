@@ -249,6 +249,7 @@ static void scoutfs_umount_begin(struct super_block *sb)
 	sbi->forced_unmount = true;
 
 	scoutfs_client_net_shutdown(sb);
+	scoutfs_lock_kick_waiters(sb);
 }
 
 static const struct super_operations scoutfs_super_ops = {
@@ -668,7 +669,7 @@ static void scoutfs_kill_sb(struct super_block *sb)
 	if (SCOUTFS_HAS_SBI(sb)) {
 		scoutfs_options_stop(sb);
 		scoutfs_inode_orphan_stop(sb);
-		scoutfs_lock_unmount_begin(sb);
+		scoutfs_lock_flush_invalidate(sb);
 	}
 
 	kill_block_super(sb);
