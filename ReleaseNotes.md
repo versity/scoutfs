@@ -2,6 +2,45 @@ Versity ScoutFS Release Notes
 =============================
 
 ---
+v1.35
+\
+*Oct 14, 2026*
+
+Fix simple cases of cluster lock starvation between hosts.  It is now
+more difficult for a very active host to prevent remote hosts from
+acquiring busy locks.  This is visible in operations like ls being more
+responsive while there is active use of inodes it visits.
+
+Break up releasing file data and final inode deletion, which are both
+extent truncating operations that don't promise atomicity, into more
+lock acquisitions.  This gives other users of the lock a chance to make
+progress while the large operation is ongoing.  As with the previous
+fix, this makes things like ls a lot more responsive while these
+operations are ongoing.
+
+Fix the iomap direct and buffered I/O write paths to not expose the
+internal ENOBUFS error to applications.  They now properly work with the
+transaction engine to refill data allocators and continue writing.
+
+Add a grace period while new servers come up before they fence previous
+servers.  This gives servers which may be in the progress of shutting
+down time to indicate that they've stopped to avoid being fenced.  These
+spurious fencing cases could be reliably caused by interrupting and
+restoring network connectivity.
+
+Add the server\_data\_fill\_target mount option which can increase the
+number of blocks provided for data allocation to each client
+transaction.  This can allow more productive work to be done per
+transaction, spending less time with an empty pipeline while the
+transaction commit is in flight, especially at the higher end of write
+bandwith.
+
+Restore previous behaviour of regularly triggering background writeback
+during buffered writes which was overlooked in the transition to use the
+kernel's iomap facility.  This keeps memory pressure down and can result
+in more consistent write bandwidth.
+
+---
 v1.34
 \
 *Sep 3, 2026*
