@@ -179,6 +179,16 @@ static struct cached_page *first_page(struct rb_root *root)
 	return rb_entry(node, struct cached_page, node);
 }
 
+static struct cached_page *prev_page(struct cached_page *pg)
+{
+	struct rb_node *node;
+
+	if (!pg || !(node = rb_prev(&pg->node)))
+		return NULL;
+
+	return rb_entry(node, struct cached_page, node);
+}
+
 static struct cached_item *first_item(struct rb_root *root)
 {
 	struct rb_node *node;
@@ -1402,6 +1412,7 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 {
 	struct rb_root root = RB_ROOT;
 	struct cached_page *right = NULL;
+	struct cached_page *left;
 	struct cached_page *pg;
 	struct cached_page *rd;
 	struct cached_item *item;
@@ -1462,6 +1473,20 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 		for_each_item_safe(&pg->item_root, item, item_tmp) {
 			if (item->deletion)
 				erase_item(pg, item);
+		}
+
+		/* special case merging empty page with previous, perhaps from many deletions */
+		if (RB_EMPTY_ROOT(&pg->item_root)) {
+			left = prev_page(pg);
+			if (left) {
+				edge = pg->start;
+				scoutfs_key_dec(&edge);
+				if (scoutfs_key_compare(&left->end, &edge) == 0) {
+					left->end = pg->end;
+					rbtree_erase(&pg->node, &root);
+					put_pg(sb, pg);
+				}
+			}
 		}
 	}
 
