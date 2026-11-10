@@ -444,16 +444,13 @@ static void erase_item(struct cached_page *pg, struct cached_item *item)
 	pg->erased_bytes += item_val_bytes(item->val_len);
 }
 
-static void lru_add(struct super_block *sb, struct item_cache_info *cinf,
-		      struct cached_page *pg)
+static void __lru_add(struct super_block *sb, struct item_cache_info *cinf, struct cached_page *pg)
 {
-	spin_lock(&cinf->lru_lock);
 	if (list_empty(&pg->lru_head)) {
 		scoutfs_inc_counter(sb, item_page_lru_add);
 		list_add_tail(&pg->lru_head, &cinf->lru_list);
 		cinf->lru_pages++;
 	}
-	spin_unlock(&cinf->lru_lock);
 }
 
 static void __lru_remove(struct super_block *sb, struct item_cache_info *cinf,
@@ -496,9 +493,11 @@ static void lru_accessed(struct super_block *sb, struct item_cache_info *cinf,
 	scoutfs_inc_counter(sb, item_page_accessed);
 
 	if (pg->lru_time != time) {
-		lru_remove(sb, cinf, pg);
+		spin_lock(&cinf->lru_lock);
+		__lru_remove(sb, cinf, pg);
 		pg->lru_time = time;
-		lru_add(sb, cinf, pg);
+		__lru_add(sb, cinf, pg);
+		spin_unlock(&cinf->lru_lock);
 	}
 }
 
