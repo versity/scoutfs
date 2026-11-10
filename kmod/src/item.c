@@ -179,6 +179,16 @@ static struct cached_page *first_page(struct rb_root *root)
 	return rb_entry(node, struct cached_page, node);
 }
 
+static struct cached_page *prev_page(struct cached_page *pg)
+{
+	struct rb_node *node;
+
+	if (!pg || !(node = rb_prev(&pg->node)))
+		return NULL;
+
+	return rb_entry(node, struct cached_page, node);
+}
+
 static struct cached_item *first_item(struct rb_root *root)
 {
 	struct rb_node *node;
@@ -434,16 +444,13 @@ static void erase_item(struct cached_page *pg, struct cached_item *item)
 	pg->erased_bytes += item_val_bytes(item->val_len);
 }
 
-static void lru_add(struct super_block *sb, struct item_cache_info *cinf,
-		      struct cached_page *pg)
+static void __lru_add(struct super_block *sb, struct item_cache_info *cinf, struct cached_page *pg)
 {
-	spin_lock(&cinf->lru_lock);
 	if (list_empty(&pg->lru_head)) {
 		scoutfs_inc_counter(sb, item_page_lru_add);
 		list_add_tail(&pg->lru_head, &cinf->lru_list);
 		cinf->lru_pages++;
 	}
-	spin_unlock(&cinf->lru_lock);
 }
 
 static void __lru_remove(struct super_block *sb, struct item_cache_info *cinf,
@@ -486,9 +493,11 @@ static void lru_accessed(struct super_block *sb, struct item_cache_info *cinf,
 	scoutfs_inc_counter(sb, item_page_accessed);
 
 	if (pg->lru_time != time) {
-		lru_remove(sb, cinf, pg);
+		spin_lock(&cinf->lru_lock);
+		__lru_remove(sb, cinf, pg);
 		pg->lru_time = time;
-		lru_add(sb, cinf, pg);
+		__lru_add(sb, cinf, pg);
+		spin_unlock(&cinf->lru_lock);
 	}
 }
 
@@ -1402,6 +1411,7 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 {
 	struct rb_root root = RB_ROOT;
 	struct cached_page *right = NULL;
+	struct cached_page *left;
 	struct cached_page *pg;
 	struct cached_page *rd;
 	struct cached_item *item;
@@ -1462,6 +1472,20 @@ static int read_pages(struct super_block *sb, struct item_cache_info *cinf,
 		for_each_item_safe(&pg->item_root, item, item_tmp) {
 			if (item->deletion)
 				erase_item(pg, item);
+		}
+
+		/* special case merging empty page with previous, perhaps from many deletions */
+		if (RB_EMPTY_ROOT(&pg->item_root)) {
+			left = prev_page(pg);
+			if (left) {
+				edge = pg->start;
+				scoutfs_key_dec(&edge);
+				if (scoutfs_key_compare(&left->end, &edge) == 0) {
+					left->end = pg->end;
+					rbtree_erase(&pg->node, &root);
+					put_pg(sb, pg);
+				}
+			}
 		}
 	}
 
