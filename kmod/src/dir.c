@@ -691,6 +691,11 @@ static struct inode *lock_hold_create(struct inode *dir, struct dentry *dentry,
 	if (ret)
 		goto out_unlock;
 
+	if (dir->i_nlink == 0) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
 	ret = scoutfs_quota_check_inode(sb, dir);
 	if (ret)
 		goto out_unlock;
@@ -861,6 +866,11 @@ static int scoutfs_link(struct dentry *old_dentry,
 	ret = validate_dentry(sb, scoutfs_ino(dir), dentry, dir_lock);
 	if (ret < 0)
 		goto out_unlock;
+
+	if (dir->i_nlink == 0) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
 
 	if (inode->i_nlink >= SCOUTFS_LINK_MAX) {
 		ret = -EMLINK;
@@ -1661,6 +1671,11 @@ static int scoutfs_rename_common(KC_VFS_NS_DEF
 	      validate_dentry(sb, scoutfs_ino(new_dir), new_dentry, new_dir_lock);
 	if (ret)
 		goto out_unlock;
+
+	if (new_dir->i_nlink == 0) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
 
 	/* test dir i_size now that it's refreshed */
 	if (new_inode && S_ISDIR(new_inode->i_mode) && i_size_read(new_inode)) {

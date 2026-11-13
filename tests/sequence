@@ -16,6 +16,7 @@ force-enobufs.sh
 punch-offline.sh
 data-prealloc.sh
 setattr_more.sh
+orphan-dir.sh
 offline-extent-waiting.sh
 move-blocks.sh
 projects.sh
