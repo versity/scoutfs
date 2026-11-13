@@ -1,0 +1,6 @@
+touch: cannot touch 'newfile': No such file or directory
+mv: cannot move '/mnt/test.0/test/orphan-dir/rename-src' to '/mnt/test.0/test/orphan-dir/orphan-dir/rename-dest': No such file or directory
+ln: failed to create hard link '/mnt/test.0/test/orphan-dir/orphan-dir/link-dest' => '/mnt/test.0/test/orphan-dir/link-src': No such file or directory
+ln: failed to create symbolic link '/mnt/test.0/test/orphan-dir/orphan-dir/symlink-dest': No such file or directory
+mkdir: cannot create directory '/mnt/test.0/test/orphan-dir/orphan-dir/newdir': No such file or directory
+open(O_TMPFILE): No such file or directory
