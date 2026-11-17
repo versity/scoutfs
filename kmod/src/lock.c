@@ -979,7 +979,7 @@ static bool lock_wait_cond(struct super_block *sb, struct scoutfs_lock *lock,
 	spin_lock(&linfo->lock);
 	wake = scoutfs_forcing_unmount(sb) || linfo->shutdown ||
 	       (lock_modes_match(lock->mode, mode) && !next_invalidate_blocks(lock, mode)) ||
-	       !lock->request_pending;
+	       (!lock_modes_match(lock->mode, mode) && !lock->request_pending);
 	spin_unlock(&linfo->lock);
 
 	if (!wake)
