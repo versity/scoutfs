@@ -615,6 +615,10 @@ static void bug_on_inconsistent_grant_cache(struct super_block *sb,
  * The server's state machine can immediately send an invalidate request
  * after sending this grant response.   We won't process the incoming
  * invalidate request until after processing this grant response.
+ *
+ * Lock recovery during invalidation can result in the server thinking
+ * we have a more permissive mode than we do.  We can have a NULL lock
+ * and get a grant from old READ to new WRITE, for example.
  */
 int scoutfs_lock_grant_response(struct super_block *sb,
 				struct scoutfs_net_lock *nl)
@@ -634,7 +638,7 @@ int scoutfs_lock_grant_response(struct super_block *sb,
 
 	bug_on_inconsistent_grant_cache(sb, lock, nl->old_mode, nl->new_mode);
 
-	if (!lock_mode_can_read(nl->old_mode) && lock_mode_can_read(nl->new_mode))
+	if (!lock_mode_can_read(lock->mode) && lock_mode_can_read(nl->new_mode))
 		lock->refresh_gen = atomic64_inc_return(&linfo->next_refresh_gen);
 
 	lock->request_pending = 0;
@@ -704,7 +708,7 @@ static void lock_invalidate_worker(struct work_struct *work)
 			continue;
 
 		/* set the new mode, no incompatible users during inval, recov needs old */
-		lock->invalidating_mode = lock->mode;
+		lock->invalidating_mode = ireq->nl.old_mode;
 		lock->mode = nl->new_mode;
 
 		/* move everyone that's ready to our private list */

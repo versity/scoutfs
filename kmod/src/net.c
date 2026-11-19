@@ -1277,6 +1277,18 @@ static bool empty_accepted_list(struct scoutfs_net_connection *conn)
 	return empty;
 }
 
+static void free_sends_by_cmd(struct net_info *ninf, struct scoutfs_net_connection *conn,
+			      struct list_head *list, u8 cmd)
+{
+	struct message_send *msend;
+	struct message_send *tmp;
+
+	list_for_each_entry_safe(msend, tmp, list, head) {
+		if (msend->nh.cmd == cmd)
+			free_msend(ninf, conn, msend);
+	}
+}
+
 /*
  * Safely shut down an active connection.  This can be triggered by
  * errors in workers or by an external call to free the connection.  The
@@ -1292,7 +1304,6 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 	struct scoutfs_net_connection *acc_conn;
 	scoutfs_net_response_t resp_func;
 	struct message_send *msend;
-	struct message_send *tmp;
 	unsigned long delay;
 	void *resp_data;
 
@@ -1370,10 +1381,7 @@ static void scoutfs_net_shutdown_worker(struct work_struct *work)
 
 	/* greetings aren't resent across sockets */
 	list_splice_tail_init(&conn->send_queue, &conn->resend_queue);
-	list_for_each_entry_safe(msend, tmp, &conn->resend_queue, head) {
-		if (msend->nh.cmd == SCOUTFS_NET_CMD_GREETING)
-			free_msend(ninf, conn, msend);
-	}
+	free_sends_by_cmd(ninf, conn, &conn->resend_queue, SCOUTFS_NET_CMD_GREETING);
 
 	clear_conn_fl(conn, saw_greeting);
 
@@ -1807,6 +1815,7 @@ void scoutfs_net_server_greeting(struct super_block *sb,
 				 bool reconnecting, bool first_contact,
 				 bool farewell)
 {
+	struct net_info *ninf = SCOUTFS_SB(sb)->net_info;
 	struct scoutfs_net_connection *listener;
 	struct scoutfs_net_connection *reconn;
 	struct scoutfs_net_connection *acc;
@@ -1878,6 +1887,9 @@ restart:
 	}
 
 	spin_lock(&conn->lock);
+
+	/* greeting response might already have been sent and moved to the resend queue */
+	free_sends_by_cmd(ninf, conn, &conn->resend_queue, SCOUTFS_NET_CMD_GREETING);
 
 	conn->rid = rid;
 	conn->greeting_id = greeting_id;
